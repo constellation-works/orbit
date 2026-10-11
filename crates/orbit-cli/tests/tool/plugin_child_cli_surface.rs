@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 
 use orbit_common::process::ancestry::process_start_key;
+use orbit_common::test_env;
 use tempfile::TempDir;
 
 /// The refusal the CLI surface guard emits. Matched on its stable clause
@@ -41,8 +42,102 @@ const SURFACE_REFUSAL: &str = "a plugin backend reaches Orbit only through `orbi
 /// is what makes the fixture realistic *and* race-free: the credential is the
 /// record, not the process tree, so the test hands it down without having to
 /// know a pid before it forks.
-struct PluginChildFixture {
+struct DisposableCliFixture {
     _temp: TempDir,
+    home: PathBuf,
+    work: PathBuf,
+    root: PathBuf,
+}
+
+impl DisposableCliFixture {
+    fn new(machine_name: &str, workspace_name: &str) -> Self {
+        let temp = tempfile::tempdir().expect("fixture tempdir");
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
+        let root = temp.path().join("orbit-root");
+        std::fs::create_dir_all(&home).expect("create fixture home");
+        crate::git_repo::init(&work);
+
+        let mut init_cmd = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            init_cmd.env_remove(name);
+        });
+        init_cmd
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .arg("--root")
+            .arg(&root)
+            .args([
+                "init",
+                "--non-interactive",
+                "--machine-name",
+                machine_name,
+                "--task-prefix",
+                "TST",
+            ]);
+        let output = init_cmd.output().expect("init fixture root");
+        assert!(
+            output.status.success(),
+            "init fixture root: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut ws_cmd = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            ws_cmd.env_remove(name);
+        });
+        ws_cmd
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .arg("--root")
+            .arg(&root)
+            .args(["workspace", "init", "--name", workspace_name]);
+        let output = ws_cmd.output().expect("init fixture workspace");
+        assert!(
+            output.status.success(),
+            "init fixture workspace: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        Self {
+            _temp: temp,
+            home,
+            work,
+            root,
+        }
+    }
+
+    fn orbit(&self, args: &[&str]) -> std::process::Output {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .env_remove("ORBIT_PLUGIN_CALLBACK")
+            .env_remove("ORBIT_PLUGIN_CALLBACK_FD")
+            .env_remove("ORBIT_PLUGIN")
+            .env_remove("ORBIT_ALLOWED_TOOLS")
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .arg("--root")
+            .arg(&self.root)
+            .args(args);
+        command.output().expect("run orbit as an ordinary caller")
+    }
+}
+
+/// An Orbit root holding one live callback session, with the session record
+/// open on a descriptor every spawned `orbit` inherits.
+///
+/// Holding the descriptor open in the test process rather than binding a pid
+/// is what makes the fixture realistic *and* race-free: the credential is the
+/// record, not the process tree, so the test hands it down without having to
+/// know a pid before it forks.
+struct PluginChildFixture {
+    base: DisposableCliFixture,
     root: PathBuf,
     token: String,
     /// The host's open handle on the record. Inheritable, so the spawned
@@ -52,9 +147,8 @@ struct PluginChildFixture {
 
 impl PluginChildFixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().expect("fixture tempdir");
-        let root = temp.path().join("orbit-root");
-        let token = "a".repeat(64);
+        let base = DisposableCliFixture::new("plugin-child-host", "child-fixture-ws");
+        let root = base.root.clone();
         let sessions = root.join("state/plugin-callbacks");
         std::fs::create_dir_all(&sessions).expect("create callback session directory");
 
@@ -62,6 +156,7 @@ impl PluginChildFixture {
         let starttime = process_start_key(pid)
             .expect("read this process's start time")
             .starttime;
+        let token = "a".repeat(64);
         let record = sessions.join(&token);
         std::fs::write(
             &record,
@@ -88,7 +183,7 @@ impl PluginChildFixture {
         let credential = inheritable_credential(&record);
 
         Self {
-            _temp: temp,
+            base,
             root,
             token,
             credential,
@@ -100,7 +195,13 @@ impl PluginChildFixture {
         use std::os::fd::AsRawFd;
 
         let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
         command
+            .current_dir(&self.base.work)
+            .env("HOME", &self.base.home)
+            .env("USERPROFILE", &self.base.home)
             // The credential: the record the host wrote, open on a descriptor
             // this process is handing down. A test cannot dictate a
             // process-wide number, so it names the one it got — which is what
@@ -246,31 +347,57 @@ fn the_granted_tool_call_path_is_not_refused_by_the_cli_surface_guard() {
     let fixture = PluginChildFixture::new();
 
     let output = fixture.orbit(&["tool", "run", "orbit.task.list", "--input", "{}"]);
+    assert!(
+        !output.status.success(),
+        "`orbit tool run` without granted tool must fail at allowlist check"
+    );
     let stderr = stderr_of(&output);
     assert!(
         !stderr.contains(SURFACE_REFUSAL),
         "`orbit tool run` is a callback entry point and must reach the allowlist: {stderr}"
+    );
+    let error: serde_json::Value = stderr
+        .lines()
+        .find_map(|line| serde_json::from_str(line.trim()).ok())
+        .unwrap_or_else(|| panic!("expected JSON error on stderr, got: {stderr}"));
+    assert_eq!(
+        error["code"], "policy_denied",
+        "`orbit tool run` must be refused as policy, got: {stderr}"
+    );
+    let message = error["error"]
+        .as_str()
+        .expect("error field should be a string");
+    assert!(
+        message.contains(
+            "tool 'orbit.task.list' is not in plugin 'graph''s granted orbit_tools allowlist"
+        ),
+        "expected plugin/tool allowlist refusal, got: {message}"
     );
 }
 
 /// An ordinary caller — no session record for its process — is untouched.
 #[test]
 fn an_ordinary_caller_is_not_gated_by_the_cli_surface_guard() {
-    let temp = tempfile::tempdir().expect("fixture tempdir");
-    let root: &Path = temp.path();
+    let fixture = DisposableCliFixture::new("ordinary-caller-host", "ordinary-fixture-ws");
 
-    let mut command = cargo_bin_cmd!("orbit");
-    command
-        .env_remove("ORBIT_PLUGIN_CALLBACK")
-        .env_remove("ORBIT_PLUGIN_CALLBACK_FD")
-        .env_remove("ORBIT_PLUGIN")
-        .arg("--root")
-        .arg(root)
-        .args(["workspace", "list", "--format", "json"]);
-    let output = command.output().expect("run orbit as an ordinary caller");
+    let output = fixture.orbit(&["workspace", "list", "--format", "json"]);
     let stderr = stderr_of(&output);
+    assert!(
+        output.status.success(),
+        "`orbit workspace list` must succeed for an ordinary caller: {stderr}"
+    );
     assert!(
         !stderr.contains(SURFACE_REFUSAL),
         "a caller with no callback session must not be treated as a plugin child: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let list: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|err| panic!("expected JSON array on stdout ({err}), got: {stdout}"));
+    let workspaces = list.as_array().expect("workspace list emits a JSON array");
+    assert!(
+        workspaces
+            .iter()
+            .any(|ws| ws["name"] == "ordinary-fixture-ws"),
+        "workspace list must contain the fixture workspace, got: {stdout}"
     );
 }
