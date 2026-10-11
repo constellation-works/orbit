@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
@@ -1356,34 +1356,51 @@ export function buildArtifacts(task) {
       row.setAttribute("aria-expanded", String(visible));
     };
 
+    // The preview owns its read. Retiring the task detail aborts a read in
+    // flight, and a preview that resolves anyway is released at once: teardown
+    // has already passed over this subtree, so a blob URL mounted into it later
+    // would never be revoked.
+    let request = null;
+    let retired = false;
+    preview.teardown = () => {
+      retired = true;
+      if (request) request.abort();
+    };
+
     makeToggleRow(row, {
       expanded: false,
       controls: preview.id,
       onToggle: async (e) => {
         e.stopPropagation();
-        if (preview.dataset.loaded === "true") {
+        if (preview.dataset.loaded === "true" || request) {
           revealPreview(preview.hidden);
           return;
         }
         revealPreview(true);
         preview.textContent = "loading...";
+        // Same 30s bound as fetchJson, covering the body read too, so a
+        // stalled artifact read ends in an error instead of "loading..." forever.
+        const controller = new AbortController();
+        request = controller;
+        const timeout = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
         try {
           if (isAggregateView() && !task.workspace_id) throw new Error("task workspace is unknown");
-          // Same 30s bound as fetchJson, covering the body read too, so a
-          // stalled artifact read ends in an error instead of "loading..." forever.
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
-          try {
-            const response = await fetch(artifactUrl(task, path), { signal: controller.signal });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            preview.replaceChildren(await buildArtifactPreview(artifact, response));
-          } finally {
-            clearTimeout(timeout);
+          const response = await fetch(artifactUrl(task, path), { signal: controller.signal });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const view = await buildArtifactPreview(artifact, response);
+          if (retired) {
+            teardownNode(view);
+            return;
           }
+          preview.replaceChildren(view);
           preview.dataset.loaded = "true";
         } catch (error) {
+          if (retired) return;
           const reason = error && error.name === "AbortError" ? "request timed out after 30 seconds" : error.message;
           preview.textContent = `Unable to load ${path}: ${reason}`;
+        } finally {
+          clearTimeout(timeout);
+          request = null;
         }
       },
     });
