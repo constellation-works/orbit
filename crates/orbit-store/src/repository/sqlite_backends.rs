@@ -258,6 +258,15 @@ impl SqliteTaskReservationStoreBackend {
 }
 
 impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
+    fn list_task_reservation_history(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<crate::contracts::TaskReservationRecord>, OrbitError> {
+        self.store
+            .list_task_reservation_history(workspace_orbit_dir, workspace_id)
+    }
+
     fn inspect_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,

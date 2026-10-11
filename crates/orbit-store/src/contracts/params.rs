@@ -280,6 +280,19 @@ pub struct ActiveTaskReservation {
     pub owner_metadata_json: Option<String>,
 }
 
+/// One file reservation as recorded, active or released, for read-only
+/// history aggregates. Released rows stay in the table, so this covers every
+/// reservation the workspace ever took that has not been migrated away.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskReservationRecord {
+    pub reservation_id: String,
+    pub task_ids: Vec<String>,
+    pub files: Vec<String>,
+    pub created_at: String,
+    pub released_at: Option<String>,
+    pub owner_run_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleasedTaskReservation {
     pub reservation_id: String,

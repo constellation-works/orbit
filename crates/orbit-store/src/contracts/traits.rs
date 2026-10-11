@@ -663,6 +663,14 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<TaskReservationListResult, OrbitError>;
 
+    /// Read every file reservation, active or released, oldest first.
+    /// Read-only: it neither expires nor releases rows.
+    fn list_task_reservation_history(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<TaskReservationRecord>, OrbitError>;
+
     fn check_task_reservation_conflicts(
         &self,
         params: TaskReservationCheckParams,

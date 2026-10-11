@@ -8,6 +8,7 @@ mod block_on_run_failure;
 pub(crate) mod locks;
 pub(crate) mod provider_hold;
 mod reservation_cleanup;
+mod reservation_history;
 
 #[cfg(test)]
 mod tests;

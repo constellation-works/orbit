@@ -1,4 +1,4 @@
-/* Audit tab: event rows and their detail, the policy view, summary cards
+/* Audit tab: event rows and their detail, the codebase view, summary cards
    (also used by Health), and the failures-by-tool cards. */
 
 @media (min-width: 901px) {
@@ -118,159 +118,92 @@ tr.audit-detail-row td {
   word-break: break-all;
 }
 
-.policy-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--border);
-  margin-top: 1px;
-}
-.policy-count-note {
-  padding: 10px 16px;
+.codebase-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
   font: 12px/1.5 var(--font-sans);
-  color: var(--fg);
-  border-bottom: 1px solid var(--border);
-}
-.policy-count-note p { margin: 0 0 6px; }
-.policy-count-note p:last-child { margin-bottom: 0; color: var(--fg-dim); }
-.policy-count-note .policy-count-headline {
-  margin-bottom: 0;
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: 600;
-}
-.policy-count-details {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
   color: var(--fg-dim);
+}
+.codebase-controls label { display: inline-flex; gap: 6px; align-items: center; }
+.codebase-controls input[type="number"] { width: 64px; }
+.codebase-caption {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
   font: 12px/1.5 var(--font-sans);
+  color: var(--fg-dim);
 }
-.policy-count-details summary {
-  width: fit-content;
-  cursor: pointer;
-  user-select: none;
-}
-.policy-count-explanation { padding-top: 8px; }
-.policy-count-explanation p { margin: 0 0 6px; }
-.policy-count-explanation p:last-child { margin-bottom: 0; }
-@media (max-width: 1100px) {
-  .policy-grid { grid-template-columns: 1fr; }
-}
-.policy-cell,
-.policy-section {
+.codebase-caption strong { color: var(--fg); font-weight: 600; }
+.codebase-section {
   background: var(--bg-elev);
-  padding: 0;
-}
-.policy-section {
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }
-.policy-cell h5,
-.policy-section h5 {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
+.codebase-section h5 {
+  padding: 10px 16px 4px;
 }
-table.policy-table {
+.codebase-definition,
+.codebase-note,
+.codebase-empty {
+  margin: 0;
+  padding: 0 16px 8px;
+  font: 12px/1.5 var(--font-sans);
+  color: var(--fg-dim);
+}
+.codebase-note { padding-top: 6px; }
+table.codebase-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
-table.policy-table th,
-table.policy-table td {
+table.codebase-table th,
+table.codebase-table td {
   padding: 6px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   white-space: nowrap;
+  vertical-align: top;
 }
-table.policy-table th {
-  cursor: pointer;
-  user-select: none;
+table.codebase-table th.num,
+table.codebase-table td.num {
+  text-align: right;
+  font-family: var(--font-mono);
 }
-table.policy-table th.num { text-align: right; }
-table.policy-table th .sort-arrow { color: var(--accent); margin-left: 4px; }
-table.policy-table tbody tr { transition: background 0.15s ease; }
-table.policy-table tbody tr.clickable { cursor: pointer; }
-table.policy-table tbody tr.clickable:hover,
-table.policy-table tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
-table.policy-table td.value-name {
-  max-width: 360px;
+table.codebase-table td.codebase-rate { color: var(--accent-hover); }
+table.codebase-table td.codebase-path {
+  max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-mono);
   color: var(--fg);
 }
-table.policy-table td.muted {
-  color: var(--fg-dim);
+table.codebase-table tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+.codebase-drilldown summary { cursor: pointer; color: var(--accent); }
+.codebase-regressed {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  white-space: normal;
 }
-table.policy-table td.mono {
-  font-family: var(--font-mono);
+.codebase-by-crew { margin-top: 4px; color: var(--fg-dim); white-space: normal; }
+.codebase-task-link { font-family: var(--font-mono); color: var(--accent); }
+.codebase-causes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0 16px 8px;
+  list-style: none;
 }
-table.policy-table td.policy-detail {
-  max-width: 480px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--fg-dim);
-}
-table.policy-table td.num {
-  text-align: right;
-  font-family: var(--font-mono);
-  color: var(--accent-hover);
-}
-table.policy-table.policy-recent-table th,
-table.policy-table.policy-recent-table td,
-table.policy-table.policy-cause-table th,
-table.policy-table.policy-cause-table td {
-  white-space: nowrap;
-}
-
-@media (min-width: 1184px) {
-  #audit-policy-body .policy-cell,
-  #audit-policy-body .policy-section { min-width: 0; }
-  #audit-policy-body table.policy-table {
-    width: 100%;
-    table-layout: fixed;
-  }
-  #audit-policy-body table.policy-table th,
-  #audit-policy-body table.policy-table td {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding-inline: 10px;
-  }
-  #audit-policy-body table.policy-table:not(.policy-cause-table):not(.policy-recent-table) th:first-child { width: 78%; }
-  #audit-policy-body table.policy-table:not(.policy-cause-table):not(.policy-recent-table) th:last-child { width: 22%; }
-  #audit-policy-body table.policy-cause-table th:nth-child(1) { width: 25%; }
-  #audit-policy-body table.policy-cause-table th:nth-child(2) { width: 35%; }
-  #audit-policy-body table.policy-cause-table th:nth-child(3) { width: 15%; }
-  #audit-policy-body table.policy-cause-table th:nth-child(4) { width: 25%; }
-  #audit-policy-body table.policy-recent-table th:nth-child(1) { width: 14%; }
-  #audit-policy-body table.policy-recent-table th:nth-child(2) { width: 20%; }
-  #audit-policy-body table.policy-recent-table th:nth-child(3) { width: 20%; }
-  #audit-policy-body table.policy-recent-table th:nth-child(4) { width: 20%; }
-  #audit-policy-body table.policy-recent-table th:nth-child(5) { width: 26%; }
-  #audit-policy-body .policy-link {
-    box-sizing: border-box;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    vertical-align: middle;
-  }
-}
-.policy-link {
-  appearance: none;
+.codebase-cause {
   border: 1px solid var(--border);
-  background: rgba(110, 159, 255, 0.08);
-  color: var(--accent);
   border-radius: 2px;
   padding: 2px 6px;
   font-family: var(--font-mono);
   font-size: 11px;
-  cursor: pointer;
+  color: var(--fg-dim);
 }
-.policy-link:hover {
-  border-color: var(--accent);
-  color: var(--accent-hover);
-}
+.codebase-cause-attributed { color: var(--state-failed); }
+.codebase-cause-unclassified { border-style: dashed; }
 
 /* Audit & Diagnostics Summary Cards */
 .audit-summary-card {

@@ -3,17 +3,17 @@
 
 use super::rows::{
     find_owned_reservation_conflicts, find_reservation_conflicts,
-    load_active_reservations_by_owner, load_reservation_row, reservation_row, reserve_files_in_tx,
-    select_reservation_columns,
+    load_active_reservations_by_owner, load_reservation_row, parse_string_list, reservation_row,
+    reserve_files_in_tx, select_reservation_columns,
 };
 use super::{expire_reservations_in_scope, reservation_scope_clause};
 use crate::{
     ActiveTaskReservation, ExpiredTaskReservation, Store, TaskReservationCheckParams,
     TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
-    TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
-    TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
-    TaskReservationReleaseResult, TaskReservationReserveParams, TaskReservationReserveResult,
-    TaskReservationScope,
+    TaskReservationOwnedConflictsResult, TaskReservationRecord,
+    TaskReservationReleaseByOwnerParams, TaskReservationReleaseByOwnerResult,
+    TaskReservationReleaseParams, TaskReservationReleaseResult, TaskReservationReserveParams,
+    TaskReservationReserveResult, TaskReservationScope,
 };
 use orbit_common::OrbitError;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -57,6 +57,56 @@ impl Store {
                 );
             }
             Ok(reservations)
+        })
+    }
+
+    /// Every file reservation, active or released, oldest first, through a
+    /// pooled read connection.
+    /// Like [`Self::inspect_active_task_reservations`] it never expires or
+    /// releases rows, so history aggregates stay strictly read-only.
+    pub fn list_task_reservation_history(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<TaskReservationRecord>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let sql = format!(
+                "SELECT reservation_id, task_ids_json, files_json, created_at, released_at,
+                        owner_run_id
+                 FROM task_reservations
+                 WHERE {}
+                 ORDER BY created_at ASC, reservation_id ASC",
+                reservation_scope_clause(TaskReservationScope::Files),
+            );
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let rows = stmt
+                .query_map(params![workspace_id, workspace_orbit_dir], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                })
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let mut records = Vec::new();
+            for row in rows {
+                let (reservation_id, task_ids_json, files_json, created_at, released_at, owner) =
+                    row.map_err(|error| OrbitError::Store(error.to_string()))?;
+                records.push(TaskReservationRecord {
+                    reservation_id,
+                    task_ids: parse_string_list(&task_ids_json)?,
+                    files: parse_string_list(&files_json)?,
+                    created_at,
+                    released_at,
+                    owner_run_id: owner,
+                });
+            }
+            Ok(records)
         })
     }
 

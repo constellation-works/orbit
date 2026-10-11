@@ -61,8 +61,10 @@ const context = vm.createContext({
 });
 const common = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'), { context });
 const audit = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/audit.js', import.meta.url), 'utf8'), { context });
+const codebase = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/codebase.js', import.meta.url), 'utf8'), { context });
 await common.link(() => { throw new Error('unexpected common dependency'); });
-await audit.link(name => { assert.equal(name, './common.js'); return common; });
+await codebase.link(name => { assert.equal(name, './common.js'); return common; });
+await audit.link(name => ({ './common.js': common, './codebase.js': codebase })[name]);
 await audit.evaluate();
 const diagnostics = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/diagnostics.js', import.meta.url), 'utf8'), { context });
 await diagnostics.link(name => ({ './common.js': common, './audit.js': audit })[name]);

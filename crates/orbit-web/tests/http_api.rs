@@ -7,6 +7,8 @@ mod audit;
 mod auto_tasks;
 #[path = "http_api/automation.rs"]
 mod automation;
+#[path = "http_api/codebase.rs"]
+mod codebase;
 #[path = "http_api/diagnostics_errors.rs"]
 mod diagnostics_errors;
 #[path = "http_api/doctor.rs"]

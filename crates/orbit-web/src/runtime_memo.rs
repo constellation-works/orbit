@@ -7,7 +7,9 @@
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
-//! `/api/scoreboard` (keyed by the canonical window).
+//! `/api/scoreboard` (keyed by the canonical window), and the codebase
+//! analytics scan behind `/api/codebase/analytics`, which caches typed facts
+//! rather than a response body.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -33,28 +35,36 @@ pub(crate) const DIAGNOSTICS_ERRORS_TTL: Duration = Duration::from_secs(15);
 /// memo so overlapping Runs-tab polls share one bounded audit/blob scan.
 pub(crate) const DIAGNOSTICS_FRICTION_TTL: Duration = Duration::from_secs(15);
 
+/// Freshness bound for the codebase analytics scan. A miss reads every task
+/// bundle's history, and the rankings it feeds move over days, so the 30 s
+/// dashboard poll must not repeat it.
+pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
+
 /// In-process TTL cache and single-flight gate for one dashboard server.
-pub(crate) struct RuntimeMemo<K> {
+pub(crate) struct RuntimeMemo<K, V = Value> {
     /// Names the computation in a panic report and trace events.
     label: &'static str,
-    slots: Mutex<HashMap<(usize, K), Arc<Slot>>>,
+    slots: Mutex<Slots<K, V>>,
 }
 
-struct Slot {
+/// One slot per (runtime identity, key).
+type Slots<K, V> = HashMap<(usize, K), Arc<Slot<V>>>;
+
+struct Slot<V> {
     /// Per-key gate so concurrent misses share one compute. Never held while
     /// the map lock is held, and never held across a different key's work.
     gate: tokio::sync::Mutex<()>,
-    value: Mutex<Option<Cached>>,
+    value: Mutex<Option<Cached<V>>>,
 }
 
-struct Cached {
+struct Cached<V> {
     runtime: Weak<OrbitRuntime>,
     computed_at: Instant,
     ttl: Duration,
-    body: Arc<Value>,
+    body: Arc<V>,
 }
 
-impl<K: Eq + Hash> RuntimeMemo<K> {
+impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     pub(crate) fn new(label: &'static str) -> Self {
         Self {
             label,
@@ -71,9 +81,9 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
         key: K,
         ttl: Duration,
         compute: F,
-    ) -> Result<Arc<Value>, OrbitError>
+    ) -> Result<Arc<V>, OrbitError>
     where
-        F: FnOnce() -> Result<Value, OrbitError> + Send + 'static,
+        F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
     {
         let slot = self.slot((Arc::as_ptr(runtime) as usize, key));
         if let Some(hit) = slot.hit(runtime) {
@@ -107,7 +117,7 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
         Ok(computed)
     }
 
-    fn slot(&self, key: (usize, K)) -> Arc<Slot> {
+    fn slot(&self, key: (usize, K)) -> Arc<Slot<V>> {
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
         // Callers own a clone before acquiring the gate and through compute.
         // Keep their slots so pruning cannot create a second gate for a key.
@@ -121,8 +131,8 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
     }
 }
 
-impl Slot {
-    fn hit(&self, runtime: &Arc<OrbitRuntime>) -> Option<Arc<Value>> {
+impl<V> Slot<V> {
+    fn hit(&self, runtime: &Arc<OrbitRuntime>) -> Option<Arc<V>> {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         let cached = guard.as_ref().filter(|cached| cached.is_fresh())?;
         let live = cached.runtime.upgrade()?;
@@ -139,7 +149,7 @@ impl Slot {
     }
 }
 
-impl Cached {
+impl<V> Cached<V> {
     fn is_fresh(&self) -> bool {
         self.computed_at.elapsed() < self.ttl
     }

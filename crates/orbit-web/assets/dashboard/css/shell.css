@@ -121,6 +121,9 @@
   font-size: 11.5px;
   font-weight: 600;
 }
+/* A second count on one entry (Audit's denials beside its events) sits next
+   to the first instead of splitting the free space with it. */
+.rail-count + .rail-count { margin-left: 6px; }
 
 /* A section's views show only while that section is open, so the rail
    stays one screen tall and the workspace picker never scrolls away. */
