@@ -40,9 +40,9 @@ use orbit_common::{
 };
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    BaselineHoldStatus, ClaimExecutionContext, DispatchError, RebaseRecoveryAttemptScope,
-    ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
-    TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
+    BaselineHoldStatus, ClaimExecutionContext, ClaimedKnownRed, DispatchError,
+    RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
+    TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
     verify_claimed_known_red,
 };
@@ -3069,19 +3069,23 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                 // The owner's own base run, not the one the leaf cached.
                 let cache = PathBuf::from(git(&fx.repo, &["rev-parse", "--git-common-dir"]))
                     .join("orbit-baseline");
-                let owner_check = |failures: &BTreeSet<String>| {
+                let owner_check = |base_sha: &str, failures: &BTreeSet<String>| {
                     if cache.exists() {
                         fs::remove_dir_all(&cache).unwrap();
                     }
                     verify_claimed_known_red(
                         &host,
                         &fx.repo,
-                        &fx.base_sha,
-                        RED_TESTS,
-                        None,
-                        // make's status for the recipe's failure
-                        2,
-                        failures,
+                        &ClaimedKnownRed {
+                            base_branch: BASE,
+                            base_sync: "local",
+                            base_sha,
+                            command: RED_TESTS,
+                            selection: None,
+                            // make's status for the recipe's failure
+                            exit_code: 2,
+                            failures,
+                        },
                     )
                 };
 
@@ -3094,7 +3098,7 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                     assert_eq!(hold.failures.identities, named(&base), "{case}");
                     assert!(host.handoffs.lock().unwrap().is_empty(), "{case}");
                     let claimed = named(candidate_tests.unwrap()).into_iter().collect();
-                    let refusal = owner_check(&claimed)
+                    let refusal = owner_check(&fx.base_sha, &claimed)
                         .expect_err(&format!("{case}: the owner refuses the report"));
                     assert!(
                         refusal.contains("does not fail `test orbit-core::runtime suite::added`"),
@@ -3126,10 +3130,22 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                     "{case}: {report:?}"
                 );
                 assert_eq!(
-                    owner_check(&report.failures),
+                    owner_check(&fx.base_sha, &report.failures),
                     Ok(report.failures.clone()),
                     "{case}: the owner's base run fails every reported test"
                 );
+                // A base off the owner's own base branch is no base: here the
+                // candidate itself, which fails the same tests. Nothing runs.
+                let off_base = owner_check(&fx.candidate, &report.failures)
+                    .expect_err(&format!("{case}: a base off the owner's branch is refused"));
+                assert!(
+                    off_base.contains(&format!(
+                        "base {} is not in the history of this owner's {BASE}",
+                        fx.candidate
+                    )),
+                    "{case}: {off_base}"
+                );
+                assert!(!cache.exists(), "{case}: the owner ran nothing");
 
                 // Before publication the results carry the report, and the
                 // pin attaches the same log for the published candidate.
