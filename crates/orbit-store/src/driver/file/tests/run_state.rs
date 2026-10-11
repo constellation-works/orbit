@@ -1,5 +1,4 @@
-// Migrated from state_io.rs per ORB-00231
-use super::super::*;
+use super::super::run_state::{resolve_active_run_state_dir, validate_active_run_state_dir};
 
 use tempfile::tempdir;
 

@@ -114,7 +114,3 @@ fn parse_executor_def(content: &str, label: String) -> Result<ExecutorDef, Orbit
         doc.spec.updated_at,
     ))
 }
-
-#[cfg(test)]
-#[cfg(test)]
-mod tests;

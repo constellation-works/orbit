@@ -182,7 +182,3 @@ fn path_contains_parent_dir(path: &Path) -> bool {
     path.components()
         .any(|component| matches!(component, Component::ParentDir))
 }
-
-#[cfg(test)]
-#[cfg(test)]
-mod tests;

@@ -127,7 +127,3 @@ fn parse_policy_def(content: &str, label: String) -> Result<PolicyDef, OrbitErro
     def.validate()?;
     Ok(def)
 }
-
-#[cfg(test)]
-#[cfg(test)]
-mod tests;
