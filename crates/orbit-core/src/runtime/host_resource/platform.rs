@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
-use super::{DiskSample, HostResourceProbe, HostResourceSample};
+use super::{DiskSample, HostCpuTickHistory, HostResourceProbe, HostResourceSample};
 
 #[derive(Default)]
 pub(super) struct NativeProbe {
     cache: Mutex<Option<NativeCache>>,
     #[cfg(target_os = "macos")]
-    cpu_ticks: Mutex<Option<(Instant, [u32; 4])>>,
+    cpu_ticks: Mutex<HostCpuTickHistory>,
 }
 
 struct NativeCache {
@@ -24,6 +24,14 @@ struct NativeCache {
 
 impl HostResourceProbe for NativeProbe {
     fn sample(&self, paths: &[PathBuf]) -> HostResourceSample {
+        self.sample_with_cpu_history(paths, &mut HostCpuTickHistory::default())
+    }
+
+    fn sample_with_cpu_history(
+        &self,
+        paths: &[PathBuf],
+        history: &mut HostCpuTickHistory,
+    ) -> HostResourceSample {
         // CPU/memory are shared even when many workspaces request different
         // disk paths. Bound disk memo size as well as its lifetime.
         let mut guard = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
@@ -31,7 +39,7 @@ impl HostResourceProbe for NativeProbe {
             .as_ref()
             .is_none_or(|cache| cache.at.elapsed() >= super::RESOURCE_CACHE_TTL)
         {
-            let (cpu_percent, memory_percent) = self.cpu_memory();
+            let (cpu_percent, memory_percent) = self.cpu_memory(history);
             *guard = Some(NativeCache {
                 at: Instant::now(),
                 sampled_at: chrono::Utc::now(),
@@ -39,6 +47,21 @@ impl HostResourceProbe for NativeProbe {
                 memory_percent,
                 disks: BTreeMap::new(),
             });
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let local = self
+                .cpu_ticks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if local.latest.as_ref().is_some_and(|latest| {
+                history
+                    .latest
+                    .as_ref()
+                    .is_none_or(|shared| latest.sampled_at > shared.sampled_at)
+            }) {
+                *history = local.clone();
+            }
         }
         let Some(cache) = guard.as_mut() else {
             return HostResourceSample {
@@ -110,7 +133,7 @@ fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 impl NativeProbe {
-    fn cpu_memory(&self) -> (Option<f64>, Option<f64>) {
+    fn cpu_memory(&self, _history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
         fn read(path: &str) -> Option<String> {
             use std::io::Read;
             let mut data = String::new();
@@ -159,7 +182,7 @@ impl NativeProbe {
     // libc recommends mach2 for these bindings; the underlying Mach APIs remain
     // supported. Keep the existing dependency for this small native collector.
     #[allow(deprecated)]
-    fn cpu_memory(&self) -> (Option<f64>, Option<f64>) {
+    fn cpu_memory(&self, history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
         use std::mem::{MaybeUninit, size_of};
         // libc exposes the statistics calls but omits this libSystem symbol.
         // The signature matches the macOS SDK's mach/mach_port.h declaration.
@@ -172,7 +195,7 @@ impl NativeProbe {
         // SAFETY: mach_host_self returns a send right owned by this call. Both
         // statistics buffers use the libc ABI with counts in integer_t units.
         let host = unsafe { libc::mach_host_self() };
-        let cpu_percent = self.cpu_percent(host);
+        let cpu_percent = self.cpu_percent(host, history);
         let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
         let mut vm_count = libc::HOST_VM_INFO64_COUNT;
         // SAFETY: same ABI/count guarantee as CPU stats above.
@@ -223,46 +246,118 @@ impl NativeProbe {
     }
 }
 
-/// XNU can serve identical cached counters to unrelated processes for a full
-/// second after the host-wide statistics quota is exhausted. Cross that window
-/// before the second first-admission read, rather than polling the shared quota.
-/// The margin lets ticks advance even when the baseline starts a cache window;
-/// the pair still fits inside `RESOURCE_CACHE_TTL`.
-#[cfg(target_os = "macos")]
-const CPU_BASELINE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1100);
+/// One timestamped observation of the host's aggregate tick counters.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct CpuTickSample {
+    pub sampled_at: chrono::DateTime<chrono::Utc>,
+    pub ticks: [u32; 4],
+}
+
+/// Cross XNU's one-second cache window when no usable measurement is available.
+#[cfg(any(target_os = "macos", test))]
+pub(super) const CPU_BASELINE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1100);
+
+#[cfg(any(target_os = "macos", test))]
+impl HostCpuTickHistory {
+    /// Reuse only a fresh, non-future observation with advancing counters. If
+    /// XNU repeats the latest observation, the previous end still measures the
+    /// last real window; never turn identical ticks into zero utilization.
+    pub(super) fn measure(
+        &mut self,
+        mut read: impl FnMut() -> Option<CpuTickSample>,
+        mut wait: impl FnMut(std::time::Duration),
+    ) -> Option<f64> {
+        let Some(mut current) = read() else {
+            *self = Self::default();
+            return None;
+        };
+        let usable = |old: &&CpuTickSample| {
+            current
+                .sampled_at
+                .signed_duration_since(old.sampled_at)
+                .to_std()
+                .is_ok_and(|age| age <= super::RESOURCE_MAX_AGE)
+                && old.ticks != current.ticks
+        };
+        let old = match self
+            .latest
+            .iter()
+            .chain(self.previous.iter())
+            .find(usable)
+            .cloned()
+        {
+            Some(old) => old,
+            None => {
+                let old = current;
+                wait(CPU_BASELINE_WINDOW);
+                let Some(next) = read() else {
+                    *self = Self::default();
+                    return None;
+                };
+                current = next;
+                old
+            }
+        };
+        // Wall-clock reversal or a stalled read must not resurrect a stale
+        // measurement, including after waiting for a cold-start window.
+        if !current
+            .sampled_at
+            .signed_duration_since(old.sampled_at)
+            .to_std()
+            .is_ok_and(|age| age <= super::RESOURCE_MAX_AGE)
+        {
+            *self = Self::default();
+            return None;
+        }
+        let delta = std::array::from_fn::<_, 4, _>(|i| {
+            u64::from(current.ticks[i].wrapping_sub(old.ticks[i]))
+        });
+        let total: u64 = delta.iter().sum();
+        // Preserve the timestamp of a repeated kernel observation; stamping it
+        // anew on every process read would make a stale baseline live forever.
+        if self
+            .latest
+            .as_ref()
+            .is_none_or(|latest| latest.ticks != current.ticks)
+        {
+            self.previous = Some(old);
+            self.latest = Some(current);
+        }
+        // Mach's CPU_STATE_IDLE is the third counter in host_cpu_load_info.
+        (total > 0).then(|| 100.0 * (total - delta[2]) as f64 / total as f64)
+    }
+}
 
 #[cfg(target_os = "macos")]
 impl NativeProbe {
-    /// Busy share of host CPU since the previous reading, from Mach tick deltas.
-    /// A process's first reading, or one after a gap longer than
-    /// `RESOURCE_MAX_AGE`, has no window to measure: it takes a baseline, waits
-    /// `CPU_BASELINE_WINDOW`, and reads again, so admission reports a value
-    /// rather than CPU unknown.
-    fn cpu_percent(&self, host: libc::mach_port_t) -> Option<f64> {
-        let mut previous = self
+    fn cpu_percent(
+        &self,
+        host: libc::mach_port_t,
+        history: &mut HostCpuTickHistory,
+    ) -> Option<f64> {
+        let mut local = self
             .cpu_ticks
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let old = match *previous {
-            Some((at, old)) if at.elapsed() <= super::RESOURCE_MAX_AGE => old,
-            _ => {
-                let Some(baseline) = host_cpu_ticks(host) else {
-                    *previous = None;
-                    return None;
-                };
-                std::thread::sleep(CPU_BASELINE_WINDOW);
-                baseline
-            }
-        };
-        let Some(ticks) = host_cpu_ticks(host) else {
-            *previous = None;
-            return None;
-        };
-        *previous = Some((Instant::now(), ticks));
-        let delta = std::array::from_fn::<_, 4, _>(|i| u64::from(ticks[i].wrapping_sub(old[i])));
-        let total: u64 = delta.iter().sum();
-        (total > 0)
-            .then(|| 100.0 * (total - delta[libc::CPU_STATE_IDLE as usize]) as f64 / total as f64)
+        if history.latest.as_ref().is_some_and(|shared| {
+            local
+                .latest
+                .as_ref()
+                .is_none_or(|latest| shared.sampled_at > latest.sampled_at)
+        }) {
+            *local = history.clone();
+        }
+        let percent = local.measure(
+            || {
+                host_cpu_ticks(host).map(|ticks| CpuTickSample {
+                    sampled_at: chrono::Utc::now(),
+                    ticks,
+                })
+            },
+            std::thread::sleep,
+        );
+        *history = local.clone();
+        percent
     }
 }
 
@@ -289,7 +384,7 @@ fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl NativeProbe {
-    fn cpu_memory(&self) -> (Option<f64>, Option<f64>) {
+    fn cpu_memory(&self, _history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
         (None, None)
     }
 }
