@@ -522,7 +522,7 @@ fn run() {
     // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
     orbit_common::observability::logging::init_subscriber_with_file_filter(
         "warn",
-        "warn,orbit_engine::activity_job::cli_runner::supervisor=info",
+        "warn,orbit_engine::activity_job::cli_runner::supervisor=info,orbit::mcp_config=info",
     );
     output::pipe::install_handler();
 

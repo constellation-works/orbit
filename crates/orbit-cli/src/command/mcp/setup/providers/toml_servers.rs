@@ -7,7 +7,7 @@ use toml_edit::{Array, Item, Table, value};
 
 use super::super::dispatch::ConfigTarget;
 use super::super::format::*;
-use super::common::{ServerLaunch, server_args, server_id};
+use super::common::{ServerLaunch, preserve_operator, server_args, server_id};
 
 const SERVERS_KEY: &str = "mcp_servers";
 
@@ -17,6 +17,17 @@ pub(in crate::command::mcp::setup) fn apply_toml_init(
     codex: bool,
 ) -> Result<(), OrbitError> {
     let mut doc = load_toml_document(&target.mcp_path)?;
+    if doc
+        .get(SERVERS_KEY)
+        .and_then(|servers| servers.get(server_id(launch)))
+        .and_then(|entry| entry.get("args"))
+        .and_then(Item::as_array)
+        .is_some_and(|args| {
+            preserve_operator(launch, args.iter().filter_map(toml_edit::Value::as_str))
+        })
+    {
+        return Ok(());
+    }
     let mut table = mcp_server_table(launch);
     if codex && matches!(launch, ServerLaunch::Local { .. }) {
         table.insert(
