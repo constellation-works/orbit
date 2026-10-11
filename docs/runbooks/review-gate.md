@@ -111,6 +111,16 @@ containing the same tree does not renew the requeue allowance, and changing the
 tree then restoring it does not erase its earlier requeue. An implementer
 change to the tree has its own allowance.
 
+When an owner run stops during review, cancellation or orphan reconciliation
+keeps the reviewer's uncommitted edits at
+`refs/orbit/candidates/<task>/<run>-review`, without moving the candidate branch
+or changing its index. The run's `interrupted_review` record identifies the
+run, reviewer step and attempt, and a task comment names the repair ref.
+Checkpoint resume clears that run-local preservation record in the new run;
+the ancestor's record and ref remain reachable. If the resumed reviewer makes
+further edits and stops again, the new run keeps its own repair and comment.
+Repeated stops of the same review leave its preservation evidence unchanged.
+
 Final recovery may repair a rejected candidate once. If it appends a commit,
 the engine records the exact HEAD advance around that invocation and resumes
 at commit or an earlier requested step. Required validation and before-PR
