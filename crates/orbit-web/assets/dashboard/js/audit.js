@@ -326,6 +326,11 @@ function fetchAndRenderAudit(ctx) {
       const page = await fetchJsonPage(path);
       return { events: page.body, nextBefore: page.header(AUDIT_NEXT_BEFORE_HEADER) };
     };
+  // A head for another scope retires the previous paging now, not when it
+  // settles: an older page still in flight for the old scope must not paint
+  // into the reset body, even if this head fails. A same-scope refresh keeps
+  // its paging so mergeAuditHead can keep the loaded tail.
+  if (auditPaging.path !== path) auditPaging = freshAuditPaging();
   // A slower search or the previous workspace must not paint over the visit
   // now on screen, and must not become the snapshot row expansion re-renders.
   return requestPanel("audit-body", path, requestEvents, (head) => {
