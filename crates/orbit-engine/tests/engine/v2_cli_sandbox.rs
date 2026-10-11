@@ -453,7 +453,14 @@ impl RuntimeHost for MissingWrapperHost {
 }
 
 /// Recovery calls enter the same actual sandbox as provider leaves; a marker
-/// cannot grant success when the exit is nonzero or a protected read succeeds.
+/// cannot grant success when the exit is nonzero or a write the profile's
+/// `modify` rules deny lands. The confinement is proven with a denied write
+/// because Linux Bubblewrap confines writes only: it never compiles `read`
+/// denies, so a protected read passed under `sandbox-exec` and failed on every
+/// host with working Bubblewrap [ORB-15372]. The denied subtree sits inside
+/// the probe's own root, so it stays denied wherever the checkout lives: a
+/// `modify` deny follows the host scratch-root allows in the SBPL profile
+/// (last match wins) and becomes a read-only bind under Bubblewrap.
 #[test]
 fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     use orbit_engine::activity_job::cli_runner::run_auth_probe;
@@ -468,11 +475,12 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
         .tempdir_in(scratch)
         .unwrap();
     let root = dir.path().canonicalize().unwrap();
-    let secret = root.join("secret");
-    fs::write(&secret, "protected fixture data").unwrap();
+    let protected = root.join("protected");
+    fs::create_dir(&protected).unwrap();
+    let escape = protected.join("escape");
     let command = root.join("claude");
     fs::write(&command, format!(
-        "#!/bin/sh\ncat > /dev/null\nif [ \"$1\" = sandbox ]; then\n  cat '{}' 2>/dev/null && exit 23\nfi\nprintf '%s\\n' \"$2\"\nexit \"$3\"\n", secret.display(),
+        "#!/bin/sh\ncat > /dev/null\nif [ \"$1\" = sandbox ]; then\n  touch '{}' 2>/dev/null && exit 23\nfi\nprintf '%s\\n' \"$2\"\nexit \"$3\"\n", escape.display(),
     )).unwrap();
     fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
     let mut host = RecordingHost {
@@ -482,8 +490,11 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
             kind,
             fs_profile: ResolvedFsProfile {
                 name: "auth-fixture".into(),
-                read: vec!["**".into(), format!("!{}", secret.display())],
-                modify: vec![format!("{}/**", root.display())],
+                read: vec!["**".into()],
+                modify: vec![
+                    format!("{}/**", root.display()),
+                    format!("!{}/**", protected.display()),
+                ],
             },
             allow_fallback: false,
             managed_worktree: false,
@@ -507,7 +518,11 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
             run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
                 .unwrap()
                 .passed,
-            "sandbox must deny the protected read while allowing the minimal invocation"
+            "sandbox must deny the protected write while allowing the minimal invocation"
+        );
+        assert!(
+            !escape.exists(),
+            "the sandboxed probe wrote into its denied subtree"
         );
     }
     host.sandbox = None;
