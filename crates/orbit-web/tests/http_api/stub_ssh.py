@@ -7,16 +7,21 @@
      "hosts": {"<ssh target>": {"attach": <port or null>,
                                 "spawn": <port or null>,
                                 "exit": <status or null>,
-                                "delay": <seconds>}}}
+                                "delay": <seconds>,
+                                "bind_delay": <seconds>}}}
 
 Every invocation first appends one JSON line to `log`: its pid, its mode
 (`attach` for a bare `-N` forward, `spawn` when a remote command follows the
 host), the host, the remote command and the full argv. Then:
 
 - an unknown host exits 255, as ssh does when it cannot connect;
-- `exit` sleeps `delay` seconds and exits with that status;
-- otherwise it binds the `-L` listener and proxies every connection to the
-  port configured for its mode. A null port closes each connection at once,
+- `exit` sleeps `delay` seconds and exits with that status, never binding;
+- otherwise it sleeps `bind_delay` seconds (authentication), then binds the
+  `-L` listener. When the port is taken it exits 255 at once, as ssh does
+  with `ExitOnForwardFailure=yes`. Once bound it runs `-o LocalCommand`
+  through `$SHELL` when `-o PermitLocalCommand=yes` is given, as ssh does
+  after setting up its forwards, and proxies every connection to the port
+  configured for its mode. A null port closes each connection at once,
   which reads as "nothing is listening behind the forward".
 
 It exits on SIGTERM, when its parent dies, or after LIFETIME seconds, so a
@@ -25,6 +30,7 @@ failed test cannot leak it.
 import json
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -58,11 +64,20 @@ def main():
     if host_config.get("exit") is not None:
         time.sleep(host_config.get("delay", 0))
         sys.exit(host_config["exit"])
+    time.sleep(host_config.get("bind_delay", 0))
     target = host_config.get(record["mode"])
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", local_port))
+    try:
+        listener.bind(("127.0.0.1", local_port))
+    except OSError as error:
+        sys.stderr.write(
+            f"bind [127.0.0.1]:{local_port}: {error.strerror}\n"
+            "Could not request local forwarding.\n"
+        )
+        sys.exit(255)
     listener.listen(64)
+    run_local_command(options(argv))
     while True:
         client, _ = listener.accept()
         threading.Thread(target=proxy, args=(client, target), daemon=True).start()
@@ -79,6 +94,26 @@ def watchdog():
             time.sleep(0.2)
 
     threading.Thread(target=watch, daemon=True).start()
+
+
+def options(argv):
+    """Every `-o Key=value` before the destination, keyed in lower case."""
+    found = {}
+    for index, arg in enumerate(argv):
+        if arg == "--":
+            break
+        if arg == "-o" and index + 1 < len(argv):
+            key, _, value = argv[index + 1].partition("=")
+            found.setdefault(key.lower(), value)
+    return found
+
+
+def run_local_command(found):
+    command = found.get("localcommand")
+    if command is None or found.get("permitlocalcommand") != "yes":
+        return
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    subprocess.run([shell, "-c", command.replace("%%", "%")], check=False)
 
 
 def parse_forward(argv):
