@@ -105,6 +105,7 @@ fi
 "$repo_root/scripts/test-validate-agent-plugin.sh"
 "$repo_root/scripts/smoke-plugin-install.sh"
 "$repo_root/scripts/test-build-budget.sh"
+"$repo_root/scripts/test-make-install.py"
 "$repo_root/scripts/test-compiler-cache.sh"
 "$repo_root/scripts/test-compiler-cache-namespaces.sh"
 "$repo_root/scripts/test-cross-revision-check.sh"
