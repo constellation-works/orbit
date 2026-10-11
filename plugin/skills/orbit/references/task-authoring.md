@@ -33,6 +33,26 @@ justify it. A coherent cross-layer change can remain one task; file count and
 breadth alone are not blockers. Each slice must be verifiable at its own boundary.
 Keep incomplete entry points unavailable when later slices are needed for safety.
 
+## Tasks that fix frictions
+
+Friction resolution on landing is automatic on the owner. Name each friction
+in the description or acceptance criteria, preferably also with
+`relations: [{"type":"resolves","target":"<friction-id>"}]`. Targets are
+workspace-local. Landing resolves open or triaged records, preserves their
+original bodies, and appends the task, delivered commit, PR number and time.
+Already-resolved records stay unchanged; the task history records resolutions
+and failed writes for retry.
+
+Treat a criterion such as "Friction <friction-id> is resolved with the merge
+sha" as a landing obligation. The implementer proves the repair and hands it
+off; the owner supplies the merge evidence after delivery. Do not ask a worker
+to obtain a future merge SHA or write the owner's friction corpus. Local and
+already-landed handoffs use the candidate or covering commit; a verified
+no-diff handoff uses its synchronized base. These paths record PR `none`.
+Every valid friction ID in the description or criteria is a resolution target,
+including background citations, so mention unrelated reports in comments
+instead. See [friction](friction.md) for workspace ownership and retry rules.
+
 ## Prepare and create
 
 1. Select the authoritative workspace. For findings discovered by review, QA,

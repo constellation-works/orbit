@@ -15,6 +15,7 @@ use super::{
     FrictionAddParams, FrictionRehomeOutcome, FrictionRehomeParams, FrictionStore,
     FrictionUpdateParams, StoredFrictionRecord, queries,
 };
+use crate::contracts::FrictionLandingOutcome;
 use crate::contracts::normalize_friction_tags as normalize_and_validate_tags;
 use crate::driver::file::friction_store::load_tag_taxonomy;
 
@@ -335,6 +336,54 @@ impl FrictionStore {
         self.update_unless(id, resolve_by_task_params(task_id, resolved_at), |stored| {
             stored.record.status == FrictionStatus::Resolved
         })
+    }
+
+    /// Resolve a workspace-local record and append verified delivery evidence
+    /// in the same transaction. Already-resolved records are left untouched;
+    /// reading the body under the write lock preserves concurrent edits.
+    pub fn auto_resolve_by_landing(
+        &self,
+        id: &str,
+        task_id: &str,
+        commit: &str,
+        pr_number: Option<u64>,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<FrictionLandingOutcome, OrbitError> {
+        validate_friction_id(id)?;
+        let (month, seq) = split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let conn = tx.connection();
+                let Some(mut stored) = queries::show_record(conn, &self.workspace_id, id)? else {
+                    return Ok(FrictionLandingOutcome::Missing);
+                };
+                if stored.record.status == FrictionStatus::Resolved {
+                    return Ok(FrictionLandingOutcome::AlreadyResolved);
+                }
+                let pr =
+                    pr_number.map_or_else(|| "none".to_string(), |number| format!("#{number}"));
+                stored.record.body.push_str(&format!(
+                    "\n\nResolved by task {task_id}; commit {commit}; PR {pr}; at {}.\n",
+                    resolved_at.to_rfc3339(),
+                ));
+                stored.record.status = FrictionStatus::Resolved;
+                stored.record.resolved_at = Some(resolved_at);
+                stored.record.resolved_by_task = Some(task_id.to_string());
+                queries::upsert_record(
+                    conn,
+                    &self.workspace_id,
+                    &stored.record,
+                    &month,
+                    seq,
+                    stored
+                        .path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy())
+                        .as_deref(),
+                )?;
+                Ok(FrictionLandingOutcome::Resolved)
+            })
     }
 }
 

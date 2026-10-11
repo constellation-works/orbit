@@ -58,6 +58,17 @@ pub struct FrictionUpdateParams {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Result of resolving a friction against verified landing evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrictionLandingOutcome {
+    /// This landing resolved the record and appended its evidence.
+    Resolved,
+    /// An earlier resolution was preserved without a write.
+    AlreadyResolved,
+    /// The target does not exist in this workspace.
+    Missing,
+}
+
 /// Where `orbit.friction.rehome` moves a record, resolved by the caller.
 ///
 /// Both workspaces share this host's store, so the move is one transaction:

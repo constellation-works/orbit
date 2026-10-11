@@ -121,10 +121,23 @@ cause, give that task
 friction IDs are workspace-local: auto-resolve looks up that ID only in the
 task's workspace and records `resolved_by_task` when the task reaches `done`.
 IDs are not global. Filing the task does not itself resolve anything — the
-record stays open until the fix lands. Auto-resolve runs on the transition into
-`done`, not on later writes to the done task: a friction reopened afterwards
-stays open. A resolution that failed at that transition is recorded in the
-task's history and retried by the task's next write.
+record stays open until the fix lands. Owner-side landing also recognizes
+valid friction IDs in the task description and acceptance criteria, deduplicated
+with its `resolves` relations. This includes background citations: keep
+unrelated friction references in comments instead. It resolves open or triaged
+records transactionally, preserving the entire body and appending the task,
+delivered commit, PR number and time. Already-resolved records stay untouched,
+and the task history names each record this landing resolved. The ordinary
+owner PR completion path uses its verified merge evidence too.
+
+The implementer never has to close a record with a future merge SHA: a
+"resolved with the merge sha" criterion is fulfilled by owner-side landing.
+Local and already-landed handoffs name the candidate or covering commit;
+verified no-diff handoffs name the synchronized base, with PR `none`.
+Auto-resolve runs on the transition into `done`, not on later writes to the
+done task: a friction reopened afterwards stays open. A resolution that failed
+at that transition is recorded in the task's history and retried by the task's
+next write, retaining the original delivery evidence.
 
 A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A

@@ -1,5 +1,6 @@
 //! FrictionStoreBackend delegation to the inherent FrictionStore surface.
 
+use crate::contracts::FrictionLandingOutcome;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
@@ -84,6 +85,17 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
         resolved_at: DateTime<Utc>,
     ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
         Self::auto_resolve_by_task(self, id, task_id, resolved_at)
+    }
+
+    fn auto_resolve_by_landing(
+        &self,
+        id: &str,
+        task_id: &str,
+        commit: &str,
+        pr_number: Option<u64>,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<FrictionLandingOutcome, OrbitError> {
+        Self::auto_resolve_by_landing(self, id, task_id, commit, pr_number, resolved_at)
     }
 
     fn tags(&self) -> Result<Vec<String>, OrbitError> {
