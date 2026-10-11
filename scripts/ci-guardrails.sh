@@ -72,6 +72,7 @@ fi
 "$repo_root/scripts/test-release-workflow.py"
 "$repo_root/scripts/test-release-promotion.py"
 "$repo_root/scripts/test-pr-state-workflows.py"
+"$repo_root/scripts/test-website-workflow.py"
 "$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
 "$repo_root/scripts/check-test-shell-waits.py"
