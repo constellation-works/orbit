@@ -48,6 +48,9 @@ pub struct OrbitRuntime {
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
+    /// One shared base-run budget per owner claim settlement. Leaves five
+    /// minutes of the routed call's fifteen for observation, cleanup and reply.
+    pub(crate) claim_known_red_budget: std::time::Duration,
     pub(crate) ci_failure_time: Option<chrono::DateTime<chrono::Utc>>,
     /// Supplied by the same registry-owning composition layer, for reads that
     /// span more than one workspace. Absent on a standalone runtime, which

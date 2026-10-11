@@ -1507,3 +1507,111 @@ fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
         fixture.assert_no_blocked();
     }
 }
+
+/// A base run that cannot finish within settlement's budget is cut once,
+/// then retries reuse its durable inconclusive outcome, including on a newly
+/// opened owner session. Partial failed-test output never admits a handoff.
+#[test]
+#[cfg(unix)]
+fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
+    if !isolated(
+        module_path!(),
+        "a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries",
+    ) {
+        return;
+    }
+    let red = RedCheck::new();
+    let fixture = CleanLeaf::red(&red);
+    fixture.attach("automation-coverage.json", json!({"findings": []}));
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    let leaf_runs = red.runs();
+
+    // No timing race or load: this FIFO has no writer. The base prints the
+    // claimed failure, then blocks until the supervisor cuts its process group.
+    let fifo = red._dir.path().join("wait");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(
+        &red.script,
+        format!(
+            "echo ran >> '{}'\necho 'test suite::broken ... FAILED'\nread ignored < '{}'\nexit 3\n",
+            red.runs.display(),
+            fifo.display(),
+        ),
+    )
+    .unwrap();
+    let settle = |owner: &OrbitRuntime| {
+        owner
+            .run_tool_with_context_and_role(
+                "orbit.drain.claim.settle",
+                json!({
+                    "claim_id": handoff.claim_id, "run_id": fixture.leaf,
+                    "settlement": ClaimMutation::AcceptHandoff(handoff.clone()),
+                }),
+                Role::Admin,
+                ToolContext {
+                    session_context: ToolSessionContext {
+                        caller_machine_id: Some(FOLLOWER.to_string()),
+                        process_machine_id: Some(OWNER.to_string()),
+                        transport: Some(McpTransport::SshMcp),
+                        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                        ..ToolSessionContext::default()
+                    },
+                    ..ToolContext::default()
+                },
+            )
+            .expect_err("a cut base never confirms known red")
+            .to_string()
+    };
+    let owner = fixture
+        .pair
+        .wire
+        .owner
+        .clone()
+        .with_claim_known_red_budget(Duration::from_secs(10));
+    let error = settle(&owner);
+    assert!(
+        error.contains("known_red_unverified") && error.contains("comparison deadline"),
+        "{error}"
+    );
+    assert_eq!(
+        red.runs(),
+        leaf_runs + 1,
+        "the owner starts just one base run"
+    );
+
+    // A command now able to complete still must not restart on settlement
+    // retry. Reopening the runtime rules out a process-local refusal cache.
+    std::fs::write(
+        &red.script,
+        format!(
+            "echo ran >> '{}'\necho 'test suite::broken ... ok'\nexit 0\n",
+            red.runs.display(),
+        ),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let reopened =
+            OrbitRuntime::from_roots(&owner.paths().global_dir, &owner.paths().orbit_dir)
+                .unwrap()
+                .with_automation_machine_identity(Some(OWNER.to_string()))
+                .with_claim_known_red_budget(Duration::from_secs(30));
+        assert_eq!(settle(&reopened), error);
+        assert_eq!(red.runs(), leaf_runs + 1, "settle retries reuse the cut");
+    }
+    assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+    assert!(owner.accepted_task_handoff(&handoff.claim_id).is_err());
+    assert!(
+        fixture.pair.owner_task(&fixture.task)["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["event"] != orbit_types::workflow::KNOWN_RED_VALIDATION_EVENT)
+    );
+    fixture.assert_no_blocked();
+}

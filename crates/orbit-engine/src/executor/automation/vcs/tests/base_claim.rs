@@ -382,7 +382,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         check.base_log["inconclusive"]
             .as_str()
             .unwrap()
-            .contains("timed out before the review deadline"),
+            .contains("timed out before the comparison deadline"),
         "the base log records the cut timeout: {:?}",
         check.base_log
     );

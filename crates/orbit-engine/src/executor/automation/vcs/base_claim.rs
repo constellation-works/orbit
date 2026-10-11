@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::baseline::{
-    FAILING_TESTS_KEY, cached_base_check, compare_with_base, compare_with_base_until,
+    FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until, compare_with_base_until,
     hold_failures, known_red, run_validation_command_until,
 };
 use super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
@@ -479,12 +479,18 @@ pub struct ClaimedKnownRed<'a> {
 /// validation applies judges the result; a whole run must also fail with the
 /// candidate's exit status.
 ///
+/// The caller shares one absolute `deadline` across settlement's commands.
+/// Lock waits and commands stop there. An inconclusive attempted run is retained
+/// separately from conclusive base results, so retries reuse the refusal without
+/// treating partial output as confirmation. Ordinary validation ignores it.
+///
 /// Only call this with a command the owner itself requires: it runs on the
 /// owner's host, outside any agent sandbox.
 pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     report: &ClaimedKnownRed<'_>,
+    deadline: Instant,
 ) -> Result<BTreeSet<String>, String> {
     let ClaimedKnownRed {
         base_branch,
@@ -498,17 +504,34 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
     if failures.is_empty() {
         return Err("the report names no failure to compare".to_string());
     }
+    if Instant::now() >= deadline {
+        return Err("the owner settlement base comparison deadline expired".into());
+    }
     on_owner_base(workspace_path, base_branch, base_sync, base_sha)?;
     let cached = cached_base_check(workspace_path, base_sha, command, selection)
         .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
         (Some(check), _) => (check, true),
         (None, Some(narrowed)) => (
-            compare_with_base(host, workspace_path, base_sha, command, Some(&narrowed)),
+            compare_claimed_with_base_until(
+                host,
+                workspace_path,
+                base_sha,
+                command,
+                Some(&narrowed),
+                deadline,
+            ),
             false,
         ),
         (None, None) => (
-            compare_with_base(host, workspace_path, base_sha, command, selection),
+            compare_claimed_with_base_until(
+                host,
+                workspace_path,
+                base_sha,
+                command,
+                selection,
+                deadline,
+            ),
             true,
         ),
     };
