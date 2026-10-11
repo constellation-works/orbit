@@ -456,6 +456,11 @@ pub enum OrbitError {
         leader_alive: bool,
         group_alive: bool,
     },
+    /// Cancellation could not confirm teardown of the run's open providers.
+    /// No PID means the provider audit trail could not be read. Ownership must
+    /// be retained until the evidence is readable and every provider is gone.
+    #[error("run cancellation incomplete: provider teardown unconfirmed (pid={pid:?}): {reason}")]
+    RunProviderTeardownUnconfirmed { pid: Option<u32>, reason: String },
     #[error("task bundle corrupt for {task_id} at {path}: {reason}")]
     TaskBundleCorrupt {
         task_id: String,

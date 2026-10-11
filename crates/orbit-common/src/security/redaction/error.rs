@@ -210,6 +210,12 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             leader_alive,
             group_alive,
         },
+        OrbitError::RunProviderTeardownUnconfirmed { pid, reason } => {
+            OrbitError::RunProviderTeardownUnconfirmed {
+                pid,
+                reason: redact(&reason),
+            }
+        }
         OrbitError::TaskBundleCorrupt {
             task_id,
             path,

@@ -388,39 +388,32 @@ impl OrbitRuntime {
     }
 
     /// Stop the provider children `run` still has open on its audit trail and
-    /// return how many were running. A survivor fails the cancellation, like a
-    /// surviving owner does, so the run is not reported cancelled while its
-    /// agent keeps working.
+    /// return how many were running. Unreadable evidence, an unverified
+    /// provider, or a survivor fails cancellation before ownership is released.
     #[cfg(unix)]
     fn stop_run_provider_processes(&self, run: &JobRun) -> Result<usize, OrbitError> {
-        let processes = match self.collect_run_provider_processes_with(
-            &run.run_id,
-            orbit_common::process::identity::probe_process_liveness,
-        ) {
-            Ok(processes) => processes,
-            Err(error) => {
-                // Unreadable evidence is not proof of a survivor: keep the
-                // established cancellation semantics rather than blocking it.
-                tracing::warn!(
-                    target: "orbit.core.job_run",
-                    run_id = %run.run_id,
-                    error = %error,
-                    "cancellation could not read provider process evidence",
-                );
-                return Ok(0);
-            }
-        };
+        let processes = self
+            .collect_run_provider_processes_with(
+                &run.run_id,
+                orbit_common::process::identity::probe_process_liveness,
+            )
+            .map_err(|error| OrbitError::RunProviderTeardownUnconfirmed {
+                pid: None,
+                reason: format!("could not read provider process evidence: {error}"),
+            })?;
         let mut stopped = 0usize;
         for process in processes.iter().filter(|process| !process.finished) {
             match stop_provider_process(process.pid, process.pid_start_time.as_deref())? {
                 ProviderStop::Stopped => stopped += 1,
                 ProviderStop::NotRunning => {}
-                ProviderStop::Unverified => tracing::warn!(
-                    target: "orbit.core.job_run",
-                    run_id = %run.run_id,
-                    pid = process.pid,
-                    "cancellation left a provider process it could not verify",
-                ),
+                ProviderStop::Unverified => {
+                    return Err(OrbitError::RunProviderTeardownUnconfirmed {
+                        pid: Some(process.pid),
+                        reason:
+                            "provider liveness or identity could not be verified; no signal sent"
+                                .to_string(),
+                    });
+                }
             }
         }
         Ok(stopped)
