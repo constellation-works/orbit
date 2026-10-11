@@ -202,14 +202,19 @@ pub fn ensure_machine_identity(
 
 /// Record `identity` in the global `config.toml`, preserving every other key
 /// and every hand-written comment. The store reparses the staged document, so
-/// a value that would not round-trip fails before mutation.
+/// a value that would not round-trip fails before mutation. The read and save
+/// run under the config write lock, so a concurrent `orbit config` write is
+/// not erased.
 fn write_machine_identity(
     global_root: &Path,
     identity: &MachineIdentity,
 ) -> Result<(), OrbitError> {
-    let mut store = ConfigStore::open(ConfigScope::Global, config_path(global_root))?;
-    store.set_machine_identity(&identity.id, &identity.name, &identity.task_prefix)?;
-    store.save()
+    let path = config_path(global_root);
+    ConfigStore::with_write_lock(&path, || {
+        let mut store = ConfigStore::open(ConfigScope::Global, path.clone())?;
+        store.set_machine_identity(&identity.id, &identity.name, &identity.task_prefix)?;
+        store.save()
+    })
 }
 
 /// Fold a pre-ORB-12725 `~/.orbit/host.toml` into `[machine]`, then remove it.

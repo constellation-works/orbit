@@ -70,7 +70,7 @@ in member manifests with `workspace = true`.
 
 ### Domain
 
-- **orbit-config** owns `config.toml`. That covers the key registry, global-over-workspace layering (security keys replace rather than merge, and `[machine]` is global-only), provenance for `orbit config show`, resolved views, and comment-preserving atomic edits through `ConfigStore`. Callers pass explicit roots, so the crate never discovers the cwd or `$HOME`. It does not depend on `orbit-engine`; Core translates PR settings at composition time.
+- **orbit-config** owns `config.toml`. That covers the key registry, global-over-workspace layering (security keys replace rather than merge, and `[machine]` is global-only), provenance for `orbit config show`, resolved views, and comment-preserving atomic edits through `ConfigStore`, which every writer runs from open to save under one per-file write lock so concurrent edits cannot erase each other. Callers pass explicit roots, so the crate never discovers the cwd or `$HOME`. It does not depend on `orbit-engine`; Core translates PR settings at composition time.
 - **orbit-search** runs lexical retrieval. It owns the SQLite chunk and FTS5 schema, chunking, task-field extraction, and BM25 ranking. Core projects task records into it. The index file keeps its `semantic.db` name so persisted paths stay compatible.
 - **orbit-registry** owns this machine's `[machine]` identity, the workspace catalog, checkout bindings, task-publication bindings, and the operator's registered remote hosts (`hosts.toml`), each persisted atomically. It has no shared database and no runtime execution.
 - **orbit-store** handles persistence. See [orbit-store internals](#orbit-store-internals) below.

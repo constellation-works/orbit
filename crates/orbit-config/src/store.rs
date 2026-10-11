@@ -5,6 +5,13 @@
 //! the file's formatting or hand-written comments. Validation uses the same
 //! layer-aware admission pipeline as runtime loads, so workspace writes see
 //! global definitions and still refuse a malformed effective config.
+//!
+//! A store holds the bytes it was opened from. [`ConfigStore::save`] rereads
+//! the file under the file's write lock and refuses to replace content that
+//! changed after the store was opened, so a stale edit cannot erase another
+//! writer's successful one. Writers that open, edit, validate and save run
+//! that whole sequence inside [`ConfigStore::with_write_lock`], so concurrent
+//! edits of one file serialize instead of refusing each other.
 
 use std::fs;
 use std::io::Read;
@@ -14,7 +21,7 @@ use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all, with_exclusive_file_lock};
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
@@ -72,7 +79,13 @@ pub struct ConfigStore {
     scope: ConfigScope,
     path: PathBuf,
     doc: DocumentMut,
+    /// The file's content when this store read it (empty when absent): the
+    /// version [`Self::save`] requires to still be on disk before replacing it.
+    opened: String,
 }
+
+/// Label the config write lock reports in contention diagnostics.
+const CONFIG_WRITE_LOCK_LABEL: &str = "config.toml write";
 
 impl ConfigStore {
     /// Open `path` for the given scope, reading its current content if it
@@ -82,7 +95,42 @@ impl ConfigStore {
     pub fn open(scope: ConfigScope, path: impl Into<PathBuf>) -> Result<Self, OrbitError> {
         let path = path.into();
         let content = read_optional(&path)?;
-        Self::from_content(scope, path, &content)
+        Self::from_content(scope, path, &content, content.clone())
+    }
+
+    /// Run `op` holding the exclusive write lock of the `config.toml` at
+    /// `path`, the lock [`Self::save`] takes.
+    ///
+    /// A writer opens its store, edits, validates and saves inside `op`, so
+    /// the version it validated is the version it replaced, and a concurrent
+    /// writer of the same file waits instead of being refused as stale. The
+    /// lock is reentrant on one thread; it must not be held across an
+    /// `.await`, so async callers run the edit on a blocking thread.
+    pub fn with_write_lock<T>(
+        path: &Path,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        // Lock the reconstructed, prefix-checked path, as reads do. A missing
+        // parent is created first (the save would create it anyway), so every
+        // writer of one file agrees on a single lock.
+        let target = match validated_config_store_path(path)? {
+            Some(target) => target,
+            None => {
+                let parent = path.parent().ok_or_else(|| {
+                    config_store_path_error("config path has no parent directory", path)
+                })?;
+                create_private_dir_all(parent).map_err(|err| {
+                    OrbitError::Io(format!(
+                        "failed to create config directory '{}': {err}",
+                        redact_home_dir(&parent.display().to_string())
+                    ))
+                })?;
+                validated_config_store_path(path)?.ok_or_else(|| {
+                    config_store_path_error("config directory could not be resolved", path)
+                })?
+            }
+        };
+        with_exclusive_file_lock(&target, CONFIG_WRITE_LOCK_LABEL, op)
     }
 
     /// Open the workspace `config.toml` for a `set`, applying the
@@ -101,9 +149,8 @@ impl ConfigStore {
         if workspace_config_sets_policy(&path) {
             return Self::open(ConfigScope::Workspace, path);
         }
-        let toggles = Self::open(ConfigScope::Workspace, path.clone())?
-            .doc
-            .remove(PLUGIN_ENABLEMENT_TABLE);
+        let mut existing = Self::open(ConfigScope::Workspace, path.clone())?;
+        let toggles = existing.doc.remove(PLUGIN_ENABLEMENT_TABLE);
         let content = match mode {
             WorkspaceInitMode::RequireExisting => {
                 return Err(OrbitError::invalid_input_with_suggestions(
@@ -122,7 +169,8 @@ impl ConfigStore {
             WorkspaceInitMode::SeedFromGlobal => read_optional(global_config_path)?,
             WorkspaceInitMode::Fresh => String::new(),
         };
-        let mut store = Self::from_content(ConfigScope::Workspace, path, &content)?;
+        let mut store =
+            Self::from_content(ConfigScope::Workspace, path, &content, existing.opened)?;
         if mode == WorkspaceInitMode::SeedFromGlobal {
             // `[machine]` belongs to this host and is rejected in workspace
             // configs. Remove it from the parsed document so all other
@@ -135,14 +183,24 @@ impl ConfigStore {
         Ok(store)
     }
 
-    fn from_content(scope: ConfigScope, path: PathBuf, content: &str) -> Result<Self, OrbitError> {
+    fn from_content(
+        scope: ConfigScope,
+        path: PathBuf,
+        content: &str,
+        opened: String,
+    ) -> Result<Self, OrbitError> {
         let doc = content.parse::<DocumentMut>().map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid TOML in '{}': {err}",
                 redact_home_dir(&path.display().to_string())
             ))
         })?;
-        Ok(Self { scope, path, doc })
+        Ok(Self {
+            scope,
+            path,
+            doc,
+            opened,
+        })
     }
 
     /// Which physical file this store is bound to.
@@ -591,13 +649,32 @@ impl ConfigStore {
     /// (temp file + rename, via `orbit_common::fs::io::atomic_write_text`).
     /// Callers should run the validation method appropriate to this store's
     /// scope first: `save` does not validate on its own.
-    pub fn save(&self) -> Result<(), OrbitError> {
-        atomic_write_text(&self.path, &self.doc.to_string()).map_err(|err| {
-            OrbitError::Io(format!(
-                "failed to write config '{}': {err}",
-                redact_home_dir(&self.path.display().to_string())
-            ))
-        })
+    ///
+    /// Under the file's write lock, the file is reread first. When it no
+    /// longer holds the content this store was opened from, another writer
+    /// saved in between: the save is refused and the file is left as that
+    /// writer persisted it, rather than replaced by an edit validated against
+    /// an older version. Run the open-to-save sequence inside
+    /// [`Self::with_write_lock`] to wait for such a writer instead.
+    pub fn save(&mut self) -> Result<(), OrbitError> {
+        let content = self.doc.to_string();
+        Self::with_write_lock(&self.path, || {
+            if read_optional(&self.path)? != self.opened {
+                return Err(OrbitError::Store(format!(
+                    "config '{}' changed on disk after this edit read it; nothing was written. \
+                     Reapply the edit to the current file",
+                    redact_home_dir(&self.path.display().to_string())
+                )));
+            }
+            atomic_write_text(&self.path, &content).map_err(|err| {
+                OrbitError::Io(format!(
+                    "failed to write config '{}': {err}",
+                    redact_home_dir(&self.path.display().to_string())
+                ))
+            })
+        })?;
+        self.opened = content;
+        Ok(())
     }
 }
 
