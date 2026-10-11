@@ -408,7 +408,7 @@ impl BaselineCheck {
 }
 
 /// The known-red rule delivery validation and review settlement share
-/// [ORB-15375] [ORB-15546]: whether a failed candidate `run`'s failures are
+/// [ORB-15375] [ORB-15545] [ORB-15546]: whether a failed candidate `run`'s failures are
 /// all the base's to answer for, given the failures the base's run of the
 /// same check names. The run must name at least one failure, every one a
 /// failed test (`test …`, as [`super::base_claim::failure_identities`] reads
@@ -429,14 +429,14 @@ pub(super) fn known_red(run: &RequiredCommandRun, base_failures: &BTreeSet<Strin
 }
 
 /// Whether `failures` is a nonempty set of failed tests, every one a `test …`
-/// identity as `failure_identities` reads it [ORB-15546]: the only failures a
-/// base run can answer for. A compiler or lint error names no test, so says
-/// nothing about which tests ran.
+/// identity as `failure_identities` reads it [ORB-15545] [ORB-15546]: the only
+/// failures a base run can answer for. A compiler or lint error names no test,
+/// so says nothing about which tests ran.
 fn names_only_failed_tests(failures: &BTreeSet<String>) -> bool {
     !failures.is_empty()
         && failures
             .iter()
-            .all(|failure| failure.starts_with(TEST_FAILURE_PREFIX))
+            .all(|failure| failure.starts_with(TEST_FAILURE_PREFIX) && !failure.contains(": error"))
 }
 
 /// The prefix `failure_identities` gives a failed test.

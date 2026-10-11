@@ -3211,7 +3211,7 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     .map(|test| format!("test orbit-core::runtime {test}"))
                     .collect::<Vec<_>>()
             };
-            let cases: [KnownRedCase<'_>; 4] = [
+            let cases: [KnownRedCase<'_>; 5] = [
                 ("equal", None, Some(&base)),
                 ("subset", Some(&["suite::flaky"]), Some(&["suite::flaky"])),
                 (
@@ -3220,6 +3220,7 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     None,
                 ),
                 ("disjoint", Some(&["suite::added"]), None),
+                ("empty", Some(&[]), None),
             ];
             for (case, candidate_tests, known_red) in cases {
                 let fx = Fixture::with_red_tests(sandbox, &base, candidate_tests);
@@ -3314,6 +3315,134 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                         "{case}: the PR names {test}: {body}"
                     );
                 }
+            }
+        },
+    );
+}
+
+/// [ORB-15545] A required command failing only with compiler or lint
+/// diagnostics never produces `passed_with_known_red`, even when the same
+/// diagnostics fail on the pinned base. A failure set containing both tests
+/// and compiler or lint diagnostics also retains ordinary failed or held
+/// behavior.
+#[test]
+fn compiler_and_lint_failures_never_proceed_as_known_red() {
+    isolated(
+        "compiler_and_lint_failures_never_proceed_as_known_red",
+        |sandbox| {
+            let compiler_diagnostic = "\
+error[E0308]: mismatched types
+ --> src/lib.rs:4:9
+";
+            let lint_diagnostic = "\
+error: this `if` has identical blocks
+ --> src/main.rs:10:5
+";
+            let test_failure = nextest_failures(&["suite::broken"]);
+            let mixed_failure = format!("{compiler_diagnostic}{test_failure}");
+
+            let cases = [
+                (
+                    "compiler_only_red_base",
+                    compiler_diagnostic.to_string(),
+                    None::<&str>,
+                    vec!["src/lib.rs:4:9: error[E0308]: mismatched types".to_string()],
+                ),
+                (
+                    "lint_only_red_base",
+                    lint_diagnostic.to_string(),
+                    None::<&str>,
+                    vec!["src/main.rs:10:5: error: this `if` has identical blocks".to_string()],
+                ),
+                (
+                    "mixed_red_base",
+                    mixed_failure.clone(),
+                    None::<&str>,
+                    vec![
+                        "src/lib.rs:4:9: error[E0308]: mismatched types".to_string(),
+                        "test orbit-core::runtime suite::broken".to_string(),
+                    ],
+                ),
+            ];
+
+            for (case, base_output, candidate_output, expected_identities) in cases {
+                let fx = Fixture::with_red_output(sandbox, &base_output, candidate_output);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                host.require_commands(&[RED_TESTS]);
+                let mut input = fx.validate_input();
+                input["base_ref"] = json!(BASE);
+
+                let outcome = action(&host, "candidate_validate", &input);
+                let message = outcome
+                    .expect_err(&format!(
+                        "{case}: compiler/lint failures never proceed as known red"
+                    ))
+                    .to_string();
+                assert!(
+                    is_baseline_red_failure(None, Some(&message)),
+                    "{case}: {message}"
+                );
+                let hold = BaselineRedHold::from_text(&message).expect("the hold");
+                assert_eq!(
+                    hold.failures.identities, expected_identities,
+                    "{case}: {hold:?}"
+                );
+
+                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                assert_eq!(log["failure_kind"], "baseline_red", "{case}");
+                assert!(log["known_red"].is_null(), "{case}: no known-red in log");
+
+                let recorded = host
+                    .history(TASK_ID)
+                    .into_iter()
+                    .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
+                    .collect::<Vec<_>>();
+                assert!(recorded.is_empty(), "{case}: no known-red history event");
+            }
+
+            // When the base passes, compiler-only and mixed failures retain
+            // ordinary candidate failure (not held as baseline_red, and never
+            // passed_with_known_red).
+            for (case, candidate_output) in [
+                ("compiler_only_candidate_failure", compiler_diagnostic),
+                ("mixed_candidate_failure", &mixed_failure),
+            ] {
+                let fx = Fixture::new(sandbox);
+                fx.commit_on_base("Makefile", "ci-test:\n\t@exit 0\n");
+                git(&fx.repo, &["rebase", BASE]);
+                git(&fx.repo, &["push", "--force", "origin", BRANCH]);
+                fx.commit("failing.txt", candidate_output);
+                let candidate =
+                    fx.commit("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n");
+                let fx = Fixture {
+                    base_sha: git(&fx.repo, &["rev-parse", BASE]),
+                    candidate,
+                    ..fx
+                };
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                host.require_commands(&[RED_TESTS]);
+                let mut input = fx.validate_input();
+                input["base_ref"] = json!(BASE);
+
+                let outcome = action(&host, "candidate_validate", &input);
+                let message = outcome
+                    .expect_err(&format!(
+                        "{case}: failing candidate retains ordinary failure"
+                    ))
+                    .to_string();
+                assert!(
+                    !is_baseline_red_failure(None, Some(&message)),
+                    "{case}: not a baseline red hold: {message}"
+                );
+                assert!(
+                    message.contains("passes this command, so the candidate introduced"),
+                    "{case}: names that base passed: {message}"
+                );
+
+                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                assert_eq!(log["failure_kind"], "candidate", "{case}");
+                assert_eq!(log["baseline"]["decision"], "passed", "{case}");
+                assert!(log["known_red"].is_null(), "{case}: no known-red in log");
             }
         },
     );
@@ -5310,6 +5439,25 @@ impl Fixture {
         }
     }
 
+    /// [`Fixture::new`] whose base fails [`RED_TESTS`] with `base_output`, and
+    /// whose candidate commits `candidate_output` (or HEAD if `None`).
+    fn with_red_output(sandbox: &Path, base_output: &str, candidate_output: Option<&str>) -> Self {
+        let fixture = Self::new(sandbox);
+        fixture.commit_on_base("failing.txt", base_output);
+        fixture.commit_on_base("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n");
+        git(&fixture.repo, &["rebase", BASE]);
+        git(&fixture.repo, &["push", "--force", "origin", BRANCH]);
+        let candidate = match candidate_output {
+            Some(output) => fixture.commit("failing.txt", output),
+            None => fixture.head(),
+        };
+        Self {
+            base_sha: git(&fixture.repo, &["rev-parse", BASE]),
+            candidate,
+            ..fixture
+        }
+    }
+
     /// [`Fixture::new`] whose base fails [`RED_TESTS`] with nextest's `FAIL`
     /// line for each of `base_tests` (and libtest's echo of the first), with
     /// the candidate rebased onto it. A candidate given `candidate_tests`
@@ -5319,25 +5467,13 @@ impl Fixture {
         base_tests: &[&str],
         candidate_tests: Option<&[&str]>,
     ) -> Self {
-        let fixture = Self::new(sandbox);
         let mut base_output = base_tests
             .first()
             .map(|test| format!("test {test} ... FAILED\n"))
             .unwrap_or_default();
         base_output.push_str(&nextest_failures(base_tests));
-        fixture.commit_on_base("failing.txt", &base_output);
-        fixture.commit_on_base("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n");
-        git(&fixture.repo, &["rebase", BASE]);
-        git(&fixture.repo, &["push", "--force", "origin", BRANCH]);
-        let candidate = match candidate_tests {
-            Some(tests) => fixture.commit("failing.txt", &nextest_failures(tests)),
-            None => fixture.head(),
-        };
-        Self {
-            base_sha: git(&fixture.repo, &["rev-parse", BASE]),
-            candidate,
-            ..fixture
-        }
+        let candidate_output = candidate_tests.map(nextest_failures);
+        Self::with_red_output(sandbox, &base_output, candidate_output.as_deref())
     }
 
     /// Commit `file` on the base and push it, leaving the candidate checked out.
