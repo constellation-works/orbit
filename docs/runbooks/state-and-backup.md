@@ -60,7 +60,7 @@ presence. Path fields live on `WorkspacePaths` in
 | `workspaces.json` | registry of workspaces on this machine (logical workspaces + local checkouts, including declared owner and `owner`/`replica` role) | authoritative |
 | `registry-cache.json` | legacy file from the removed fleet-registry path | inert; no live reader or refresher, so remove only after backup if cleanup is desired |
 | `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`, retained `job_run_states`, and `job_run_id_allocations`, which keeps archived and deleted run ids reserved), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for retained live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
-| `tasks/index.sqlite` | global task-ID allocator + registry index, plus `task_envelope_stamps`, a cache of which `task.yaml` files already match the index | regenerable (`orbit task reindex`); stamps are re-recorded by the next listing |
+| `tasks/index.sqlite` (+ `-wal`, `-shm`) | global task-ID allocator + registry index, plus `task_envelope_stamps`, a cache of which `task.yaml` files already match the index | **authoritative** for the allocator's issued-id high-water mark and workspace bindings; index rows are regenerable (`orbit task reindex`) and stamps are re-recorded by the next listing. Losing it needs the [registry-loss procedure](../design/task-migration/1_overview.md#recovering-a-lost-task-registry) |
 | `tasks/workspaces/<ws-id>/<task-id>/` | canonical task bundles (survive repo moves) | **authoritative** |
 | `frictions/workspaces/<ws-id>/` | live tag taxonomy plus the published legacy record tree used for one-time import/rollback | mixed: taxonomy is authoritative configuration; record files are legacy evidence after SQLite import |
 | `resources/activities/`, `resources/jobs/` | managed defaults plus operator-authored activity/job YAML; hidden manifests retain managed content provenance | mixed: current defaults are regenerable, but untracked YAML and `resources/.retired-managed/` backups are **authoritative until reviewed** |
@@ -312,10 +312,10 @@ from the captured settings only after the old source identity is restored.
   `state/job-runs/` if its old run evidence matters. Git already backs up any selected
   artifacts the repository deliberately commits.
 - **Global root:** `~/.orbit/config.toml` (settings and the `[machine]` identity), `workspaces.json`, `tasks/`
-  (canonical bundles), `orbit.db`, `frictions/`, and `resources/` whenever it contains operator-authored YAML or
+  (canonical bundles and the `index.sqlite` task-id allocator), `orbit.db`, `frictions/`, and `resources/` whenever it contains operator-authored YAML or
   `.retired-managed/` recovery copies. The database holds non-derivable audit and run history.
 - **Safe to lose or regenerate:** retired `graph/` and `knowledge/graph/`, `state/semantic.db`,
-  `tasks/index.sqlite`, `~/.orbit/embed/`, `~/.orbit/state/logs/`, scoreboard counters.
+  `~/.orbit/embed/`, `~/.orbit/state/logs/`, scoreboard counters.
 
 ### Preserve SQLite consistency
 
@@ -375,7 +375,9 @@ orbit doctor              # verify; see health-checks.md
 ```
 
 Task bundles restored by file copy (for example, an rsync of `~/.orbit/tasks/`) need
-`orbit task reindex` afterward. For cross-machine moves, prefer
+`orbit task reindex` afterward. A copy without its `tasks/index.sqlite` loses the
+allocator's high-water mark, so Orbit refuses new task ids until it is set again; follow the
+[registry-loss procedure](../design/task-migration/1_overview.md#recovering-a-lost-task-registry). For cross-machine moves, prefer
 `orbit task export` / `orbit task import --on-conflict=renumber`.
 
 ## Verification

@@ -25,6 +25,28 @@ fn workspaces_dir_of(path: &Path) -> PathBuf {
     normalize_path(&registry_dir).join("workspaces")
 }
 
+/// Whether the bundle root already holds a task partition. Partitions are
+/// created only through an open registry, so one that predates the registry's
+/// schema means the registry holding its allocator was lost or replaced.
+fn holds_partitions(workspaces_dir: &Path) -> Result<bool, OrbitError> {
+    let entries = match std::fs::read_dir(workspaces_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(OrbitError::Io(error.to_string())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| OrbitError::Io(error.to_string()))?;
+        if entry
+            .file_type()
+            .map_err(|error| OrbitError::Io(error.to_string()))?
+            .is_dir()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Task registry handle: one writer connection behind a mutex plus a
 /// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
 /// readers on their own connections never queue behind the writer, so a
@@ -87,7 +109,7 @@ impl TaskRegistryStore {
             assert_readable_schema(&conn, path)?;
         } else {
             if registry_user_version(&conn)? < super::REGISTRY_SCHEMA_VERSION {
-                apply_schema(&conn)?;
+                apply_schema(&conn, holds_partitions(&workspaces_dir)?)?;
             }
             ensure_compatible_schema(&mut conn, path)?;
             assert_registry_user_version(&conn)?;

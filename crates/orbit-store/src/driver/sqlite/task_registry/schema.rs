@@ -1,13 +1,18 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use rusqlite::{Connection, TransactionBehavior, types::Value};
+use rusqlite::{Connection, Transaction, TransactionBehavior, types::Value};
 
 use super::REGISTRY_SCHEMA_VERSION;
+use super::allocator::HIGH_WATER_UNKNOWN_AUTHORITY;
 use super::envelope_stamps::{ensure_envelope_stamps, has_envelope_stamps};
 use super::util::now_string;
 
-pub(super) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
+/// `prior_partitions` says the bundle root already held task partitions when
+/// this registry was opened. A fresh allocator seeded over them cannot know
+/// which ids were issued, so it is marked to refuse allocation until an
+/// operator establishes the high-water mark.
+pub(super) fn apply_schema(conn: &Connection, prior_partitions: bool) -> Result<(), OrbitError> {
     migrate_path_coupled_workspace_bindings(conn)?;
     migrate_allocator_state_v5(conn)?;
     conn.execute_batch(
@@ -135,15 +140,35 @@ pub(super) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-    conn.execute(
-        "INSERT OR IGNORE INTO allocator_state(authority, next_number, task_prefix, updated_at)
-         VALUES ('local', 0, 'ORB', ?1)",
-        [now_string()],
-    )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    seed_allocator(conn, prior_partitions)?;
     conn.pragma_update(None, "user_version", i64::from(REGISTRY_SCHEMA_VERSION))
         .map_err(|e| OrbitError::Store(format!("failed to set registry user_version: {e}")))?;
     Ok(())
+}
+
+/// Seed the local allocator row, and mark it in the same transaction when it
+/// was created over existing partitions, so no concurrent opener can allocate
+/// from the unmarked zero counter.
+fn seed_allocator(conn: &Connection, prior_partitions: bool) -> Result<(), OrbitError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let now = now_string();
+    let seeded = tx
+        .execute(
+            "INSERT OR IGNORE INTO allocator_state(authority, next_number, task_prefix, updated_at)
+             VALUES ('local', 0, 'ORB', ?1)",
+            [&now],
+        )
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    if seeded == 1 && prior_partitions {
+        tx.execute(
+            "INSERT OR IGNORE INTO allocator_state(authority, next_number, task_prefix, updated_at)
+             VALUES (?1, 0, 'ORB', ?2)",
+            [HIGH_WATER_UNKNOWN_AUTHORITY, &now],
+        )
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    }
+    tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 /// Whether the stored schema is already exactly the shape this build reads.
@@ -242,7 +267,7 @@ fn ensure_action_keys(conn: &Connection) -> Result<(), OrbitError> {
 /// their column order. This reference must stay at v5 when a future format ships.
 fn is_known_additive_v6(conn: &Connection) -> Result<bool, OrbitError> {
     let reference = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;
-    apply_schema(&reference)?;
+    apply_schema(&reference, false)?;
     ensure_action_keys(&reference)?;
     // Envelope stamps are a derived cache any format may carry; they are
     // created on first use, not by schema setup, so mirror them when present.
