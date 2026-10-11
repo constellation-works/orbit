@@ -21,6 +21,7 @@
 //!
 //! # Key exports
 //! - [`run_process`] — primary entry point for spawning a subprocess
+//! - [`run_process_supervised`] — the same with structured supervisor stop metadata
 //! - [`supervise_child`] — supervise a child spawned through a sandbox wrapper
 //! - [`spawn_supervised_cancellable`] — the same, with signals intercepted
 //!   before the spawn
@@ -97,12 +98,13 @@ pub use path_identity::{lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
-    EnvironmentMode, ExecRequest, StdinMode, run_process, run_process_streaming_stdout,
-    spawn_supervised_cancellable, supervise_child, supervise_child_cancellable,
+    EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,
+    run_process_streaming_stdout, run_process_supervised, spawn_supervised_cancellable,
+    supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
 pub use supervision::{
-    INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, TERMINATION_STATUS_NOTE,
+    INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, ProcessStopCause, TERMINATION_STATUS_NOTE,
 };
 pub use validation_env::{
     LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,

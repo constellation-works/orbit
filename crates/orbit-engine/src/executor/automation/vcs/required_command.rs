@@ -19,8 +19,9 @@
 //! problem rather than the code's.
 //!
 //! A supervisor stop at the output capture limit or by a signal also says
-//! nothing about the candidate. Its unbounded-stream note is classified before
-//! log truncation and carries the same validation-environment marker.
+//! nothing about the candidate. Its structured execution metadata supplies the
+//! cause and carries the same validation-environment marker. Child output,
+//! including printed supervision diagnostics, cannot establish a stop.
 //!
 //! Captured output keeps a head and a tail of each stream. A long stdout
 //! cannot drop the stderr failure before that classification, and the end of
@@ -55,8 +56,8 @@ use std::sync::OnceLock;
 use orbit_common::OrbitError;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_exec::{
-    EnvironmentMode, ExecRequest, INTERRUPTED_SIGNAL_NOTE, NoSandbox, OUTPUT_CAPTURE_LIMIT_NOTE,
-    StdinMode, TERMINATION_STATUS_NOTE, ValidationEnvironment, program_on_path, run_process,
+    EnvironmentMode, ExecRequest, NoSandbox, StdinMode, ValidationEnvironment, program_on_path,
+    run_process_supervised,
 };
 use orbit_types::workflow::{
     HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand, SEATBELT_DEFERRAL_PREFIX,
@@ -351,7 +352,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     if let Some(selection) = selection {
         env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
     }
-    let outcome = run_process(
+    let supervised = run_process_supervised(
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],
@@ -363,6 +364,8 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         },
         &NoSandbox,
     )?;
+    let infrastructure_failure = supervised.stop_cause.map(|cause| cause.to_string());
+    let outcome = supervised.result;
     let summary = ValidationSummary::read(&summary_path);
     // Judge the complete streams before `capture` bounds the log. A skip or
     // deferral in the middle of a large output must still refuse a host pass
@@ -387,25 +390,6 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
                 || line.starts_with(SEATBELT_DEFERRAL_PREFIX)
         })
         .map(|line| line.trim().to_string());
-    // Read the supervisor notes before the recorded output is bounded.
-    let infrastructure_failure = (!passed)
-        .then(|| {
-            outcome
-                .stdout
-                .lines()
-                .chain(outcome.stderr.lines())
-                .find(|line| {
-                    [
-                        OUTPUT_CAPTURE_LIMIT_NOTE,
-                        INTERRUPTED_SIGNAL_NOTE,
-                        TERMINATION_STATUS_NOTE,
-                    ]
-                    .iter()
-                    .any(|prefix| line.starts_with(prefix))
-                })
-                .map(str::to_string)
-        })
-        .flatten();
     let failures = if passed {
         BTreeSet::new()
     } else {
