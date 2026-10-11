@@ -259,16 +259,6 @@ impl ConfigStore {
         names
     }
 
-    /// Look up the value of `key` if it was explicitly defined in this document,
-    /// returning `None` if the key is not set.
-    pub fn explicit_value(&self, key: &str) -> Result<Option<JsonValue>, OrbitError> {
-        registry::admit_config_key(key)?;
-        if !self.is_key_set(key) {
-            return Ok(None);
-        }
-        self.effective_value(key).map(Some)
-    }
-
     /// The fully resolved (defaulted) view of this document, as if it were
     /// loaded as the effective `config.toml`. [`Self::validate`] uses it to
     /// verify a standalone document before saving. File views use

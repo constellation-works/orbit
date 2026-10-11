@@ -76,22 +76,18 @@ fn schema_accepted_keys_can_be_read_set_and_unset_despite_named_properties_or_de
         store.save().expect("save valid write");
 
         let mut reopened = ConfigStore::open(ConfigScope::Global, &path).expect("reopen store");
+        assert!(reopened.is_key_set(&key));
         assert_eq!(
-            reopened.explicit_value(&key).expect("read saved key"),
-            Some(json!(3))
+            reopened.effective_value(&key).expect("read saved key"),
+            json!(3)
         );
         assert!(reopened.unset_value(&key).expect("unset additional key"));
         reopened
             .validate_for_set(&key)
             .expect("section remains valid");
         reopened.save().expect("save unset");
-        assert_eq!(
-            ConfigStore::open(ConfigScope::Global, &path)
-                .expect("reopen unset store")
-                .explicit_value(&key)
-                .expect("read unset key"),
-            None,
-        );
+        let unset = ConfigStore::open(ConfigScope::Global, &path).expect("reopen unset store");
+        assert!(!unset.is_key_set(&key));
     }
 }
 
