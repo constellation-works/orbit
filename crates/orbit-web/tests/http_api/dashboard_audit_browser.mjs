@@ -30,19 +30,35 @@ const summary = {
   mcp_vs_cli_split: [{ label: 'mcp', count: 12345 }],
 };
 const rate = (numerator, denominator) => ({ rate: numerator / denominator, numerator, denominator });
+// Three paths sit in two or more of the four path rankings; the lock ranking
+// is quiet and change coupling is empty.
 const analytics = {
   window: '90d', rollup: 'file', min_support: 15, touched: 'declared_footprint', tasks_scanned: 5000,
-  computed_at: '2026-10-07T09:32:04Z', cache_ttl_seconds: 300,
+  computed_at: '2026-10-07T09:32:04Z', cache_ttl_seconds: 300, row_limit: 25,
   regressions: { below_support: 3, population: 400, rows: [{
-    path: 'crates/orbit-core/src/runtime/task/a-long-module-name/with/nested/paths/mod.rs', ...rate(4, 20),
+    path: 'crates/orbit-core/src/application/task/mod.rs', ...rate(12, 30),
     regressed_tasks: [{ task_id: 'ORB-1', title: 'Fixture regression', crew: 'opus', regression_tasks: ['ORB-2'] }],
-    by_crew: [{ crew: 'opus', ...rate(4, 20) }],
+    by_crew: [{ crew: 'opus', ...rate(12, 30) }],
+  }, {
+    path: 'crates/orbit-core/src/runtime/task/a-long-module-name/with/nested/paths/mod.rs', ...rate(4, 20),
+    regressed_tasks: [], by_crew: [],
   }] },
-  lock_contention: { below_support: 0, wait_time_recorded: false, rows: [{ path: 'Cargo.lock', ...rate(9, 30), contending_tasks: 9, reservations: 30, denials: 210, wait_ms: null }] },
-  footprint_misses: { below_support: 0, population: 400, rows: [{ path: 'docs/README.md', ...rate(6, 18), widenings: 7 }] },
-  change_coupling: { below_support: 0, reservations: 120, excluded_large: 4, large_footprint_cap: 12, rows: [{ paths: ['crates/a/src/lib.rs', 'crates/b/src/lib.rs'], ...rate(16, 20), reservations: [18, 18] }] },
-  blocked: { below_support: 0, causes: [{ cause: 'auth', kind: 'infrastructure', tasks: 3 }, { cause: 'unclassified', kind: 'unclassified', tasks: 2 }, { cause: 'run_failure', kind: 'attributed', tasks: 5 }], rows: [{ path: 'src/blocked.rs', ...rate(5, 16), unclassified: 2 }] },
-  rejected: { below_support: 0, rejected_with_run: 2, excluded_without_run: 6, rows: [{ path: 'src/rejected.rs', ...rate(2, 15) }] },
+  lock_contention: { below_support: 0, reservations: 2557, denials: 0, wait_time_recorded: false, rows: [] },
+  footprint_misses: { below_support: 0, population: 400, rows: [
+    { path: 'docs/README.md', ...rate(6, 18), widenings: 7 },
+    { path: 'crates/orbit-core/src/application/task/mod.rs', ...rate(5, 30), widenings: 5 },
+    ...Array.from({ length: 23 }, (_, index) => ({ path: `crates/orbit-fixture/src/module_${index}.rs`, ...rate(3, 20), widenings: 3 })),
+  ] },
+  change_coupling: { below_support: 13051, reservations: 2300, excluded_large: 250, large_footprint_cap: 12, rows: [] },
+  blocked: { below_support: 0, causes: [{ cause: 'auth', kind: 'infrastructure', tasks: 3 }, { cause: 'unclassified', kind: 'unclassified', tasks: 2 }, { cause: 'run_failure', kind: 'attributed', tasks: 5 }], rows: [
+    { path: 'src/blocked.rs', ...rate(5, 16), unclassified: 2 },
+    { path: 'crates/orbit-core/src/application/task/mod.rs', ...rate(3, 30), unclassified: 1 },
+  ] },
+  rejected: { below_support: 0, rejected_with_run: 2, excluded_without_run: 6, rows: [
+    { path: 'src/rejected.rs', ...rate(2, 15) },
+    { path: 'docs/README.md', ...rate(1, 18) },
+    { path: 'src/blocked.rs', ...rate(1, 16) },
+  ] },
 };
 const analyticsRequests = [];
 // When set, /api/audit pages through it like the real endpoint: newest first,
@@ -273,38 +289,146 @@ try {
   pagedEvents = null;
   await page.evaluate(async () => {
     const codebase = await import('/js/codebase.js');
+    globalThis.codebaseFixture = codebase;
     // app.js is stripped here, so wire the controls the way it does.
-    globalThis.codebaseChanges = 0;
-    codebase.wireCodebaseControls(() => { globalThis.codebaseChanges += 1; });
+    globalThis.codebaseHashes = [];
+    codebase.wireCodebaseControls(() => { globalThis.codebaseHashes.push(auditFixture.buildAuditHash()); });
     auditFixture.setActiveAuditSubtabFromButton('codebase');
     await codebase.fetchAndRenderCodebase();
   });
-  assert.equal(await page.locator('#audit-title').textContent(), 'Codebase analytics');
+  const refreshCodebase = () => page.evaluate(() => codebaseFixture.fetchAndRenderCodebase());
+  assert.equal(await page.locator('#audit-title').textContent(), 'Codebase');
   assert.equal(await page.locator('#audit-body').isVisible(), false, 'Codebase hides the Events listing');
   assert.equal(await page.locator('#audit-codebase-controls').isVisible(), true);
-  assert.equal(await page.locator('#audit-codebase-body .codebase-section').count(), 6);
-  assert.match(await page.locator('#audit-codebase-body .codebase-caption').textContent(), /Touched = declared footprint/);
+  assert.equal(await page.locator('#audit-summary-panel').isVisible(), false, 'Codebase hides the audit summary');
   assert.equal(analyticsRequests.at(-1).get('min_support'), '15', 'minimum support defaults to 15');
-  const codebaseLayout = await page.locator('#audit-codebase-body').evaluate(body => {
-    const box = body.getBoundingClientRect();
-    return [...body.querySelectorAll('.codebase-section')].map(section => {
-      const table = section.querySelector('table');
-      const tableBox = table ? table.getBoundingClientRect() : null;
-      return { key: section.dataset.section, inside: !tableBox || (tableBox.left >= box.left - 1), scrolls: section.scrollWidth > section.clientWidth + 1 };
-    });
+  const widths = () => page.evaluate(() => {
+    const main = document.getElementById('audit-main');
+    const style = getComputedStyle(main);
+    return {
+      main: main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      pane: document.getElementById('audit-pane').getBoundingClientRect().width,
+    };
   });
-  for (const row of codebaseLayout) assert.ok(row.inside, `${row.key} table starts inside the panel: ${JSON.stringify(codebaseLayout)}`);
+  const fullWidth = await widths();
+  assert.ok(fullWidth.pane >= fullWidth.main - 2, `Codebase takes the full width: ${JSON.stringify(fullWidth)}`);
+  await page.evaluate(() => auditFixture.setActiveAuditSubtabFromButton('events'));
+  assert.equal(await page.locator('#audit-summary-panel').isVisible(), true, 'Events keeps the audit summary');
+  const eventsWidth = await widths();
+  assert.ok(eventsWidth.pane < eventsWidth.main * 0.75, `Events shares the width with the summary: ${JSON.stringify(eventsWidth)}`);
+  await page.evaluate(() => auditFixture.setActiveAuditSubtabFromButton('codebase'));
+
+  // Seven tiles are toggle buttons; the overlap list is open by default and
+  // holds exactly the paths in two or more of the four path rankings.
+  const tiles = page.locator('#audit-codebase-body .codebase-tile');
+  assert.equal(await tiles.count(), 7);
+  assert.deepEqual(await tiles.evaluateAll(nodes => nodes.map(node => [node.tagName, node.getAttribute('aria-pressed')])),
+    [['BUTTON', 'true'], ...Array.from({ length: 6 }, () => ['BUTTON', 'false'])]);
+  const rowPaths = () => page.locator('#codebase-list .codebase-row .codebase-path').evaluateAll(nodes => nodes.map(node => node.textContent));
+  assert.deepEqual(await rowPaths(), ['crates/orbit-core/src/application/task/mod.rs', 'docs/README.md', 'src/blocked.rs']);
+  const selectedPath = () => page.locator('#codebase-list .codebase-row[aria-current="true"] .codebase-path').textContent();
+  assert.equal(await selectedPath(), 'crates/orbit-core/src/application/task/mod.rs', 'the first row is selected');
+  assert.equal(await page.locator('#codebase-detail .codebase-task').count(), 1);
+  await page.locator('#codebase-list .codebase-row').nth(1).click();
+  assert.equal(await selectedPath(), 'docs/README.md');
+  assert.match(await page.locator('#codebase-detail [data-ranking="regressions"] .codebase-standing-rank').textContent(), /^not in the top 25$/);
+
+  // A poll with the same payload keeps the tile, the row and the scroll.
+  await page.locator('#audit-codebase-body .codebase-tile[data-tile="footprint_misses"]').click();
+  assert.equal(await page.locator('#audit-codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true');
+  const scroller = page.locator('.tab-pane[data-tab="audit"]');
+  await page.setViewportSize({ width: 1440, height: 600 });
+  const scrolled = await scroller.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
+  assert.ok(scrolled > 0, 'the fixture page is tall enough to scroll');
+  await refreshCodebase();
+  assert.equal(await scroller.evaluate(node => node.scrollTop), scrolled, 'a poll keeps the scroll position');
+  assert.equal(await page.locator('#audit-codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true', 'a poll keeps the tile');
+  assert.equal(await selectedPath(), 'docs/README.md', 'a poll keeps the row');
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
-  await page.selectOption('#codebase-rollup', 'crate');
-  assert.equal(await page.evaluate(() => globalThis.codebaseChanges), 1, 'the rollup select asks for a new hash');
-  await page.evaluate(async () => {
-    const codebase = await import('/js/codebase.js');
-    await codebase.fetchAndRenderCodebase();
+
+  // The segments and the empty-coupling action rewrite the hash and the request.
+  await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').click();
+  assert.equal(await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(await page.evaluate(() => globalThis.codebaseHashes), ['#audit/codebase?rollup=crate']);
+  await refreshCodebase();
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup segment changes the request');
+  await page.locator('#audit-codebase-body .codebase-tile[data-tile="change_coupling"]').click();
+  await page.getByRole('button', { name: 'Group by directory' }).click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#audit/codebase?rollup=dir');
+  await refreshCodebase();
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'dir');
+
+  // 375 px: no horizontal page scroll, every tile and row inside the body,
+  // the detail stacked under the list, and readable text.
+  await page.locator('#audit-codebase-body .codebase-tile[data-tile="overlap"]').click();
+  for (const width of [375, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const fit = await page.evaluate(() => {
+      const body = document.getElementById('audit-codebase-body').getBoundingClientRect();
+      const pane = document.querySelector('.tab-pane[data-tab="audit"]');
+      const outside = [...document.querySelectorAll('#audit-codebase-body .codebase-tile, #audit-codebase-body .codebase-row, #audit-codebase-body .codebase-metric, #audit-codebase-controls .codebase-seg')]
+        .map(node => node.getBoundingClientRect())
+        .filter(box => box.left < body.left - 1 || box.right > body.right + 1);
+      const list = document.getElementById('codebase-list').getBoundingClientRect();
+      const detail = document.getElementById('codebase-detail').getBoundingClientRect();
+      return {
+        page: document.documentElement.scrollWidth - innerWidth,
+        pane: pane.scrollWidth - pane.clientWidth,
+        outside: outside.length,
+        stacked: detail.top >= list.bottom - 1,
+      };
+    });
+    assert.equal(fit.page, 0, `no horizontal page scroll at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.pane, 0, `no horizontal pane scroll at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.outside, 0, `tiles, rows and segments fit at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.stacked, width < 1280, `the detail stacks under the list only on a narrow screen at ${width}`);
+    await page.screenshot({ path: path.join(evidence, `codebase-${width}.png`), fullPage: true, animations: 'disabled' });
+  }
+  // Text contrast against the composited background, through the alpha
+  // washes of selected rows and hints.
+  const lowContrast = await page.evaluate(() => {
+    const parse = value => (value.match(/[\d.]+/g) || []).map(Number);
+    const blend = (top, under) => {
+      const alpha = top[3] ?? 1;
+      return [0, 1, 2].map(index => top[index] * alpha + under[index] * (1 - alpha));
+    };
+    const background = node => {
+      const layers = [];
+      for (let at = node; at; at = at.parentElement) {
+        const color = parse(getComputedStyle(at).backgroundColor);
+        if (color.length >= 3 && (color[3] ?? 1) > 0) layers.push(color);
+        if (color.length >= 3 && (color[3] ?? 1) === 1) break;
+      }
+      return layers.reverse().reduce((under, layer) => blend(layer, under), [0, 0, 0]);
+    };
+    const luminance = rgb => {
+      const [r, g, b] = rgb.map(value => {
+        const channel = value / 255;
+        return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const failures = [];
+    for (const node of document.querySelectorAll('#audit-codebase-controls *, #audit-codebase-body *')) {
+      const own = [...node.childNodes].some(child => child.nodeType === 3 && child.textContent.trim());
+      if (!own || !node.getClientRects().length) continue;
+      const style = getComputedStyle(node);
+      if (style.visibility === 'hidden' || style.display === 'none' || node.closest('details:not([open]) > :not(summary)')) continue;
+      const bg = background(node);
+      const fg = blend(parse(style.color), bg);
+      const [light, dark] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+      const ratio = (light + 0.05) / (dark + 0.05);
+      if (ratio < 4.5) failures.push({ text: node.textContent.trim().slice(0, 40), class: node.className, ratio: Number(ratio.toFixed(2)) });
+    }
+    return failures;
   });
-  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup select changes the request');
+  assert.deepEqual(lowContrast, [], 'codebase text meets 4.5:1');
+  await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: codebaseLayout, errors }, null, 2));
-  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, the codebase view and keyboard expansion passed');
+  fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth, eventsWidth }, errors }, null, 2));
+  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, keyboard expansion, and the full-width codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;

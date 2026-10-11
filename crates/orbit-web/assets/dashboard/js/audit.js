@@ -124,11 +124,17 @@ function setAuditSubtab(name) {
   if (eventsBody) eventsBody.style.display = name === "events" ? "" : "none";
   if (codebaseCtl) codebaseCtl.style.display = name === "codebase" ? "" : "none";
   if (codebaseBody) codebaseBody.style.display = name === "codebase" ? "" : "none";
+  // The audit summary describes events, not the codebase, so Codebase drops
+  // that column and takes the full width.
+  const layout = $("audit-main");
+  if (layout) layout.classList.toggle("audit-full", name === "codebase");
+  const summary = $("audit-summary-column");
+  if (summary) summary.style.display = name === "codebase" ? "none" : "";
   // The audit count is the Events listing's; Codebase states its own totals.
   const count = $("audit-count");
   if (count) count.style.display = name === "events" ? "" : "none";
   const title = $("audit-title");
-  if (title) title.textContent = name === "codebase" ? "Codebase analytics" : "Audit events";
+  if (title) title.textContent = name === "codebase" ? "Codebase" : "Audit events";
 }
 
 function syncAuditControls() {

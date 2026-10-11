@@ -211,8 +211,8 @@
       </main>
     </section>
     <section class="tab-pane" data-tab="audit" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <main class="tasks-layout" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr);">
-        <div style="display: flex; flex-direction: column; min-width: 0;">
+      <main class="tasks-layout audit-layout" id="audit-main">
+        <div class="audit-primary">
           <section class="panel" id="audit-pane">
             <header><span id="audit-title">Audit events</span><span class="count" id="audit-count">-</span></header>
             <nav class="subtabs" id="audit-subtabs">
@@ -231,21 +231,46 @@
                 <div class="skeleton skeleton-row" style="width: 70%"></div>
               </div>
             </div>
-            <div class="controls codebase-controls" id="audit-codebase-controls" style="display: none;">
-              <label>Window <select id="codebase-window" aria-label="Codebase analytics window">
-                <option value="7d">7d</option>
-                <option value="30d">30d</option>
-                <option value="90d" selected>90d</option>
-                <option value="all">all</option>
-              </select></label>
-              <label>Minimum support <input type="number" id="codebase-min-support" min="1" step="1" value="15" inputmode="numeric" /></label>
-              <label>Roll up by <select id="codebase-rollup" aria-label="Codebase analytics rollup">
-                <option value="file" selected>file</option>
-                <option value="dir">directory</option>
-                <option value="crate">crate</option>
-              </select></label>
+            <div class="codebase-head" id="audit-codebase-controls" style="display: none;">
+              <div class="codebase-intro">
+                <p class="codebase-purpose">Which paths are costly for agents to change: how often the tasks that declared a path regressed, missed their footprint, got blocked or were rejected.</p>
+                <div class="codebase-meta-row">
+                  <span class="codebase-meta" id="codebase-meta"></span>
+                  <details class="codebase-how">
+                    <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>“Declared” is not the landed diff</summary>
+                    <p>A task counts against a path when its <code>context_files</code> name it, widened selectors included. What the merged commit actually changed is not read. Rates count distinct tasks, so a path does not lead just because many tasks touch it.</p>
+                  </details>
+                </div>
+              </div>
+              <div class="codebase-controls">
+                <div class="codebase-ctl" role="group" aria-labelledby="codebase-window-label">
+                  <span class="codebase-ctl-label" id="codebase-window-label">Window</span>
+                  <div class="codebase-segs" id="codebase-window">
+                    <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
+                    <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
+                    <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
+                    <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
+                  </div>
+                </div>
+                <div class="codebase-ctl" role="group" aria-labelledby="codebase-rollup-label">
+                  <span class="codebase-ctl-label" id="codebase-rollup-label">Group by</span>
+                  <div class="codebase-segs" id="codebase-rollup">
+                    <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
+                    <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
+                    <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
+                  </div>
+                </div>
+                <div class="codebase-ctl" role="group" aria-labelledby="codebase-min-label">
+                  <span class="codebase-ctl-label" id="codebase-min-label">Min. tasks per path</span>
+                  <div class="codebase-stepper">
+                    <button type="button" id="codebase-min-down" aria-label="Fewer tasks per path">−</button>
+                    <output id="codebase-min-support" aria-live="polite">15</output>
+                    <button type="button" id="codebase-min-up" aria-label="More tasks per path">+</button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="body scoreboard-table-wrap" id="audit-codebase-body" tabindex="0" role="region" aria-label="Codebase analytics" style="display: none;">
+            <div class="body codebase-body" id="audit-codebase-body" tabindex="0" role="region" aria-label="Codebase analytics" style="display: none;">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -253,7 +278,7 @@
             </div>
           </section>
         </div>
-        <div style="display: flex; flex-direction: column; min-width: 0;">
+        <div class="audit-side" id="audit-summary-column">
           <section class="panel" id="audit-summary-panel">
             <header><span id="audit-summary-title">Audit summary 24h</span></header>
             <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
