@@ -21,6 +21,7 @@ mod landing;
 mod operations;
 mod pr;
 mod push;
+mod remote_probe;
 mod required_command;
 mod resume;
 pub mod review_gate;

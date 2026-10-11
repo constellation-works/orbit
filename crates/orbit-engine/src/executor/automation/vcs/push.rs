@@ -9,13 +9,16 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
-use super::freshness::{commit_sha, remote_branch_sha};
-use super::git::{git_command_success, git_output, git_success};
+use super::freshness::commit_sha;
+use super::git::{
+    GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_output, git_success,
+};
 use super::handoff::{
     FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, load_handoff_context,
     record_failed_handoff,
 };
 use super::operations;
+use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -110,6 +113,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     input: &Value,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
+    let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let branch = input_string_field(input, "branch")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
@@ -127,7 +131,8 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     ensure_origin_publishes_elsewhere(workspace_path, &branch)?;
 
     let local_sha = commit_sha(workspace_path, &branch)?;
-    let remote_sha = remote_branch_sha(workspace_path, &branch)?;
+    let probe = pre_push_remote_branch(workspace_path, &branch)?;
+    let remote_sha = &probe.sha;
     // [ORB-14849] A before-landing reviewer's fix goes onto the published
     // head it reviewed and nowhere else: a branch that moved since loses the
     // lease, and the push itself is conditional on that head.
@@ -171,6 +176,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
                 &local_sha,
                 remote_sha.as_deref(),
                 false,
+                &probe,
             ));
         }
         // [ORB-15351] An adopted branch's fast-forward is leased on the
@@ -218,6 +224,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         &local_sha,
         remote_sha.as_deref(),
         force_with_lease,
+        &probe,
     );
     // What the transient retries cost, for the run's step record.
     output["push_attempts"] = pushed.get("attempts").cloned().unwrap_or(json!(1));
@@ -374,6 +381,7 @@ fn push_output(
     local_sha: &str,
     remote_sha: Option<&str>,
     force_with_lease: bool,
+    probe: &RemoteBranchProbe,
 ) -> Value {
     json!({
         "phase": "push",
@@ -382,5 +390,8 @@ fn push_output(
         "local_sha": local_sha,
         "remote_sha_before": remote_sha,
         "force_with_lease": force_with_lease,
+        "remote_probe_attempts": probe.attempts,
+        "remote_probe_elapsed_ms": probe.elapsed_ms,
+        "remote_probe_waited_ms": probe.waited_ms,
     })
 }
