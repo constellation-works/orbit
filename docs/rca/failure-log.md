@@ -8,8 +8,6 @@ paths: []
 related_artifacts:
   - ORB-14777
   - ORB-15156
-  - ORB-15400
-  - ORB-15406
   - ORB-15409
 ---
 
@@ -52,62 +50,20 @@ entries.
   (ORB-15287). Whether a claim fails depends on how strictly the model reads
   that rule, not on the change. In the same context three `orbit-cli::process`
   tests also fail on the base, and they pass on dk-server-2.
-- **Fix:** ORB-15409 (proposed; needs an owner choice between deferral parity
-  and routing). Until then:
+- **Fix:** ORB-15409 (backlog). Daniel chose macOS deferral parity on
+  2026-10-11: the Mac implementer may hand off a gate whose only gaps are
+  these `SKIP:` lines, and the claimed `validate` step replays
+  `make ci-test-affected` outside the agent sandbox before push. Until it lands:
   - Rescue by hand. Copy the worktree diff (`git diff HEAD`) to a box
     worktree on current `agent-main`, run ci-fast, ci-test-affected and
     ci-lint there, and open a PR.
-  - Keep orbit-core, orbit-cli and orbit-engine work off the Mac by tagging
-    it `os:linux`.
+  - Only crew sol has failed this way. Claude crews hand off anyway (9/9 on
+    2026-10-11), so their Seatbelt tests never run before landing. Tag sol
+    tasks that reach Seatbelt-gated crates `os:linux`.
 - **Tasks:** ORB-15399 (luna, PR #4260), ORB-15395 (sol, PR #4262), and in
   part ORB-15365 (PR #4253).
 - **Final recovery:** `escalate` (`jrun-20261011-0356-c1`,
   `jrun-20261011-0406-c1`).
-
-## 2026-10-11: A finished candidate is refused because its deferral record has no `probe.command`
-
-- **Where:** owner, `implement_one`, at the step boundary that checks the
-  implementer's output, before commit.
-- **Symptom:** `implementer output rejected before delivery:
-  deferred_sandbox_validation is not a {command, exit_code, tests_run, base,
-  notices, probe: {command, exit_code, output}} record: missing field
-  command`. Step recovery returns `not_recovered`. Final recovery resumes the
-  implementer, which repeats the record, and the run ends in a failure-handoff
-  PR.
-- **Cause:** the schema in `agent_implement.yaml` requires `probe.command`,
-  but the instruction prose describes `probe` as the bwrap probe's "exit code
-  and output" and never names the field. Implementers return `probe:
-  {exit_code, output}`. Everything else in the record is valid: the gate
-  passed, and every notice is a Bubblewrap `DEFERRED:` line.
-- **Fix:** ORB-15406 (open). Until it lands, rescue by hand. Replay the gate on
-  the owner host in the run's worktree (`CI_TEST_BASE=<record base> make
-  ci-test-affected`), then land the handoff PR once the replay and hosted CI
-  are green.
-- **Tasks:** ORB-15206 (sol; replay 2763/2763, PR #4248), ORB-15403 (luna,
-  PR #4254).
-- **Final recovery:** `resume` from `implement_bundle`; it failed the same way
-  (`jrun-20261011-0323-c8`).
-
-## 2026-10-11: A full-workspace affected-test gate is killed at the capture limit and held as baseline red
-
-- **Where:** owner, `validate` (`candidate_validate`) and its base replay; the
-  hold refresh after it.
-- **Symptom:** `baseline_red_hold` on `make ci-test-affected`. Both
-  `validation/<run>/1.json` and `1.baseline.json` show `exit_code: -1`, no
-  failing test, and "process output capture limit exceeded on stderr".
-- **Cause:** `ci-test-affected.py` runs nextest with `--success-output
-  immediate`, so every passing test's output is streamed. A full-workspace
-  selection (2,754 tests) passes `orbit-exec`'s 1 MiB per-stream capture
-  limit near the end, and the supervisor stops the command. The base replay
-  dies the same way, so the hold never lifts.
-- **Fix:** ORB-15400 (open). Interim since 2026-10-11 02:45Z: box drains are
-  started with `ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES=16777216`, and the
-  systemd user manager carries the same value for clock-started hold refreshes
-  (`systemctl --user unset-environment ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES`
-  to restore).
-- **Tasks:** ORB-15374.
-- **Final recovery:** none; the run released the candidate as a hold
-  (`jrun-20261011-0131-c8`).
 
 ## Operational causes (no code defect)
 
