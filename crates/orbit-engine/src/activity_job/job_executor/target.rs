@@ -104,7 +104,7 @@ pub(super) fn run_target(
         step,
         t,
         dispatch.success,
-        dispatch.message,
+        dispatch.message.take(),
         &dispatch.output,
     );
     let (success, message) =
@@ -116,7 +116,7 @@ pub(super) fn run_target(
         &dispatched_input,
         success,
         message,
-        &dispatch.output,
+        &mut dispatch,
     );
     // Response envelopes belong to provider invocations. A deterministic
     // target already returns its structured output directly and can implement
@@ -278,9 +278,11 @@ fn reject_malformed_implementer_findings(
     }
 }
 
-/// Fail an implementer step whose `deferred_sandbox_validation` is not the
-/// sanctioned Bubblewrap case, and keep an owner run's accepted record for
-/// the native replay before delivery [ORB-15287]. Like malformed findings,
+/// Derive an implementer step's deferred sandbox validation from the gate
+/// summary it names and Orbit's own probe in its lane, failing the step
+/// unless it is one sandbox's sanctioned case [ORB-15287] [ORB-15516]. The
+/// derived record replaces the handoff in the step's output, and an owner run
+/// keeps it for the native replay before delivery. Like malformed findings,
 /// it fails here, before anything is committed.
 fn accept_implementer_deferral(
     step: &JobV2Step,
@@ -289,18 +291,35 @@ fn accept_implementer_deferral(
     input: &Value,
     success: bool,
     message: Option<String>,
-    output: &Value,
+    dispatch: &mut super::super::dispatcher::DispatchOutcome,
 ) -> (bool, Option<String>) {
     if !success || !is_implementer_step(step, target) {
         return (success, message);
     }
+    let lane = crate::executor::automation::vcs::ImplementerLane {
+        provider: dispatch
+            .invocation
+            .as_ref()
+            .map(|invocation| invocation.provider.as_str()),
+        fs_profile: target.fs_profile.as_deref(),
+    };
     match crate::executor::automation::vcs::accept_implementer_deferral(
         ctx.host,
         &ctx.run_id,
         input,
-        output,
+        &dispatch.output,
+        &lane,
     ) {
-        Ok(()) => (success, message),
+        Ok(Some(record)) => {
+            if let (Some(output), Ok(record)) = (
+                dispatch.output.as_object_mut(),
+                serde_json::to_value(record),
+            ) {
+                output.insert("deferred_sandbox_validation".to_string(), record);
+            }
+            (success, message)
+        }
+        Ok(None) => (success, message),
         Err(refusal) => (false, Some(refusal)),
     }
 }

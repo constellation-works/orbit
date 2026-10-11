@@ -1,4 +1,5 @@
-//! The implementer's `deferred_sandbox_validation` output field [ORB-15287].
+//! The implementer's deferred-sandbox handoff and the record Orbit derives
+//! from it [ORB-15287].
 //!
 //! An agent lane's own sandbox refuses the nested sandbox Orbit's sandbox
 //! tests apply, so those tests print a notice and pass without running their
@@ -6,14 +7,21 @@
 //! Bubblewrap cannot create a nested user namespace; on macOS a
 //! [`SEATBELT_DEFERRAL_PREFIX`] notice, because `sandbox-exec` cannot apply a
 //! nested profile [ORB-15409]. An affected-test gate can therefore exit 0
-//! although those paths never ran. The implementer hands that gap off with
-//! this record instead of failing, and Orbit enforces it at two points:
+//! although those paths never ran.
 //!
-//! - the implement step boundary calls [`deferred_sandbox_validation`] and
-//!   fails the step, before anything is committed, for a record that is not
-//!   exactly one sandbox's case: its notices and its probe. An owner run keeps
-//!   the accepted record on the task as [`DEFERRED_SANDBOX_ARTIFACT`], so a
-//!   resumed candidate still carries it;
+//! The implementer hands that gap off by naming only the validation summary
+//! the gate wrote ([`deferral_handoff`]). Orbit builds the
+//! [`DeferredSandboxValidation`] itself [ORB-15516]: the gate's command, exit
+//! status, executed tests, base and notices come from the summary
+//! ([`DeferralHandoff::derive`]), and the probe is one Orbit runs in the
+//! implementer's lane ([`PendingDeferral::complete`]). Orbit enforces the
+//! record at two points:
+//!
+//! - the implement step boundary derives it and fails the step, before
+//!   anything is committed, unless it is exactly one sandbox's case: its
+//!   notices and its refused probe. The derived record replaces the handoff
+//!   in the step's output, and an owner run keeps it on the task as
+//!   [`DEFERRED_SANDBOX_ARTIFACT`], so a resumed candidate still carries it;
 //! - the validation step that runs the owner's required commands outside any
 //!   agent sandbox (a claimed leaf's on its claim host) replays the record's
 //!   command there before delivery. A replay that still defers is the
@@ -23,7 +31,7 @@
 //! The record only ever adds a native run; it never stands in for one.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::workflow::host_evidence::{
     BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, SEATBELT_APPLY_REFUSAL,
@@ -42,7 +50,7 @@ pub const SEATBELT_APPLY_PROBE: &str =
     "/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true";
 
 /// An affected-test gate that passed with only one sandbox's deferrals, as
-/// the implementer ran it.
+/// Orbit derived it from the gate's summary and its own probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeferredSandboxValidation {
@@ -56,7 +64,7 @@ pub struct DeferredSandboxValidation {
     /// Every skip or deferral line the gate printed.
     pub notices: Vec<String>,
     /// The deferring sandbox's probe ([`BUBBLEWRAP_NAMESPACE_PROBE`] or
-    /// [`SEATBELT_APPLY_PROBE`]) as run in the same lane.
+    /// [`SEATBELT_APPLY_PROBE`]) as Orbit ran it in the implementer's lane.
     pub probe: NamespaceProbe,
 }
 
@@ -71,12 +79,12 @@ pub struct NamespaceProbe {
 }
 
 /// [`DEFERRED_SANDBOX_ARTIFACT`]: the record the task's latest
-/// implementation returned, or `None` once a later one deferred nothing.
+/// implementation deferred, or `None` once a later one deferred nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeferredSandboxArtifact {
     pub schema_version: u32,
-    /// The run whose implementer returned it.
+    /// The run whose implementer handed it off.
     pub run_id: String,
     pub deferred: Option<DeferredSandboxValidation>,
 }
@@ -85,82 +93,22 @@ impl DeferredSandboxValidation {
     /// Whether the record's command is one of `gates`, compared trimmed.
     #[must_use]
     pub fn names_gate(&self, gates: &[String]) -> bool {
-        let command = self.command.trim();
-        !command.is_empty() && gates.iter().any(|gate| gate.trim() == command)
+        names_gate(&self.command, gates)
     }
+}
 
-    /// The first reason this record is not the sanctioned case.
-    fn refusal(&self, gates: &[String], pinned_base: Option<&str>) -> Option<String> {
-        let command = self.command.trim();
-        if !self.names_gate(gates) {
-            return Some(format!(
-                "names `{command}`, which is not one of the owner's validation gates \
-                 (`workflow.required_validation_commands` or `review.baseline_commands`), so no \
-                 host would replay it"
-            ));
-        }
-        if self.exit_code != 0 {
-            return Some(format!(
-                "reports that `{command}` exited {}; a failing gate is not deferrable",
-                self.exit_code
-            ));
-        }
-        if self.tests_run == 0 {
-            return Some(format!("reports that `{command}` executed no tests"));
-        }
-        let Some(pinned) = pinned_base.map(str::trim).filter(|base| !base.is_empty()) else {
-            return Some(
-                "cannot be checked: the step names no pinned delivery base (`base_sha`)"
-                    .to_string(),
-            );
-        };
-        if self.base.trim() != pinned {
-            return Some(format!(
-                "compared against `{}`, not the pinned delivery base `{pinned}`",
-                self.base.trim()
-            ));
-        }
-        if self.notices.is_empty() {
-            return Some("lists no deferral notice".to_string());
-        }
-        let first = self.notices[0].trim();
-        let Some(sandbox) = DeferringSandbox::of_notice(first) else {
-            return Some(format!(
-                "lists `{first}`, which is neither a Bubblewrap nor a Seatbelt deferral; only \
-                 `{BUBBLEWRAP_DEFERRAL_PREFIX}` or `{SEATBELT_DEFERRAL_PREFIX}` notices are \
-                 deferrable"
-            ));
-        };
-        if let Some(notice) = self
-            .notices
-            .iter()
-            .find(|notice| DeferringSandbox::of_notice(notice.trim()) != Some(sandbox))
-        {
-            return Some(format!(
-                "lists `{}`, which is not a {} deferral; a record defers only `{}` notices, \
-                 one sandbox's",
-                notice.trim(),
-                sandbox.name(),
-                sandbox.prefix()
-            ));
-        }
-        let probe = self
-            .probe
-            .command
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if probe != sandbox.probe() {
-            return Some(format!(
-                "names the probe `{probe}`, not `{}`",
-                sandbox.probe()
-            ));
-        }
-        if !sandbox.refused(&self.probe) {
-            return Some(sandbox.probe_requirement());
-        }
-        None
-    }
+fn names_gate(command: &str, gates: &[String]) -> bool {
+    let command = command.trim();
+    !command.is_empty() && gates.iter().any(|gate| gate.trim() == command)
+}
+
+/// A probe Orbit runs for a deferral: its canonical spelling, recorded as
+/// [`NamespaceProbe::command`], and the argv that spawns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeferralProbe {
+    pub command: &'static str,
+    /// The program, then its arguments.
+    pub argv: &'static [&'static str],
 }
 
 /// The sandbox whose refusal a record defers. A record defers one sandbox:
@@ -194,10 +142,29 @@ impl DeferringSandbox {
         }
     }
 
-    fn probe(self) -> &'static str {
+    fn probe(self) -> DeferralProbe {
         match self {
-            Self::Bubblewrap => BUBBLEWRAP_NAMESPACE_PROBE,
-            Self::Seatbelt => SEATBELT_APPLY_PROBE,
+            Self::Bubblewrap => DeferralProbe {
+                command: BUBBLEWRAP_NAMESPACE_PROBE,
+                argv: &[
+                    "bwrap",
+                    "--unshare-user",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--",
+                    "/bin/true",
+                ],
+            },
+            Self::Seatbelt => DeferralProbe {
+                command: SEATBELT_APPLY_PROBE,
+                argv: &[
+                    "/usr/bin/sandbox-exec",
+                    "-p",
+                    "(version 1) (allow default)",
+                    "/usr/bin/true",
+                ],
+            },
         }
     }
 
@@ -217,40 +184,221 @@ impl DeferringSandbox {
     fn probe_requirement(self) -> String {
         match self {
             Self::Bubblewrap => format!(
-                "has no failing namespace probe: it must exit nonzero with \
-                 `{BUBBLEWRAP_NAMESPACE_REFUSAL}` in the same run"
+                "has no failing namespace probe: in the implementer's lane it must exit \
+                 nonzero with `{BUBBLEWRAP_NAMESPACE_REFUSAL}`"
             ),
             Self::Seatbelt => format!(
-                "has no refused Seatbelt apply probe: it must exit \
-                 {SEATBELT_APPLY_REFUSAL_EXIT} with `{SEATBELT_APPLY_REFUSAL}` in the same run"
+                "has no refused Seatbelt apply probe: in the implementer's lane it must exit \
+                 {SEATBELT_APPLY_REFUSAL_EXIT} with `{SEATBELT_APPLY_REFUSAL}`"
             ),
         }
     }
 }
 
-/// The implementer's `deferred_sandbox_validation`, checked against the
-/// owner's `gates` and the step's `pinned_base`. `Ok(None)` when it is absent
-/// or `null`; `Err` names the first reason the record is refused.
-pub fn deferred_sandbox_validation(
-    output: &Value,
-    gates: &[String],
-    pinned_base: Option<&str>,
-) -> Result<Option<DeferredSandboxValidation>, String> {
+/// The implementer's deferral handoff: the gate's validation summary, by
+/// checkout-relative path. Any other key is a hand-written record field,
+/// accepted only when it equals Orbit's derivation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferralHandoff {
+    /// The file the gate wrote through `ORBIT_VALIDATION_SUMMARY`.
+    pub summary: String,
+    handed: Map<String, Value>,
+}
+
+/// The implementer's `deferred_sandbox_validation` handoff. `Ok(None)` when
+/// it is absent or `null`; `Err` says why it names no summary.
+pub fn deferral_handoff(output: &Value) -> Result<Option<DeferralHandoff>, String> {
     let Some(value) = output
         .get("deferred_sandbox_validation")
         .filter(|value| !value.is_null())
     else {
         return Ok(None);
     };
-    let record: DeferredSandboxValidation =
-        serde_path_to_error::deserialize(value).map_err(|error| {
-            format!(
-                "is not a `{{command, exit_code, tests_run, base, notices, probe: {{command, \
-                 exit_code, output}}}}` record: {error}"
-            )
-        })?;
-    match record.refusal(gates, pinned_base) {
-        Some(reason) => Err(reason),
-        None => Ok(Some(record)),
+    let mut handed = value.as_object().cloned().unwrap_or_default();
+    match handed.remove("summary") {
+        Some(Value::String(summary)) if !summary.trim().is_empty() => Ok(Some(DeferralHandoff {
+            summary: summary.trim().to_string(),
+            handed,
+        })),
+        _ => Err(
+            "names no gate summary: hand off `{\"summary\": \"<path>\"}`, the checkout-relative \
+             file the gate wrote through `ORBIT_VALIDATION_SUMMARY`, and Orbit derives the \
+             record from it"
+                .to_string(),
+        ),
+    }
+}
+
+/// What a gate reports about its own run in its validation summary. The
+/// selection a base rerun reads is not needed here.
+#[derive(Deserialize)]
+struct GateSummary {
+    schema_version: u32,
+    command: Option<String>,
+    exit_code: Option<i32>,
+    tests_run: Option<u64>,
+    base: Option<String>,
+    #[serde(default)]
+    notices: Vec<String>,
+}
+
+impl DeferralHandoff {
+    /// Check the gate's `summary` against the owner's `gates` and the step's
+    /// `pinned_base`. `Ok` names the probe Orbit must run; `Err` is the first
+    /// reason the gate run is not deferrable, before any probe runs.
+    pub fn derive(
+        &self,
+        summary: &[u8],
+        gates: &[String],
+        pinned_base: Option<&str>,
+    ) -> Result<PendingDeferral, String> {
+        let mut decoder = serde_json::Deserializer::from_slice(summary);
+        let summary: GateSummary = serde_path_to_error::deserialize(&mut decoder)
+            .map_err(|error| format!("is not a gate validation summary: {error}"))?;
+        if summary.schema_version != 1 {
+            return Err(format!(
+                "is a schema {} summary; only schema 1 is read",
+                summary.schema_version
+            ));
+        }
+        let Some(command) = summary.command.map(|command| command.trim().to_string()) else {
+            return Err(
+                "names no gate `command`; only a gate that records its own command can be \
+                 deferred"
+                    .to_string(),
+            );
+        };
+        if !names_gate(&command, gates) {
+            return Err(format!(
+                "names `{command}`, which is not one of the owner's validation gates \
+                 (`workflow.required_validation_commands` or `review.baseline_commands`), so no \
+                 host would replay it"
+            ));
+        }
+        let Some(exit_code) = summary.exit_code else {
+            return Err(format!(
+                "reports no exit status for `{command}`; the gate did not finish"
+            ));
+        };
+        if exit_code != 0 {
+            return Err(format!(
+                "reports that `{command}` exited {exit_code}; a failing gate is not deferrable"
+            ));
+        }
+        let tests_run = summary.tests_run.unwrap_or(0);
+        if tests_run == 0 {
+            return Err(format!("reports that `{command}` executed no tests"));
+        }
+        let Some(pinned) = pinned_base.map(str::trim).filter(|base| !base.is_empty()) else {
+            return Err(
+                "cannot be checked: the step names no pinned delivery base (`base_sha`)"
+                    .to_string(),
+            );
+        };
+        let base = summary.base.unwrap_or_default().trim().to_string();
+        if base != pinned {
+            return Err(format!(
+                "compared against `{base}`, not the pinned delivery base `{pinned}`"
+            ));
+        }
+        let notices = summary
+            .notices
+            .iter()
+            .map(|notice| notice.trim().to_string())
+            .collect::<Vec<_>>();
+        let Some(first) = notices.first() else {
+            return Err("lists no deferral notice".to_string());
+        };
+        let Some(sandbox) = DeferringSandbox::of_notice(first) else {
+            return Err(format!(
+                "lists `{first}`, which is neither a Bubblewrap nor a Seatbelt deferral; only \
+                 `{BUBBLEWRAP_DEFERRAL_PREFIX}` or `{SEATBELT_DEFERRAL_PREFIX}` notices are \
+                 deferrable"
+            ));
+        };
+        if let Some(notice) = notices
+            .iter()
+            .find(|notice| DeferringSandbox::of_notice(notice) != Some(sandbox))
+        {
+            return Err(format!(
+                "lists `{notice}`, which is not a {} deferral; a record defers only `{}` \
+                 notices, one sandbox's",
+                sandbox.name(),
+                sandbox.prefix()
+            ));
+        }
+        Ok(PendingDeferral {
+            command,
+            exit_code,
+            tests_run,
+            base,
+            notices,
+            sandbox,
+            handed: self.handed.clone(),
+        })
+    }
+}
+
+/// A deferrable gate run, waiting for the probe that shows its sandbox's
+/// refusal in the implementer's lane.
+#[derive(Debug, Clone)]
+pub struct PendingDeferral {
+    command: String,
+    exit_code: i32,
+    tests_run: u64,
+    base: String,
+    notices: Vec<String>,
+    sandbox: DeferringSandbox,
+    handed: Map<String, Value>,
+}
+
+impl PendingDeferral {
+    /// The probe of the sandbox the notices defer.
+    #[must_use]
+    pub fn probe(&self) -> DeferralProbe {
+        self.sandbox.probe()
+    }
+
+    /// The record, once `probe` shows the sandbox's refusal. `Err` when the
+    /// probe is another one or did not refuse, or when a hand-written field
+    /// differs from the derivation.
+    pub fn complete(self, probe: NamespaceProbe) -> Result<DeferredSandboxValidation, String> {
+        let expected = self.sandbox.probe().command;
+        if probe.command != expected {
+            return Err(format!(
+                "names the probe `{}`, not `{expected}`",
+                probe.command
+            ));
+        }
+        if !self.sandbox.refused(&probe) {
+            return Err(self.sandbox.probe_requirement());
+        }
+        let record = DeferredSandboxValidation {
+            command: self.command,
+            exit_code: self.exit_code,
+            tests_run: self.tests_run,
+            base: self.base,
+            notices: self.notices,
+            probe,
+        };
+        let derived =
+            serde_json::to_value(&record).map_err(|error| format!("cannot be encoded: {error}"))?;
+        for (field, handed) in &self.handed {
+            match derived.get(field) {
+                None => {
+                    return Err(format!(
+                        "hands off unknown field `{field}`; name only `summary`"
+                    ));
+                }
+                Some(value) if value != handed => {
+                    return Err(format!(
+                        "hands `{field}` as {handed}, but Orbit derives {value} from the gate \
+                         summary and its own probe; name only `summary`"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(record)
     }
 }

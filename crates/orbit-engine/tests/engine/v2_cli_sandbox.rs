@@ -1,7 +1,8 @@
 //! Sandboxed CLI dispatch through the public boundaries: missing trusted
 //! macOS wrapper admission (runs on Linux as well, without changing PATH or
-//! removing a host executable), and the activity identity a sandboxed
-//! pipeline step hands its plugin broker and tool policy.
+//! removing a host executable), the activity identity a sandboxed pipeline
+//! step hands its plugin broker and tool policy, and the deferral probe Orbit
+//! runs in an implementer's lane.
 
 use std::collections::HashMap;
 use std::fs;
@@ -542,5 +543,95 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     assert!(
         host.broker_runs.lock().unwrap().is_empty(),
         "auth probes grant no activity broker"
+    );
+}
+
+/// A host whose implementer lane has no sandbox, or whose sandbox cannot be
+/// resolved, for Orbit's own deferral probe [ORB-15516].
+struct ProbeHost {
+    unresolvable: bool,
+}
+
+impl RuntimeHost for ProbeHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        provider: &str,
+        _fs_profile: Option<&str>,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        if self.unresolvable {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "no sandbox for `{provider}`"
+            )));
+        }
+        Ok(None)
+    }
+}
+
+/// Orbit runs a deferral's probe itself, in the implementer's lane, and
+/// records what the lane answered: its exit status and output. A probe that
+/// cannot run, or whose lane cannot be resolved, records why with a nonzero
+/// exit, which no deferral accepts [ORB-15516].
+#[test]
+fn the_deferral_probe_records_what_the_lane_answers() {
+    let checkout = tempfile::tempdir().unwrap();
+    let refusing = orbit_types::workflow::DeferralProbe {
+        command: "lane refusal",
+        argv: &[
+            "/bin/sh",
+            "-c",
+            "echo 'bwrap: No permissions to create a new namespace' >&2; exit 1",
+        ],
+    };
+    let unrunnable = orbit_types::workflow::DeferralProbe {
+        command: "missing probe",
+        argv: &["/nonexistent/orbit-probe"],
+    };
+    let bare = ProbeHost {
+        unresolvable: false,
+    };
+
+    let refused = bare.run_deferral_probe(&refusing, Some("claude"), None, checkout.path());
+    let missing = bare.run_deferral_probe(&unrunnable, None, None, checkout.path());
+    let unresolved = ProbeHost { unresolvable: true }.run_deferral_probe(
+        &refusing,
+        Some("claude"),
+        None,
+        checkout.path(),
+    );
+
+    assert_eq!(
+        (
+            refused.command.as_str(),
+            refused.exit_code,
+            refused.output.as_str()
+        ),
+        (
+            "lane refusal",
+            1,
+            "bwrap: No permissions to create a new namespace"
+        )
+    );
+    assert_ne!(missing.exit_code, 0);
+    assert!(
+        missing.output.starts_with("the probe could not run"),
+        "{missing:?}"
+    );
+    assert_ne!(unresolved.exit_code, 0);
+    assert!(
+        unresolved.output.contains("no sandbox for `claude`"),
+        "the probe runs in the provider's lane: {unresolved:?}"
     );
 }

@@ -11,6 +11,12 @@ also names `failing_tests` (each a nextest `<binary-id> <test>` or a bare test
 name, as a failed candidate run printed them) runs only those tests, building
 only the packages their binary ids name and skipping doctests [ORB-15328]; the
 summary still reports the selection it was handed.
+
+The summary also records what an implementer's deferred-sandbox handoff
+needs, so Orbit derives that record instead of the implementer writing it
+[ORB-15516]: the gate's own command (ORBIT_VALIDATION_GATE, which the make
+target sets), the base it compared against, its exit status once it finishes,
+and every skip or deferral notice its tests printed under nextest.
 """
 
 import argparse
@@ -28,6 +34,7 @@ import xml.etree.ElementTree
 ROOT = Path(__file__).resolve().parent.parent
 SUMMARY_ENV = "ORBIT_VALIDATION_SUMMARY"
 SELECTION_ENV = "ORBIT_VALIDATION_SELECTION"
+GATE_ENV = "ORBIT_VALIDATION_GATE"
 FAILING_TESTS = "failing_tests"
 # An optional nextest binary id (`crate`, `crate::target`, `crate::bin/name`),
 # then a Rust test path: nothing a filterset or libtest filter must escape.
@@ -170,10 +177,12 @@ def executed_tests(junit):
     return int(tests) if tests is not None and tests.isdigit() else None
 
 
-def write_summary(path, selection, tests_run):
+def write_summary(path, selection, tests_run, base=None, exit_code=None, notices=()):
     if path:
-        Path(path).write_text(json.dumps(
-            dict(schema_version=1, selection=selection, tests_run=tests_run)))
+        Path(path).write_text(json.dumps(dict(
+            schema_version=1, selection=selection, tests_run=tests_run,
+            command=os.environ.get(GATE_ENV), base=base, exit_code=exit_code,
+            notices=list(notices))))
 
 
 # Keep every notice the required-command host judge refuses, including ones
@@ -191,8 +200,10 @@ def run_nextest(command, environment):
 
     Nextest prints a status header before each captured test-output block.
     Passing blocks are suppressed except for host-evidence notices; progress
-    headers and the summary delimit them and are always relayed.
+    headers and the summary delimit them and are always relayed. Returns the
+    exit status and every line that leads with a host-notice prefix.
     """
+    notices = []
     scratch = ROOT / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix="ci-test-affected-nextest-", suffix=".log",
@@ -216,11 +227,13 @@ def run_nextest(command, environment):
                         passing_block = status.group(2).endswith("PASS")
                     elif plain.startswith("────────") or plain.startswith("     Summary "):
                         passing_block = False
+                    if plain.lstrip().startswith(HOST_NOTICE_PREFIXES):
+                        notices.append(plain.strip())
                     notice = (plain.lstrip().startswith(HOST_NOTICE_PREFIXES)
                               or any(marker in plain for marker in HOST_NOTICE_MARKERS))
                     if status or not passing_block or notice:
                         print(plain if notice else line, end="", file=sys.stderr, flush=True)
-                return process.wait()
+                return process.wait(), notices
             except BaseException:
                 process.terminate()
                 process.wait()
@@ -277,7 +290,7 @@ def main():
         doc_packages = []
     if not packages:
         print("ci-test-affected: no affected workspace crates; no Rust tests to run", file=sys.stderr)
-        write_summary(summary, selection, 0)
+        write_summary(summary, selection, 0, base, 0)
         return 0
     if arguments.list:
         print("\n".join(packages))
@@ -329,20 +342,26 @@ def main():
             command = [*cargo, "test", "--no-fail-fast", *package_flags, *run_target_flags, *libtest_filters]
         # A run stopped before nextest finishes still reports what it selected,
         # so its failures so far can be replayed alone [ORB-15328].
-        write_summary(summary, selection, None)
+        write_summary(summary, selection, None, base)
+        notices = []
         if nextest.returncode == 0:
-            exit_code = run_nextest([*budget, "--", *command], test_environment)
+            exit_code, notices = run_nextest([*budget, "--", *command], test_environment)
         else:
             exit_code = subprocess.run([*budget, "--", *command], cwd=ROOT,
                                        env=test_environment).returncode
-        write_summary(summary, selection, executed_tests(junit))
-    if exit_code:
-        return exit_code
-    if not doc_packages:
-        return 0
+        tests_run = executed_tests(junit)
+
+    def finished(code):
+        write_summary(summary, selection, tests_run, base, code, notices)
+        return code
+
+    if exit_code or not doc_packages:
+        return finished(exit_code)
+    # Doctests still run, so the summary does not yet report an exit status.
+    write_summary(summary, selection, tests_run, base, None, notices)
     doc_flags = [argument for name in doc_packages for argument in ("-p", name)]
-    return subprocess.run([*budget, "--", *cargo, "test", "--no-fail-fast", *doc_flags, "--doc"],
-                          cwd=ROOT, env=test_environment).returncode
+    return finished(subprocess.run([*budget, "--", *cargo, "test", "--no-fail-fast", *doc_flags, "--doc"],
+                                   cwd=ROOT, env=test_environment).returncode)
 
 
 if __name__ == "__main__":

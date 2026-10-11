@@ -169,7 +169,7 @@ ci-fast:
 # Full test targets of changed crates and all reverse workspace dependents.
 # The selector includes committed and working-tree changes against the base.
 ci-test-affected:
-	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" python3 ./scripts/ci-test-affected.py
+	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" ORBIT_VALIDATION_GATE="make ci-test-affected" python3 ./scripts/ci-test-affected.py
 
 # Compile-time pre-handoff gate for agents. Keep these passes aligned with
 # scripts/ci-guardrails.sh: production enforces bounded channels, then all

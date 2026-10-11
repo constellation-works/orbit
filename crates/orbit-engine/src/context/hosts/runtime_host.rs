@@ -13,7 +13,9 @@ use orbit_types::task::{
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
-use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -725,6 +727,21 @@ pub trait RuntimeHost: Send + Sync {
         _subprocess_cwd: Option<&Path>,
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
         Ok(None)
+    }
+
+    /// Run `probe` in the lane an implementer ran in: under the sandbox
+    /// [`Self::resolve_executor_sandbox`] gives `provider` for `fs_profile` in
+    /// `cwd`, or bare when there is no provider or no sandbox. A probe that
+    /// cannot run reports why in its output with a nonzero exit, which no
+    /// deferral accepts [ORB-15516]. Tests override it with a scripted result.
+    fn run_deferral_probe(
+        &self,
+        probe: &DeferralProbe,
+        provider: Option<&str>,
+        fs_profile: Option<&str>,
+        cwd: &Path,
+    ) -> NamespaceProbe {
+        crate::executor::automation::vcs::run_deferral_probe(self, probe, provider, fs_profile, cwd)
     }
 
     /// Optional task snapshot to embed in a CLI agent envelope.

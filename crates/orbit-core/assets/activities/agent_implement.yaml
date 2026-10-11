@@ -106,37 +106,20 @@ spec:
             source_path:
               type: string
       # A required affected-test gate whose only gap is one sandbox's
-      # deferrals: Bubblewrap on Linux, Seatbelt on macOS (item 7). The step
-      # boundary refuses any other record before commit; validation replays
-      # `command` outside the agent sandbox before delivery.
+      # deferrals: Bubblewrap on Linux, Seatbelt on macOS (item 7). The
+      # implementer names only the validation summary the gate wrote. The
+      # step boundary derives the record from it, runs the sandbox's probe in
+      # this lane, refuses anything but the sanctioned case before commit and
+      # replaces this field with the derived record; validation replays the
+      # gate outside the agent sandbox before delivery.
       deferred_sandbox_validation:
         type: [object, "null"]
-        required: [command, exit_code, tests_run, base, notices, probe]
+        required: [summary]
         additionalProperties: false
         properties:
-          command:
+          summary:
             type: string
-          exit_code:
-            type: integer
-          tests_run:
-            type: integer
-          base:
-            type: string
-          notices:
-            type: array
-            items:
-              type: string
-          probe:
-            type: object
-            required: [command, exit_code, output]
-            additionalProperties: false
-            properties:
-              command:
-                type: string
-              exit_code:
-                type: integer
-              output:
-                type: string
+            description: Checkout-relative path of the gate's validation summary, under `.orbit/tmp/`.
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -337,40 +320,30 @@ spec:
        sandbox the agent sandbox refuses, only
        `DEFERRED: bubblewrap unavailable:` notices on Linux or only
        `SKIP: sandbox-exec cannot apply a profile:` notices on macOS. Do not
-       fail the step for it; return `deferred_sandbox_validation` instead,
-       which Orbit checks before commit and replays outside the agent
-       sandbox before delivery. It holds exactly `command` (the gate
-       exactly as the owner's `workflow.required_validation_commands` or
-       `review.baseline_commands` names it, without the base pin),
-       `exit_code` (0), `tests_run` (the tests the gate executed, at
-       least 1), `base` (`input.base_sha`, which you pin as the
-       comparison base), `notices` (every skip or deferral line the gate
-       printed, all of that one OS's shape), and `probe` with
-       `probe.command`, `probe.exit_code`, and `probe.output`; any other
-       key is refused. On Linux the probe is the
-       exact string `bwrap --unshare-user --ro-bind / / -- /bin/true`, which
-       must exit nonzero with `No permissions to create a new namespace`. On
-       macOS it is the exact string
-       `/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true`,
-       which must exit 71 with `sandbox_apply: Operation not permitted`.
-       Return the complete record in your OS's shape, replacing the
-       gate-command and base placeholders with this run's values (never
-       return the placeholders literally). Linux:
-       `{"deferred_sandbox_validation":{"command":"<exact gate command>","exit_code":0,"tests_run":1,"base":"<input.base_sha>","notices":["DEFERRED: bubblewrap unavailable: spawn_under_linux_bwrap: ..."],"probe":{"command":"bwrap --unshare-user --ro-bind / / -- /bin/true","exit_code":1,"output":"bwrap: No permissions to create a new namespace"}}}`.
-       macOS:
-       `{"deferred_sandbox_validation":{"command":"<exact gate command>","exit_code":0,"tests_run":1,"base":"<input.base_sha>","notices":["SKIP: sandbox-exec cannot apply a profile: cli_ctrl_c_during_proc_spawn_reports_interrupt: ..."],"probe":{"command":"/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true","exit_code":71,"output":"sandbox-exec: sandbox_apply: Operation not permitted"}}}`.
-       The step boundary accepts this record only when those substituted
-       values match this run and every other condition above holds. Orbit
-       refuses any other record (including any extra key) and fails the step.
-       In the execution summary (never as a key in
-       `deferred_sandbox_validation`), record the same facts and mark that
-       coverage `not_run`, never a completed pass.
+       fail the step for it. Run the gate with its comparison base pinned to
+       `input.base_sha` and `ORBIT_VALIDATION_SUMMARY` naming a new file
+       under the checkout's `.orbit/tmp/`, then return only that file's
+       checkout-relative path:
+       `{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}`.
+       Do not write any other field: Orbit derives the record from the
+       summary the gate wrote (its command, exit status, executed tests,
+       base and notices), runs the deferring sandbox's probe in this lane
+       itself, and fails the step before commit unless the result is the
+       sanctioned case; it then replays the gate outside the agent sandbox
+       before delivery. A hand-written field is accepted only when it equals
+       Orbit's derivation, and any other key is refused. A gate whose
+       summary records no command, exit status or executed-test count cannot
+       be deferred. In the execution summary (never as a key in
+       `deferred_sandbox_validation`), record the gate, the summary path and
+       its notices, and mark that coverage `not_run`, never a completed
+       pass.
        Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
-       `skipping` notice, a gate that ran no tests or selected nothing, a
-       notice with no failing probe, notices of both sandboxes in one record,
-       a host-required criterion, a `baseline_red` command, and every other
-       required command (formatting, lint, goldens, static-analysis
-       extraction) keep their ordinary handling above.
+       `skipping` notice, a gate that ran no tests or selected nothing,
+       notices in a lane whose probe does not refuse that sandbox, notices of
+       both sandboxes in one gate run, a host-required criterion, a
+       `baseline_red` command, and every other required command (formatting,
+       lint, goldens, static-analysis extraction) keep their ordinary
+       handling above.
        Run only gates named by workspace policy. When a gate fails outside the
        delivery scope, reproduce it once on the unmodified baseline (the same
        command at the base commit or with your diff reverted). A failure there
