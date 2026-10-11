@@ -1,8 +1,6 @@
-use super::super::router;
-use axum::Router;
+use super::super::super::router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use axum::response::Response;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
@@ -11,41 +9,9 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-async fn request_dashboard_run_events(runtime: OrbitRuntime, encoded_run_id: &str) -> Response {
-    request_dashboard_run_events_query(runtime, encoded_run_id, "").await
-}
-
-async fn request_dashboard_run_events_query(
-    runtime: OrbitRuntime,
-    encoded_run_id: &str,
-    query: &str,
-) -> Response {
-    Router::new()
-        .nest("/api", router())
-        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/runs/{encoded_run_id}/events{query}"))
-                .header(header::HOST, "localhost:7878")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response")
-}
-
-#[tokio::test]
-async fn list_run_events_rejects_path_traversal_id() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-
-    let response = request_dashboard_run_events(runtime, "..%2F..%2Fetc%2Fpasswd").await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
 #[tokio::test]
 async fn force_cancel_exposes_stopped_and_unstopped_local_children() {
-    use super::test_support::{body_json, enter_isolated_child, seed_run};
+    use super::super::test_support::{body_json, enter_isolated_child, seed_run};
     use chrono::Utc;
     use orbit_types::workflow::{ChildDispatch, PipelineState};
     use serde_json::json;
@@ -131,7 +97,7 @@ async fn force_cancel_exposes_stopped_and_unstopped_local_children() {
 
 #[tokio::test]
 async fn dashboard_cancel_requeues_with_reason_by_default_and_can_keep_blocked_state() {
-    use super::test_support::{body_json, enter_isolated_child, seed_run};
+    use super::super::test_support::{body_json, enter_isolated_child, seed_run};
 
     if !enter_isolated_child(
         module_path!(),
