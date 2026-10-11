@@ -41,7 +41,9 @@ if [[ "$fast" == false ]]; then
   cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
   cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
   if cargo nextest --version >/dev/null 2>&1; then
-    cargo nextest run --no-fail-fast --workspace --lib --bins --tests
+    cargo nextest run --no-fail-fast \
+      --success-output immediate \
+      --workspace --lib --bins --tests
   else
     echo "cargo-nextest not found; falling back to cargo test" >&2
     cargo test --no-fail-fast --workspace --lib --bins --tests

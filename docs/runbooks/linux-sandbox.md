@@ -207,15 +207,21 @@ boundary behavior. Record the command's actual exit status and mark native
 enforcement **not run** when capability is unavailable. Fix the namespace
 prerequisite and rerun on the owning host; a capability denial is never a passing skip.
 
-The hosted `ci` workflow runs this suite in its Linux enforcement gate on an
+The hosted `ci` workflow prepares Bubblewrap before `Run CI guardrails` on an
 ephemeral `ubuntu-latest` runner, which ships neither Bubblewrap nor the
-AppArmor rule. The step before the gate installs the distribution `bubblewrap`
-and `apparmor-profiles` packages and runs the same `/usr/bin/bwrap`
+AppArmor rule. Probe-gated tests in the portable suite therefore exercise their
+live branch; nextest uses `--success-output immediate` so passing assertions
+appear in the CI log. Setup installs the distribution `bubblewrap` and
+`apparmor-profiles` packages and runs the same `/usr/bin/bwrap`
 namespace-and-mount probe as the unprivileged runner user. Only the Ubuntu
 `setting up uid map: Permission denied` failure triggers loading the packaged
 `bwrap-userns-restrict` profile; any other probe failure, an existing bwrap
 profile, or an existing `/etc/apparmor.d/bwrap-userns-restrict` fails the step
-with diagnostics. It never changes the global user-namespace controls.
+with diagnostics. The apt and AppArmor preparation now precedes guardrails, so
+its failure preempts their output. The explicit Linux sandbox/policy enforcement
+gate still runs afterwards and selects the ignored Linux sandbox tests; its
+nextest filters fail if either selection is empty. The workflow never changes
+the global user-namespace controls.
 
 Step-failure recovery dispatch through Bubblewrap with a provider process has
 no automated native check. Its persistent Git configuration guard runs in the
