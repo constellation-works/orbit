@@ -196,6 +196,91 @@ fn comments_in(fleet: &Fleet, home: &Path, repo: &Path, id: &str) -> Vec<String>
 }
 
 #[test]
+fn task_show_projections_match_the_owning_host() {
+    let routed = Routed::new();
+    let remote = routed.remote_task.as_str();
+    let selector = routed.bravo_selector();
+    routed.json(&[
+        "task",
+        "update",
+        remote,
+        "--comment",
+        "a comment for the array projection",
+        "--json",
+    ]);
+
+    let local_json = |fields: &str| {
+        let args = ["task", "show", remote, "--fields", fields, "--json"];
+        let output = routed
+            .fleet
+            .orbit_in(&routed.bravo.home, &routed.bravo.repo(), &args)
+            .output()
+            .expect("spawn local task show on bravo");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        parse(&output.stdout, &args)
+    };
+    let routes: &[&[&str]] = &[
+        &[],
+        &["--workspace", &selector],
+        &["--host", "bravo", "--workspace", "bravo-ws"],
+    ];
+    for fields in [
+        "title",
+        "comments",
+        "readiness",
+        "terminal",
+        "title,comments,readiness,terminal",
+    ] {
+        let local = local_json(fields);
+        match fields {
+            "title" => assert_eq!(local, "held by bravo"),
+            "comments" => assert!(!local.as_array().expect("comments array").is_empty()),
+            "readiness" => {
+                assert!(local["ready"].is_boolean(), "readiness: {local}");
+                assert!(local["gaps"].is_array(), "readiness: {local}");
+            }
+            "terminal" => assert_eq!(local, json!({ "terminal": false })),
+            _ => {
+                let object = local.as_object().expect("multiple fields stay keyed");
+                assert_eq!(object.len(), 4);
+                for field in fields.split(',') {
+                    let single = local_json(field);
+                    let expected = if field == "terminal" {
+                        &single[field]
+                    } else {
+                        &single
+                    };
+                    assert_eq!(&object[field], expected);
+                }
+            }
+        }
+        for route in routes {
+            let mut args = vec!["task", "show", remote, "--fields", fields, "--json"];
+            args.extend_from_slice(route);
+            assert_eq!(routed.json(&args), local, "{args:?}");
+        }
+    }
+
+    let readiness = local_json("readiness");
+    for route in routes {
+        let mut args = vec!["task", "show", remote, "--fields", "readiness"];
+        args.extend_from_slice(route);
+        let output = routed.fleet.orbit_ok(&routed.fleet.local_repo, &args);
+        let text = String::from_utf8(output.stdout).expect("human task show is UTF-8");
+        let value = text
+            .trim()
+            .strip_prefix("readiness: ")
+            .unwrap_or_else(|| panic!("readiness field line: {text}"));
+        let shown: Value = serde_json::from_str(value).expect("full readiness object");
+        assert_eq!(shown, readiness, "{args:?}");
+    }
+}
+
+#[test]
 fn cli_task_ids_route_to_the_host_their_prefix_names() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
