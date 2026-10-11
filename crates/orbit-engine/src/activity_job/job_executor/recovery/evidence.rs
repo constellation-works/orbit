@@ -4,7 +4,10 @@ use super::*;
 
 /// Project the current run's audit attempts and worker-log tail without
 /// granting an agent access to operator-only run observation.
-pub(super) fn inject_recovery_evidence(ctx: &ExecCtx<'_>, input: &mut Value) -> Result<(), String> {
+pub(in crate::activity_job::job_executor) fn inject_recovery_evidence(
+    ctx: &ExecCtx<'_>,
+    input: &mut Value,
+) -> Result<(), String> {
     let log_tail = ctx
         .host
         .final_recovery_log_tail(&ctx.run_id)

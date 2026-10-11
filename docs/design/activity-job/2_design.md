@@ -944,7 +944,7 @@ in `task_pr_pipeline`:
   (a red gate, transient tooling, a flaky test — the case the leaf exists for)
   was the one failure that bypassed it: on-call runs went straight from the
   declared failure to `pr_failure_handoff` and `blocked` with no recovery event.
-  The executor keys recovery on `StepFailure` (`recovery.rs`), which carries
+  The executor keys recovery on `StepFailure` (`recovery/retry.rs`), which carries
   either shape; `pr_conflict_recovery` keeps its restriction to
   `RecoverableVcsConflict`, so a declared failure on `sync_base` never
   dispatches the conflict leaf. Recovery that fails, or is refused, hands the
