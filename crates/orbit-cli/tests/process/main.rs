@@ -29,6 +29,8 @@ mod job_resume_detached;
 mod run_observation;
 mod supervised_parent_signal;
 mod update;
+#[cfg(unix)]
+mod web_fixture_io;
 mod web_serve_handover;
 mod web_serve_root;
 mod web_serve_shutdown;

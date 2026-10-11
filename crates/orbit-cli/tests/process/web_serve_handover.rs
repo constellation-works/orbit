@@ -11,14 +11,14 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::Path;
 
 use crate::generation_fixture;
 use std::process::{Command, Stdio};
 
 use crate::child_guard::ChildGuard;
+use crate::web_fixture_io::{DeadlineStream, OPERATION_TIMEOUT, http_get};
 use std::time::{Duration, Instant};
 
 use orbit_common::fs::generation::executable_generation;
@@ -62,7 +62,7 @@ fn a_handed_over_dashboard_is_reaped_when_an_assertion_panics() {
         Some(libc::ESRCH)
     );
     assert!(
-        TcpStream::connect(("127.0.0.1", port)).is_err(),
+        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
         "the handed-over dashboard must release its listening port"
     );
 }
@@ -80,7 +80,7 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
     let mut server = spawn_dashboard(&installed, &home, port);
     let pid = server.id();
     test_env::wait_until("listening", || {
-        TcpStream::connect(("127.0.0.1", port)).is_ok()
+        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_ok()
     });
     assert!(http_get(port, "/healthz").contains("ok"));
 
@@ -98,7 +98,7 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
         "the dashboard must exec in place, not exit"
     );
     test_env::wait_until("listening after the handover", || {
-        TcpStream::connect(("127.0.0.1", port)).is_ok()
+        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_ok()
     });
     assert!(http_get(port, "/healthz").contains("ok"));
 
@@ -129,17 +129,4 @@ fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> ChildGuard {
     generation_fixture::launch(|| command.spawn())
         .map(ChildGuard::new)
         .expect("spawn orbit web serve")
-}
-
-fn http_get(port: u16, path: &str) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-    stream
-        .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
 }
