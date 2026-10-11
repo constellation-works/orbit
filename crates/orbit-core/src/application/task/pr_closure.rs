@@ -49,10 +49,7 @@ impl OrbitRuntime {
         // A done task's landing PR was kept open on purpose, and the done
         // transition already closed the rest, so leaving done (an archive)
         // has nothing left to close.
-        if previous == task.status
-            || previous == TaskStatus::Done
-            || !is_terminal_decision(task.status)
-        {
+        if previous == task.status || previous == TaskStatus::Done || !task.status.is_terminal() {
             return;
         }
         let settings = self.context.settings().pr_settings();
@@ -176,13 +173,6 @@ impl OrbitRuntime {
     fn record_session_event(&self, event: OrbitEvent) {
         self.event_log.append(event);
     }
-}
-
-fn is_terminal_decision(status: TaskStatus) -> bool {
-    matches!(
-        status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    )
 }
 
 /// The branch and body tests: `orbit/<TASK-ID>-…`, and a body naming the

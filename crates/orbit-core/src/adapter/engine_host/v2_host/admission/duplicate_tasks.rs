@@ -243,7 +243,7 @@ where
     L: DuplicateTaskLookup + ?Sized,
 {
     let exact_tasks = lookup.list_tasks_by_tags(std::slice::from_ref(&candidate.exact_tag))?;
-    if let Some(task) = exact_tasks.iter().find(|task| is_open_status(task.status)) {
+    if let Some(task) = exact_tasks.iter().find(|task| !task.status.is_terminal()) {
         return Ok(Some(DuplicateTaskMatch {
             task_id: task.id.clone(),
             match_kind: "exact_key",
@@ -262,14 +262,14 @@ where
     let all_tasks = lookup.list_tasks()?;
     let mut open_tasks = all_tasks
         .iter()
-        .filter(|task| is_open_status(task.status) || recently_completed(task))
+        .filter(|task| !task.status.is_terminal() || recently_completed(task))
         .collect::<Vec<_>>();
     open_tasks.sort_by(|left, right| left.id.cmp(&right.id));
 
     for task in open_tasks {
         let comments = lookup.get_task_comments(&task.id)?;
         let searchable = searchable_task_text(task, &comments);
-        let fingerprints = if is_open_status(task.status) {
+        let fingerprints = if !task.status.is_terminal() {
             &candidate.fingerprints
         } else {
             &candidate.completed_fingerprints
@@ -348,7 +348,7 @@ where
             continue;
         };
         match lookup.get_task(&owner_id) {
-            Ok(owner) if is_open_status(owner.status) => {
+            Ok(owner) if !owner.status.is_terminal() => {
                 return Ok(Some(DuplicateTaskMatch {
                     task_id: owner.id.clone(),
                     match_kind: "confirmed_duplicate",
@@ -643,13 +643,6 @@ fn bounded_evidence(kind: &str, anchors: &[CoverageAnchor]) -> Value {
 
 fn bounded_redacted(value: &str) -> String {
     redact_all(value).chars().take(MAX_EVIDENCE_CHARS).collect()
-}
-
-pub(in crate::adapter::engine_host::v2_host) fn is_open_status(status: TaskStatus) -> bool {
-    !matches!(
-        status,
-        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-    )
 }
 
 fn recently_completed(task: &Task) -> bool {

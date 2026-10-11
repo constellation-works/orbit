@@ -455,10 +455,7 @@ fn left_automatic_selection(selected: &Value, task: &Task) -> Option<Value> {
         task.complexity,
         &task.tags,
     )?;
-    let (reason, detail) = if matches!(
-        task.status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    ) {
+    let (reason, detail) = if task.status.is_terminal() {
         ("task_terminal", "task became terminal after selection")
     } else if selected["status"] != json!(task.status) {
         (

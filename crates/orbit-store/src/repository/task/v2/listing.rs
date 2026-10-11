@@ -5,7 +5,6 @@ use crate::contracts::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage,
     TaskResidualFilter, TaskRow,
 };
-use crate::driver::sqlite::task_registry::is_terminal_status;
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
 impl TaskV2Store {
@@ -418,6 +417,6 @@ fn sort_listing<T>(
 ) {
     sort_by_created_desc_id_asc(items, created_at, id);
     if terminal_last {
-        items.sort_by_key(|item| is_terminal_status(status(item)));
+        items.sort_by_key(|item| status(item).is_terminal());
     }
 }
