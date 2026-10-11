@@ -338,16 +338,25 @@ spec:
          blocks with both commits preserved, unless every failed required
          check carries a `baseline` claim settlement confirms and no finding
          is open, when it is held for the red base instead.
-       - `incomplete`: the review could not be completed (missing evidence,
-         a denied required check, ambiguous intent, mismatch); set
-         `escalation`. If the only remaining work is a named hosted CI job,
-         native OS run or CodeQL result, list it in `external_evidence` with
+       - `incomplete`: the review could not be completed (a denied required
+         check, ambiguous intent, mismatch, or a failed check whose base
+         replay did not fit the budget); set `escalation`. Evidence this host
+         cannot produce is owner-side follow-up, not an `incomplete` verdict by
+         itself. This reviewer's host produces its own check runs in its lane,
+         the base replay of failing tests within its reserve, and the
+         sandbox-gated runs in step 4. Anything else it cannot produce, such as
+         a hosted CI job, a native OS run, a CodeQL result on another OS, or a
+         sandbox-gated test of another OS, is named in `external_evidence` for
+         the owner to fulfil. If the only remaining work is a named hosted CI
+         job, native OS run or CodeQL result, list it in `external_evidence` with
          `kind` (`hosted_ci`, `native_os`, `codeql`), `name`, the exact required
          `command`, and the task `artifact` path where its result will arrive.
          Keep its validation record `required` and `not_run` or `denied`.
          External checks belong in this list; substantive open findings still
-         reject the candidate. A required command that repository guidance
-         says cannot run on this host's platform and that refused without
+         reject the candidate. A failed check is never owner-side follow-up:
+         the owner cannot pass a record that failed on the candidate. A
+         required command that repository guidance says cannot run on this
+         host's platform and that refused without
          running did not run: record it
          `not_run` and, when it is the only remaining work, name the run on
          the supported platform that the guidance specifies as external

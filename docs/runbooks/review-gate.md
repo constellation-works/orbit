@@ -132,7 +132,9 @@ still fails with `worktree_head_changed`.
 
 An evidence hold applies only when every remaining requirement is a named
 unavailable external check and the report contains no open defect or failed
-required check. `review-evidence-hold.json` pins the attempt, candidate,
+required check. A reviewer names a check its host cannot run as that external
+check rather than returning a bare `incomplete`; a failed check is never held
+for owner evidence. `review-evidence-hold.json` pins the attempt, candidate,
 task meaning, and each required artifact. Attach a passing `ReviewExternalEvidence`
 result at each named path and its nonempty log artifact with
 `orbit task artifact put` from an operator shell: no agent identity, outside

@@ -24,6 +24,10 @@ use orbit_types::workflow::{
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 \
                       codeql/rust-queries:codeql-suites/rust-security-extended.qls";
 const ARTIFACT: &str = "evidence/codeql-rust-linux.json";
+const SANDBOX: &str = "cargo test -p orbit-exec --test sandbox linux_sandbox";
+const SANDBOX_ARTIFACT: &str = "evidence/sandbox-linux.json";
+const CI: &str = "make ci";
+const CI_ARTIFACT: &str = "evidence/ci.json";
 
 /// The owner's rule: a change matching `paths` owes a Linux CodeQL run.
 fn codeql_rule(paths: &str) -> String {
@@ -250,6 +254,102 @@ fn an_open_finding_on_a_mac_leaf_still_blocks() {
     assert!(
         artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
         "no hold for an open finding"
+    );
+}
+
+/// A Mac reviewer names its own Linux-only gaps and a hosted CI job as
+/// external evidence, each record `not_run`. No host-evidence rule owes them,
+/// so the reviewer's report alone holds the candidate for the owner's runs
+/// instead of blocking it.
+#[test]
+fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
+    if !isolated(
+        module_path!(),
+        "a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking",
+    ) {
+        return;
+    }
+    let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
+    assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
+    let named = vec![
+        owed(),
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: "Sandbox probe (Linux)".into(),
+            command: SANDBOX.into(),
+            artifact: SANDBOX_ARTIFACT.into(),
+            os: Some(EvidenceHostOs::Linux),
+        },
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostedCi,
+            name: "CI".into(),
+            command: CI.into(),
+            artifact: CI_ARTIFACT.into(),
+            os: None,
+        },
+    ];
+    let mut validation = vec![ci_fast()];
+    for (index, required) in named.iter().enumerate() {
+        let id = format!("V{}", index + 2);
+        validation.push(record(&id, &required.command, ValidationOutcome::NotRun));
+    }
+    let mut reviewer_report = report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        validation,
+        Some("Linux-only evidence is owed to the owner"),
+    );
+    reviewer_report.external_evidence = named.clone();
+    leaf.put_report(&reviewer_report);
+    let refused = leaf
+        .settle()
+        .expect_err("a held review opens no pull request");
+    assert!(!refused.contains("review_gate_blocked"), "{refused}");
+
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the gate holds for the named evidence");
+    assert_eq!(hold.requirements.len(), named.len(), "{hold:?}");
+    for required in &named {
+        assert!(hold.requirements.contains(required), "{hold:?}");
+    }
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+}
+
+/// A check that failed on the candidate is an answer, not an evidence gap: a
+/// later run of it on another OS cannot settle it, so the review blocks.
+#[test]
+fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
+    if !isolated(
+        module_path!(),
+        "a_mac_reviewers_failed_linux_only_check_still_blocks",
+    ) {
+        return;
+    }
+    let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
+    let mut reviewer_report = report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![ci_fast(), record("V2", CI, ValidationOutcome::Failed)],
+        Some("the hosted CI check failed on the candidate"),
+    );
+    reviewer_report.external_evidence = vec![ReviewEvidenceRequirement {
+        kind: ReviewEvidenceKind::HostedCi,
+        name: "CI".into(),
+        command: CI.into(),
+        artifact: CI_ARTIFACT.into(),
+        os: None,
+    }];
+    leaf.put_report(&reviewer_report);
+    let refused = leaf
+        .settle()
+        .expect_err("a failed check opens no pull request");
+    assert!(refused.contains("review_gate_blocked"), "{refused}");
+    assert!(
+        artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+        "no hold for a failed check"
     );
 }
 
