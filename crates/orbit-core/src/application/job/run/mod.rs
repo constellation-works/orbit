@@ -9,6 +9,7 @@
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
+//! - `window_extension` — lengthening a live drain's window.
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
@@ -29,6 +30,7 @@ mod reconcile;
 mod root_cause;
 mod step_recovery;
 mod types;
+mod window_extension;
 mod worker_limit;
 
 /// A claimed worker conclusively exited without a recorded cancellation.
@@ -54,4 +56,6 @@ pub use projection::{
 };
 pub use root_cause::{RunIncident, fold_run_incidents};
 pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild, UnstoppedLeaf};
+pub(crate) use window_extension::drain_deadline;
+pub use window_extension::{DrainWindowExtensionChange, DrainWindowExtensionRequest};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

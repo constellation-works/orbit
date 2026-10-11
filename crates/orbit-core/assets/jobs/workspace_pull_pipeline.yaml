@@ -11,7 +11,10 @@
 # it made has settled with the owner (`unsettled == 0`), so a leaf that
 # finishes after the window still has its handoff or failure delivered.
 # `orbit run auto --stop` closes the window early the same way it does for the
-# owner drain; live leaves keep running.
+# owner drain; live leaves keep running. `orbit run extend` lengthens it on
+# this same run [ORB-15383], also during that settling tail, which reopens
+# requests; a repeat `orbit run auto --pull` would instead queue behind this
+# run (`max_active_runs: 1`) until the tail ends.
 #
 # `for_seconds: 0` (`--for` omitted) is one admission pass [ORB-14174]. Its
 # window is expired from the first iteration, so `pull_refill` takes that pass

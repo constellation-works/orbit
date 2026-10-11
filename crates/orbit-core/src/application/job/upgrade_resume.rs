@@ -58,9 +58,6 @@ const DRAIN_JOBS: [&str; 3] = [
     "workspace_ship_pipeline",
 ];
 
-/// Step whose output stamps a drain's admission deadline (`drain_window`).
-const DRAIN_WINDOW_STEP: &str = "open_window";
-
 /// Newest runs of a job scanned for one that supersedes the candidate.
 const SUPERSEDE_SCAN_LIMIT: usize = 50;
 
@@ -332,23 +329,24 @@ impl OrbitRuntime {
         }))
     }
 
-    /// The deadline the drain stamped when it opened its window. The ship
-    /// wrapper holds no window of its own, so its window is the one its drain
-    /// child stamped. A run that never stamped one gets a window opened at
-    /// its start, so replaying `open_window` cannot stretch it.
+    /// The deadline the drain stamped when it opened its window, or the later
+    /// one an operator extended it to [ORB-15383]. The ship wrapper holds no
+    /// window of its own, so its window is the one its drain child stamped. A
+    /// run that never stamped one gets a window opened at its start, so
+    /// replaying `open_window` cannot stretch it.
     fn drain_window_deadline(
         &self,
         run: &JobRun,
         state: Option<&PipelineState>,
     ) -> Result<DateTime<Utc>, OrbitError> {
-        if let Some(deadline) = state.and_then(stamped_deadline) {
+        if let Some(deadline) = state.and_then(super::drain_deadline) {
             return Ok(deadline);
         }
         for dispatch in state.iter().flat_map(|state| &state.child_dispatches) {
             if let Some(deadline) = self
                 .read_run_state(&dispatch.child_run_id)?
                 .as_ref()
-                .and_then(stamped_deadline)
+                .and_then(super::drain_deadline)
             {
                 return Ok(deadline);
             }
@@ -438,15 +436,4 @@ fn upgrade_interrupted(run: &JobRun) -> bool {
                     || message.contains("upgrade admission refused")
             })
     })
-}
-
-fn stamped_deadline(state: &PipelineState) -> Option<DateTime<Utc>> {
-    let window = state.pipeline.get(DRAIN_WINDOW_STEP)?;
-    let deadline = window
-        .get("deadline")
-        .or_else(|| window.get("output")?.get("deadline"))?
-        .as_str()?;
-    DateTime::parse_from_rfc3339(deadline.trim())
-        .ok()
-        .map(|deadline| deadline.with_timezone(&Utc))
 }

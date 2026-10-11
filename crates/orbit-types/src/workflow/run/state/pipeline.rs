@@ -12,8 +12,9 @@ use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDis
 
 use super::{
     ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
-    DrainCancelRequest, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
-    PullAuthRecovery, PullCrewPreflight, PullSinglePass, TaskCancellationPolicy,
+    DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint,
+    FinalRecoveryCheckpoint, PullAuthRecovery, PullCrewPreflight, PullSinglePass,
+    TaskCancellationPolicy,
 };
 
 /// The PR leaf step that admits the before-landing review of its open pull
@@ -102,6 +103,12 @@ pub struct PipelineState {
     /// finished coordinator is distinguished from cancellation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_admissions_stop: Option<DrainAdmissionsStop>,
+    /// Operator extension of this drain's window [ORB-15383]. Absent means the
+    /// deadline its `open_window` step stamped still governs. Survives
+    /// terminalization like `drain_worker_limit`, as evidence of the window
+    /// the run actually admitted under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_window_extension: Option<DrainWindowExtension>,
     /// A graceful cancel this pull drain is carrying out: present while it
     /// waits for its launched leaves, and kept once it ends `cancelled`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +218,7 @@ impl PipelineState {
             child_dispatches: Vec::new(),
             drain_worker_limit: None,
             drain_admissions_stop: None,
+            drain_window_extension: None,
             drain_cancel: None,
             task_cancellation_policy: None,
             pull_crew_preflight: None,
@@ -274,6 +282,46 @@ impl PipelineState {
             actor,
             reason,
             updated_at: Utc::now(),
+        });
+        self.updated_at = Utc::now();
+        true
+    }
+
+    /// The deadline in force for a drain that stamped `stamped`: the later of
+    /// the stamp and any operator extension. An extension never shortens.
+    pub fn effective_drain_deadline(&self, stamped: DateTime<Utc>) -> DateTime<Utc> {
+        self.drain_window_extension
+            .as_ref()
+            .map_or(stamped, |extension| extension.deadline.max(stamped))
+    }
+
+    /// Record an extension of a drain that stamped `stamped` to `deadline`.
+    ///
+    /// Returns `false` and mutates nothing when `deadline` is no later than
+    /// the deadline already in force: a shorter window is a no-op, never a
+    /// shortening.
+    pub fn extend_drain_window(
+        &mut self,
+        stamped: DateTime<Utc>,
+        deadline: DateTime<Utc>,
+        actor: String,
+        reason: Option<String>,
+    ) -> bool {
+        let previous_deadline = self.effective_drain_deadline(stamped);
+        if deadline <= previous_deadline {
+            return false;
+        }
+        let revision = self
+            .drain_window_extension
+            .as_ref()
+            .map_or(0, |extension| extension.revision);
+        self.drain_window_extension = Some(DrainWindowExtension {
+            deadline,
+            previous_deadline,
+            revision: revision.saturating_add(1),
+            actor,
+            reason,
+            extended_at: Utc::now(),
         });
         self.updated_at = Utc::now();
         true

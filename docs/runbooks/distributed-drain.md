@@ -785,7 +785,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   not failures and never open the breaker.
 - The run outlives its window until every admission has settled, so a leaf
   that finishes late still hands off, and a later drain for the same owner
-  carries anything an earlier drain left behind.
+  carries anything an earlier drain left behind. A second `orbit run auto
+  --pull` started meanwhile queues behind it and requests nothing until that
+  tail ends. To keep a drain requesting, extend it instead (below).
 - Each iteration reclaims the `target/` build output of every settled leaf
   whose worker has exited (`reclaimed_build_bytes` in the iteration output)
   and keeps its checkout. A leaf's `target/` runs to gigabytes, so follower
@@ -804,8 +806,23 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 
 Operate it with the ordinary run commands: `orbit run show <run-id>`,
 `orbit run concurrency <run-id> --set N` (MCP: `orbit_workflow_auto` with
-`action: "resize"`), and `orbit run auto --stop` (closes the window; live
-leaves keep running and still settle). The drain's `--concurrency`, as last
+`action: "resize"`), `orbit run extend <run-id> --for 4h [--concurrency N]`,
+and `orbit run auto --stop` (closes the window; live leaves keep running and
+still settle).
+
+`orbit run extend` moves the drain's deadline to the later of its current one
+and now plus `--for` (at most 24 hours from now), on the same run: its leaves,
+claims and settlements are untouched, and `--concurrency` retunes it as
+`orbit run concurrency` does. It also works in the settling tail after the
+window closed, and the drain resumes requesting. A shorter window is a no-op
+(`outcome: unchanged`). It refuses a drain whose admissions were stopped
+(`--stop`) or that is being cancelled, since an extension never reopens one,
+and a drain started without `--for`, which makes its single pass only. Each
+request is audited on the run (`pipeline.run.window_extend.completed`, with
+`previous_deadline` and `deadline`), and `orbit run show` prints the
+`Window: extended to …` line. The job's loop ceiling (6000 iterations, each
+idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
+over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
 active-run limit of their own. A leaf in its before-landing review (the owner's
 `review.before_landing`) runs no implementer but keeps its claim until it

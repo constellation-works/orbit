@@ -122,8 +122,8 @@ pub use application::distributed::{
     DrainEntryPoint, DrainEntryRefusal, PullSettlementEntry, WorkspacePullRequest,
 };
 pub use application::job::{
-    AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest, DrainWorkerLimitRequest,
-    PipelineInvokeResult, PipelineWaitEntry,
+    AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
+    DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,

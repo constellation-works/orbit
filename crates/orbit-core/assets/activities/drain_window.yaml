@@ -10,7 +10,10 @@ spec:
     many seconds. Called with that `deadline` echoed back, it answers whether
     the window has since expired. The stamp lives in the stamping step's own
     output, so re-reading the window is a pure function of a value the run
-    already carries. A zero or absent window is expired on the first answer;
+    already carries, plus the drain's own run controls: an operator stop
+    closes the window, and an operator extension (`orbit run extend`)
+    replaces the echoed deadline when it is later, so the answer reports the
+    deadline in force. A zero or absent window is expired on the first answer;
     since `break_when` is evaluated after a loop body runs, that yields exactly
     one iteration. The deadline gates starting new work only — it never
     cancels or shortens a child run that has already begun.

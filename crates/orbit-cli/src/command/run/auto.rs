@@ -81,7 +81,8 @@ pub struct AutoCommand {
     /// How long to keep draining, e.g. `30m`, `2h`. Without it, or with
     /// `0s`, the run makes one admission pass and admits nothing more. The
     /// window bounds only the start of new work: a task already being shipped
-    /// when it expires still finishes.
+    /// when it expires still finishes. `orbit run extend` lengthens a running
+    /// drain's window in place.
     #[arg(long = "for", value_name = "DURATION")]
     pub for_duration: Option<String>,
     /// How many tasks may be in flight at once. The drain tops these slots up

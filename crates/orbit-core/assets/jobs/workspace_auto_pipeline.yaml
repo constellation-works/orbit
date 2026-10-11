@@ -54,7 +54,9 @@
 #   pilot, so the pilot, record and wait steps are skipped.
 #
 # `for_seconds` gates *starting* the next iteration. It never cancels or
-# shortens a child that has already begun. A zero or absent window is expired
+# shortens a child that has already begun. `orbit run extend` lengthens a
+# live window on this same run [ORB-15383]; once the window has expired the
+# loop has ended, so an extension is refused then. A zero or absent window is expired
 # on its first answer, and `break_when` runs after the body, so the default is
 # exactly one tick — the behavior every pre-window caller of `orbit run auto`
 # has.

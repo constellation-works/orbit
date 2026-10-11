@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
-use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
+use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -47,16 +47,18 @@ pub(super) fn live_admissions_stop(
     runtime: &OrbitRuntime,
     input: &Value,
 ) -> Option<DrainAdmissionsStop> {
+    live_drain_state(runtime, input).and_then(|state| state.drain_admissions_stop)
+}
+
+/// The executing drain's own run state, read through the engine-injected run
+/// id. Absent or unreadable state reads as no operator control at all.
+pub(super) fn live_drain_state(runtime: &OrbitRuntime, input: &Value) -> Option<PipelineState> {
     let run_id = input
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    runtime
-        .read_run_state(run_id)
-        .ok()
-        .flatten()
-        .and_then(|state| state.drain_admissions_stop)
+    runtime.read_run_state(run_id).ok().flatten()
 }
 
 /// The live drain run, with both the ceiling it was submitted with and the one

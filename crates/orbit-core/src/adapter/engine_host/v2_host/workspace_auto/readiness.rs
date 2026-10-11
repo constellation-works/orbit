@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
@@ -23,6 +23,7 @@ use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
     FootprintGuard, whole_tree_holder,
 };
 use crate::application::distributed::RESOURCE_THROTTLED;
+use crate::application::job::drain_deadline;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
@@ -87,12 +88,12 @@ pub fn explain_workspace_auto_readiness(
         .transpose()?
         .flatten();
     // The open-window checkpoint is the actual server-stamped deadline, not
-    // the submission time plus a browser's chosen duration.
-    let ends_at = status_state.as_ref().and_then(|state| {
-        state
-            .step_output_entries()
-            .find_map(|(_, output)| output.get("deadline").and_then(Value::as_str))
-    });
+    // the submission time plus a browser's chosen duration, unless an
+    // operator has since extended it [ORB-15383].
+    let ends_at = status_state
+        .as_ref()
+        .and_then(drain_deadline)
+        .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
     let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
         let mut running = 0;
         let workers = state
@@ -116,6 +117,7 @@ pub fn explain_workspace_auto_readiness(
         (0, 0)
     };
     let window_open = ends_at
+        .as_deref()
         .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
         .is_none_or(|deadline| deadline > Utc::now());
     let drain_phase = if active_drain

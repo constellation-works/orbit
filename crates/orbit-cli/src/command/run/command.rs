@@ -8,6 +8,7 @@ use super::auto;
 use super::cancel::RunCancelArgs;
 use super::concurrency::RunConcurrencyArgs;
 use super::events::RunEventsArgs;
+use super::extend::RunExtendArgs;
 use super::history::RunHistoryArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
@@ -41,6 +42,7 @@ Run history:
 Maintenance:
   orbit run cancel <run_id>
   orbit run concurrency <run_id> --set 7
+  orbit run extend <run_id> --for 2h [--concurrency <N>]
 ";
 
 #[derive(Args)]
@@ -74,6 +76,7 @@ Audits:
 Maintenance:
   cancel       Cancel a pending or running job run
   concurrency  Change how many tasks a running drain keeps in flight
+  extend       Lengthen a running drain's window, and optionally retune it
   readiness    Explain why backlog tasks are waiting in auto-drain
 
 Options:
@@ -124,6 +127,8 @@ pub enum RunSubcommand {
     Cancel(RunCancelArgs),
     /// Change how many tasks a running drain keeps in flight
     Concurrency(RunConcurrencyArgs),
+    /// Lengthen a running drain's window, and optionally retune it
+    Extend(RunExtendArgs),
     /// Run an arbitrary job by ID
     Job(JobRunArgs),
     /// Invoke an agent on the host for exploration or debugging (operator only)
@@ -149,6 +154,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::Settlements(command) => command.execute(runtime),
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
+            RunSubcommand::Extend(command) => command.execute(runtime),
             RunSubcommand::Job(command) => command.execute(runtime),
             RunSubcommand::Agent(command) => command.execute(runtime),
         }
