@@ -9,7 +9,7 @@
 //! the operator-only `orbit_command_exec` cannot run on that transport.
 
 #![allow(missing_docs)]
-#![cfg(unix)]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -24,6 +24,12 @@ use std::time::{Duration, Instant};
 use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::{Builder, TempDir};
+
+#[path = "backend_guard.rs"]
+mod backend_guard;
+use backend_guard::{BackendGuard, BackendReadiness};
+
+const BACKEND_ENTRY: &str = "supervised_parent_signal::signal_fixture_backend";
 
 /// Upper bound between SIGTERM and process exit. The child's own termination
 /// grace period is 5s (`TERMINATION_GRACE_PERIOD`); this is only a CI jitter
@@ -155,6 +161,17 @@ fn mcp_listen_exits_on_sigterm_while_plugin_child_runs() {
     {
         return;
     }
+    // The backend receives Orbit's canonical root; the receiver must identify
+    // the same workspace through a symlink, as temporary roots may contain one.
+    let readiness_workspace = fixture
+        .work
+        .parent()
+        .expect("fixture root")
+        .join("work alias");
+    std::os::unix::fs::symlink(&fixture.work, &readiness_workspace)
+        .expect("readiness workspace alias");
+    let readiness =
+        BackendReadiness::new(&readiness_workspace).expect("backend readiness receiver");
     send_rpc(
         &mut writer,
         &json!({
@@ -164,11 +181,13 @@ fn mcp_listen_exits_on_sigterm_while_plugin_child_runs() {
             "params": { "name": "signalfixture_wait", "arguments": {} }
         }),
     );
-    // Only this in-flight MCP call can create the marker. Keep its connection
-    // open, and verify the backend PID is live before signalling its parent.
-    let marker = fixture.work.join("markers/listen.ready");
-    let backend = wait_for_backend_pid(&mut server, &marker);
-    assert!(process_is_live(backend.0), "plugin child must be live");
+    // Only this in-flight MCP call can announce readiness. Keep its connection
+    // open and verify the retained backend identity before signalling its parent.
+    let backend = wait_for_backend(&mut server, &readiness, &mut reader);
+    assert!(
+        backend.is_live().expect("probe backend identity"),
+        "plugin child must be live"
+    );
 
     let before = Instant::now();
     send_signal(&server, libc::SIGTERM);
@@ -189,101 +208,56 @@ fn mcp_listen_exits_on_sigterm_while_plugin_child_runs() {
         before.elapsed()
     );
     let deadline = Instant::now() + SHUTDOWN_DEADLINE;
-    while process_is_live(backend.0) && Instant::now() < deadline {
+    while backend.is_live().expect("probe backend identity") && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(
-        !process_is_live(backend.0),
+        !backend.is_live().expect("probe backend identity"),
         "supervised plugin child {} survived listener shutdown",
-        backend.0
+        backend.identity.pid
     );
 }
 
-/// An owned backend PID, including panic cleanup if the listener regresses.
-struct BackendGuard(libc::pid_t);
-
-impl Drop for BackendGuard {
-    fn drop(&mut self) {
-        if process_is_live(self.0) {
-            // Safety: the fixture backend wrote its own PID, and is still live.
-            let _ = unsafe { libc::kill(self.0, libc::SIGKILL) };
-        }
-    }
-}
-
-/// A zombie is dead: `kill(pid, 0)` still succeeds for one that a subreaper
-/// has not yet reaped, which would report an exited backend as surviving.
-fn process_is_live(pid: libc::pid_t) -> bool {
-    // Safety: signal 0 probes the fixture PID without delivering a signal.
-    let rc = unsafe { libc::kill(pid, 0) };
-    if rc == 0 {
-        return !process_is_zombie(pid);
-    }
-    let error = std::io::Error::last_os_error();
-    assert_eq!(
-        error.raw_os_error(),
-        Some(libc::ESRCH),
-        "probe PID {pid}: {error}"
-    );
-    false
-}
-
-/// `/proc/<pid>/stat` is `pid (comm) state ...`; `comm` may hold spaces and
-/// parentheses, so the state follows the last `)`. Where `/proc` is absent
-/// (macOS) or the process vanished, report not-a-zombie and let `kill` decide.
-fn process_is_zombie(pid: libc::pid_t) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
-    };
-    stat.rsplit_once(')')
-        .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
-}
-
-/// Negative control for the zombie rule: only a dead-but-unreaped process is
-/// treated as exited, so a backend left running still fails the test.
+/// A real plugin backend, re-executed from the process integration binary.
+/// Readiness carries its own identity, closing the stale-PID acquisition window.
 #[test]
-fn process_is_live_distinguishes_running_zombie_and_reaped() {
-    let mut child = Command::new("/bin/sleep")
-        .arg("120")
-        .spawn()
-        .expect("spawn sleeper");
-    let pid = child.id() as libc::pid_t;
-    assert!(process_is_live(pid), "a running process must be live");
-
-    // Safety: the fixture sleeper's own PID.
-    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0, "kill sleeper");
-    if Path::new("/proc/self/stat").exists() {
-        // Not yet waited on, so it lingers as a zombie once it dies.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !process_is_zombie(pid) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(process_is_zombie(pid), "killed child must become a zombie");
-        assert!(!process_is_live(pid), "a zombie must be treated as exited");
-    }
-    child.wait().expect("reap sleeper");
-    assert!(!process_is_live(pid), "a reaped process must not be live");
+#[ignore = "child entry point for the signal plugin fixture"]
+fn signal_fixture_backend() {
+    let workspace = std::env::var_os("ORBIT_WORKSPACE_ROOT").expect("fixture workspace");
+    let _lease = backend_guard::publish_readiness(Path::new(&workspace))
+        .expect("publish backend's own identity");
+    // No exec after recording identity: macOS pidversion changes across exec.
+    std::thread::sleep(Duration::from_secs(120));
 }
 
-fn wait_for_backend_pid(server: &mut Child, marker: &Path) -> BackendGuard {
+fn wait_for_backend(
+    server: &mut Child,
+    readiness: &BackendReadiness,
+    reader: &mut TcpStream,
+) -> BackendGuard {
     let deadline = Instant::now() + STARTUP_DEADLINE;
     loop {
-        if let Ok(contents) = std::fs::read_to_string(marker)
-            && let Ok(pid) = contents.trim().parse::<libc::pid_t>()
+        if let Some(backend) = readiness
+            .receive()
+            .expect("receive backend identity handle")
         {
-            assert!(pid > 0, "backend marker must contain a positive PID");
-            return BackendGuard(pid);
+            return backend;
         }
         if server.try_wait().expect("poll listener").is_some() || Instant::now() >= deadline {
-            fail_startup(server, "MCP plugin call did not write its live child PID");
+            reader
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .expect("diagnostic timeout");
+            let response = read_rpc_line(reader);
+            fail_startup(
+                server,
+                &format!("MCP plugin call did not write its child identity; response={response:?}"),
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
 fn install_signal_plugin(fixture: &Fixture) {
-    use std::os::unix::fs::PermissionsExt;
-
     // Install solely into the disposable HOME, outside the fixture checkout.
     // This uses the real advertised plugin surface and its normal sandbox
     // grants without changing the listener's agent-only authority. The tool
@@ -293,14 +267,27 @@ fn install_signal_plugin(fixture: &Fixture) {
     // The granted write root must exist before the sandboxed backend writes
     // its readiness marker into it.
     std::fs::create_dir_all(fixture.work.join("markers")).expect("create marker dir");
-    let backend = source.join("bin/wait.sh");
-    std::fs::write(
+    test_env::assert_child_test_exists(BACKEND_ENTRY);
+    // The plugin's normal read/exec grant covers its own installed tree, so
+    // copy the child entry point there rather than widen its sandbox grants.
+    let backend = source.join("bin/wait");
+    std::fs::copy(
+        std::env::current_exe().expect("process integration binary"),
         &backend,
-        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$ORBIT_WORKSPACE_ROOT/markers/listen.ready\"\nexec /bin/sleep 120\n",
     )
-    .expect("write plugin backend");
-    std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
-        .expect("make plugin executable");
+    .expect("copy plugin backend");
+    // Assess the new executable before the timed listener startup on macOS.
+    let mut probe = Command::new(&backend);
+    test_env::clear_inherited_authority(|name| {
+        probe.env_remove(name);
+    });
+    probe.args(["--list", "--exact", BACKEND_ENTRY, "--include-ignored"]);
+    let output = orbit_common::process::run_bounded_capped(&mut probe, STARTUP_DEADLINE, 64 * 1024)
+        .expect("assess copied backend");
+    assert!(
+        output.status.success(),
+        "backend assessment failed: {output:?}"
+    );
     std::fs::write(
         source.join("plugin.yaml"),
         r#"schemaVersion: 2
@@ -315,7 +302,8 @@ spec:
       write: ['{{workspace}}/markers']
   backend:
     type: exec
-    command: bin/wait.sh
+    command: bin/wait
+    args: ['--ignored', '--exact', 'supervised_parent_signal::signal_fixture_backend', '--nocapture']
     timeout_ms: 120000
   tools:
     - name: wait
