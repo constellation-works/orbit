@@ -68,9 +68,11 @@ entries.
   only `DEFERRED:` notices backed by a failing namespace probe, so the
   implementer cannot hand the check to the host replay. It blocks instead.
   On the host, outside any agent sandbox, the check runs.
-- **Fix:** ORB-15397 (open). Inside an agent sandbox the script prints a
-  `DEFERRED:` notice the handoff accepts, and the validate step replays
-  `make ci-fast` on the host.
+- **Fix:** ORB-15397. When the compiler cache is disabled (no sccache, an
+  unwritable cache directory, or `ORBIT_COMPILER_CACHE=0`), the script prints a
+  not-applicable line and exits 0 before probing namespaces. It no longer
+  prints `skip:` there. The `DEFERRED:` route was dropped: `make ci-fast` stays
+  individually required.
 - **Tasks:** ORB-15380. Rescued by hand: every other gate had passed, and the
   change does not touch the compiler-cache scripts. PR #4234.
 - **Final recovery:** none; an agent-declared blocker stops the run before it
