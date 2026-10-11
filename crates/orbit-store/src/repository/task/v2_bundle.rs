@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
-    atomic_write_text, sync_parent_dir, with_exclusive_file_lock, with_shared_file_lock,
+    atomic_write_text, hold_step, sync_parent_dir, with_exclusive_file_lock, with_shared_file_lock,
 };
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
@@ -24,6 +24,13 @@ use crate::driver::file::task_bundle::{
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
+
+/// Steps a boundary section's hold report names for bundle reads
+/// ([`hold_step`]): opening, reading and decoding the bundle's files. A wait
+/// for the bundle's lock is a step of its own.
+const BUNDLE_READ_STEP: &str = "bundle read";
+const ENVELOPE_READ_STEP: &str = "envelope read";
+const SEARCH_DOCS_READ_STEP: &str = "search docs read";
 
 fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
     let parent = path.parent().ok_or_else(|| {
@@ -311,8 +318,10 @@ impl TaskBundleStoreV2 {
         if !bundle_dir.try_exists().ok()? {
             return None;
         }
-        with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
-            read_search_docs_at(&bundle_dir)
+        hold_step(SEARCH_DOCS_READ_STEP, || {
+            with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+                read_search_docs_at(&bundle_dir)
+            })
         })
         .ok()
         .flatten()
@@ -325,7 +334,7 @@ impl TaskBundleStoreV2 {
         task_id: &str,
     ) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
         let bundle_dir = self.bundle_path(task_id)?;
-        match read_envelope_at(&bundle_dir) {
+        match hold_step(ENVELOPE_READ_STEP, || read_envelope_at(&bundle_dir)) {
             Ok(envelope) => Ok(Some(envelope)),
             Err(err) => skip_if_in_flight(&bundle_dir, err),
         }
@@ -423,8 +432,10 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
     #[cfg(test)]
     CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
-    with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
-        read_bundle_at(bundle_dir)
+    hold_step(BUNDLE_READ_STEP, || {
+        with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            read_bundle_at(bundle_dir)
+        })
     })
 }
 
@@ -436,8 +447,10 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
         return read_bundle_lightweight_at(bundle_dir);
     }
 
-    with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
-        read_bundle_lightweight_at(bundle_dir)
+    hold_step(BUNDLE_READ_STEP, || {
+        with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            read_bundle_lightweight_at(bundle_dir)
+        })
     })
 }
 

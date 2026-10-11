@@ -5,6 +5,16 @@ use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
 use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity};
 use orbit_common::StorageLayer;
+use orbit_common::fs::io::hold_step;
+
+/// Steps a boundary section's hold report names for index work
+/// ([`hold_step`]). The freshness step is the scan's own time — metadata
+/// probes, cache lookups and comparisons — less the snapshot reads, envelope
+/// reads and stamp write it times separately.
+const INDEX_FRESHNESS_STEP: &str = "index freshness";
+const INDEX_SNAPSHOT_STEP: &str = "index snapshot";
+const ENVELOPE_STAMP_WRITE_STEP: &str = "envelope stamp write";
+const INDEX_REPAIR_STEP: &str = "index repair";
 
 impl TaskV2Store {
     pub(crate) fn task_status_index(
@@ -114,28 +124,34 @@ impl TaskV2Store {
             workspace_id = %self.workspace_id,
         )
         .entered();
-        // The index snapshot precedes the envelope probes. A writer can
-        // finish publishing between them, so confirm a mismatch once against
-        // a new snapshot before paying for a workspace-wide bundle scan.
-        for _ in 0..2 {
-            if let Some(unsettled) = self.validate_index_once()? {
-                orbit_common::tracing::debug!(
-                    target: "orbit.store.task_query",
-                    workspace_id = %self.workspace_id,
-                    path = "index",
-                    "task index freshness accepted",
-                );
-                return Ok(Some(unsettled));
+        hold_step(INDEX_FRESHNESS_STEP, || {
+            // The index snapshot precedes the envelope probes. A writer can
+            // finish publishing between them, so confirm a mismatch once
+            // against a new snapshot before paying for a workspace-wide
+            // bundle scan.
+            for _ in 0..2 {
+                if let Some(unsettled) = self.validate_index_once()? {
+                    orbit_common::tracing::debug!(
+                        target: "orbit.store.task_query",
+                        workspace_id = %self.workspace_id,
+                        path = "index",
+                        "task index freshness accepted",
+                    );
+                    return Ok(Some(unsettled));
+                }
             }
-        }
-        Ok(None)
+            Ok(None)
+        })
     }
 
     fn validate_index_once(&self) -> Result<Option<Vec<String>>, OrbitError> {
-        let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
-        let indexed = self
-            .registry
-            .indexed_task_rows_for_workspace(&self.workspace_id)?;
+        let (registered, indexed) = hold_step(INDEX_SNAPSHOT_STEP, || {
+            Ok::<_, OrbitError>((
+                self.registry.tasks_for_workspace(&self.workspace_id)?,
+                self.registry
+                    .indexed_task_rows_for_workspace(&self.workspace_id)?,
+            ))
+        })?;
         orbit_common::tracing::debug!(
             target: "orbit.store.task_query",
             workspace_id = %self.workspace_id,
@@ -146,9 +162,10 @@ impl TaskV2Store {
             return Ok(None);
         }
         self.envelope_cache.retain_registered(&registered);
-        let recorded = self
-            .registry
-            .envelope_stamps_for_workspace(&self.workspace_id)?;
+        let recorded = hold_step(INDEX_SNAPSHOT_STEP, || {
+            self.registry
+                .envelope_stamps_for_workspace(&self.workspace_id)
+        })?;
 
         let mut unsettled = Vec::new();
         let mut proofs = Vec::new();
@@ -168,18 +185,28 @@ impl TaskV2Store {
             }
         }
         // Proofs only spare later scans a parse. Observation-only reads must
-        // not even attempt to persist them through a read-only connection.
-        if !self.registry.is_read_only()?
-            && let Err(error) = self
-                .registry
-                .record_envelope_stamps(&self.workspace_id, &proofs)
-        {
-            orbit_common::tracing::debug!(
-                target: "orbit.store.task_bundle_v2",
-                workspace_id = %self.workspace_id,
-                %error,
-                "could not record envelope stamps; the next cold scan parses those envelopes",
-            );
+        // not even attempt to persist them through a read-only connection,
+        // and a busy registry writer skips them rather than holding this
+        // read's boundary section while it waits.
+        if !self.registry.is_read_only()? {
+            let recorded = hold_step(ENVELOPE_STAMP_WRITE_STEP, || {
+                self.registry
+                    .record_envelope_stamps(&self.workspace_id, &proofs)
+            });
+            match recorded {
+                Ok(true) => {}
+                Ok(false) => orbit_common::tracing::debug!(
+                    target: "orbit.store.task_bundle_v2",
+                    workspace_id = %self.workspace_id,
+                    "registry writer busy; skipped recording envelope stamps, so the next cold scan parses those envelopes",
+                ),
+                Err(error) => orbit_common::tracing::debug!(
+                    target: "orbit.store.task_bundle_v2",
+                    workspace_id = %self.workspace_id,
+                    %error,
+                    "could not record envelope stamps; the next cold scan parses those envelopes",
+                ),
+            }
         }
         Ok(Some(unsettled))
     }
@@ -343,10 +370,10 @@ impl TaskV2Store {
             .iter()
             .map(|bundle| bundle.envelope.clone())
             .collect::<Vec<_>>();
-        let Err(error) = self
-            .registry
-            .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
-        else {
+        let Err(error) = hold_step(INDEX_REPAIR_STEP, || {
+            self.registry
+                .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
+        }) else {
             ticket.succeeded();
             return;
         };

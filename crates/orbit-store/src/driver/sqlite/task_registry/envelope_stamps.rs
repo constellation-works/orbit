@@ -11,9 +11,11 @@
 //! registry simply has none.
 
 use std::collections::HashMap;
+use std::sync::TryLockError;
 
 use orbit_common::OrbitError;
-use rusqlite::{Connection, TransactionBehavior, params};
+use orbit_common::fs::io::sqlite_synchronous;
+use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
@@ -83,47 +85,114 @@ impl TaskRegistryStore {
 
     /// Record stamps for tasks registered to `partition_id`, replacing older
     /// ones. A task no longer registered there is skipped.
+    ///
+    /// Opportunistic, because a freshness scan records them from inside a
+    /// task read's boundary section and they are only a cache: it never waits.
+    /// When another thread holds this process's writer connection, or another
+    /// connection holds the registry's write lock, it records nothing and
+    /// returns `Ok(false)`, leaving the next scan to parse those envelopes and
+    /// try again. It also skips the per-commit fsync registry writes otherwise
+    /// pay; a stamp lost to a power cut costs one parse. Waiting out the 5 s
+    /// busy timeout behind drain writers, and the fsync after it, held
+    /// ordinary task reads in the boundary for seconds (ORB-15534).
     pub fn record_envelope_stamps(
         &self,
         partition_id: &str,
         records: &[EnvelopeStampRecord],
-    ) -> Result<(), OrbitError> {
+    ) -> Result<bool, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         if records.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        ensure_envelope_stamps(&tx)?;
-        {
-            let mut stmt = tx
-                .prepare(
-                    "INSERT INTO task_envelope_stamps(task_id, workspace_id, stamp, fingerprint)
-                     SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (
-                         SELECT 1 FROM task_bundle_bindings
-                         WHERE task_id = ?1 AND workspace_id = ?2
-                     )
-                     ON CONFLICT(task_id) DO UPDATE SET
-                         workspace_id = excluded.workspace_id,
-                         stamp = excluded.stamp,
-                         fingerprint = excluded.fingerprint",
-                )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
-            for record in records {
-                stmt.execute(params![
-                    record.task_id,
-                    partition_id,
-                    record.stamp,
-                    record.fingerprint
-                ])
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut conn = match self.conn.try_lock() {
+            Ok(conn) => conn,
+            Err(TryLockError::WouldBlock) => return Ok(false),
+            Err(TryLockError::Poisoned(e)) => {
+                return Err(OrbitError::Store(format!("mutex poisoned: {e}")));
             }
+        };
+        let settings = CacheWriteSettings::apply(&conn)?;
+        let recorded = write_envelope_stamps(&mut conn, &partition_id, records);
+        let restored = settings.restore(&conn);
+        let recorded = recorded?;
+        restored?;
+        Ok(recorded)
+    }
+}
+
+/// Upsert `records` in one transaction. `Ok(false)` when another connection
+/// holds the write lock, which the no-wait busy timeout reports at once.
+fn write_envelope_stamps(
+    conn: &mut Connection,
+    partition_id: &str,
+    records: &[EnvelopeStampRecord],
+) -> Result<bool, OrbitError> {
+    let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(tx) => tx,
+        Err(error) if error.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) => {
+            return Ok(false);
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        Err(error) => return Err(OrbitError::Store(error.to_string())),
+    };
+    ensure_envelope_stamps(&tx)?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO task_envelope_stamps(task_id, workspace_id, stamp, fingerprint)
+                 SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (
+                     SELECT 1 FROM task_bundle_bindings
+                     WHERE task_id = ?1 AND workspace_id = ?2
+                 )
+                 ON CONFLICT(task_id) DO UPDATE SET
+                     workspace_id = excluded.workspace_id,
+                     stamp = excluded.stamp,
+                     fingerprint = excluded.fingerprint",
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        for record in records {
+            stmt.execute(params![
+                record.task_id,
+                partition_id,
+                record.stamp,
+                record.fingerprint
+            ])
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        }
+    }
+    tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+    Ok(true)
+}
+
+/// The writer connection's busy timeout and sync level while it records
+/// stamps: no wait for the write lock, and in WAL mode no fsync at commit.
+/// Both are per-connection, so [`Self::restore`] puts them back before the
+/// writer mutex is released: the busy timeout as it was, and the durable
+/// level [`TaskRegistryStore::open`] gives the writer.
+struct CacheWriteSettings {
+    busy_timeout_ms: i64,
+}
+
+impl CacheWriteSettings {
+    fn apply(conn: &Connection) -> Result<Self, OrbitError> {
+        let settings = Self {
+            busy_timeout_ms: conn
+                .pragma_query_value(None, "busy_timeout", |row| row.get::<_, i64>(0))
+                .map_err(|e| OrbitError::Store(format!("read busy_timeout: {e}")))?,
+        };
+        let applied = conn
+            .pragma_update(None, "busy_timeout", 0)
+            .and_then(|()| conn.pragma_update(None, "synchronous", sqlite_synchronous("NORMAL")))
+            .map_err(|e| OrbitError::Store(format!("relax envelope stamp write: {e}")));
+        if let Err(error) = applied {
+            let _ = settings.restore(conn);
+            return Err(error);
+        }
+        Ok(settings)
+    }
+
+    fn restore(&self, conn: &Connection) -> Result<(), OrbitError> {
+        conn.pragma_update(None, "synchronous", sqlite_synchronous("FULL"))
+            .and_then(|()| conn.pragma_update(None, "busy_timeout", self.busy_timeout_ms))
+            .map_err(|e| OrbitError::Store(format!("restore registry writer settings: {e}")))
     }
 }

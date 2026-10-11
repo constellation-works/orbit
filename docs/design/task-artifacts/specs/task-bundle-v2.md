@@ -385,6 +385,10 @@ shared workspace extractor. Envelope validation remains linear in the
 workspace's corpus size. Persisted envelope stamps can spare a parse while the
 file identity, modification time and index-row fingerprint still agree;
 read-only processes consume those proofs and writable scans record new ones.
+Recording is opportunistic: a scan runs inside a task read's boundary
+section, so it skips the stamps rather than wait while another thread or
+process holds the registry's write lock, and commits them without an fsync.
+A skipped or lost stamp costs the next scan one parse.
 They do not audit off-page bodies, event logs or artifacts.
 
 ### Reproducing the bounded-read measurements

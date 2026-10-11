@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::hold_step;
 use orbit_types::task::{TaskStatus, task_id_prefix};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
@@ -76,7 +77,22 @@ impl TaskRegistryStore {
     /// for ties; with `terminal_last`, tasks in a terminal status follow the
     /// rest in that same order. `limit` bounds the ids; the total is the number
     /// of rows the filter matched regardless of it.
+    ///
+    /// A boundary section that runs it reports the time as its `index query`
+    /// step ([`hold_step`]).
     pub fn indexed_task_selection(
+        &self,
+        partition_id: &str,
+        filter: &TaskIndexFilter,
+        terminal_last: bool,
+        limit: Option<usize>,
+    ) -> Result<TaskIndexSelection, OrbitError> {
+        hold_step("index query", || {
+            self.select_indexed_tasks(partition_id, filter, terminal_last, limit)
+        })
+    }
+
+    fn select_indexed_tasks(
         &self,
         partition_id: &str,
         filter: &TaskIndexFilter,

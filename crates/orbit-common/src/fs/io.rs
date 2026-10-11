@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::file_lock::acquire_shared_file_lock;
 pub use super::file_lock::{
     DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockTimeout,
-    acquire_exclusive_file_lock, read_file_lock_holder, try_acquire_exclusive_file_lock,
+    acquire_exclusive_file_lock, hold_step, read_file_lock_holder, try_acquire_exclusive_file_lock,
 };
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);

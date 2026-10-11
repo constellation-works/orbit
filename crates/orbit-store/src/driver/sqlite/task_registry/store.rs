@@ -100,12 +100,12 @@ impl TaskRegistryStore {
         })
     }
 
+    /// Whether this registry was opened for observation only. Answered from
+    /// how it was opened, without the writer mutex: every freshness scan
+    /// asks, and asking the writer connection queued a task read behind
+    /// whichever write held it.
     pub(crate) fn is_read_only(&self) -> Result<bool, OrbitError> {
-        self.conn
-            .lock()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
-            .is_readonly(rusqlite::DatabaseName::Main)
-            .map_err(|error| OrbitError::Store(error.to_string()))
+        Ok(self.readers.is_none())
     }
 
     /// Open an existing registry without creating files, applying schema, or

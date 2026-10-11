@@ -638,7 +638,14 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
-  for 2 s or more. A section queued behind a waiting admission or recovery
+  for 2 s or more. Its `slowest_step` and `slowest_step_ms` name where the
+  hold went, and `steps` lists the largest steps by their own time: `pending
+  recovery`, a lock wait such as `.task-commit.lock wait` (the partition) or
+  a bundle lock's, and the operation's `index freshness`, `index snapshot`,
+  `index query`, `envelope stamp write`, `index repair`, `bundle read`,
+  `envelope read` and `search docs read`. `operation` is whatever of the
+  operation those steps leave over, and `unattributed` is time no step
+  claimed. A section queued behind a waiting admission or recovery
   names it as `queued exclusive waiter`, followed by the holders that waiter
   is waiting on.
 - Each leaf settles itself when it ends ([ORB-13663]): its worker records
