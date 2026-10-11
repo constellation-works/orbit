@@ -1072,7 +1072,7 @@ function buildDrainReadiness(drain, workspace) {
   if (badge.holder) wrap.appendChild(line("Waits on", [readinessTaskLink(badge.holder, workspace)]));
   else if (badge.runId) {
     const run = el("a", { class: "mono", text: badge.runId });
-    run.href = runHref(badge.runId);
+    run.href = runHref(badge.runId, workspace ? { workspace } : {});
     wrap.appendChild(line("Waits on", [run]));
   }
   if (badge.selectors.length > 0) {
