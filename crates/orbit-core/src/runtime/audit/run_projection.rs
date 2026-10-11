@@ -511,6 +511,39 @@ fn recovery_event_from_row(row: &orbit_store::V2AuditEventRow) -> Option<RunAudi
 
 fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<RunRecoveryAttempt> {
     let failed_step_id = event.raw.get("step_id")?.as_str()?.to_string();
+    if event.body_kind.as_deref() == Some("final_recovery_attempted") {
+        let outcome = event.raw.get("outcome")?.as_str()?.to_string();
+        let detail = event
+            .raw
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(bounded_recovery_diagnostic);
+        return Some(RunRecoveryAttempt {
+            run_id: run_id.to_string(),
+            event_id: event.event_id,
+            attempted_at: event.timestamp,
+            failed_step_id,
+            recovery_activity: event
+                .raw
+                .get("final_recovery_activity")?
+                .as_str()?
+                .to_string(),
+            retry_admitted: outcome == "resume",
+            outcome,
+            failure_phase: None,
+            diagnostic: detail.as_ref().map(|(text, _)| text.clone()),
+            diagnostic_truncated: detail.as_ref().is_some_and(|(_, truncated)| *truncated),
+            decision: event
+                .raw
+                .get("decision")
+                .and_then(Value::as_str)
+                .map(|verdict| RunRecoveryDecision {
+                    status: "verified".to_string(),
+                    verdict: Some(verdict.to_string()),
+                    detail: detail.map(|(text, _)| text),
+                }),
+        });
+    }
     let recovery_activity = event.raw.get("recovery_activity")?.as_str()?.to_string();
     let recovery_succeeded = event.raw.get("recovery_succeeded")?.as_bool()?;
     let (diagnostic, diagnostic_truncated) = event

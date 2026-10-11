@@ -178,6 +178,7 @@ impl Fixture {
                 decision,
                 resume_step_index,
                 repair_commit: None,
+                resume_context: None,
                 workspace_path: self.repo.clone(),
                 completion_done: false,
             },
@@ -333,8 +334,29 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
         step_id: "implement".to_string(),
         rationale: "finished the implementation".to_string(),
     };
+    let context = orbit_types::workflow::FinalRecoveryResume {
+        step_id: "implement".to_string(),
+        failed_step_id: "implement".to_string(),
+        rationale: "finished the implementation".to_string(),
+        refusal: "missing probe.command".to_string(),
+        refused_output: json!({"deferred_sandbox_validation": {"probe": {}}}),
+    };
     assert_eq!(
-        fixture.apply(&run, &task, resume.clone(), Some(1)),
+        RuntimeHost::apply_final_recovery(
+            &fixture.runtime,
+            &run,
+            &FinalRecoveryApplication {
+                task_id: task.clone(),
+                failed_step_id: "implement".to_string(),
+                decision: resume.clone(),
+                resume_step_index: Some(1),
+                repair_commit: None,
+                resume_context: Some(context.clone()),
+                workspace_path: fixture.repo.clone(),
+                completion_done: false,
+            }
+        )
+        .unwrap(),
         FinalRecoveryApplied::Resume
     );
     let state = fixture.state(&run);
@@ -346,6 +368,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
     assert_eq!(state.step_outputs.keys().copied().collect::<Vec<_>>(), [0]);
     let recorded = state.final_recovery.expect("decision recorded");
     assert_eq!(recorded.decision, Some(resume));
+    assert_eq!(recorded.resume_context, Some(context));
     assert_eq!(fixture.status(&task), started, "resume writes no task");
 
     // A run resumed from this state inherits the record, so it is refused.

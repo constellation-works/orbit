@@ -424,6 +424,106 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
 }
 
 #[test]
+fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
+    use orbit_types::workflow::FinalRecoveryResume;
+
+    for claimed in [false, true] {
+        let refused = json!({
+            "summary": "candidate ready",
+            "deferred_sandbox_validation": {
+                "command": "make ci-test-affected", "exit_code": 0, "tests_run": 1,
+                "base": "0123456789abcdef0123456789abcdef01234567",
+                "notices": ["DEFERRED: bubblewrap unavailable: fixture: unavailable"],
+                "probe": {"exit_code": 1, "output": "bwrap: No permissions to create a new namespace"}
+            }
+        });
+        let rationale = "Set probe.command before returning the deferral record";
+        let host = RecoveryHost::new([
+            (
+                "work",
+                vec![
+                    Reply::Ok(refused.clone()),
+                    Reply::Ok(json!({"repaired": true})),
+                ],
+            ),
+            (
+                "decide",
+                vec![Reply::Ok(json!({
+                    "decision": "resume", "step_id": "implement_bundle", "rationale": rationale,
+                }))],
+            ),
+        ]);
+        let asset = json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "resume_deferral_fixture"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [
+                {"id": "setup", "spec": {"type": "deterministic", "action": "setup", "config": {}}},
+                {"id": "implement_bundle", "loop": {"items": "one", "max_iterations": 1, "steps": [
+                    {"id": "implement_one", "spec": {"type": "deterministic", "action": "work", "config": {}},
+                     "default_input": {"claimed": claimed, "base_sha": "0123456789abcdef0123456789abcdef01234567"}}
+                ]}},
+                {"id": "deliver", "spec": {"type": "deterministic", "action": "deliver", "config": {}}}
+            ]}
+        });
+        let mut job = load_job_asset(&asset.to_string()).unwrap().spec;
+        job.final_recovery_activity = Some("decide".to_string());
+        job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+        let observed = run(&job, &host, None);
+        assert!(observed.result.unwrap().success);
+        assert_eq!(
+            host.count("work"),
+            2,
+            "one refusal and one resumed invocation"
+        );
+        let inputs = host.inputs("work");
+        assert!(inputs[0].get("final_recovery_resume").is_none());
+        let context: FinalRecoveryResume =
+            serde_json::from_value(inputs[1]["final_recovery_resume"].clone()).unwrap();
+        assert_eq!(context.rationale, rationale);
+        assert_eq!(context.failed_step_id, "implement_bundle");
+        assert_eq!(context.refused_output["implement_one"], refused);
+        assert!(
+            context.refusal.contains("missing field `command`"),
+            "{}",
+            context.refusal
+        );
+        assert_eq!(inputs[1]["claimed"], claimed);
+        assert!(
+            host.inputs("deliver")[0]
+                .get("final_recovery_resume")
+                .is_none()
+        );
+        assert!(observed.details[0].as_ref().unwrap().contains(rationale));
+        assert_eq!(
+            host.applications()[0].resume_context.as_ref(),
+            Some(&context)
+        );
+
+        // Re-enter from durable state: no second recovery dispatch, and the
+        // nested default_input must still receive the original refusal.
+        let mut state = resumed_after(
+            FinalRecoveryDecision::Resume {
+                step_id: context.step_id.clone(),
+                rationale: context.rationale.clone(),
+            },
+            Some("resume"),
+        );
+        state.final_recovery.as_mut().unwrap().resume_context = Some(context.clone());
+        let restarted = RecoveryHost::new([]);
+        assert!(run(&job, &restarted, Some(&state)).result.unwrap().success);
+        assert_eq!(restarted.count("decide"), 0);
+        assert_eq!(
+            restarted.inputs("work")[0]["final_recovery_resume"],
+            serde_json::to_value(context).unwrap()
+        );
+        assert!(
+            restarted.inputs("deliver")[0]
+                .get("final_recovery_resume")
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -562,6 +662,7 @@ fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> Pipe
         task_id: "T-1".to_string(),
         observed: None,
         repair_commit: None,
+        resume_context: None,
         base_ref: Some("main".to_string()),
         admitted_at: Utc::now(),
         decision: Some(decision),

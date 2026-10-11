@@ -638,6 +638,13 @@ final_recovery_crews = ["sol:100", "opus:20"]
 - **Explicit:** standard pool grammar (`name` or `name:weight`); every named crew must exist in `[crews.*]`.
 - **`[]`** disables final recovery.
 
+A final-recovery `resume` records its rationale and the failed step's refusal
+and output before discarding stale checkpoints. The resumed top-level phase
+and its nested activities receive this typed `final_recovery_resume` input,
+including in claimed pipelines and after a process restart. `agent_implement`
+addresses that repair mandate first. Later phases do not inherit it. Run-show
+recovery attempts include the resume rationale in their detail.
+
 ### Setting `task.crew`
 
 | Surface | How |

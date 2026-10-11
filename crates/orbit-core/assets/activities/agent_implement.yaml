@@ -34,6 +34,21 @@ spec:
       # `interrupted_review` when the earlier run was stopped mid-review.
       resume_candidate:
         type: [object, "null"]
+      # Engine-owned context for the phase resumed by final recovery.
+      final_recovery_resume:
+        type: object
+        required: [step_id, failed_step_id, rationale, refusal, refused_output]
+        additionalProperties: false
+        properties:
+          step_id:
+            type: string
+          failed_step_id:
+            type: string
+          rationale:
+            type: string
+          refusal:
+            type: string
+          refused_output: {}
       # The pinned delivery base: the commit the worktree started on. A
       # deferred sandbox validation names it as its `base`.
       base_sha:
@@ -225,6 +240,15 @@ spec:
        Record starting HEAD and full `git status --short` as the baseline
        distinguishing run-owned output from pre-existing edits; preserve those
        edits. Inspect materials, consumers, and evidence before changes.
+
+    Final-recovery resume
+
+    - When `input.final_recovery_resume` is present, after the terminal-task
+      guard address its `rationale`, original `refusal`, and `refused_output`
+      first. Repair the refused record or candidate before repeating validation;
+      do not return the same refused output unchanged. This applies in claimed
+      mode too. The context is supplied by the engine for the resumed phase
+      and survives a process restart.
 
     Resumed candidate
 

@@ -73,6 +73,23 @@ pub struct FinalRecoveryRepairCommit {
     pub head_sha: String,
 }
 
+/// Instructions and refused output delivered to the step final recovery resumes.
+/// Stored before stale step checkpoints are removed, so a process restart keeps
+/// the same repair mandate. Older checkpoints omit this context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalRecoveryResume {
+    /// Top-level resume target, including all targets nested in that step.
+    pub step_id: String,
+    /// Top-level step whose failure caused recovery.
+    pub failed_step_id: String,
+    /// Recovery's explanation of what the resumed step must address.
+    pub rationale: String,
+    /// Original boundary refusal, before the rerun replaces it.
+    pub refusal: String,
+    /// Original failed step output; null when the step produced none.
+    pub refused_output: serde_json::Value,
+}
+
 /// A run's job-level final recovery [ORB-13907], recorded when it is admitted.
 ///
 /// Admission writes this before the activity is dispatched, so a crash during
@@ -105,6 +122,9 @@ pub struct FinalRecoveryCheckpoint {
     /// Older run states carry no permission to accept a moved HEAD.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_commit: Option<FinalRecoveryRepairCommit>,
+    /// Repair context captured before the resumed steps lose their outputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_context: Option<FinalRecoveryResume>,
     /// What applying the decision did (`resume`, `settled: …` or
     /// `escalated: …`); absent while the decision is only intended.
     #[serde(default, skip_serializing_if = "Option::is_none")]

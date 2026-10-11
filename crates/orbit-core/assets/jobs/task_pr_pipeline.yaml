@@ -147,6 +147,9 @@ spec:
         items: "{{ input.task_ids }}"
         max_iterations: 256
         steps:
+          # The engine injects typed final_recovery_resume into every nested
+          # target of a resumed phase. agent_implement addresses its rationale
+          # and refused output first, including for a claimed invocation.
           - id: implement_one
             recovery_activity: step_failure_recovery
             target: activity:agent_implement

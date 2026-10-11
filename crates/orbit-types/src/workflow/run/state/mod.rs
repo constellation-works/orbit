@@ -28,5 +28,5 @@ pub use failure::{
 pub use pipeline::PipelineState;
 pub use recovery::{
     ActivityCrewDraw, ActivityCrewPoolMember, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
-    FinalRecoveryKey, FinalRecoveryObservedTask, FinalRecoveryRepairCommit,
+    FinalRecoveryKey, FinalRecoveryObservedTask, FinalRecoveryRepairCommit, FinalRecoveryResume,
 };

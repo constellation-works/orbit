@@ -22,7 +22,8 @@
 //! instead of dispatching the activity.
 
 use orbit_types::workflow::{
-    FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, FinalRecoveryRepairCommit, PipelineState,
+    FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, FinalRecoveryRepairCommit,
+    FinalRecoveryResume, PipelineState,
 };
 
 use super::*;
@@ -41,7 +42,7 @@ pub(super) enum FinalRecoveryVerdict {
     /// The hook did not run; today's failure path follows.
     Skipped,
     /// Rerun the pipeline from this top-level step index.
-    Resume(usize),
+    Resume(usize, Box<FinalRecoveryResume>),
     /// The task was settled; the run fails without its `failure_activity`.
     Settled,
     /// The task is parked for a human; the run's `failure_activity` follows.
@@ -186,6 +187,7 @@ pub(super) fn attempt_final_recovery(
             decision,
             resume_step_index: None,
             repair_commit: None,
+            resume_context: None,
             workspace_path: worktree.workspace_path.into(),
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         };
@@ -279,12 +281,23 @@ pub(super) fn attempt_final_recovery(
         resume_index = Some(index);
     }
 
+    let resume_context = match &decision {
+        FinalRecoveryDecision::Resume { step_id, rationale } => Some(FinalRecoveryResume {
+            step_id: step_id.clone(),
+            failed_step_id: step.id.clone(),
+            rationale: rationale.clone(),
+            refusal: error_message.to_string(),
+            refused_output: refused_step_output(ctx, step),
+        }),
+        _ => None,
+    };
     let application = FinalRecoveryApplication {
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
         resume_step_index: resume_index.map(|index| index as u32),
         repair_commit,
+        resume_context,
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
@@ -324,10 +337,34 @@ fn settle_absorbed(
         },
         resume_step_index: None,
         repair_commit: None,
+        resume_context: None,
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
     conclude(job, ctx, step, activity, &application, None, None)
+}
+
+/// A compound failure keeps the nested outputs its resumed phase must repair.
+fn refused_step_output(ctx: &ExecCtx<'_>, step: &JobV2Step) -> Value {
+    let outputs = ctx.pipeline_snapshot();
+    if let Some(output) = outputs.get(&step.id) {
+        return unwrap_step_output(output);
+    }
+    let mut keys = Vec::new();
+    super::execute::collect_step_keys(step, &mut keys);
+    let nested = keys
+        .into_iter()
+        .filter_map(|key| {
+            outputs
+                .get(key)
+                .map(|output| (key.to_string(), unwrap_step_output(output)))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    if nested.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(nested)
+    }
 }
 
 fn observe_repair_commit(
@@ -367,7 +404,13 @@ fn conclude(
     let kind = Some(application.decision.kind());
     match (applied, resume_index) {
         (Ok(FinalRecoveryApplied::Resume), Some(index)) => {
-            let mut detail = format!("rerunning from step `{}`", job.steps[index].id);
+            let Some(context) = application.resume_context.as_ref() else {
+                return FinalRecoveryVerdict::Escalated;
+            };
+            let mut detail = format!(
+                "rerunning from step `{}`: {}",
+                job.steps[index].id, context.rationale
+            );
             if let Some(downgrade) = downgrade {
                 detail.push_str(&format!("; {downgrade}"));
                 if let Err(error) = ctx.host.apply_task_automation_update(
@@ -391,7 +434,7 @@ fn conclude(
                 }
             }
             emit_final_recovery_event(ctx, step, activity, "resume", kind, Some(&detail));
-            FinalRecoveryVerdict::Resume(index)
+            FinalRecoveryVerdict::Resume(index, Box::new(context.clone()))
         }
         (Ok(FinalRecoveryApplied::Settled { outcome }), _) => {
             emit_final_recovery_event(ctx, step, activity, "settled", kind, Some(&outcome));

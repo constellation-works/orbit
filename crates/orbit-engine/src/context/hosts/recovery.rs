@@ -144,6 +144,8 @@ pub struct FinalRecoveryApplication {
     /// Engine-observed HEAD advance during this recovery dispatch. Never read
     /// from the recovery activity's response.
     pub repair_commit: Option<orbit_types::workflow::FinalRecoveryRepairCommit>,
+    /// Refusal and instructions handed to a resumed step, persisted with the decision.
+    pub resume_context: Option<orbit_types::workflow::FinalRecoveryResume>,
     /// The run's assigned worktree, where a `complete_no_diff` commit is
     /// resolved.
     pub workspace_path: std::path::PathBuf,

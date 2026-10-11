@@ -160,3 +160,34 @@ fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_recor
         .collect::<Vec<_>>();
     assert_eq!(rows, ["1", "2", "3", "4", "5"], "{text}");
 }
+
+#[test]
+fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
+    let fixture = Fixture::init();
+    seed_interrupted_run(&fixture);
+    let rationale = "Set probe.command before returning the deferral record";
+    let payload = serde_json::json!({
+        "event_id": "final-resume", "body_kind": "final_recovery_attempted",
+        "step_id": "implement_bundle", "final_recovery_activity": "final_recovery",
+        "outcome": "resume", "decision": "resume", "detail": rationale,
+        "ts": "2026-10-08T04:05:00+00:00",
+    });
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+            event_type, ts, run_id, agent_identity, payload_json)
+         VALUES (?1, 'final-resume', 'v2_envelope', 1, 'job.final_recovery_attempted',
+            '2026-10-08T04:05:00+00:00', ?2, 'test', ?3)",
+            params![fixture.workspace_id(), INTERRUPTED, payload.to_string()],
+        )
+        .unwrap();
+    let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
+    let attempts = json["recovery_attempts"]["items"].as_array().unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["outcome"], "resume");
+    assert_eq!(attempts[0]["recovery_activity"], "final_recovery");
+    assert_eq!(attempts[0]["decision"]["verdict"], "resume");
+    assert_eq!(attempts[0]["diagnostic"], rationale);
+    assert!(shown(&fixture, &[]).contains(rationale));
+}

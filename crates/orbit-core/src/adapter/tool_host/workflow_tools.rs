@@ -208,7 +208,7 @@ fn project_workflow_run_list(
 ) -> Result<(Vec<Value>, RunListProjectionReads), OrbitError> {
     let reads = RunListProjectionReads {
         pipeline_state_queries: usize::from(!runs.is_empty()),
-        recovery_event_queries: usize::from(!runs.is_empty()),
+        recovery_event_queries: 2 * usize::from(!runs.is_empty()),
         recovery_presence_queries: usize::from(!runs.is_empty()),
         per_run_recovery_fetch_limit: RECOVERY_FETCH_PER_RUN,
         per_run_recovery_projection_limit: MAX_RECOVERY_ATTEMPTS,
@@ -350,28 +350,7 @@ fn run_json_enriched(
     // observable as `unavailable` rather than making existing run-show callers
     // fail their ordinary durable run read.
     value["recovery_attempts"] = match recovery {
-        Some(attempts) => json!({
-            "state": attempts.state,
-            "limit": attempts.limit,
-            "truncated": attempts.truncated,
-            "items": attempts.attempts.iter().map(|attempt| json!({
-                "run_id": attempt.run_id,
-                "event_id": attempt.event_id,
-                "attempted_at": attempt.attempted_at.map(|value| value.to_rfc3339()),
-                "failed_step_id": attempt.failed_step_id,
-                "recovery_activity": attempt.recovery_activity,
-                "outcome": attempt.outcome,
-                "failure_phase": attempt.failure_phase,
-                "diagnostic": attempt.diagnostic,
-                "diagnostic_truncated": attempt.diagnostic_truncated,
-                "decision": attempt.decision.as_ref().map(|decision| json!({
-                    "status": decision.status,
-                    "verdict": decision.verdict,
-                    "detail": decision.detail,
-                })),
-                "retry_admitted": attempt.retry_admitted,
-            })).collect::<Vec<_>>(),
-        }),
+        Some(attempts) => attempts.to_json(),
         None => json!({
             "state": "unavailable",
             "limit": MAX_RECOVERY_ATTEMPTS,
