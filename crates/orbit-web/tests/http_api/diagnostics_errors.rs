@@ -7,6 +7,160 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
+// Seed the production audit budget in one transaction, rather than paying for
+// 50,000 runtime writes or adding a test-only setting to the HTTP server.
+fn fill_stderr_audit_budget(fixture: &Fixture, count: usize, ts: DateTime<Utc>) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "WITH RECURSIVE filler(n) AS (
+                         SELECT 1 UNION ALL SELECT n + 1 FROM filler WHERE n < ?1
+                     )
+                     INSERT INTO v2_audit_events
+                       (workspace_id, event_id, source, schema_version, event_type,
+                        ts, run_id, agent_identity, payload_json)
+                     SELECT 'ws_http_fixture', 'filler-' || n, 'v2_envelope', 1,
+                            'heartbeat', ?2, 'filler', 'http-fixture', '{}' FROM filler",
+                    (i64::try_from(count).unwrap(), ts.to_rfc3339()),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn stderr_audit_budget_discloses_truncation_and_distinguishes_exact_exhaustion() {
+    isolated(
+        "diagnostics_errors::stderr_audit_budget_discloses_truncation_and_distinguishes_exact_exhaustion",
+        || {
+            use orbit_common::storage::blob_store::BlobStore;
+
+            // Event-budget exhaustion is independent of blob-budget exhaustion:
+            // these cases read zero, one, or two blobs, far below the blob cap.
+            for (truncated, with_recent_error) in [(true, false), (true, true), (false, true)] {
+                let fixture = Fixture::new();
+                write_process_rows(&fixture, &[]);
+                let since: DateTime<Utc> = "2026-09-01T00:00:00Z".parse().unwrap();
+                let boundary = since + Duration::days(2);
+                let invoked_at = since + Duration::days(7);
+                let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+                let old_blob = blobs
+                    .write(b"ERROR fixture: older excluded error\n")
+                    .unwrap();
+                insert(
+                    &fixture,
+                    "old-error",
+                    "old-run",
+                    since + Duration::days(1),
+                    json!({"body_kind":"cli_invocation_finished", "stderr_blob_ref":old_blob}),
+                );
+                let mut seeded = 1;
+                if truncated {
+                    // This row is the oldest inside the budget. Its malformed
+                    // payload must not move coverage to the next parsed event.
+                    insert(
+                        &fixture,
+                        "boundary",
+                        "boundary-run",
+                        boundary,
+                        json!({"body_kind":"heartbeat"}),
+                    );
+                    fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                        tx.connection().execute(
+                            "UPDATE v2_audit_events SET payload_json = '[' WHERE event_id = 'boundary'",
+                            [],
+                        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        Ok(())
+                    }).unwrap();
+                    seeded += 1;
+                }
+                if with_recent_error {
+                    let blob = blobs
+                        .write(b"ERROR fixture: recent attributed error\n")
+                        .unwrap();
+                    for (id, days, body) in [
+                        (
+                            "step-a",
+                            3,
+                            json!({"body_kind":"step_started", "step_id":"A"}),
+                        ),
+                        (
+                            "step-b",
+                            4,
+                            json!({"body_kind":"step_started", "step_id":"B"}),
+                        ),
+                        (
+                            "bridge",
+                            5,
+                            json!({"body_kind":"activity_started", "parent_event_id":"step-b"}),
+                        ),
+                        (
+                            "recent-error",
+                            7,
+                            json!({"body_kind":"cli_invocation_finished", "parent_event_id":"bridge", "stderr_blob_ref":blob}),
+                        ),
+                    ] {
+                        insert(
+                            &fixture,
+                            id,
+                            "recent-run",
+                            since + Duration::days(days),
+                            body,
+                        );
+                    }
+                    seeded += 4;
+                }
+                fill_stderr_audit_budget(
+                    &fixture,
+                    50_000 + usize::from(truncated) - seeded,
+                    boundary + Duration::hours(1),
+                );
+                let server = fixture.server(false);
+                let response = json_ok(
+                    server.get("/api/diagnostics/errors?month=2026-09&workspace=ws_http_fixture"),
+                );
+                assert_eq!(response["since"], since.to_rfc3339());
+                assert_eq!(
+                    response["coverage_since"],
+                    if truncated { boundary } else { since }.to_rfc3339()
+                );
+                let rows = response["items"].as_array().unwrap();
+                assert_eq!(
+                    rows.len(),
+                    usize::from(with_recent_error) + usize::from(!truncated)
+                );
+                assert_eq!(
+                    rows.iter().any(|row| row["event_id"] == "old-error"),
+                    !truncated
+                );
+                if with_recent_error {
+                    let row = rows
+                        .iter()
+                        .find(|row| row["event_id"] == "recent-error")
+                        .unwrap();
+                    assert_eq!(row["message"], "recent attributed error");
+                    assert_eq!(row["step"], "B");
+                    assert_eq!(row["step_index"], 1);
+                    assert_eq!(row["ts"], invoked_at.to_rfc3339());
+                    // The raw scan reaches before this narrower window. Its
+                    // ancestors still supply the original step index and join.
+                    let response = json_ok(server.get(
+                        "/api/diagnostics/errors?since=2026-09-07T00:00:00Z&workspace=ws_http_fixture",
+                    ));
+                    assert_eq!(response["coverage_since"], response["since"]);
+                    assert_eq!(response["items"][0]["step"], "B");
+                    assert_eq!(response["items"][0]["step_index"], 1);
+                }
+            }
+        },
+    );
+}
+
 #[test]
 fn recent_diagnostics_skip_oversized_records_without_losing_neighbours() {
     isolated(

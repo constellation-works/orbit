@@ -63,7 +63,8 @@ pub(in crate::api) async fn list_diagnostics_errors(
 /// The Errors feed: `items` newest first, the window start `since` (null for
 /// `all`), and `coverage_since`, the instant from which both sources were read
 /// completely. It equals `since` unless log retention, the process-log scan
-/// cap or the stderr blob cap stopped a source later than the window start.
+/// cap, stderr audit-event cap or stderr blob cap stopped a source later than
+/// the window start.
 /// Each item's `message` is a bounded excerpt; `truncated` says it was cut,
 /// and the owning run keeps the full text.
 fn diagnostics_errors(
@@ -300,7 +301,8 @@ fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
 pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
 
 /// Agent-stderr rows newest first, with the timestamp of the oldest invocation
-/// read when the blob cap stopped the scan before the window start.
+/// read when the blob cap stopped the scan before the window start, combined
+/// with the raw audit-event scan's coverage boundary.
 fn agent_stderr_error_rows(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
@@ -308,7 +310,7 @@ fn agent_stderr_error_rows(
 ) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
     // Ancestors can precede the selected window. Keep them for step attribution,
     // but only read stderr blobs belonging to invocations in the requested range.
-    let events = stderr_scan_events(runtime, range.until)?;
+    let (events, mut coverage_since) = stderr_scan_events(runtime, range.until)?;
     let by_id: HashMap<&str, &StderrScanEvent> = events
         .iter()
         .filter_map(|event| event.event_id.as_deref().map(|id| (id, event)))
@@ -318,7 +320,6 @@ fn agent_stderr_error_rows(
     let mut rows = Vec::new();
     let mut blobs_read = 0usize;
     let mut oldest_read = None;
-    let mut coverage_since = None;
     let mut seen = HashSet::new();
     // `events` is oldest-first so the step index above numbers steps in
     // execution order; the row scan walks newest-first because it stops at
@@ -344,7 +345,7 @@ fn agent_stderr_error_rows(
             continue;
         };
         if blobs_read >= MAX_STDERR_BLOBS_PER_REQUEST {
-            coverage_since = oldest_read;
+            coverage_since = coverage_since.into_iter().chain(oldest_read).max();
             break;
         }
         blobs_read += 1;
@@ -521,30 +522,43 @@ fn string_field<'de, D: serde::Deserializer<'de>>(
 }
 
 /// The newest [`STDERR_SCAN_EVENTS`] v2 envelope events up to `until`, oldest
-/// first. Pages through the store so one page of rows is alive at a time.
+/// first, with the oldest scanned raw timestamp if older rows were excluded.
+/// Pages through the store so one page of rows is alive at a time. One-row
+/// lookahead distinguishes an exactly-full exhausted source from truncation.
 fn stderr_scan_events(
     runtime: &OrbitRuntime,
     until: DateTime<Utc>,
-) -> Result<Vec<StderrScanEvent>, orbit_core::OrbitError> {
+) -> Result<(Vec<StderrScanEvent>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
     let mut events = Vec::new();
     let mut scanned = 0;
+    let mut oldest_scanned = None;
+    let mut truncated = false;
     while scanned < STDERR_SCAN_EVENTS {
         let requested = STDERR_SCAN_PAGE.min(STDERR_SCAN_EVENTS - scanned);
+        let final_page = scanned + requested == STDERR_SCAN_EVENTS;
         let page = OrbitRuntime::list_v2_audit_events(
             runtime,
             V2AuditEventFilter {
                 workspace_id: String::new(),
                 until: Some(until),
                 source: Some("v2_envelope".to_string()),
-                limit: Some(requested),
+                limit: Some(requested + usize::from(final_page)),
                 offset: Some(scanned),
                 ..Default::default()
             },
         )?;
         let fetched = page.len();
-        scanned += fetched;
+        truncated = fetched > requested;
+        scanned += fetched.min(requested);
+        // Parsing may discard malformed payloads; they still consume the raw
+        // budget and determine where this source's coverage actually begins.
+        oldest_scanned = page
+            .get(fetched.min(requested).saturating_sub(1))
+            .map(|row| row.ts)
+            .or(oldest_scanned);
         events.extend(
             page.into_iter()
+                .take(requested)
                 .filter_map(|row| serde_json::from_str(&row.payload_json).ok()),
         );
         if fetched < requested {
@@ -552,7 +566,7 @@ fn stderr_scan_events(
         }
     }
     events.reverse();
-    Ok(events)
+    Ok((events, oldest_scanned.filter(|_| truncated)))
 }
 
 fn strip_htmlish(raw: &str) -> String {
