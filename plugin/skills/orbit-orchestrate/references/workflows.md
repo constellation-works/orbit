@@ -56,6 +56,15 @@ worker and returns as soon as the run is durable — it prints the run id and th
 inspection commands, and does *not* claim the eventual outcome. Add `--wait` to
 block on it.
 
+An MCP session submits the same catalog job with `orbit_pipeline_invoke`:
+required `job_name`, and `input` unless `default_input` is true (that form
+also requires `workspace`, forbids `input` and `priority`, and is
+operator-only). It returns a run ID immediately. Public submissions require
+an operator; a managed run may invoke only a host-authorized child pipeline
+admission. There is no MCP wait. `orbit.pipeline.wait` is registered and
+CLI-only (`orbit tool run orbit.pipeline.wait` with `run_ids`); poll
+`orbit_workflow_run_show` from MCP.
+
 Equivalent catalog commands exist as `orbit job list|show|run|replay|resume`.
 `replay` re-runs from step 0 against the current definition; `resume` creates a new linked run using persisted checkpoints where
 resumable, preserving the original attempt. Read both run records; a resume is
@@ -78,6 +87,10 @@ not a rewrite of failed history.
 | `review_evidence_fulfilment_pipeline` | On a Linux owner, runs the named `scripts/codeql-rust-local.sh` command for a review held only for `codeql` evidence. It runs at the held commit, attaches the result and log, and receipt queues a fresh review. A failed or incomplete run attaches only the log, with a typed reason. The owner's clock sweep dispatches it, one at a time. Not for direct invocation. |
 | `baseline_hold_refresh_pipeline` | Re-checks backlog tasks held for a red base whose base ref moved to a tip with no recorded result: runs the held required command there and records the verdict, which lifts the hold only when it passes. The owner's clock sweep dispatches it, one run per workspace at a time, so the sweep itself never runs the command. Not for direct invocation. |
 | `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission — the same test locally and over SSH — changes no task, and is not resumable. See [tool-surface.md](../../orbit/references/tool-surface.md). |
+| `task_claimed_pr_pipeline` | Claimed leaf for PR ship mode. Ends at an owner handoff; the follower never merges. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md). |
+| `task_claimed_local_pipeline` | Claimed leaf for local ship mode, and only when the execution machine is the owner. A remote follower is refused. Ends at a handoff and does not merge or complete. |
+| `task_landing_pipeline` | Lands one authorized handoff on the owner. The handoff outbox submits it; a drain or schedule does not. |
+| `task_review_reconciliation_pipeline` | Validates and reviews one already-merged foreign delivery head. Admitted by `orbit task reconcile-review submit`; the job refuses a run that lacks that admission. |
 
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
 the contract.
