@@ -48,6 +48,3 @@ pub(crate) fn acquire_exclusive_with(
 ) -> Result<FileLockGuard, OrbitError> {
     acquire_exclusive_file_lock(path, label, options).map_err(OrbitError::from)
 }
-
-#[cfg(test)]
-mod tests;

@@ -2,12 +2,14 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-use super::super::{LockOptions, acquire_exclusive, acquire_exclusive_with, read_lock_holder};
+use super::super::lock::{
+    LockOptions, acquire_exclusive, acquire_exclusive_with, read_lock_holder,
+};
 
 /// Exact libtest name of the ignored helper below, re-exec'd as a child process
 /// by [`sigkilled_holder_releases_lock`]. Keep in sync with the module path.
 #[cfg(unix)]
-const CRASH_CHILD_TEST: &str = "fs::lock::tests::file_lock::crash_holder_child";
+const CRASH_CHILD_TEST: &str = "fs::tests::lock::crash_holder_child";
 
 fn short_options(timeout_ms: u64) -> LockOptions {
     LockOptions {
