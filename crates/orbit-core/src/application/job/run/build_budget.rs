@@ -8,11 +8,21 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
 
+/// The admission wrapper a checkout ships to wait for host build slots. A
+/// checkout without it never waits, so a slot limit governs none of its builds.
+const ADMISSION_WRAPPER: &str = "scripts/build-budget.py";
+
 impl OrbitRuntime {
     /// Compare each running drain's effective worker ceiling with host build
-    /// slots. This observation never reconciles, resizes, or reserves work.
+    /// slots, for a checkout that ships the admission wrapper. This observation
+    /// never reconciles, resizes, or reserves work.
     pub fn build_budget_capacity_warnings(&self) -> Result<Vec<Value>, OrbitError> {
+        // Read settings before the participation check, so an invalid setting
+        // is still reported as an advisory error in every checkout.
         let budget = BuildBudgetCapacity::read()?;
+        if !self.paths().repo_root.join(ADMISSION_WRAPPER).is_file() {
+            return Ok(Vec::new());
+        }
         let mut warnings = Vec::new();
         for job_id in ["workspace_auto_pipeline", PULL_DRAIN_JOB] {
             for run in self.stores().jobs().list_job_runs_filtered(&JobRunQuery {

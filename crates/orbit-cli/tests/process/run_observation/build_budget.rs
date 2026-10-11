@@ -2,20 +2,17 @@
 use super::*;
 use orbit_types::workflow::PipelineState;
 
-#[test]
-fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
-    if !isolated_run_observation(
-        "run_observation::build_budget::readiness_and_doctor_warn_for_local_and_pull_drain_capacity",
-    ) {
-        return;
-    }
-    let fixture = Fixture::init();
+/// Marks a checkout as one whose builds wait for host slots.
+fn ship_admission_wrapper(work: &Path) {
+    fs::create_dir_all(work.join("scripts")).unwrap();
+    fs::write(work.join("scripts/build-budget.py"), "").unwrap();
+}
+
+/// Inserts one running local and one running pull drain, each resized to `ceiling`.
+fn seed_running_drains(fixture: &Fixture, ceiling: u32) {
     let runtime =
         OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
             .unwrap();
-    let budget = fixture.home.join(".orbit/cache/build-budget");
-    fs::create_dir_all(&budget).unwrap();
-    fs::write(budget.join("slots"), "2\n").unwrap();
     let now = chrono::Utc::now().to_rfc3339();
     for (run, job) in [
         ("jrun-budget-local", "workspace_auto_pipeline"),
@@ -27,15 +24,35 @@ fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
             job.into(),
             serde_json::json!({"max_active_leaf_runs":8}),
         );
-        state.set_drain_worker_limit(3, 8, "fixture".into(), None, None);
+        state.set_drain_worker_limit(ceiling, 8, "fixture".into(), None, None);
         runtime.write_run_state(run, &state).unwrap();
     }
+}
+
+#[test]
+fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
+    if !isolated_run_observation(
+        "run_observation::build_budget::readiness_and_doctor_warn_for_local_and_pull_drain_capacity",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    ship_admission_wrapper(&fixture.work);
+    let budget = fixture.home.join(".orbit/cache/build-budget");
+    fs::create_dir_all(&budget).unwrap();
+    fs::write(budget.join("slots"), "2\n").unwrap();
+    seed_running_drains(&fixture, 3);
     let snapshot = fixture.json(&["run", "readiness", "--json"]);
     let warnings = snapshot["capacity"]["build_budget_warnings"]
         .as_array()
         .unwrap();
     assert_eq!(warnings.len(), 2, "{snapshot}");
     for warning in warnings {
+        assert!(
+            ["jrun-budget-local", "jrun-budget-pull"]
+                .contains(&warning["run_id"].as_str().unwrap()),
+            "{warning}"
+        );
         assert_eq!(warning["concurrency"], 3, "effective resized ceiling wins");
         assert_eq!(warning["build_slots"], 2);
         assert_eq!(
@@ -98,6 +115,52 @@ fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
             snapshot["capacity"]["build_budget_error"],
             serde_json::Value::Null
         );
+    }
+}
+
+#[test]
+fn readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper() {
+    if !isolated_run_observation(
+        "run_observation::build_budget::readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper",
+    ) {
+        return;
+    }
+    // Without the wrapper, builds never wait for a slot, so the default two
+    // slots govern none of them and a concurrency of four is not a mismatch.
+    let fixture = Fixture::init();
+    seed_running_drains(&fixture, 4);
+    let snapshot = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        snapshot["capacity"]["build_budget_warnings"],
+        serde_json::json!([]),
+        "{snapshot}"
+    );
+    assert_eq!(snapshot["capacity"]["build_budget_error"], Value::Null);
+    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(!text.contains("Build-budget warning"), "{text}");
+    let doctor = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
+    let rows: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let build_budget = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["check"] == "build-budget")
+        .collect::<Vec<_>>();
+    assert_eq!(build_budget.len(), 1, "{rows}");
+    assert_eq!(build_budget[0]["status"], "ok");
+    // The same drains warn once the checkout ships the wrapper, so the silence
+    // above comes from the checkout rather than from drains being missed.
+    ship_admission_wrapper(&fixture.work);
+    let snapshot = fixture.json(&["run", "readiness", "--json"]);
+    let warnings = snapshot["capacity"]["build_budget_warnings"]
+        .as_array()
+        .unwrap();
+    assert_eq!(warnings.len(), 2, "{snapshot}");
+    for warning in warnings {
+        assert_eq!(warning["concurrency"], 4);
+        assert_eq!(warning["build_slots"], 2);
     }
 }
 
