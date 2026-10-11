@@ -51,7 +51,8 @@
 //! A candidate absent from this object store is fetched from `origin` — from
 //! the durable ref its leaf carried it to (`durable_ref`), else its branch.
 //! The claimed implementer always runs, because the handoff carries its
-//! summary: a clean apply is `resumed_repaired` with trigger `continuation`
+//! summary: a clean apply is `resumed_repaired` with trigger `implementation`
+//! for a partial implementation, otherwise `continuation`
 //! (or `review` when the before-PR review refused it), and the leaf's own
 //! validation judges the result. [ORB-15314] When that claim's leaf was
 //! stopped inside a review, the candidate also names the reviewer's kept
@@ -71,9 +72,10 @@
 //! offers it under the same discard, spec and fetchability checks, a refusal
 //! is `fresh` with that typed reason, and every outcome is written to the
 //! task's history naming the claim and the machine that committed it. A
-//! claim candidate was always committed, so its implementer runs as a
-//! claimed leaf's does — unless the task's latest decision is the evidence
-//! receipt for the hold that claim's leaf settled into: the owner kept the
+//! claim candidate may be a preserved partial implementation, so its
+//! implementer finishes it as a claimed leaf's does — unless the task's
+//! latest decision is the evidence receipt for the hold that claim's leaf
+//! settled into: the owner kept the
 //! held candidate from the branch the leaf published it to, and a clean
 //! apply is `resumed_held`, as for a local hold. A prior run on this machine
 //! that recorded no failure handoff — a claim's leaf this machine executed —
@@ -110,7 +112,7 @@ const PRESERVING_DECISIONS: &[&str] = &[
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.
 const REVIEW_VERDICT_STEP: &str = "review_gate_settle";
-/// Steps of `task_pr_pipeline` and `task_local_pipeline` that run only after
+/// Steps of the owner and claimed task pipelines that run only after
 /// `implement_bundle` has finished. A preserved candidate from one of these
 /// is a completed implementation and may resume as `resumed_validated`.
 ///
@@ -130,6 +132,8 @@ const COMPLETED_IMPLEMENTATION_STEPS: &[&str] = &[
     "review_validate",
     "push",
     "pr_open",
+    "pin_validation",
+    "handoff",
     "promote_tasks",
     "promote_no_diff",
     "landing_review_gate_admit",

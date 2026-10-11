@@ -270,6 +270,15 @@ fn leaf_failure(
     for marker in FAILURE_MARKERS {
         reason = reason.replace(marker, "");
     }
+    if let Some(carry) = state
+        .and_then(|state| state.failure_activity_checkpoint.as_ref())
+        .filter(|checkpoint| checkpoint.activity_name == "claim_candidate_carry")
+        .map(|checkpoint| &checkpoint.output)
+        && carry.get("carry").and_then(serde_json::Value::as_str) == Some("failed")
+        && let Some(refusal) = carry.get("reason").and_then(serde_json::Value::as_str)
+    {
+        reason = format!("candidate carry failed: {refusal}; original failure: {reason}");
+    }
     let reason = reason.trim();
     let cut = floor_char_boundary(reason, MAX_FAILURE_REASON_BYTES);
     let crew = run

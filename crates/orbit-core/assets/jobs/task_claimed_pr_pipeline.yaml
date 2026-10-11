@@ -37,7 +37,12 @@
 # ORB-14338: when a step fails before `push`, the `failure_activity`
 # (`claim_candidate_carry`) pushes the committed candidate to
 # `refs/orbit/candidates/<task>/<run>` on `origin`, so a claim on any host can
-# fetch it. One it could not carry resumes only on this host; the owner gives
+# fetch it. Before `commit`, dirty implementer output is kept as a marked
+# partial commit using a scratch index: the branch, index and files stay
+# unchanged. Settlement records its ref and failed step; the next claim
+# resumes with trigger `implementation`. Protected paths and gitlinks refuse
+# the snapshot with a reason, and `.orbit/tmp/` is excluded.
+# One it could not carry resumes only on this host; the owner gives
 # a claim elsewhere none and records why in the task's history.
 # ORB-15314: a leaf cancelled or interrupted while a reviewer is working runs
 # no `failure_activity`. Before the run is finalized, the host that stopped it

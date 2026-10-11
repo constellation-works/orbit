@@ -184,8 +184,7 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
     // A clean apply of work that never reached `commit` is not an
     // implementation. Owner validation, including an empty command list,
     // must not promote it to `resumed_validated` and skip the implementer.
-    // A claimed candidate is always committed: its owner keeps none earlier.
-    if !claimed && !implementation_completed(&candidate.failed_step_id) {
+    if !implementation_completed(&candidate.failed_step_id) {
         return Ok(Outcome::Repair(json!({
             "trigger": "implementation",
             "failed_step_id": candidate.failed_step_id,

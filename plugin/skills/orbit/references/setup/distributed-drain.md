@@ -155,6 +155,15 @@ rechecks the report against its live base before authorized completion without
 a PR. A changed base or evidence requires fresh validation.
 
 
+A claimed PR leaf that fails before its normal commit preserves unfinished
+implementer changes as one marked partial commit at
+`refs/orbit/candidates/<task>/<run>` on `origin`. Its branch, index and files
+stay unchanged. Settlement records that ref in task history, and the next
+claim on any host fetches and applies it through `resume_candidate` with
+trigger `implementation`, so the implementer finishes the existing work.
+Protected paths, environment files, symlinks and gitlinks refuse the entire
+snapshot with a settlement diagnostic; `.orbit/tmp/` scratch is excluded.
+
 ## Start a follower's drain
 
 On the follower, from the replica checkout, with the owner registered by

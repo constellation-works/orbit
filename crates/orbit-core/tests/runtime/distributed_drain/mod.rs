@@ -77,6 +77,7 @@ mod landing_attribution;
 mod landing_repair;
 mod no_diff;
 mod ordering;
+mod partial_candidate;
 mod pilot;
 mod provider_limit;
 mod rebased_landing;
