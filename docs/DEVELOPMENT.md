@@ -233,13 +233,25 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 
 ## Browser checks on a prepared host
 
-Browser checks need Playwright, Chromium, its shared libraries and a font configuration. On a prepared host, `~/.local/chromium-deps/env.sh` exports `LD_LIBRARY_PATH`, `FONTCONFIG_FILE`, `PLAYWRIGHT_BROWSERS_PATH` and `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`); source it first. Elsewhere, set `PLAYWRIGHT_MODULE` yourself and stage dependencies under `.orbit/tmp/` ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
+Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`; its `env.sh` exports `PLAYWRIGHT_BROWSERS_PATH` and `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`), and on Linux also `LD_LIBRARY_PATH` and `FONTCONFIG_FILE`. Source it first. To build, verify or upgrade the kit on Linux or macOS, see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md). On a host without it, set `PLAYWRIGHT_MODULE` yourself and stage dependencies under `.orbit/tmp/` ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
 
 ```bash
 . ~/.local/chromium-deps/env.sh
 node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
   "$PLAYWRIGHT_MODULE" .orbit/tmp/dashboard-browser
 ```
+
+To check a fixture under the worker sandbox on macOS without dispatching a run, substitute the placeholders in the leaf-worker profile golden and run the fixture under `sandbox-exec`:
+
+```bash
+SCRATCH="$(mktemp -d)"
+sed -e "s#<HOME>#$HOME#g" -e "s#<ROOT>#$SCRATCH#g" \
+  crates/orbit-exec/tests/sandbox_profile_goldens/macos/leaf_worker.sbpl >"$SCRATCH/leaf_worker.sb"
+sandbox-exec -f "$SCRATCH/leaf_worker.sb" /bin/zsh -c '. ~/.local/chromium-deps/env.sh &&
+  node crates/orbit-web/src/tests/dashboard_operations_browser.mjs "$PLAYWRIGHT_MODULE" '"$SCRATCH"'/dashboard-browser'
+```
+
+The golden only approximates a live run's profile, so use a real worker run as the final proof.
 
 ### Dashboard browser fixtures
 
