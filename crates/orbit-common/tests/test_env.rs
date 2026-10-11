@@ -464,3 +464,93 @@ mod orphaned_fixture_children {
         grandchild.wait().unwrap();
     }
 }
+
+/// Test runs skip durability syncs: on macOS each one is an `F_FULLFSYNC` that
+/// flushes the whole drive, and Mac gates ran 5-20x slower than Linux for it.
+/// A sync on a pipe fails on every Unix, so whether the helper reached the
+/// kernel is observable without a power cut.
+#[cfg(unix)]
+mod durability_syncs {
+    use std::ffi::OsStr;
+    use std::fs::File;
+    use std::os::fd::OwnedFd;
+    use std::process::Command;
+
+    use orbit_common::fs::io::{
+        RELAXED_DURABILITY_ENV, relaxed_durability_requested, sqlite_synchronous, sync_file,
+        sync_file_data,
+    };
+    use orbit_common::test_env::{assert_child_test_passed, require_durable_syncs, run_child_test};
+
+    const CHILD: &str = "durability_syncs::sync_probe_child";
+    const EXPECT: &str = "ORBIT_DURABILITY_PROBE_EXPECT";
+
+    #[test]
+    fn a_release_build_ignores_the_relaxed_durability_request() {
+        let relaxed = Some(OsStr::new("1"));
+        assert!(
+            !relaxed_durability_requested(relaxed, false),
+            "a release or installed binary must sync whatever its environment says"
+        );
+        assert!(relaxed_durability_requested(relaxed, true));
+        for value in [None, Some(OsStr::new("0")), Some(OsStr::new("true"))] {
+            assert!(!relaxed_durability_requested(value, true), "{value:?}");
+        }
+    }
+
+    /// The child inherits the variable as any `orbit` process a test spawns
+    /// does, and a debug build skips its syncs until a test opts back in.
+    #[test]
+    fn a_spawned_test_process_inherits_relaxed_syncs_until_it_opts_back_in() {
+        let relaxed = if cfg!(debug_assertions) {
+            "relaxed"
+        } else {
+            "durable"
+        };
+        for (value, expect) in [
+            (Some("1"), relaxed),
+            (Some("0"), "durable"),
+            (None, "durable"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", CHILD, "--ignored", "--nocapture"])
+                .env(EXPECT, expect);
+            match value {
+                Some(value) => command.env(RELAXED_DURABILITY_ENV, value),
+                None => command.env_remove(RELAXED_DURABILITY_ENV),
+            };
+            let output = run_child_test(&mut command, CHILD, dir.path());
+            assert_child_test_passed(CHILD, output.status, &output.stdout, &output.stderr);
+        }
+    }
+
+    #[test]
+    #[ignore = "re-executed by the relaxed-durability regression"]
+    fn sync_probe_child() {
+        let relaxed = std::env::var(EXPECT).unwrap() == "relaxed";
+        let (_reader, writer) = std::io::pipe().unwrap();
+        let pipe = File::from(OwnedFd::from(writer));
+        let assert_syncs = |relaxed: bool| {
+            assert_eq!(
+                sync_file(&pipe).is_ok(),
+                relaxed,
+                "sync_file, relaxed={relaxed}"
+            );
+            assert_eq!(
+                sync_file_data(&pipe).is_ok(),
+                relaxed,
+                "sync_file_data, relaxed={relaxed}"
+            );
+            let level = if relaxed { "OFF" } else { "FULL" };
+            assert_eq!(sqlite_synchronous("FULL"), level);
+        };
+
+        assert_syncs(relaxed);
+        let durable = require_durable_syncs();
+        assert_syncs(false);
+        drop(durable);
+        assert_syncs(relaxed);
+    }
+}

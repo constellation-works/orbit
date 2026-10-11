@@ -59,7 +59,11 @@ impl RecoveryAuthority {
             .map_err(|error| authority_error("enable WAL on recovery authority", error))?;
         persist_wal_sidecars(&connection)?;
         connection
-            .pragma_update(None, "synchronous", "FULL")
+            .pragma_update(
+                None,
+                "synchronous",
+                orbit_common::fs::io::sqlite_synchronous("FULL"),
+            )
             .map_err(|error| authority_error("harden recovery authority durability", error))?;
         // `rebase_recovery_certificate` is the pre-attempt shape, one row per
         // run and step. It stays exactly as older binaries create and read it:

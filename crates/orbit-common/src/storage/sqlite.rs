@@ -448,7 +448,9 @@ pub struct PragmaOutcome {
 /// - `foreign_keys=ON`;
 /// - `synchronous=NORMAL` — the recommended WAL durability level. Stores
 ///   that need commit-durable acks (e.g. the task registry) override to
-///   `FULL` after calling this.
+///   `FULL` after calling this. Both go through
+///   [`sqlite_synchronous`](crate::fs::io::sqlite_synchronous), which is
+///   `OFF` in a relaxed test run.
 pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitError> {
     apply_default_pragmas_inner(conn, None)
 }
@@ -469,7 +471,11 @@ fn apply_default_pragmas_inner(
         .map_err(|error| sqlite_operation_error(path, "set busy_timeout", &error))?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|error| sqlite_operation_error(path, "enable foreign keys", &error))?;
-    if let Err(error) = conn.pragma_update(None, "synchronous", "NORMAL") {
+    if let Err(error) = conn.pragma_update(
+        None,
+        "synchronous",
+        crate::fs::io::sqlite_synchronous("NORMAL"),
+    ) {
         let mapped = sqlite_operation_error(path, "set synchronous=NORMAL", &error);
         if mapped.is_readonly_or_access_failure() {
             write_denied = true;

@@ -200,7 +200,7 @@ fn with_clock_hold<T>(
         .map_err(|error| OrbitError::Io(format!("write clock hold record: {error}")))?;
     file.set_len(encoded.len() as u64)
         .map_err(|error| OrbitError::Io(format!("truncate clock hold record: {error}")))?;
-    file.sync_data()
+    crate::fs::io::sync_file_data(&file)
         .map_err(|error| OrbitError::Io(format!("sync clock hold record: {error}")))?;
     Ok(result)
 }

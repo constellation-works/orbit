@@ -81,6 +81,7 @@ fi
 "$repo_root/scripts/check-codeql-extension-schema.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
+"$repo_root/scripts/check-durability-syncs.py"
 "$repo_root/scripts/check-history-note-size.sh"
 "$repo_root/scripts/check-stability.sh"
 "$repo_root/scripts/check-artifact-redaction-guardrail.sh"

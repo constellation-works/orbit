@@ -67,7 +67,7 @@ where
             .map_err(|err| OrbitError::from_write_io(path, err))?;
         file.flush()
             .map_err(|err| OrbitError::from_write_io(path, err))?;
-        file.sync_all()
+        orbit_common::fs::io::sync_file(&file)
             .map_err(|err| OrbitError::from_write_io(path, err))?;
         Ok(())
     })
@@ -86,7 +86,7 @@ fn repair_jsonl_tail(path: &Path) -> Result<(), OrbitError> {
             .map_err(|err| OrbitError::from_write_io(path, err))?;
         file.seek(SeekFrom::End(0))
             .map_err(|err| OrbitError::from_write_io(path, err))?;
-        file.sync_all()
+        orbit_common::fs::io::sync_file(&file)
             .map_err(|err| OrbitError::from_write_io(path, err))?;
     }
     Ok(())

@@ -117,7 +117,7 @@ pub(super) fn write_session_exclusive(path: &Path, record: &SessionRecord) -> st
     }
     let mut file = options.open(path)?;
     file.write_all(&bytes)?;
-    file.sync_all()
+    orbit_common::fs::io::sync_file(&file)
 }
 
 /// Rewrite the record the child was granted, keeping its inode.
@@ -150,7 +150,7 @@ pub(super) fn rewrite_session_in_place(
         let mut file = OpenOptions::new().write(true).open(path)?;
         file.write_all(&bytes)?;
         file.set_len(bytes.len() as u64)?;
-        file.sync_all()
+        orbit_common::fs::io::sync_file(&file)
     })();
     write_result.map_err(|error| {
         OrbitError::Io(format!(

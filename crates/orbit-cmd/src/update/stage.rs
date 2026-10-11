@@ -335,7 +335,7 @@ pub(super) fn write_staging_file_with_mode(
         .open(&path)
         .map_err(stage_error)?;
     let written = std::io::copy(&mut executable.take(limit + 1), &mut file)
-        .and_then(|written| file.sync_all().map(|()| written))
+        .and_then(|written| orbit_common::fs::io::sync_file(&file).map(|()| written))
         .map_err(|error| {
             let _ = std::fs::remove_file(&path);
             stage_error(error)
