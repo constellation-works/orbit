@@ -419,16 +419,8 @@ fn load_layered_resolved_with_staged(
         reject_workspace_machine_table(&workspace_document.value, &workspace_document.path)?;
     }
 
-    if global.is_none() && workspace.is_none() {
-        let mut resolved = ResolvedConfig::built_in(persistence);
-        resolved.plugin_enablement = plugin_enablement;
-        return Ok(LoadedResolvedConfig {
-            resolved,
-            global,
-            workspace,
-        });
-    }
-
+    // Missing files still admit an empty document: environment defaults and
+    // their validation must not depend on whether a config file exists.
     let mut merged = global
         .as_ref()
         .map(|document| document.value.clone())

@@ -417,6 +417,11 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus` and `codex` selects `sol` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
 5. **system_default**: the `opus` crew, or a legacy `claude` crew.
 
+The environment-default tier applies even when neither config file exists.
+An unset or blank variable leaves the built-in default in effect. An invalid
+provider is refused during config admission unless a file configures
+`workflow.default_crew`, which takes precedence over the variable.
+
 **Which crew an activity uses.** A non-empty `crew` in its rendered input, otherwise the run's crew. Activity and job assets that declare `role` are rejected.
 
 **Crew over inline baseline.** For each of `provider`, `model` and `effort`, the selected crew's value wins when present, else the activity's inline `agent_loop` value. An unrecognized crew `provider` is logged and falls back to the inline provider, so a typo never moves dispatch to another runtime. A provider already recorded on a run is reused verbatim on reconciliation.
