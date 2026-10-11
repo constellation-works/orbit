@@ -93,8 +93,10 @@
 # before-landing evidence; the owner refuses a handoff without it, or for
 # another head, so the claimed PR never lands unreviewed. A verdict other
 # than an approve fails the leaf with the PR open and unmerged, and its
-# failure settlement blocks the task on the owner; an evidence-only gap is
-# not held after publication.
+# failure settlement blocks the task on the owner. An evidence-only gap
+# holds the leaf and releases its claim with the reviewed candidate and open
+# PR. If the evidence-branch push fails, settlement carries the tip to its
+# durable candidate ref, or records why it remains on the source host.
 #
 # ORB-14261: a repair claim — admitted after the owner's landing of an earlier
 # handoff stopped on a base conflict or stale base — runs this same leaf with

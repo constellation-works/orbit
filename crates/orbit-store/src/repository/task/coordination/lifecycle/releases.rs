@@ -48,14 +48,20 @@ impl TaskCommitBoundary {
     /// an evidence hold keeps the held candidate from the branch its leaf
     /// published it to, so the run after the evidence arrives resumes it,
     /// with the pull request a before-landing hold left open [ORB-15570], so
-    /// that run closes it once its own is open.
+    /// that run closes it once its own is open. If that publication failed,
+    /// it keeps the durable carry or the local tip and carry diagnostic.
     pub(super) fn preserve_candidate(
         &self,
         task_id: &str,
         evidence: &ClaimEvidence,
     ) -> Result<Option<PreservedClaimCandidate>, OrbitError> {
         let held = evidence.evidence_hold.as_ref().and_then(|hold| {
-            let branch = hold.published_ref.as_deref()?.strip_prefix("refs/heads/")?;
+            let published_branch = hold
+                .published_ref
+                .as_deref()
+                .and_then(|reference| reference.strip_prefix("refs/heads/"));
+            let carry = hold.candidate_carry.as_ref();
+            let branch = published_branch.or_else(|| carry.map(|carry| carry.branch.as_str()))?;
             Some(ClaimCandidateRef {
                 branch: branch.to_string(),
                 head_sha: hold.candidate.commit.clone(),
@@ -71,9 +77,9 @@ impl TaskCommitBoundary {
                 // Complete: its review held only for evidence, so a claim
                 // that resumes it continues rather than repairs a verdict.
                 failed_step_id: None,
-                published: true,
-                durable_ref: None,
-                carry_failure: None,
+                published: published_branch.is_some(),
+                durable_ref: carry.and_then(|carry| carry.durable_ref.clone()),
+                carry_failure: carry.and_then(|carry| carry.carry_failure.clone()),
                 interrupted_review: None,
             })
         });

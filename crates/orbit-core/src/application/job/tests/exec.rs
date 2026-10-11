@@ -80,6 +80,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                         os: None,
                     }],
                     published_ref: None,
+                    candidate_carry: None,
                 });
                 let message = "candidate validation failed with its original cause";
                 let pipeline = if held {

@@ -561,7 +561,7 @@ fn settle(
         issued_at: now,
     };
     if super::super::evidence::evidence_only(&certificate, &judgement.external_evidence) {
-        let hold = orbit_types::workflow::ReviewEvidenceHold {
+        let mut hold = orbit_types::workflow::ReviewEvidenceHold {
             schema_version: 1,
             attempt_id: certificate.attempt_id.clone(),
             lineage_key: certificate.lineage_key.clone(),
@@ -578,7 +578,12 @@ fn settle(
             } else {
                 None
             },
+            candidate_carry: None,
         };
+        if context.claimed && hold.published_ref.is_none() {
+            hold.candidate_carry =
+                carry_evidence_candidate(runtime, context, &hold.candidate.commit)?;
+        }
         let bytes = serde_json::to_vec_pretty(&hold)
             .map_err(|error| OrbitError::Execution(format!("serialize evidence hold: {error}")))?;
         for task in &context.tasks {
@@ -602,7 +607,8 @@ fn settle(
 /// Publish a claimed leaf's held candidate on `origin`, where the owner
 /// fetches it to run a named check. Best-effort: a failed push leaves the
 /// hold intact, and the owner then reports the candidate unreachable instead
-/// of fulfilling it. Returns the ref it was published to.
+/// of fulfilling it unless the durable carry fallback succeeds. Returns the
+/// ref it was published to.
 fn publish_held_candidate(context: &GateContext, commit: &str) -> Option<String> {
     match orbit_engine::review_gate::publish_held_candidate(&context.workspace_path, commit) {
         Ok(target) => {
@@ -625,6 +631,38 @@ fn publish_held_candidate(context: &GateContext, commit: &str) -> Option<String>
             None
         }
     }
+}
+
+/// Evidence holds bypass the failure activity, so a failed evidence-branch
+/// push must carry the reviewed tip here, before recording the hold.
+fn carry_evidence_candidate(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    commit: &str,
+) -> Result<Option<orbit_types::workflow::ReviewEvidenceCandidateCarry>, OrbitError> {
+    let Some(task_id) = context.task_ids.first() else {
+        return Ok(None);
+    };
+    let state = runtime.read_run_state(&context.run_id)?;
+    let published_sha = state.as_ref().and_then(|state| {
+        ["landing_push", "push"].into_iter().find_map(|step| {
+            state
+                .pipeline
+                .get(step)?
+                .get("local_sha")?
+                .as_str()
+                .map(str::to_string)
+        })
+    });
+    orbit_engine::review_gate::carry_evidence_candidate(
+        runtime,
+        &context.workspace_path,
+        commit,
+        task_id,
+        &context.run_id,
+        published_sha,
+    )
+    .map(Some)
 }
 
 /// What validation sources are judged against: every bundle task's
