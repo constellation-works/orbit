@@ -80,8 +80,9 @@ spec:
         type: [object, "null"]
       revalidate:
         type: boolean
-      # This attempt's implementer output. A `deferred_sandbox_validation`
-      # it carries adds that gate after the required commands, run here
+      # This attempt's implementer output. The `deferred_sandbox_validation`
+      # record the implement step derived into it adds that gate after the
+      # required commands, run here
       # outside the agent sandbox; it must report executed tests, and the
       # pre-publication output names it in `replayed`.
       implementation:

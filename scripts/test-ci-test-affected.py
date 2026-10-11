@@ -30,7 +30,7 @@ class AffectedTestGateTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         BUILD_BUDGET=str(self.bin / "build-budget"), CARGO="cargo")
         for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE",
-                     "ORBIT_VALIDATION_SUMMARY", "ORBIT_VALIDATION_SELECTION"):
+                     "ORBIT_VALIDATION_SUMMARY", "ORBIT_VALIDATION_SELECTION", "ORBIT_VALIDATION_GATE"):
             self.env.pop(name, None)
         packages = []
         # Renamed, build and dev edges must all contribute to the transitive
@@ -94,6 +94,9 @@ else:
         junit = json.loads(open(config).read().split("path = ", 1)[1])
         with open(junit, "w") as report:
             report.write(f'<testsuites name="nextest-run" tests="{len(selected)}"/>')
+    if os.environ.get("GUARD_TEST_NOTICE") and arguments[:2] == ["nextest", "run"]:
+        print("    " + os.environ["GUARD_TEST_NOTICE"], flush=True)
+        print("ordinary output", flush=True)
     if os.environ.get("GUARD_TEST_PROBE_TMP_GIT"):
         fixture = os.path.join(os.environ["TMPDIR"], "non-git-fixture")
         assert subprocess.run(["git", "-C", fixture, "rev-parse", "--is-inside-work-tree"],
@@ -284,16 +287,34 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), selection=dict(
             packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"],
-            doctest_packages=self.core_dependents)))
+            doctest_packages=self.core_dependents), command=None, base=self.base, exit_code=0, notices=[]))
         # A failing run still reports what it selected and ran.
         result, failed = self.summarized(GUARD_TEST_EXIT="17")
         self.assertEqual(result.returncode, 17, result.stderr)
-        self.assertEqual(failed, summary)
+        self.assertEqual(failed, dict(summary, exit_code=17))
         # cargo test reports no count, so the summary claims none.
         result, fallback = self.summarized(GUARD_TEST_NO_NEXTEST="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIsNone(fallback["tests_run"])
         self.assertEqual(fallback["selection"], summary["selection"])
+
+    def test_summary_records_what_a_deferral_handoff_derives_from(self):
+        # [ORB-15516] Orbit derives an implementer's deferred-sandbox record
+        # from the summary: the gate's command, its base, its final exit
+        # status (doctests included) and every notice its tests printed.
+        self.touch_core()
+        notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace"
+        result, summary = self.summarized(ORBIT_VALIDATION_GATE="make ci-test-affected",
+                                          GUARD_TEST_NOTICE=notice)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((summary["command"], summary["base"], summary["exit_code"], summary["notices"]),
+                         ("make ci-test-affected", self.base, 0, [notice]))
+        result, failed = self.summarized(GUARD_TEST_NOTICE=notice, GUARD_TEST_DOC_EXIT="19")
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual((failed["exit_code"], failed["notices"]), (19, [notice]))
+        result, explicit = self.summarized(CI_TEST_BASE="agent-main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(explicit["base"], self.base)
 
     def test_a_base_checkout_runs_the_candidate_selection_it_is_given(self):
         # [ORB-15131] On the base itself the diff is empty: left to select,
@@ -310,7 +331,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         # Given the candidate's selection, it tests the same packages and targets.
         result, rerun = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(candidate["selection"]))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(rerun, candidate)
+        self.assertEqual(rerun, dict(candidate, base=None))
         self.assertTrue(any(call[:2] == ["nextest", "run"] for call in self.calls()))
 
     def test_a_selection_the_checkout_cannot_run_fails_without_a_summary(self):
@@ -332,7 +353,8 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.log.write_text("")
         result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(handed), GUARD_TEST_EXIT="100")
         self.assertEqual(result.returncode, 100, result.stderr)
-        self.assertEqual(replay, dict(schema_version=1, selection=handed, tests_run=2))
+        self.assertEqual(replay, dict(schema_version=1, selection=handed, tests_run=2, command=None,
+                                      base=None, exit_code=100, notices=[]))
         [run] = [call for call in self.calls() if call[:2] == ["nextest", "run"]]
         self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
                          ["orbit-cli", "orbit-core"])
@@ -439,6 +461,7 @@ class NextestOutputTransportTests(unittest.TestCase):
             with self.subTest(stream=stream):
                 output = self.run_gate(f'#[test]\nfn deferred() {{ {stream}!("{self.NOTICE}"); }}\n')
                 self.assertEqual(self.notices(output), [self.NOTICE], output)
+                self.assertEqual(self.summary["notices"], [self.NOTICE], output)
 
     def test_passing_noise_is_archived_and_all_host_refusal_markers_are_relayed(self):
         # A bounded fixture reproduces the output-volume incident without load
@@ -479,7 +502,8 @@ class NextestOutputTransportTests(unittest.TestCase):
         self.assertEqual(self.summary["tests_run"], 3, output)
         handed = dict(self.summary["selection"], failing_tests=["suite::fixture inner::also_broken"])
         output = self.run_gate(body, returncode=100, selection=handed)
-        self.assertEqual(self.summary, dict(schema_version=1, selection=handed, tests_run=1), output)
+        self.assertEqual(self.summary, dict(schema_version=1, selection=handed, tests_run=1, command=None,
+                                            base=None, exit_code=100, notices=[]), output)
         self.assertIn("suite::fixture inner::also_broken", output)
         self.assertNotIn("suite::fixture broken", output)
 

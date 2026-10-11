@@ -23,8 +23,9 @@ pub use baseline::{
     is_baseline_red_failure,
 };
 pub use deferred_sandbox::{
-    BUBBLEWRAP_NAMESPACE_PROBE, DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact,
-    DeferredSandboxValidation, NamespaceProbe, SEATBELT_APPLY_PROBE, deferred_sandbox_validation,
+    BUBBLEWRAP_NAMESPACE_PROBE, DEFERRED_SANDBOX_ARTIFACT, DeferralHandoff, DeferralProbe,
+    DeferredSandboxArtifact, DeferredSandboxValidation, NamespaceProbe, PendingDeferral,
+    SEATBELT_APPLY_PROBE, deferral_handoff,
 };
 pub use delivery::{
     CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, DeliveryEvidenceProvenance,

@@ -472,7 +472,7 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
                 "probe": {"exit_code": 1, "output": "bwrap: No permissions to create a new namespace"}
             }
         });
-        let rationale = "Set probe.command before returning the deferral record";
+        let rationale = "Name only the gate summary instead of hand-writing the deferral record";
         let host = RecoveryHost::new([
             (
                 "work",
@@ -517,7 +517,7 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
         assert_eq!(context.failed_step_id, "implement_bundle");
         assert_eq!(context.refused_output["implement_one"], refused);
         assert!(
-            context.refusal.contains("missing field `command`"),
+            context.refusal.contains("names no gate summary"),
             "{}",
             context.refusal
         );
@@ -618,7 +618,7 @@ fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
             "decide",
             vec![Reply::Ok(json!({
                 "decision": "resume", "step_id": "implement_bundle",
-                "rationale": "Set probe.command before returning the deferral record",
+                "rationale": "Name only the gate summary instead of hand-writing the deferral record",
             }))],
         ),
     ]);

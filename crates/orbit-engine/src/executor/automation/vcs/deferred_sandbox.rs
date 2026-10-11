@@ -2,12 +2,15 @@
 //! [ORB-15287]: Bubblewrap deferrals on Linux, Seatbelt ones on macOS
 //! [ORB-15409].
 //!
-//! [`accept_implementer_deferral`] runs at the implement step boundary. It
-//! checks an implementer's [`DeferredSandboxValidation`] against the gates this
-//! host names and the step's pinned base, and an owner run keeps the accepted
-//! record on the task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate
-//! skips the implementer, so the obligation must outlive the run that created
-//! it. A later implementation that deferred nothing clears it. A claimed leaf
+//! [`accept_implementer_deferral`] runs at the implement step boundary. The
+//! implementer names only the validation summary its gate wrote; Orbit derives
+//! the [`DeferredSandboxValidation`] from it, checks it against the gates this
+//! host names and the step's pinned base, and runs the deferring sandbox's
+//! probe in the implementer's lane itself [ORB-15516]. The derived record
+//! replaces the handoff in the step's output, and an owner run keeps it on the
+//! task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate skips the
+//! implementer, so the obligation must outlive the run that created it. A
+//! later implementation that deferred nothing clears it. A claimed leaf
 //! always runs its implementer, so its validation reads this attempt's output
 //! instead.
 //!
@@ -15,14 +18,30 @@
 //! validation steps replay outside any agent sandbox after the required ones,
 //! each re-checked against this host's gates.
 
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact, DeferredSandboxValidation,
-    deferred_sandbox_validation,
+    DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact, DeferredSandboxValidation, deferral_handoff,
 };
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
+
+/// The checkout directory a handed-off gate summary must be in: the
+/// implementer's scratch.
+const SUMMARY_DIR: &str = ".orbit/tmp";
+/// Larger than any summary a gate writes; a bigger file is not one.
+const MAX_SUMMARY_BYTES: u64 = 1024 * 1024;
+
+/// The lane the implementer ran in, where Orbit runs the deferral's probe.
+pub(crate) struct ImplementerLane<'a> {
+    /// The provider that ran the implementer; `None` for a deterministic one.
+    pub(crate) provider: Option<&'a str>,
+    /// The step's filesystem profile.
+    pub(crate) fs_profile: Option<&'a str>,
+}
 
 /// The gates whose deferrals an implementer may hand off: the required
 /// validation commands, then the review baseline commands.
@@ -46,31 +65,29 @@ pub(super) fn with_replays(mut commands: Vec<String>, replays: &[String]) -> Vec
     commands
 }
 
-/// Check a successful implementer step's `deferred_sandbox_validation` and,
-/// on an owner run, keep it on the task. `Err` is the step's failure message.
+/// Derive a successful implementer step's deferred sandbox validation from
+/// the gate summary it names and, on an owner run, keep it on the task.
+/// `Ok(Some)` is the derived record, which replaces the handoff in the step's
+/// output; `Err` is the step's failure message.
 pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
     host: &H,
     run_id: &str,
     input: &Value,
     output: &Value,
-) -> Result<(), String> {
-    let record = deferred_sandbox_validation(
-        output,
-        &deferral_gates(host),
-        input.get("base_sha").and_then(Value::as_str),
-    )
-    .map_err(|reason| {
+    lane: &ImplementerLane<'_>,
+) -> Result<Option<DeferredSandboxValidation>, String> {
+    let record = derive(host, input, output, lane).map_err(|reason| {
         format!(
             "implementer output rejected before delivery: `deferred_sandbox_validation` \
-             {reason}. Hand off only a passing affected-test gate whose sole gap is one \
-             sandbox's notices backed by its failing probe: Bubblewrap `DEFERRED:` notices \
-             and the namespace probe on Linux, or Seatbelt `SKIP: sandbox-exec cannot apply \
-             a profile:` notices and the apply probe on macOS; otherwise fix the gate or \
-             report the validation blocker."
+             {reason}. Hand off only `{{\"summary\": \"<path>\"}}` for a passing \
+             affected-test gate whose sole gap is one sandbox's notices: Bubblewrap \
+             `DEFERRED:` notices on Linux, or Seatbelt `SKIP: sandbox-exec cannot apply a \
+             profile:` notices on macOS, in a lane that refuses that sandbox; otherwise fix \
+             the gate or report the validation blocker."
         )
     })?;
     if input.get("claimed").and_then(Value::as_bool) == Some(true) {
-        return Ok(());
+        return Ok(record);
     }
     let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
         return match record {
@@ -79,15 +96,83 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
                  needs the step's `task_id` to keep it for the native replay"
                     .to_string(),
             ),
-            None => Ok(()),
+            None => Ok(None),
         };
     };
-    keep(host, run_id, task_id, record).map_err(|error| {
+    keep(host, run_id, task_id, record.clone()).map_err(|error| {
         format!(
             "could not keep {task_id}'s deferred sandbox validation for the native replay: \
              {error}"
         )
-    })
+    })?;
+    Ok(record)
+}
+
+/// The record the handoff's gate summary and Orbit's own probe derive, or
+/// `None` when the implementer deferred nothing.
+fn derive<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    output: &Value,
+    lane: &ImplementerLane<'_>,
+) -> Result<Option<DeferredSandboxValidation>, String> {
+    let Some(handoff) = deferral_handoff(output)? else {
+        return Ok(None);
+    };
+    let checkout = input
+        .get("workspace_path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "cannot be derived: the step names no `workspace_path` to read the gate summary \
+             from"
+                .to_string()
+        })?;
+    let summary = read_summary(&checkout, &handoff.summary).map_err(|reason| {
+        format!(
+            "names the gate summary `{}`, which {reason}",
+            handoff.summary
+        )
+    })?;
+    let pending = handoff
+        .derive(
+            &summary,
+            &deferral_gates(host),
+            input.get("base_sha").and_then(Value::as_str),
+        )
+        .map_err(|reason| {
+            format!(
+                "names the gate summary `{}`, which {reason}",
+                handoff.summary
+            )
+        })?;
+    let probe =
+        host.run_deferral_probe(&pending.probe(), lane.provider, lane.fs_profile, &checkout);
+    pending.complete(probe).map(Some)
+}
+
+/// The summary at checkout-relative `path`, which must resolve inside the
+/// checkout's [`SUMMARY_DIR`].
+fn read_summary(checkout: &Path, path: &str) -> Result<Vec<u8>, String> {
+    let scratch = checkout
+        .join(SUMMARY_DIR)
+        .canonicalize()
+        .map_err(|error| format!("cannot be read: the checkout has no `{SUMMARY_DIR}`: {error}"))?;
+    let resolved = checkout
+        .join(path)
+        .canonicalize()
+        .map_err(|error| format!("cannot be read: {error}"))?;
+    if !resolved.starts_with(&scratch) || !resolved.is_file() {
+        return Err(format!("is not a file in the checkout's `{SUMMARY_DIR}`"));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&resolved)
+        .and_then(|file| file.take(MAX_SUMMARY_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|error| format!("cannot be read: {error}"))?;
+    if bytes.len() as u64 > MAX_SUMMARY_BYTES {
+        return Err(format!("is larger than {MAX_SUMMARY_BYTES} bytes"));
+    }
+    Ok(bytes)
 }
 
 /// Write the task's [`DEFERRED_SANDBOX_ARTIFACT`], or clear one an earlier

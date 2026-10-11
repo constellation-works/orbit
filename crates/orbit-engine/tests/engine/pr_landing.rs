@@ -58,8 +58,9 @@ use orbit_types::workflow::handoff::{
 };
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
-    DEFERRED_SANDBOX_ARTIFACT, JobV2StepBody, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
-    PipelineState, ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
+    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, JobV2StepBody, KNOWN_RED_VALIDATION_EVENT,
+    KnownRedValidation, NamespaceProbe, PipelineState, ReviewTiming, ReviewVerdict,
+    SEATBELT_APPLY_PROBE, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -1901,16 +1902,34 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
             let gate = Gate::new(sandbox);
             host.require_commands(&["true"]);
             host.baseline_commands(&[&gate.command()]);
+            let record = deferral(&fx, &gate.command());
             let handoff = json!({
                 "summary": "done",
-                "deferred_sandbox_validation": deferral(&fx, &gate.command()),
+                "deferred_sandbox_validation": handoff_for(&fx, &record),
             });
 
             run_implementation(&fx, &host, Some(handoff))
                 .expect("the handoff delivers once the gate passes natively");
             let kept = host.validation_log(TASK_ID, DEFERRED_SANDBOX_ARTIFACT);
             assert_eq!(kept["run_id"], RUN_ID);
-            assert_eq!(kept["deferred"]["command"], gate.command().as_str());
+            assert_eq!(
+                kept["deferred"], record,
+                "Orbit derived the record from the gate summary and its own probe"
+            );
+            assert_eq!(
+                host.scripted_input("test_stub_commit")["implementation"]["deferred_sandbox_validation"],
+                record,
+                "the derived record replaces the handoff in the step's output"
+            );
+            assert_eq!(
+                *host.probes.lock().unwrap(),
+                vec![(
+                    BUBBLEWRAP_NAMESPACE_PROBE.to_string(),
+                    None,
+                    fx.repo.clone()
+                )],
+                "Orbit ran the notices' probe once, in the implementer's checkout and lane"
+            );
             assert_eq!(gate.runs(), 1, "the owner ran the deferred gate itself");
             let replay = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
             assert_eq!(replay["command"], gate.command().as_str());
@@ -1954,10 +1973,11 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     );
 }
 
-/// Every record that is not exactly one sandbox's case, the Bubblewrap one
-/// [ORB-15287] or the Seatbelt one [ORB-15409], fails the implement step
-/// before commit: nothing is validated, replayed or kept, and the failure
-/// names what is wrong with the record.
+/// Every handoff whose derivation is not exactly one sandbox's case, the
+/// Bubblewrap one [ORB-15287] or the Seatbelt one [ORB-15409], fails the
+/// implement step before commit: nothing is validated, replayed or kept, and
+/// the failure names what is wrong. The gate summary, Orbit's own probe and
+/// any hand-written field each decide [ORB-15516].
 #[test]
 fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
     isolated(
@@ -1980,11 +2000,10 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
             let alongside = |line: &str| json!([bwrap_notice(), line]);
             let probe = |exit_code: i32, output: &str| json!({ "command": BUBBLEWRAP_NAMESPACE_PROBE, "exit_code": exit_code, "output": output });
             let seatbelt_probe = |exit_code: i32, output: &str| json!({ "command": SEATBELT_APPLY_PROBE, "exit_code": exit_code, "output": output });
-            let mut missing_probe_command = valid.clone();
-            missing_probe_command["probe"]
-                .as_object_mut()
-                .expect("probe is an object")
-                .remove("command");
+            let none = Value::Null;
+            // (case, the run the gate summary reports, Orbit's probe in the
+            // lane when not the sandbox's refusal, hand-written fields beside
+            // `summary`, reason)
             let cases = [
                 (
                     "a SKIP line",
@@ -1992,6 +2011,8 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                         "notices",
                         alongside("SKIP: shell_child: sandbox unavailable"),
                     ),
+                    none.clone(),
+                    none.clone(),
                     "is not a Bubblewrap deferral",
                 ),
                 (
@@ -2000,6 +2021,8 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                         "notices",
                         json!(["DEFERRED: landlock unavailable: confined_child: unsupported"]),
                     ),
+                    none.clone(),
+                    none.clone(),
                     "is neither a Bubblewrap nor a Seatbelt deferral",
                 ),
                 (
@@ -2008,16 +2031,22 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                         "notices",
                         json!(["SKIP: seatbelt_child: sandbox_apply: Operation not permitted"]),
                     ),
+                    none.clone(),
+                    none.clone(),
                     "is neither a Bubblewrap nor a Seatbelt deferral",
                 ),
                 (
                     "a Seatbelt notice beside a Bubblewrap one",
                     with("notices", alongside(&seatbelt_notice())),
+                    none.clone(),
+                    none.clone(),
                     "is not a Bubblewrap deferral",
                 ),
                 (
                     "a Bubblewrap notice beside a Seatbelt one",
                     seatbelt_with("notices", json!([seatbelt_notice(), bwrap_notice()])),
+                    none.clone(),
+                    none.clone(),
                     "is not a Seatbelt deferral",
                 ),
                 (
@@ -2029,117 +2058,146 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                             "SKIP: the sandbox denied running ps: Operation not permitted (os error 1)",
                         ]),
                     ),
+                    none.clone(),
+                    none.clone(),
                     "is not a Seatbelt deferral",
                 ),
                 (
-                    "Seatbelt notices with the namespace probe",
-                    seatbelt_with("probe", valid["probe"].clone()),
+                    "a lane that answers the Seatbelt probe with the namespace one",
+                    seatbelt.clone(),
+                    valid["probe"].clone(),
+                    none.clone(),
                     "names the probe",
                 ),
                 (
-                    "Bubblewrap notices with the Seatbelt probe",
-                    with("probe", seatbelt["probe"].clone()),
-                    "names the probe",
-                ),
-                (
-                    "a Seatbelt probe that applied",
-                    seatbelt_with("probe", seatbelt_probe(0, "")),
+                    "a lane that applies Seatbelt",
+                    seatbelt.clone(),
+                    seatbelt_probe(0, ""),
+                    none.clone(),
                     "no refused Seatbelt apply probe",
                 ),
                 (
                     "a Seatbelt probe that failed otherwise",
-                    seatbelt_with(
-                        "probe",
-                        seatbelt_probe(1, "sandbox-exec: sandbox_apply: Operation not permitted"),
-                    ),
+                    seatbelt.clone(),
+                    seatbelt_probe(1, "sandbox-exec: sandbox_apply: Operation not permitted"),
+                    none.clone(),
                     "no refused Seatbelt apply probe",
                 ),
                 (
                     "a Seatbelt probe carrying the namespace refusal",
-                    seatbelt_with(
-                        "probe",
-                        seatbelt_probe(71, "bwrap: No permissions to create a new namespace"),
-                    ),
+                    seatbelt.clone(),
+                    seatbelt_probe(71, "bwrap: No permissions to create a new namespace"),
+                    none.clone(),
                     "no refused Seatbelt apply probe",
                 ),
                 (
                     "a Seatbelt gate that failed",
                     seatbelt_with("exit_code", json!(1)),
+                    none.clone(),
+                    none.clone(),
                     "exited 1",
                 ),
                 (
-                    "a Seatbelt record that claims a pass",
-                    seatbelt_with("passed", json!(true)),
-                    "is not a",
+                    "a Seatbelt handoff that claims a pass",
+                    seatbelt.clone(),
+                    none.clone(),
+                    json!({ "passed": true }),
+                    "unknown field `passed`",
                 ),
                 (
                     "no notice",
                     with("notices", json!([])),
+                    none.clone(),
+                    none.clone(),
                     "lists no deferral notice",
                 ),
                 (
                     "zero tests",
                     with("tests_run", json!(0)),
+                    none.clone(),
+                    none.clone(),
                     "executed no tests",
                 ),
                 (
                     "the wrong base",
                     with("base", json!(fx.candidate)),
+                    none.clone(),
+                    none.clone(),
                     "not the pinned delivery base",
                 ),
                 (
                     "a nonzero exit",
                     with("exit_code", json!(101)),
+                    none.clone(),
+                    none.clone(),
                     "exited 101",
                 ),
                 (
-                    "a probe that succeeded",
-                    with("probe", probe(0, "")),
+                    "a lane that creates namespaces",
+                    valid.clone(),
+                    probe(0, ""),
+                    none.clone(),
                     "no failing namespace probe",
                 ),
                 (
                     "a probe that never reached the kernel",
-                    with("probe", probe(127, "sh: bwrap: not found")),
+                    valid.clone(),
+                    probe(-1, "the probe could not run: No such file or directory"),
+                    none.clone(),
                     "no failing namespace probe",
                 ),
                 (
-                    "a probe missing its command",
-                    missing_probe_command,
-                    "probe: missing field `command`",
+                    "a hand-written probe that is not Orbit's",
+                    valid.clone(),
+                    none.clone(),
+                    json!({ "probe": probe(1, "bwrap: setting up uid map: Permission denied") }),
+                    "hands `probe` as",
                 ),
                 (
-                    "a different probe command",
-                    with(
-                        "probe",
-                        json!({
-                            "command": "bwrap --unshare-user --ro-bind / / -- /bin/false",
-                            "exit_code": 1,
-                            "output": "bwrap: No permissions to create a new namespace",
-                        }),
-                    ),
-                    "names the probe",
+                    "a hand-written count that is not the summary's",
+                    valid.clone(),
+                    none.clone(),
+                    json!({ "tests_run": 1 }),
+                    "hands `tests_run` as 1",
                 ),
                 (
                     "a command no host replays",
                     with("command", json!("scripts/codeql-rust-local.sh")),
+                    none.clone(),
+                    none.clone(),
                     "not one of the owner's validation gates",
                 ),
                 (
                     "a host-required criterion",
                     with("command", json!("cargo test -p orbit-cli --test mcp")),
+                    none.clone(),
+                    none.clone(),
                     "not one of the owner's validation gates",
                 ),
                 (
-                    "a record that claims a pass",
-                    with("passed", json!(true)),
-                    "is not a",
+                    "a gate that records no command",
+                    with("command", Value::Null),
+                    none.clone(),
+                    none.clone(),
+                    "names no gate `command`",
+                ),
+                (
+                    "a handoff that claims a coverage",
+                    valid.clone(),
+                    none.clone(),
+                    json!({ "coverage": "not_run" }),
+                    "unknown field `coverage`",
                 ),
             ];
-            for (case, record, reason) in cases {
+            let refuse = |case: &str, deferral: Value, probe: Value, reason: &str| {
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 host.require_commands(&["true"]);
                 host.baseline_commands(&[&gate.command()]);
-                let handoff = json!({ "summary": "done", "deferred_sandbox_validation": record });
+                if !probe.is_null() {
+                    *host.deferral_probe.lock().unwrap() =
+                        Some(serde_json::from_value(probe).unwrap());
+                }
+                let handoff = json!({ "summary": "done", "deferred_sandbox_validation": deferral });
                 let refusal = run_implementation(&fx, &host, Some(handoff)).expect_err(case);
                 assert!(
                     refusal.contains("`deferred_sandbox_validation`") && refusal.contains(reason),
@@ -2153,8 +2211,33 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
                     "{case}: nothing is kept"
                 );
+            };
+            for (case, record, probe, handed, reason) in cases {
+                let mut handoff = handoff_for(&fx, &record);
+                if let Some(handed) = handed.as_object() {
+                    handoff.as_object_mut().unwrap().extend(handed.clone());
+                }
+                refuse(case, handoff, probe, reason);
             }
-            assert_eq!(gate.runs(), 0, "no refused record reaches a replay");
+            refuse(
+                "a hand-written record that names no summary",
+                valid.clone(),
+                none.clone(),
+                "names no gate summary",
+            );
+            refuse(
+                "a summary outside the scratch directory",
+                json!({ "summary": "src/feature.txt" }),
+                none.clone(),
+                "is not a file in the checkout's `.orbit/tmp`",
+            );
+            refuse(
+                "a summary that escapes the checkout",
+                json!({ "summary": format!(".orbit/tmp/../../../{}", fx.repo.file_name().unwrap().to_string_lossy()) }),
+                none.clone(),
+                "is not a file in the checkout's `.orbit/tmp`",
+            );
+            assert_eq!(gate.runs(), 0, "no refused handoff reaches a replay");
         },
     );
 }
@@ -2244,11 +2327,17 @@ fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() 
             run_implementation(
                 &fx,
                 &host,
-                Some(json!({ "summary": "done", "deferred_sandbox_validation": record })),
+                Some(json!({
+                    "summary": "done",
+                    "deferred_sandbox_validation": handoff_for(&fx, &record),
+                })),
             )
-            .expect("the implement step accepts the Seatbelt record and the replay passes");
+            .expect("the implement step accepts the Seatbelt handoff and the replay passes");
             let kept = host.validation_log(TASK_ID, DEFERRED_SANDBOX_ARTIFACT);
-            assert_eq!(kept["deferred"], record, "the record is kept as handed off");
+            assert_eq!(
+                kept["deferred"], record,
+                "the record Orbit derived, with its own Seatbelt probe, is kept"
+            );
             let replay = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
             assert_eq!(replay["deferred_sandbox_replay"], true);
             assert_eq!(replay["exit_code"], 0);
@@ -2397,8 +2486,32 @@ fn seatbelt_notice() -> String {
     )
 }
 
-/// The accepted macOS record example from `agent_implement.yaml`, with the
-/// gate and base substituted for this run's values [ORB-15409].
+/// Where a handoff's gate summary lives in the checkout.
+const GATE_SUMMARY: &str = ".orbit/tmp/gate-summary.json";
+
+/// Write the summary of the gate run `record` describes, as
+/// `make ci-test-affected` writes it, and return the handoff that names it
+/// [ORB-15516]. Orbit derives `record` from it when its probe refuses.
+fn handoff_for(fx: &Fixture, record: &Value) -> Value {
+    let mut summary = record.clone();
+    let fields = summary.as_object_mut().unwrap();
+    fields.remove("probe");
+    fields.insert("schema_version".to_string(), json!(1));
+    fields.insert("selection".to_string(), json!({ "packages": ["fixture"] }));
+    let path = fx.repo.join(GATE_SUMMARY);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, serde_json::to_vec(&summary).unwrap()).unwrap();
+    let exclude = fx.repo.join(".git/info/exclude");
+    fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    let excluded = fs::read_to_string(&exclude).unwrap_or_default();
+    if !excluded.lines().any(|line| line == "/.orbit/") {
+        fs::write(&exclude, format!("{excluded}/.orbit/\n")).unwrap();
+    }
+    json!({ "summary": GATE_SUMMARY })
+}
+
+/// The accepted macOS record, with the gate and base substituted for this
+/// run's values [ORB-15409].
 fn seatbelt_deferral(fx: &Fixture, command: &str) -> Value {
     json!({
         "command": command,
@@ -2414,8 +2527,8 @@ fn seatbelt_deferral(fx: &Fixture, command: &str) -> Value {
     })
 }
 
-/// The accepted record example from `agent_implement.yaml`, with the gate and
-/// base substituted for this run's values.
+/// The accepted Linux record, with the gate and base substituted for this
+/// run's values.
 fn deferral(fx: &Fixture, command: &str) -> Value {
     json!({
         "command": command,
@@ -2442,6 +2555,7 @@ fn run_implementation(
     host: &DeliveryHost,
     implementation: Option<Value>,
 ) -> Result<(), String> {
+    let implemented = implementation.is_some();
     host.script(
         "test_stub_worktree",
         json!({ "job_run_id": RUN_ID, "workspace_path": fx.repo, "base_sha": fx.base_sha }),
@@ -2488,8 +2602,13 @@ fn run_implementation(
     };
     let mut job = job_asset(json!([stub("worktree"), stub("resume_candidate")]));
     job.steps.push(step("implement_bundle"));
+    let mut commit = stub("commit");
+    if implemented {
+        // What the commit step sees of the implementer's output.
+        commit["default_input"] = json!({ "implementation": "{{ steps.implement_one.output }}" });
+    }
     job.steps
-        .extend(job_asset(json!([stub("commit"), stub("sync_base")])).steps);
+        .extend(job_asset(json!([commit, stub("sync_base")])).steps);
     job.steps.push(step("validate"));
     let mut catalog = V2ActivityCatalog::new();
     for (name, action) in [
@@ -5579,6 +5698,13 @@ struct DeliveryHost {
     recovery_certificates: Mutex<Vec<(String, String, Value)>>,
     /// Run-store copies of the certified recoveries, by run.
     run_states: Mutex<BTreeMap<String, PipelineState>>,
+    /// Inputs the scripted actions last received, by action.
+    scripted_inputs: Mutex<BTreeMap<String, Value>>,
+    /// What the implementer's lane answers a deferral probe with; `None`
+    /// answers with the probed sandbox's refusal.
+    deferral_probe: Mutex<Option<NamespaceProbe>>,
+    /// Deferral probes run, as (probe, provider, checkout).
+    probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -5610,6 +5736,9 @@ impl DeliveryHost {
             recovery_attempts: Mutex::default(),
             recovery_certificates: Mutex::default(),
             run_states: Mutex::default(),
+            scripted_inputs: Mutex::default(),
+            deferral_probe: Mutex::default(),
+            probes: Mutex::default(),
         }
     }
 
@@ -5632,6 +5761,15 @@ impl DeliveryHost {
             .lock()
             .unwrap()
             .insert(action.to_string(), output);
+    }
+
+    fn scripted_input(&self, action: &str) -> Value {
+        self.scripted_inputs
+            .lock()
+            .unwrap()
+            .get(action)
+            .cloned()
+            .unwrap_or_else(|| panic!("`{action}` ran"))
     }
 
     fn has_artifact(&self, task_id: &str, path: &str) -> bool {
@@ -5964,6 +6102,35 @@ impl RuntimeHost for DeliveryHost {
         self.baseline_commands.lock().unwrap().clone()
     }
 
+    /// An implementer lane that refuses the probed sandbox, unless a test
+    /// scripted another answer [ORB-15516].
+    fn run_deferral_probe(
+        &self,
+        probe: &DeferralProbe,
+        provider: Option<&str>,
+        _fs_profile: Option<&str>,
+        cwd: &Path,
+    ) -> NamespaceProbe {
+        self.probes.lock().unwrap().push((
+            probe.command.to_string(),
+            provider.map(str::to_string),
+            cwd.to_path_buf(),
+        ));
+        if let Some(answer) = self.deferral_probe.lock().unwrap().clone() {
+            return answer;
+        }
+        let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
+            (71, "sandbox-exec: sandbox_apply: Operation not permitted")
+        } else {
+            (1, "bwrap: No permissions to create a new namespace")
+        };
+        NamespaceProbe {
+            command: probe.command.to_string(),
+            exit_code,
+            output: output.to_string(),
+        }
+    }
+
     /// A job graph's scripted steps; every other action is the engine's own.
     fn run_deterministic(
         &self,
@@ -5973,6 +6140,10 @@ impl RuntimeHost for DeliveryHost {
         _tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
         if let Some(output) = self.scripted.lock().unwrap().get(action).cloned() {
+            self.scripted_inputs
+                .lock()
+                .unwrap()
+                .insert(action.to_string(), input.clone());
             return Ok(output);
         }
         execute_deterministic_action(self, action, config, input, false, &HashMap::new(), None)

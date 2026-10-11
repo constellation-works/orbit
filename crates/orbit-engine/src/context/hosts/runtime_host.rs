@@ -13,7 +13,9 @@ use orbit_types::task::{
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
-use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -725,6 +727,25 @@ pub trait RuntimeHost: Send + Sync {
         _subprocess_cwd: Option<&Path>,
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
         Ok(None)
+    }
+
+    /// Run `probe` in the implementer's lane. Hosts must opt into this
+    /// capability and apply the sandbox resolved for the provider, profile
+    /// and checkout. The default reports an unsupported, unexecuted probe,
+    /// which cannot justify a deferral [ORB-15516].
+    fn run_deferral_probe(
+        &self,
+        probe: &DeferralProbe,
+        _provider: Option<&str>,
+        _fs_profile: Option<&str>,
+        _cwd: &Path,
+    ) -> NamespaceProbe {
+        NamespaceProbe {
+            command: probe.command.to_string(),
+            exit_code: -1,
+            output: "the probe could not run: this host does not support deferral probes"
+                .to_string(),
+        }
     }
 
     /// Optional task snapshot to embed in a CLI agent envelope.

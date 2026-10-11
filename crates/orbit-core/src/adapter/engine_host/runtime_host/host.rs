@@ -22,7 +22,9 @@ use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
-use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState};
+use orbit_types::workflow::{
+    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe,
+};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -742,6 +744,16 @@ impl RuntimeHost for OrbitRuntime {
 
     fn task_context_for_agent_input(&self, input: &Value) -> Result<Option<Value>, DispatchError> {
         task_context::task_context_for_agent_input(self, input)
+    }
+
+    fn run_deferral_probe(
+        &self,
+        probe: &DeferralProbe,
+        provider: Option<&str>,
+        fs_profile: Option<&str>,
+        cwd: &Path,
+    ) -> NamespaceProbe {
+        orbit_engine::run_deferral_probe(self, probe, provider, fs_profile, cwd)
     }
 
     fn resolve_activity_tools(
