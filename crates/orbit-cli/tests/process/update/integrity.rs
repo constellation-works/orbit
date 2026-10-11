@@ -28,6 +28,10 @@ use tempfile::TempDir;
 
 use super::output_of;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "integrity/probes.rs"]
+mod probes;
+
 const WAIT_SLICE: Duration = Duration::from_millis(20);
 
 /// [`PROBE_TIMEOUT_ENV`] for every fixture command, in seconds. Each probe's
