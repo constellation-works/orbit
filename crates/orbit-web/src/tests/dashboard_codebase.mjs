@@ -333,6 +333,20 @@ assert.deepEqual(rows()[0].querySelectorAll('span.codebase-chip').map(node => no
 assert.equal(rows()[0].querySelector('span.codebase-frac').textContent, '13 of 20');
 assert.equal(button(part('list'), 'Show paths with 5+ tasks'), undefined, 'already at 5, so no lower-support button');
 
+// A changed scan can change another ranking while the open section stays
+// identical. Its cross-ranking chips must update without losing selection.
+const changedRankings = JSON.parse(JSON.stringify(full));
+changedRankings.footprint_misses.rows = changedRankings.footprint_misses.rows.filter(row => row.path !== 'src/a/');
+changedRankings.blocked.rows[0] = { ...changedRankings.blocked.rows[0], ...rate(10, 20) };
+await serve(changedRankings);
+assert.deepEqual(rows()[0].querySelectorAll('span.codebase-chip').map(node => [node.dataset.ranking, node.querySelector('span.codebase-chip-rate').textContent]),
+  [['blocked', '50%'], ['rejected', '5.0%']], 'a poll removes absent rankings and updates rates in the open list’s chips');
+assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/b/', 'a cross-ranking update keeps the selected path');
+const refreshedNodes = view().children.slice();
+await serve(changedRankings);
+assert.ok(view().children.every((node, index) => node === refreshedNodes[index]), 'an unchanged poll after the update keeps every node');
+await serve(full);
+
 click(tile('footprint_misses'));
 assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/c/', 'a row the new list lacks falls back to its first');
 assert.ok(rows()[0].querySelector('span.codebase-extra'), 'widenings beyond the tasks show as an extra');

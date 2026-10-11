@@ -680,7 +680,14 @@ function listNode(model) {
   const hashed = tile === "overlap" ? [data.rollup, model.overlaps, PATH_RANKINGS.map((key) => rowsOf(data, key))]
     : tile === "blocked" ? section(data, "blocked")
       : section(data, tile);
-  return keyed(node, "list", { tile, selected: model.selected, hideExpected: view.hideExpected, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed });
+  // Path lists also render chips from the other rankings. A refreshed scan
+  // can change those memberships or rates without changing this section.
+  const chipRates = PATH_RANKINGS.includes(tile) ? rowsOf(data, tile).map((row) =>
+    PATH_RANKINGS.filter((key) => key !== tile).map((key) => {
+      const hit = model.index.get(row.path)?.[key];
+      return hit ? [key, hit.row.rate] : null;
+    })) : null;
+  return keyed(node, "list", { tile, selected: model.selected, hideExpected: view.hideExpected, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed, chipRates });
 }
 
 // ---- detail -----------------------------------------------------------------
