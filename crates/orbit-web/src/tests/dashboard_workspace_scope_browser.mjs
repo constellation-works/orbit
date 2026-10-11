@@ -7,6 +7,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
+    let reliabilityEvidence = null;
     try {
       await page.goto(`${origin}/#audit?role=operator`);
       await page.evaluate(async workspaceCount => {
@@ -23,6 +24,38 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         let routineEnabled = true;
         let drainRunId = null;
         globalThis.scopeRequests = [];
+        // Reliability reads are fleet-wide per host; a host in `reliabilityHoldHosts`
+        // answers only when the test settles its entry in `reliabilityHeld`.
+        globalThis.reliabilityHoldHosts = new Set();
+        globalThis.reliabilityHeld = [];
+        const reliabilityReport = (host, label) => {
+          const runs = host === 'beta' ? 5 : 17;
+          const workspace = `${host}-only-workspace`;
+          const counts = { total: runs, succeeded: runs - 2, failed: 2, cancelled: 0, skipped: 0, in_flight: 0, unknown: 0 };
+          const rate = { numerator: 2, denominator: runs, denominator_label: 'settled runs', value: 2 / runs, low_sample: true };
+          return {
+            scope: 'fleet',
+            window: { label, since: '2026-10-10T00:00:00Z', until: '2026-10-11T00:00:00Z', bucket: '1h' },
+            totals: { job_runs: { counts, failure_rate: rate, truncated: true },
+              recovery: { per_step_invocation: rate, per_job_run: rate } },
+            workspaces: [{ workspace_id: workspace, workspace_name: workspace,
+              job_runs: { counts, failure_rate: rate, by_job: [{ job_id: `${host}-job`, counts, failure_rate: rate }],
+                over_time: [{ bucket_start: '2026-10-10T12:00:00Z', counts }] },
+              recovery: { by_activity: [{ activity_id: `${host}-recover`, invocation_count: 3, job_run_count: 2, role: 'recovery' }] } }],
+            unreadable_workspaces: [`${host}-unreadable`],
+          };
+        };
+        globalThis.reliabilityView = () => {
+          const text = id => document.getElementById(id).textContent;
+          const status = document.querySelector('#reliability-status [data-panel-status]');
+          return {
+            status: status ? status.textContent : '',
+            badgeHidden: document.getElementById('reliability-scope-badge').hidden,
+            report: Object.fromEntries(['reliability-summary', 'reliability-denominator-note', 'reliability-truncation-note',
+              'reliability-over-time', 'reliability-over-time-axis', 'reliability-breakdown', 'reliability-activities',
+              'reliability-meta', 'reliability-count'].map(id => [id, text(id)])),
+          };
+        };
         window.confirm = () => true;
         globalThis.EventSource = class { close() {} };
         globalThis.fetch = async (url, options = {}) => {
@@ -43,6 +76,13 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
             }
             if (pathname === '/api/workflows/auto/stop') { drainRunId = null; return respond({ outcome: 'stopped' }); }
             return respond({ ok: true, message: 'Saved', result: { claim_id: claim.claim_id, phase: claim.phase } });
+          }
+          if (pathname.endsWith('/metrics/reliability')) {
+            const host = pathname.startsWith('/api/on/') ? decodeURIComponent(pathname.split('/')[3]) : 'alpha';
+            const label = parsed.searchParams.get('window');
+            if (!globalThis.reliabilityHoldHosts.has(host)) return respond(reliabilityReport(host, label));
+            return new Promise(resolve => globalThis.reliabilityHeld.push({ host, label, settle: status =>
+              resolve(status === 200 ? respond(reliabilityReport(host, label)) : respond({ error: `${host} reliability unavailable` }, status)) }));
           }
           if (pathname === '/api/workspaces') return respond(['one', 'two'].slice(0, workspaceCount)
             .map(id => ({ id, name: id, status: 'active', is_default: id === 'one' })));
@@ -157,9 +197,10 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
             throw new Error(`Opening ${label} must not move dashboard rail entries: ${JSON.stringify({ initialRailPositions, positions })}`);
           }
         }
+        reliabilityEvidence = await assertReliabilityScope(page);
       }
       if (errors.length) throw new Error(errors.join('\n'));
-      fs.writeFileSync(path.join(evidence, `workspace-scope-${workspaceCount}.json`), JSON.stringify({ passed: true, workspaceCount, requests }, null, 2));
+      fs.writeFileSync(path.join(evidence, `workspace-scope-${workspaceCount}.json`), JSON.stringify({ passed: true, workspaceCount, requests, reliability: reliabilityEvidence }, null, 2));
     } catch (error) {
       await page.screenshot({ path: path.join(evidence, `workspace-scope-${workspaceCount}-failure.png`), fullPage: true });
       throw error;
@@ -168,4 +209,115 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     }
   }
   console.log('Single-workspace scope preservation and multi-workspace chip clearing passed.');
+}
+
+// Reliability's report belongs to one host and window. A replacement read that
+// is held or fails must show its own load state over a retired report, never
+// the previous scope's figures; a same-scope refresh keeps its report.
+async function assertReliabilityScope(page) {
+  const view = () => page.evaluate(() => globalThis.reliabilityView());
+  const refresh = () => page.evaluate(async () => {
+    (await import('/js/reliability.js')).fetchAndRenderReliability().catch(() => {});
+  });
+  const held = count => page.waitForFunction(count => globalThis.reliabilityHeld.length >= count, count);
+  const settle = status => page.evaluate(status => {
+    for (const entry of globalThis.reliabilityHeld.splice(0)) entry.settle(status);
+  }, status);
+  const statusShows = text => page.waitForFunction(text =>
+    (document.querySelector('#reliability-status [data-panel-status]')?.textContent || '').includes(text), text);
+  const reportNames = text => page.waitForFunction(text =>
+    document.getElementById('reliability-breakdown').textContent.includes(text), text);
+  const assertRetired = (snapshot, when) => {
+    const shown = Object.entries(snapshot.report).filter(([id, text]) =>
+      text !== '' && !(text === '—' && (id === 'reliability-meta' || id === 'reliability-count')));
+    if (shown.length || !snapshot.badgeHidden) {
+      throw new Error(`${when}: the previous scope's Reliability report must be retired: ${JSON.stringify(snapshot)}`);
+    }
+  };
+  const evidence = {};
+
+  await page.locator('#diag-subtabs [data-subtab="reliability"]').click();
+  await reportNames('alpha-only-workspace');
+  const alpha = await view();
+  if (alpha.report['reliability-count'] !== '17 runs / 24h' || !alpha.report['reliability-meta'].includes('unreadable')
+    || !alpha.report['reliability-activities'].includes('alpha-recover') || alpha.badgeHidden) {
+    throw new Error(`The alpha Reliability report must render: ${JSON.stringify(alpha)}`);
+  }
+  evidence.alpha = alpha;
+
+  // Same host and window: the report stays, labeled as refreshing and then stale.
+  await page.evaluate(() => globalThis.reliabilityHoldHosts.add('alpha'));
+  await refresh();
+  await held(1);
+  await statusShows('Refreshing');
+  const refreshing = await view();
+  if (JSON.stringify(refreshing.report) !== JSON.stringify(alpha.report)) {
+    throw new Error(`A same-scope refresh must keep its report while pending: ${JSON.stringify(refreshing)}`);
+  }
+  await settle(503);
+  await statusShows('Refresh failed; showing stale data');
+  const stale = await view();
+  if (JSON.stringify(stale.report) !== JSON.stringify(alpha.report)) {
+    throw new Error(`A failed same-scope refresh must keep its report labeled stale: ${JSON.stringify(stale)}`);
+  }
+  evidence.sameScopeFailure = stale;
+  await page.evaluate(() => globalThis.reliabilityHoldHosts.clear());
+  await refresh();
+  await statusShows('Updated');
+
+  // Another window: the change itself retires the 24h report, and a held then
+  // failed 7d read never shows it again.
+  await page.evaluate(() => globalThis.reliabilityHoldHosts.add('alpha'));
+  await page.locator('#reliability-window-selector [data-window="7d"]').click();
+  assertRetired(await view(), 'After a window change');
+  await page.waitForFunction(() => globalThis.reliabilityHeld.some(entry => entry.label === '7d'));
+  await statusShows('Loading');
+  const windowPending = await view();
+  assertRetired(windowPending, 'While the replacement window read is pending');
+  evidence.windowPending = windowPending;
+  await settle(503);
+  await statusShows('Unable to load');
+  const windowFailed = await view();
+  assertRetired(windowFailed, 'After the replacement window read fails');
+  evidence.windowFailure = windowFailed;
+  await page.evaluate(() => globalThis.reliabilityHoldHosts.clear());
+  await refresh();
+  await reportNames('alpha-only-workspace');
+  const alphaWeek = await view();
+  if (alphaWeek.report['reliability-count'] !== '17 runs / 7d') {
+    throw new Error(`The alpha 7d Reliability report must render once its read succeeds: ${JSON.stringify(alphaWeek)}`);
+  }
+
+  // Another host: the switch itself retires alpha's report, and a held then
+  // failed beta read never shows it again.
+  const switched = await page.evaluate(async () => {
+    const common = await import('/js/common.js');
+    globalThis.reliabilityHoldHosts.add('beta');
+    common.setHost('beta');
+    return { host: common.getHost(), ...globalThis.reliabilityView() };
+  });
+  if (switched.host !== 'beta') throw new Error(`The fixture must select host beta: ${JSON.stringify(switched)}`);
+  assertRetired(switched, 'After a host switch');
+  await refresh();
+  await held(1);
+  await statusShows('Loading');
+  const pending = await view();
+  assertRetired(pending, 'While the replacement host read is pending');
+  evidence.hostPending = pending;
+  await settle(503);
+  await statusShows('Unable to load');
+  const failed = await view();
+  assertRetired(failed, 'After the replacement host read fails');
+  if (!failed.status.includes('beta reliability unavailable')) {
+    throw new Error(`The failed beta read must report its own failure: ${JSON.stringify(failed)}`);
+  }
+  evidence.hostFailure = failed;
+  await page.evaluate(() => globalThis.reliabilityHoldHosts.clear());
+  await refresh();
+  await reportNames('beta-only-workspace');
+  const beta = await view();
+  if (beta.report['reliability-count'] !== '5 runs / 7d' || beta.badgeHidden || beta.report['reliability-breakdown'].includes('alpha')) {
+    throw new Error(`The beta Reliability report must render once its read succeeds: ${JSON.stringify(beta)}`);
+  }
+  return evidence;
 }
