@@ -2,7 +2,7 @@
 title: State Compatibility — Vision
 owner: claude
 last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_validated: 2026-10-11
 status: Draft
 feature: state-compatibility
 doc_role: vision
@@ -50,11 +50,12 @@ mismatch refuses the whole cluster — Orbit's pre-[ORB-12434] behaviour.
 
 ### Application-managed schemas
 
-Firefox's Places database and Chromium's `sql::MetaTable` both distinguish a
-current version from a *compatible* version — the lowest reader that may open
-the file. This contract is that idea with the floor derived from named
-migrations instead of a single number, so the diagnostic can name what is
-missing.
+Chromium's `sql::MetaTable` distinguishes a current version from a
+*compatible* version — the lowest reader that may open the file. Firefox
+Places exposes one current database schema version and migrates older schemas.
+This contract generalizes the compatibility floor by deriving it from named
+migrations instead of requiring a single number, so the diagnostic can name
+what is missing.
 
 ### Wire formats
 
