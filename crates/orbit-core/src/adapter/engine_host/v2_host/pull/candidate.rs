@@ -129,23 +129,16 @@ pub(super) fn preserved_candidate(
         .map(|checkpoint| &checkpoint.output);
     // [ORB-14849] A before-landing reviewer's fix, pushed under a lease, is
     // the published head from then on. [ORB-15602] Commits past it that the
-    // failure hook carried to a durable ref are the candidate instead.
-    let carried_past_push = text(carry, "carry").as_deref() == Some("durable");
+    // failure hook carried to a durable ref, or kept host-local after a
+    // failed carry, are the candidate instead.
+    let carried_past_push = matches!(text(carry, "carry").as_deref(), Some("durable" | "failed"))
+        && both(carry, "branch", "head_sha").is_some();
     if let Some(pushed) = both(step("landing_push"), "branch", "local_sha")
         .or_else(|| both(step("push"), "branch", "local_sha"))
         .filter(|_| !carried_past_push)
     {
         (candidate.branch, candidate.head_sha) = pushed;
         candidate.published = true;
-        // Commits past the push the hook could not carry stay on this host.
-        if let (Some(unpublished), Some(reason)) =
-            (text(carry, "unpublished_sha"), text(carry, "reason"))
-        {
-            candidate.carry_failure = Some(format!(
-                "the commits past it, up to {unpublished}, stay on this host only (they could \
-                 not be pushed to a durable ref: {reason})"
-            ));
-        }
         return Some(candidate);
     }
     if carry
@@ -243,9 +236,6 @@ pub(super) fn candidate_note(failure: &ClaimFailure) -> String {
     }
     if candidate.published {
         note.push_str(", and the task's next claim resumes it");
-        if let Some(carry_failure) = &candidate.carry_failure {
-            note.push_str(&format!("; {carry_failure}"));
-        }
     } else if let Some(reference) = &candidate.durable_ref {
         note.push_str(&format!(
             ", carried to `{reference}` on origin, and the task's next claim resumes it on any \

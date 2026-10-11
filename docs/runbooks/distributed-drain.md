@@ -776,9 +776,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   names the unpushed head, and its `pr_open` supersedes the earlier pull
   request as above. When the local tip is the pushed head, the hook reports
   `carry: published` and pushes nothing. When the carry push fails, it also
-  reports `published`, with `unpublished_sha` and `reason`; the settlement
-  comment says the commits past the published head stay on that host, so
-  recover them from its worktree before it is collected.
+  reports `failed`, with the local `head_sha`, the earlier `published_sha`
+  and `reason`; the settlement keeps the reviewer-fixed tip as host-local,
+  so the task's next claim on that host resumes the fix. A claim elsewhere
+  implements fresh rather than treating the older published head as the
+  fixed candidate; recover the local tip before its worktree is collected.
 
   Every fresh start that
   sets a kept candidate aside is in the owner's task history as a

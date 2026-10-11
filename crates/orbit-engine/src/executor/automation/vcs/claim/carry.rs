@@ -146,8 +146,9 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
 /// reviewer's fix that a rejected review never pushed — exist only on this
 /// host, so a local tip past the published one is carried to the durable ref
 /// and reported `durable`, naming both. A tip that is the published one, or
-/// cannot be read, stays `published`; so does one whose carry fails, with
-/// the reason, since the published head is still fetchable from any host.
+/// cannot be read, stays `published`. A carry failure keeps the local tip
+/// as `failed`, with the pushed head and reason, so a later claim on this
+/// host resumes the reviewer fix instead of reverting to the pushed head.
 fn carry_published<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: Option<&Path>,
@@ -170,11 +171,11 @@ fn carry_published<H: RuntimeHost + ?Sized>(
     else {
         return output;
     };
+    output["head_sha"] = json!(local_sha);
+    output["published_sha"] = json!(published_sha);
     match carry_to_durable_ref(host, workspace_path, branch, &local_sha, task_id, run_id) {
         Ok(durable_ref) => {
             output["carry"] = json!("durable");
-            output["head_sha"] = json!(local_sha);
-            output["published_sha"] = json!(published_sha);
             output["durable_ref"] = json!(durable_ref);
         }
         Err(reason) => {
@@ -186,7 +187,7 @@ fn carry_published<H: RuntimeHost + ?Sized>(
                 error = %reason,
                 "commits past the claimed leaf's published head could not be carried"
             );
-            output["unpublished_sha"] = json!(local_sha);
+            output["carry"] = json!("failed");
             output["reason"] = json!(reason);
         }
     }

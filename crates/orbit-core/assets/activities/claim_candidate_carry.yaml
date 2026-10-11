@@ -13,10 +13,10 @@ spec:
     head (a rejected before-landing review's fix), it carries the local tip
     to the same ref. Its output, checkpointed on the run, is what the leaf's
     failure settlement names: `carry` is `published` (the leaf's push
-    already put the branch tip on `origin`; with `unpublished_sha` and
-    `reason` when commits past it could not be carried), `durable` (with
+    already put the branch tip on `origin`), `durable` (with
     `durable_ref`, and `published_sha` when it carried commits past the
-    pushed head), `failed` (with `reason`; the candidate stays on this host)
+    pushed head), `failed` (with `reason`; the local `head_sha` stays on this
+    host, and `published_sha` names an earlier pushed head when present)
     or `none` (nothing was committed or left dirty). Before the normal commit, it snapshots dirty
     files as one marked partial implementation commit without moving the
     branch or changing the index or worktree. Protected paths, environment
@@ -70,8 +70,6 @@ spec:
       durable_ref:
         type: string
       published_sha:
-        type: string
-      unpublished_sha:
         type: string
       reason:
         type: string

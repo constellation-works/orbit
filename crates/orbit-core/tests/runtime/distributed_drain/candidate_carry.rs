@@ -976,6 +976,16 @@ fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
 /// state the way the engine runs a job's `failure_activity`. Returns the
 /// hook's output, checkpointed on the run.
 fn landing_review_failed(pair: &Pair, leaf: &str, steps: &Value, error: &str) -> Value {
+    landing_review_stopped(pair, leaf, steps, error, JobRunState::Failed)
+}
+
+fn landing_review_stopped(
+    pair: &Pair,
+    leaf: &str,
+    steps: &Value,
+    error: &str,
+    terminal: JobRunState,
+) -> Value {
     let task = pair.claimed_task(leaf);
     let mut state = pair.follower.read_run_state(leaf).unwrap().unwrap();
     for (step, output) in steps.as_object().unwrap() {
@@ -1000,7 +1010,28 @@ fn landing_review_failed(pair: &Pair, leaf: &str, steps: &Value, error: &str) ->
         carry.clone(),
     );
     pair.follower.write_run_state(leaf, &state).unwrap();
-    pair.leaf_fails_with(leaf, error);
+    let now = Utc::now();
+    pair.follower_jobs
+        .complete_job_run_step(
+            leaf,
+            &JobRunStepParams {
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "landing_review_gate_settle".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: Some(1),
+                agent_response_json: None,
+                state: terminal,
+                error_code: Some("review_gate_blocked".into()),
+                error_message: Some(error.into()),
+            },
+        )
+        .unwrap();
+    pair.follower_jobs
+        .finalize_job_run(leaf, terminal, now, None)
+        .unwrap();
     carry
 }
 
@@ -1018,6 +1049,37 @@ fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
     ) {
         return;
     }
+    landing_review_fix_resumes(true, JobRunState::Failed);
+}
+
+/// A carry push failure must keep the reviewer's local tip for this host's
+/// next claim, rather than silently offering the older published head.
+#[test]
+fn a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host() {
+    if !isolated(
+        module_path!(),
+        "a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host",
+    ) {
+        return;
+    }
+    landing_review_fix_resumes(false, JobRunState::Failed);
+}
+
+/// A held leaf without a named external-evidence hold still settles its
+/// carried candidate; the reviewer-fixed tip must survive that terminal
+/// state just as it survives a failed review.
+#[test]
+fn a_held_landing_reviews_unpushed_fix_survives_to_another_host() {
+    if !isolated(
+        module_path!(),
+        "a_held_landing_reviews_unpushed_fix_survives_to_another_host",
+    ) {
+        return;
+    }
+    landing_review_fix_resumes(true, JobRunState::Held);
+}
+
+fn landing_review_fix_resumes(carry_available: bool, terminal: JobRunState) {
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -1032,6 +1094,17 @@ fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
     std::fs::write(first.join("src/f0.rs"), reviewed).unwrap();
     git(&first, &["commit", "-q", "-am", "reviewer fix"]);
     let fixed = git(&first, &["rev-parse", "HEAD"]).trim().to_string();
+    if !carry_available {
+        let unreachable = first.with_file_name("unreachable.git");
+        git(
+            &first,
+            &[
+                "config",
+                "remote.origin.pushurl",
+                unreachable.to_str().unwrap(),
+            ],
+        );
+    }
 
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -1048,17 +1121,40 @@ fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
         "pr_open": {"pr_number": "41"},
         "landing_review_gate_admit": {"admitted": true},
     });
-    let carry = landing_review_failed(&pair, &leaf, &steps, "review_gate_blocked: verdict reject");
+    let carry = landing_review_stopped(
+        &pair,
+        &leaf,
+        &steps,
+        "review_gate_blocked: verdict reject",
+        terminal,
+    );
+    assert_eq!(
+        pair.follower_jobs
+            .get_job_run(&leaf)
+            .unwrap()
+            .unwrap()
+            .state,
+        terminal
+    );
     let reference = format!("refs/orbit/candidates/{task}/{leaf}");
-    assert_eq!(carry["carry"], "durable", "{carry}");
+    assert_eq!(
+        carry["carry"],
+        if carry_available { "durable" } else { "failed" },
+        "{carry}"
+    );
     assert_eq!(carry["head_sha"], fixed.as_str(), "{carry}");
     assert_eq!(carry["published_sha"], published.as_str(), "{carry}");
-    assert_eq!(carry["durable_ref"], reference.as_str(), "{carry}");
-    assert_eq!(
-        git(&bare(&pair), &["rev-parse", &reference]).trim(),
-        fixed,
-        "origin holds the reviewer-fixed tip at the durable ref"
-    );
+    if carry_available {
+        assert_eq!(carry["durable_ref"], reference.as_str(), "{carry}");
+        assert_eq!(
+            git(&bare(&pair), &["rev-parse", &reference]).trim(),
+            fixed,
+            "origin holds the reviewer-fixed tip at the durable ref"
+        );
+    } else {
+        assert!(carry.get("durable_ref").is_none(), "{carry}");
+        assert!(carry["reason"].as_str().is_some(), "{carry}");
+    }
     assert_eq!(
         git(
             &bare(&pair),
@@ -1073,9 +1169,45 @@ fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
     assert_eq!(pair.owner_status(&task), "blocked", "a candidate failure");
     let kept = settled_candidate(&pair, &leaf, "Fail");
     assert_eq!(kept["head_sha"], fixed.as_str(), "{kept}");
-    assert_eq!(kept["durable_ref"], reference.as_str(), "{kept}");
     assert_eq!(kept["pull_request"], "41", "{kept}");
     assert!(kept.get("published").is_none(), "{kept}");
+    if !carry_available {
+        assert!(kept.get("durable_ref").is_none(), "{kept}");
+        assert!(kept["carry_failure"].as_str().is_some(), "{kept}");
+        returned_to_backlog(&pair, &task);
+        git(&first, &["checkout", "-q", "main"]);
+        let drain = pair.run_drain();
+        let next = pair.running_leaf(&drain, 1);
+        assert_eq!(pair.claimed_task(&next), task);
+        let offered = claim_candidate(&pair, &next).expect("the holding host resumes the fix");
+        assert_eq!(offered.head_sha, fixed);
+        let input = pair
+            .follower_jobs
+            .get_job_run(&next)
+            .unwrap()
+            .unwrap()
+            .input
+            .unwrap();
+        let resumed = engine_action(
+            &pair.follower,
+            "candidate_resume",
+            &json!({
+                "job_run_id": next,
+                "task_ids": [task],
+                "workspace_path": first,
+                "base_sha": base,
+                "candidate": input["resume_candidate"],
+                "claimed": true,
+            }),
+        );
+        assert_eq!(resumed["source_sha"], fixed.as_str(), "{resumed}");
+        assert_eq!(
+            std::fs::read_to_string(first.join("src/f0.rs")).unwrap(),
+            reviewed
+        );
+        return;
+    }
+    assert_eq!(kept["durable_ref"], reference.as_str(), "{kept}");
 
     returned_to_backlog(&pair, &task);
     let second = pair.another_host(SECOND);
