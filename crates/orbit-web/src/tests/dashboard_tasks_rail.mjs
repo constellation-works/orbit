@@ -678,6 +678,81 @@ assert.deepEqual(pinnedCardHead(), ['', 'Waiting on capacity', 'no free slot'], 
 stopPinnedReadiness();
 drainWaits.setDrainReadiness({ tasks: [] });
 clearPinnedExternalTask(pinnedContext);
+
+// Ordinary expanded drafts refresh only the Readiness card when their own
+// readiness read settles or a failed read falls back to a changed snapshot.
+const paintOrdinary = ordinaryTask => {
+  served = { total: 1, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = [ordinaryTask];
+  renderTasks(currentTasks, cardContext);
+};
+const openOrdinaryDraft = ordinaryTask => {
+  paintOrdinary(ordinaryTask);
+  const title = rowFor(ordinaryTask.id).querySelector('button.title');
+  title.parentNode.dispatch('click', { target: title });
+  const detail = byId['tasks-body'].querySelector(`#detail-${ordinaryTask.id}`);
+  const readiness = readinessCard(ordinaryTask.id);
+  assert.ok(readiness.textContent.includes('Checking whether the drain can take this task'), 'an ordinary detail shows its held readiness read');
+  detail.querySelector('.action.comment').dispatch('click');
+  const textarea = detail.querySelector('.comment-form textarea');
+  assert.ok(textarea, 'an ordinary detail opens its comment draft control');
+  textarea.value = 'keep this ordinary draft';
+  textarea.focus();
+  return { detail, readiness, textarea };
+};
+
+const ordinarySuccessTask = task(154, { status: 'backlog', readiness: readyGaps });
+const ordinarySuccessEntry = { task_id: 'ORB-154', status: 'backlog', eligible: true, reason: 'ready' };
+heldReads.set('ORB-154', holdRead());
+const ordinarySuccessDraft = openOrdinaryDraft(ordinarySuccessTask);
+heldReads.get('ORB-154').resolve(readinessResponse({ tasks: [ordinarySuccessEntry] }));
+heldReads.delete('ORB-154');
+await settleReads();
+assert.notEqual(readinessCard('ORB-154'), ordinarySuccessDraft.readiness, 'a settled ordinary answer replaces its readiness list');
+assert.equal(readinessCard('ORB-154').textContent.includes('Ready: nothing is missing.'), true, 'an ordinary draft shows the successful answer');
+assert.equal(byId['tasks-body'].querySelector('#detail-ORB-154'), ordinarySuccessDraft.detail, 'success repaint preserves the ordinary detail node');
+assert.equal(ordinarySuccessDraft.detail.querySelector('.comment-form textarea'), ordinarySuccessDraft.textarea, 'success repaint preserves the draft textarea');
+assert.equal(ordinarySuccessDraft.textarea.value, 'keep this ordinary draft', 'success repaint preserves unsent text');
+assert.equal(document.activeElement, ordinarySuccessDraft.textarea, 'success repaint preserves textarea focus');
+assert.equal(pinnedReads.filter(id => id === 'ORB-154').length, 1, 'success repaint does not issue another readiness request');
+
+const ordinaryFailureTask = task(155, { status: 'backlog', readiness: readyGaps });
+heldReads.set('ORB-155', holdRead());
+const ordinaryFailureDraft = openOrdinaryDraft(ordinaryFailureTask);
+heldReads.get('ORB-155').resolve(readinessResponse({ error: 'readiness offline' }, false));
+heldReads.delete('ORB-155');
+await settleReads();
+assert.notEqual(readinessCard('ORB-155'), ordinaryFailureDraft.readiness, 'a failed ordinary answer replaces its readiness list');
+assert.ok(readinessCard('ORB-155').textContent.includes('Drain readiness unknown: readiness offline.'));
+assert.equal(byId['tasks-body'].querySelector('#detail-ORB-155'), ordinaryFailureDraft.detail, 'error repaint preserves the ordinary detail node');
+assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'error repaint preserves the draft textarea');
+assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft', 'error repaint preserves unsent text');
+assert.equal(document.activeElement, ordinaryFailureDraft.textarea, 'error repaint preserves textarea focus');
+
+let ordinaryReadinessRepaints = 0;
+const stopOrdinaryReadiness = drainWaits.onDrainReadinessChange(() => {
+  ordinaryReadinessRepaints += 1;
+  paintOrdinary(ordinaryFailureTask);
+});
+const ordinaryLock = { task_id: 'ORB-155', status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:src/locked.rs', locking_task_id: 'ORB-88' }] };
+drainWaits.setDrainReadiness({ tasks: [ordinaryLock] });
+assert.equal(ordinaryReadinessRepaints, 1, 'a fallback snapshot repaints an ordinary draft');
+assert.equal(byId['tasks-body'].querySelector('#detail-ORB-155'), ordinaryFailureDraft.detail, 'fallback repaint preserves the ordinary detail node');
+assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'fallback repaint preserves the draft textarea');
+assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft', 'fallback repaint preserves unsent text');
+assert.equal(document.activeElement, ordinaryFailureDraft.textarea, 'fallback repaint preserves textarea focus');
+assert.deepEqual(cardHead('ORB-155'), ['', 'Waiting on locks', 'waits on ORB-88 · lock'], 'an ordinary draft shows the fallback lock snapshot');
+const ordinaryCapacity = { task_id: 'ORB-155', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-8'] };
+drainWaits.setDrainReadiness({ tasks: [ordinaryCapacity] });
+assert.equal(ordinaryReadinessRepaints, 2, 'a changed fallback answer repaints again');
+assert.deepEqual(cardHead('ORB-155'), ['', 'Waiting on capacity', 'no free slot'], 'the ordinary draft shows the current fallback snapshot');
+assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'a second fallback repaint retains the same textarea');
+assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft');
+assert.equal(document.activeElement, ordinaryFailureDraft.textarea);
+assert.equal(pinnedReads.filter(id => id === 'ORB-155').length, 1, 'error and fallback repaints do not issue another readiness request');
+stopOrdinaryReadiness();
+drainWaits.setDrainReadiness({ tasks: [] });
+
 context.fetch = () => new Promise(() => {});
 
 // Review approval runs the shipped row handler and request client. Hold the

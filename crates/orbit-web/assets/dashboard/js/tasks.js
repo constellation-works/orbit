@@ -3153,16 +3153,16 @@ function takeTaskActionNotice() {
   return notice;
 }
 
-// A pinned detail kept as an open draft is reused as-is, so only its readiness
-// list is replaced when the drain state behind it changes.
-function refreshPinnedDraftReadiness(wrap, task, context) {
+// A detail kept as an open draft is reused as-is, so only its readiness list
+// is replaced when the drain state behind it changes.
+function refreshDraftReadiness(wrap, task, context, readinessTask = task) {
   const current = wrap.querySelector(".readiness-list");
   if (!current) return;
   const drain = taskDrainState(task, context);
   if (!drain) return;
   const signature = taskDrainSignature(drain);
   if (current.dataset.drainSignature === signature) return;
-  const replacement = buildReadinessBlock(readinessOf(task), drain, task.workspace_id);
+  const replacement = buildReadinessBlock(readinessOf(readinessTask), drain, readinessTask.workspace_id);
   replacement.dataset.drainSignature = signature;
   const parent = current.parentNode;
   if (!parent) return;
@@ -3617,7 +3617,7 @@ export function renderTasks(tasks, context) {
     const pinnedKey = `pinned-${ptask.id}`;
     const draft = drafts.get(pinnedKey);
     if (draft) {
-      refreshPinnedDraftReadiness(draft, ptask, context);
+      refreshDraftReadiness(draft, ptask, context);
       nodes.push(draft);
     } else {
       nodes.push(buildPinnedTask(ptask, context));
@@ -3750,6 +3750,8 @@ export function renderTasks(tasks, context) {
         const key = `detail-${t.id}`;
         const draft = drafts.get(key);
         if (draft) {
+          const state = taskDetailState(t, context);
+          refreshDraftReadiness(draft, t, context, state.task || t);
           groupNodes.push(draft);
         } else {
           const state = taskDetailState(t, context);
@@ -3767,6 +3769,8 @@ export function renderTasks(tasks, context) {
             detail = state.task
               ? buildTaskDetail(state.task, context, drain)
               : buildTaskDetailPlaceholder(t, state, context);
+            const readiness = detail.querySelector(".readiness-list");
+            if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
             detail.dataset.key = key;
             // The row's `aria-controls` points here, so the detail needs a real id.
             detail.id = key;
