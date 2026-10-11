@@ -452,7 +452,9 @@ A local run that ends with `[provider_capacity]`, `[provider_unavailable]` or
 blocked. It is in `backlog` under a `provider_failure_hold` history event. The
 event's note names the excluded crews and the `not_before` time. The candidate
 is committed on the run's branch, and no `[BLOCKED]` PR was opened. Do not
-unblock or replay anything.
+unblock or replay anything. A claimed leaf on a follower that a provider
+refused is held the same way: its claim is released as a `provider` failure,
+and the owner records the hold, naming the leaf run.
 
 Until `not_before`, the drain gives the task to a crew the hold does not
 exclude. A refusal excludes every crew of the refusing provider. When no crew

@@ -224,7 +224,10 @@ for a pull drain as for a local one.
    (`run_context.run_id`) released for an `environment`, `transient`, `owner_route` or `provider`
    failure, and every task when that run released one for an `environment` or `owner_route`
    failure — the host itself is suppressed for the window; another drain may take them
-   [ORB-14257]. An admitted task carries `resume_candidate`, the candidate the owner kept from
+   [ORB-14257]. A `provider` release for a content refusal excludes no crew; instead the owner
+   records a provider failure hold on the task, and admission defers, into `deferred_conflicts`,
+   a held task whose crew (or, for a task naming none, the request's `default_crew`) the hold
+   excludes [ORB-15573]. An admitted task carries `resume_candidate`, the candidate the owner kept from
    the task's last claim, unless its spec changed or an operator discarded it since. Before the crew check, skip a candidate whose `os:` tags name no OS the request's `os`
    declares, and record it in `os_unavailable` with the wait (`waits for a macos host
    (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which

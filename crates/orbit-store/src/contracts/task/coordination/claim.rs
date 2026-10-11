@@ -94,6 +94,7 @@ pub struct ClaimInvocation {
     pub(crate) run: Option<ClaimRun>,
     pub(crate) operator: bool,
     pub(crate) handoff_observation: Option<HandoffObservation>,
+    pub(crate) provider_hold: Option<orbit_types::workflow::ProviderFailureHold>,
 }
 
 impl ClaimInvocation {
@@ -111,6 +112,7 @@ impl ClaimInvocation {
             run,
             operator: false,
             handoff_observation: None,
+            provider_hold: None,
         }
     }
 
@@ -123,6 +125,7 @@ impl ClaimInvocation {
             run: None,
             operator: true,
             handoff_observation: None,
+            provider_hold: None,
         }
     }
 }
@@ -131,6 +134,14 @@ impl ClaimInvocation {
     /// Trusted owner-domain seam; never fill observations from worker payloads.
     pub fn with_handoff_observation(mut self, observation: HandoffObservation) -> Self {
         self.handoff_observation = Some(observation);
+        self
+    }
+
+    /// [ORB-15573] The provider failure hold the owner computed for a release
+    /// whose leaf its provider refused. The release records it as the task's
+    /// latest status decision; never fill it from a worker payload.
+    pub fn with_provider_hold(mut self, hold: orbit_types::workflow::ProviderFailureHold) -> Self {
+        self.provider_hold = Some(hold);
         self
     }
 }
@@ -196,9 +207,24 @@ pub struct ClaimFailure {
     /// that predates the field counts it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provider_limit: bool,
+    /// [ORB-15573] Set on a `provider` failure whose provider's content
+    /// policy refused the task. The provider works on the executing host, so
+    /// the drain keeps offering the crew; the owner holds the task back from
+    /// every crew of that provider instead. An owner that predates the field
+    /// releases the task unheld.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_refusal: bool,
 }
 
 impl ClaimFailure {
+    /// Whether the executing drain stops running the leaf's crew for the rest
+    /// of its window: its class [says so](orbit_types::workflow::ClaimFailureClass::excludes_crew)
+    /// and it is not a provider's content refusal.
+    #[must_use]
+    pub fn excludes_crew(&self) -> bool {
+        self.class.excludes_crew() && !self.provider_refusal
+    }
+
     /// Whether a release for this failure counts against the task's release
     /// budget: its class is [budgeted](orbit_types::workflow::ClaimFailureClass::budgeted)
     /// and it is not a provider usage limit.

@@ -488,6 +488,13 @@ impl TaskCommitBoundary {
                     } else if let Some(hold) = &value.baseline_red {
                         params.status_note = Some(hold.text(reason));
                         state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
+                    // [ORB-15573] A release its leaf's provider refused is
+                    // recorded as the hold the owner computed, so owner and
+                    // pull admission draw the task onto another provider.
+                    } else if let Some(hold) = &auth.provider_hold {
+                        params.status_note = Some(hold.text(reason));
+                        state.last_event =
+                            orbit_types::workflow::PROVIDER_FAILURE_HOLD_EVENT.into();
                     } else {
                         params.status_note = Some(reason.to_string());
                         state.last_event = "claim_released".into();

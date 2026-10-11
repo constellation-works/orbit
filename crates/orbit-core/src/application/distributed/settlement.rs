@@ -753,8 +753,9 @@ impl crate::OrbitRuntime {
                 // default, even when it died before resolving one.
                 // [ORB-14634] A forge outage is neither the crew's nor the
                 // host's, so its release excludes nothing.
+                // [ORB-15573] Nor is a provider's content refusal.
                 (None, Some(failure))
-                    if failure.class.excludes_crew() && evidence.forge_hold.is_none() =>
+                    if failure.excludes_crew() && evidence.forge_hold.is_none() =>
                 {
                     (
                         failure

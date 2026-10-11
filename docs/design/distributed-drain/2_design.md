@@ -609,7 +609,15 @@ owns delivery:
   `provider` release with `failure.provider_limit` set and is not budgeted. After [ORB-14697]
   the release excludes no crew: each pass reads the follower's provider-limit store and excludes
   every crew whose provider reads at or over its threshold, with source `provider_limit` and an
-  `until`, until that reading lapses within the same window. `environment` and `owner_route`
+  `until`, until that reading lapses within the same window. A content refusal
+  (`[provider_refusal]`, [ORB-15573]) is a `provider` release with `failure.provider_refusal`
+  set and no `provider_unavailable`: the provider works on the host, so the release excludes no
+  crew from the window. The owner instead records the release as a `provider_failure_hold`
+  built from its own crews and the task's history, exactly as a local run's refusal holds its
+  task (every crew of the refusing provider, 24 h base backoff); its own admission draws another
+  provider's crew or defers the task with `provider_backoff`. The owner's pull admission defers
+  (`deferred_conflicts`) any held task an executor would run as an excluded crew, its own or the
+  executor's default. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
   from that drain run. For any excluding class the owner's admission also holds the released

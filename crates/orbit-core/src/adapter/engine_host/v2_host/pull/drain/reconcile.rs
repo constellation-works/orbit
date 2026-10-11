@@ -302,6 +302,7 @@ impl PullDrain<'_> {
                                         .and_then(|task| task.crew.clone()),
                                     candidate: None,
                                     provider_limit: false,
+                                    provider_refusal: false,
                                 });
                                 record = self
                                     .record_settlement(&record, ClaimMutation::Release(evidence))?;
