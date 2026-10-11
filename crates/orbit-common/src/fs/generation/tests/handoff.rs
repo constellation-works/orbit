@@ -8,7 +8,15 @@ use std::time::Duration;
 use super::super::GENERATION_CONTRACT;
 use super::super::handoff::{RESUME_MCP_STDIO, judge_candidate};
 
+/// The budget a held probe must exceed. Its candidate sleeps past it, so the
+/// timeout outcome does not depend on how fast the host runs.
 const TIMEOUT: Duration = Duration::from_millis(300);
+
+/// The budget an answering probe gets. It is a hang guard, not a race: the poll
+/// returns as soon as the script exits, so a passing run pays nothing, and a
+/// loaded host (or macOS holding a new image on its first exec) still gets its
+/// answer.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Write an executable shell script. The returned path is stable across later
 /// calls that leave the script alone, so its cache key does not change.
@@ -52,11 +60,22 @@ fn a_probe_that_times_out_is_retried_at_the_next_boundary() {
     assert!(refused.lock().unwrap().is_none(), "a timeout was cached");
 
     std::fs::write(&ready, "").expect("ready");
+    // The held call has returned, so its child is reaped and the count is final.
+    let held_runs = runs(&counter);
     assert_eq!(
-        judge_candidate(&refused, candidate.clone(), Some(RESUME_MCP_STDIO), TIMEOUT),
+        judge_candidate(
+            &refused,
+            candidate.clone(),
+            Some(RESUME_MCP_STDIO),
+            ANSWER_TIMEOUT
+        ),
         Some(candidate)
     );
-    assert_eq!(runs(&counter), 2, "the candidate was not probed again");
+    assert_eq!(
+        runs(&counter),
+        held_runs + 1,
+        "the answering call did not probe the candidate exactly once"
+    );
 }
 
 /// A completed refusal — wrong contract, missing resume capability, or a
@@ -87,7 +106,12 @@ fn a_completed_refusal_is_not_probed_again() {
         let refused = Mutex::new(None);
         for _ in 0..3 {
             assert_eq!(
-                judge_candidate(&refused, candidate.clone(), Some(RESUME_MCP_STDIO), TIMEOUT),
+                judge_candidate(
+                    &refused,
+                    candidate.clone(),
+                    Some(RESUME_MCP_STDIO),
+                    ANSWER_TIMEOUT
+                ),
                 None,
                 "{name}"
             );

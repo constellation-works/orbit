@@ -156,6 +156,9 @@ pub(super) struct CapacityHost {
     /// [ORB-14696] Entries `[execution.env]` adds to the provider child's
     /// environment.
     pub(super) agent_env: Vec<(String, String)>,
+    /// Provider attempts started. Each resolves its executor before its child
+    /// exists, so the count does not depend on the child reaching its first line.
+    provider_dispatches: Mutex<usize>,
 }
 
 impl CapacityHost {
@@ -167,6 +170,7 @@ impl CapacityHost {
             final_recovery_admissions: Mutex::new(0),
             limits: Mutex::new(Vec::new()),
             agent_env: Vec::new(),
+            provider_dispatches: Mutex::new(0),
         }
     }
 
@@ -178,6 +182,10 @@ impl CapacityHost {
             .filter(|(name, _)| name == action)
             .map(|(_, input)| input.clone())
             .collect()
+    }
+
+    pub(super) fn provider_dispatches(&self) -> usize {
+        *self.provider_dispatches.lock().unwrap()
     }
 }
 
@@ -227,6 +235,7 @@ impl RuntimeHost for CapacityHost {
     }
 
     fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        *self.provider_dispatches.lock().unwrap() += 1;
         Ok(ResolvedCliExecutor {
             command: self.cli.to_string_lossy().into_owned(),
             args: Vec::new(),
@@ -730,12 +739,13 @@ fn a_declared_owner_route_failure_skips_recovery() {
 
 /// Every failure that is not provider capacity still gets step recovery and
 /// its post-recovery attempt: a failed exit (whose answer may even quote the
-/// capacity text), a declared `status: "failed"` envelope, and a timeout.
+/// capacity text) and a declared `status: "failed"` envelope. A timeout takes
+/// the same path; see `a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt`.
 #[test]
 fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() {
     let failed_envelope = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"red","message":"tests failed"}}"#;
-    let cases: Vec<(&str, Provider, String, &str, i32, &str, u64)> = vec![
-        ("codex", Provider::Codex, String::new(), "boom", 1, "", 30),
+    let cases: Vec<(&str, Provider, String, &str, i32)> = vec![
+        ("codex", Provider::Codex, String::new(), "boom", 1),
         (
             "codex",
             Provider::Codex,
@@ -744,8 +754,6 @@ fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() 
             ),
             "",
             1,
-            "",
-            30,
         ),
         (
             "claude",
@@ -753,28 +761,13 @@ fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() 
             failed_envelope.to_string(),
             "",
             0,
-            "",
-            30,
-        ),
-        (
-            "claude",
-            Provider::Claude,
-            String::new(),
-            "",
-            0,
-            "sleep 10",
-            1,
         ),
     ];
-    for (index, (binary, provider, stdout, stderr, exit_code, before, timeout)) in
-        cases.into_iter().enumerate()
-    {
+    for (index, (binary, provider, stdout, stderr, exit_code)) in cases.into_iter().enumerate() {
         let worktree = tempfile::tempdir().unwrap();
-        let fake = FakeProvider::new(binary, &stdout, stderr, exit_code, before);
+        let fake = FakeProvider::new(binary, &stdout, stderr, exit_code, "");
         let host = CapacityHost::new(&fake.path, worktree.path());
-        let mut spec = agent_spec(provider);
-        spec.wall_clock_timeout_seconds = timeout;
-        let mut job = implementation_job(spec);
+        let mut job = implementation_job(agent_spec(provider));
         job.final_recovery_activity = None;
         job.resolved_final_recovery_activity = None;
         let run = run_job(&job, &host, &format!("recovered-{index}"));
@@ -799,6 +792,44 @@ fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() 
             "case {index}"
         );
     }
+}
+
+/// A provider attempt that outlives its wall-clock budget is a failure like any
+/// other: step recovery runs, and the post-recovery attempt dispatches the step
+/// again. The fake sleeps ten seconds under a one-second budget, so every
+/// attempt times out. The rerun is counted at dispatch, not by the fake's
+/// invocation log, because a loaded host can spend the whole budget before the
+/// fake writes its first line.
+#[test]
+fn a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt() {
+    let worktree = tempfile::tempdir().unwrap();
+    let fake = FakeProvider::new("claude", "", "", 0, "sleep 10");
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut spec = agent_spec(Provider::Claude);
+    spec.wall_clock_timeout_seconds = 1;
+    let mut job = implementation_job(spec);
+    job.final_recovery_activity = None;
+    job.resolved_final_recovery_activity = None;
+    let run = run_job(&job, &host, "recovered-timeout");
+
+    let message = failure_message(&run.outcome);
+    assert!(
+        !is_provider_unavailable(None, Some(&message)),
+        "the timeout is a provider failure: {message}"
+    );
+    assert_eq!(host.calls("step_fix").len(), 1, "{message}");
+    assert_eq!(
+        host.provider_dispatches(),
+        2,
+        "the post-recovery attempt reruns the step: {message}"
+    );
+    assert_eq!(
+        count(&run.events, |kind| matches!(
+            kind,
+            V2AuditEventKind::StepPostRecoveryAttempt { .. }
+        )),
+        1
+    );
 }
 
 /// A required validation failure remains a candidate defect, so it still
