@@ -27,6 +27,12 @@ let pendingOpenTaskId = null;
 // once that window lapses (see scheduleFeedbackExpiry).
 let statusFeedback = new Map();
 let crewFeedback = new Map();
+// A status change made from a task's open detail folds that detail in: the row
+// has moved to its new status group. The change's feedback and undo then show
+// on the collapsed row, or in a notice above the list while the new status is
+// filtered out, until the feedback expires. Keyed by task id; the value is the
+// updated record, which the undo acts on when the list no longer holds the row.
+let foldedStatusTasks = new Map();
 // ORB-12235: the same feedback shape for the writable fields in the expanded
 // detail — the complexity select and the inline text editors. `fieldFeedback`
 // is keyed `<task id>:<field>` because one detail can hold several editors.
@@ -75,6 +81,7 @@ onWorkspaceChange(() => {
   // no render has shown yet must survive it.
   if (!pendingOpenTaskId) setOpenTask(null);
   statusFeedback.clear();
+  foldedStatusTasks.clear();
   crewFeedback.clear();
   complexityFeedback.clear();
   fieldFeedback.clear();
@@ -392,6 +399,7 @@ function applyUpdatedTask(updatedTask, context) {
   if (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === merged.id) {
     pinnedExternalTask.task = merged;
   }
+  return merged;
 }
 
 // Read the full projection behind a summary row. One read per summary object:
@@ -2740,6 +2748,16 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   // so the server applies it and records the `forced` history event. A target
   // that is not a lifecycle status at all stays a refusal.
   const forced = !transition;
+  // A refusal before any write. Beside an open detail's control it stays until
+  // the next change; on a folded row or notice it expires like the feedback it
+  // replaced, so a refused undo does not linger there.
+  const refuse = (text) => {
+    statusFeedback.set(task.id, { kind: "error", text });
+    renderTasks(taskList(context), context);
+    if (foldedStatusTasks.has(task.id) && !expandedTaskIds.has(task.id)) {
+      scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+    }
+  };
   // A summary row lists the governed targets but not what each one requires —
   // the `done` requirement depends on the task's job run, which only the
   // detail endpoint reads. Ask it before deciding whether to prompt.
@@ -2751,41 +2769,25 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       detail = await loadTaskDetail(task, context);
     } catch (error) {
       if (!visit.isCurrent()) return;
-      statusFeedback.set(task.id, {
-        kind: "error",
-        text: `status update failed: ${error.message || String(error)}`,
-      });
-      renderTasks(taskList(context), context);
+      refuse(`status update failed: ${error.message || String(error)}`);
       return;
     }
     if (!visit.isCurrent()) return;
     transition = detail.status === task.status ? statusTransition(detail, nextStatus) : null;
     if (!transition) {
-      statusFeedback.set(task.id, {
-        kind: "error",
-        text: `status update unavailable: ${task.id} changed underneath this page; refresh`,
-      });
-      renderTasks(taskList(context), context);
+      refuse(`status update unavailable: ${task.id} changed underneath this page; refresh`);
       return;
     }
     task = mergeTaskRecord(task, detail);
   }
   if (forced && !statusOrder(context).includes(nextStatus)) {
-    statusFeedback.set(task.id, {
-      kind: "error",
-      text: `status update unavailable: ${task.status} cannot move to ${nextStatus}`,
-    });
-    renderTasks(taskList(context), context);
+    refuse(`status update unavailable: ${task.status} cannot move to ${nextStatus}`);
     return;
   }
   if (forced && !confirmForcedStatusChange(task, nextStatus)) {
-    statusFeedback.set(task.id, {
-      kind: "error",
-      text: typeof window.confirm === "function"
-        ? "status update cancelled"
-        : `status update unavailable: forcing ${task.status} → ${nextStatus} needs a confirmation`,
-    });
-    renderTasks(taskList(context), context);
+    refuse(typeof window.confirm === "function"
+      ? "status update cancelled"
+      : `status update unavailable: forcing ${task.status} → ${nextStatus} needs a confirmation`);
     return;
   }
 
@@ -2793,11 +2795,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   if (!forced && transition.required_field) {
     const evidence = collectStatusTransitionEvidence(task, nextStatus, transition.required_field);
     if (!evidence) {
-      statusFeedback.set(task.id, {
-        kind: "error",
-        text: statusTransitionEvidenceUnavailable(transition.required_field),
-      });
-      renderTasks(taskList(context), context);
+      refuse(statusTransitionEvidenceUnavailable(transition.required_field));
       return;
     }
     payload[transition.required_field] = evidence;
@@ -2809,7 +2807,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   try {
     const updatedTask = await patchJson(mutationPath, payload);
     if (!visit.isCurrent()) return;
-    applyUpdatedTask(updatedTask, context);
+    const merged = applyUpdatedTask(updatedTask, context) || task;
     const feedback = {
       kind: "success",
       text: forced ? "status forced" : "status saved",
@@ -2819,6 +2817,13 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
     statusFeedback.set(task.id, feedback);
+    // Fold the open detail in; an undo from a folded row keeps it folded. A
+    // pinned detail is the only view of a filtered-out task, so it stays open.
+    const pinned = pinnedExternalTask && pinnedExternalTask.id === task.id;
+    if (!pinned && (expandedTaskIds.has(task.id) || foldedStatusTasks.has(task.id))) {
+      collapseTask(task.id);
+      foldedStatusTasks.set(task.id, merged);
+    }
   } catch (error) {
     if (!visit.isCurrent()) return;
     statusFeedback.set(task.id, {
@@ -3157,6 +3162,43 @@ async function approveReviewTask(task, detail, btnNode, context) {
     path: request.path,
     successNotice: `${task.id}: handoff approved; the owner landing job completes it`,
   });
+}
+
+// The feedback of a status change whose detail folded in, with its undo. Null
+// while the detail is open again (it shows the feedback itself) or once the
+// feedback has expired.
+function buildFoldedStatusFeedback(taskId, context) {
+  if (!foldedStatusTasks.has(taskId) || expandedTaskIds.has(taskId)) return null;
+  const entry = statusFeedback.get(taskId);
+  return buildMutationFeedback(entry, () => {
+    if (!entry || !entry.undo) return;
+    const task = taskList(context).find((t) => t && t.id === taskId) || foldedStatusTasks.get(taskId);
+    applyTaskStatusChange(task, entry.undo.previousValue, context);
+  });
+}
+
+function foldedStatusSignature(taskId) {
+  return foldedStatusTasks.has(taskId) && !expandedTaskIds.has(taskId) ? feedbackSignature(statusFeedback, taskId) : "";
+}
+
+// Folded status feedback for a task with no row on screen, usually because its
+// new status is filtered out, so the undo stays reachable above the list. A
+// pinned detail shows its own.
+function buildFoldedStatusNotices(rowIds, context) {
+  const notices = [];
+  for (const [taskId, task] of foldedStatusTasks) {
+    if (rowIds.has(taskId) || (pinnedExternalTask && pinnedExternalTask.id === taskId)) continue;
+    const feedback = buildFoldedStatusFeedback(taskId, context);
+    if (!feedback) continue;
+    const notice = el("div", { class: "task-status-notice" }, [
+      el("span", { class: "mono", text: `${taskId} → ${task.status}` }),
+      feedback,
+    ]);
+    notice.dataset.key = `status-notice-${taskId}`;
+    notice.dataset.hash = `${task.status}-${foldedStatusSignature(taskId)}`;
+    notices.push(notice);
+  }
+  return notices;
 }
 
 function takeTaskActionNotice() {
@@ -3611,6 +3653,9 @@ export function renderTasks(tasks, context) {
     }
   }
   resolvePendingOpenTask(tasks, context);
+  for (const taskId of foldedStatusTasks.keys()) {
+    if (!statusFeedback.has(taskId)) foldedStatusTasks.delete(taskId);
+  }
 
   // Collected as a plain array rather than a document fragment: a fragment
   // would detach every reused node from the panel, and moving a node is what
@@ -3668,11 +3713,14 @@ export function renderTasks(tasks, context) {
       el("div", { class: "text", text: replica ? `This checkout is a pull replica of ${replica.name}; its tasks live on the owner.` : defaultText }),
       replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
-    syncNodes(body, notice ? [notice, emptyState] : [emptyState]);
+    syncNodes(body, [notice, ...buildFoldedStatusNotices(new Set(), context), emptyState].filter(Boolean));
     return;
   }
   const groups = new Map();
   if (notice) nodes.push(notice);
+  // Filled in once the rows are known: a notice is only for a task with no row.
+  const noticeIndex = nodes.length;
+  const rowIds = new Set();
 
   for (const t of filtered) {
     if (!groups.has(t.status)) groups.set(t.status, []);
@@ -3701,7 +3749,7 @@ export function renderTasks(tasks, context) {
       const rowKey = `task-${t.id}`;
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}-${foldedStatusSignature(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -3722,13 +3770,17 @@ export function renderTasks(tasks, context) {
           rest,
         ]);
         const quickError = buildQuickActionError(t);
-        row = el("div", { class: `row${run ? " run-layout" : ""}${quickError ? " has-quick-error" : ""}`, title: t.title }, [
+        const statusFeedbackNode = buildFoldedStatusFeedback(t.id, context);
+        const statusNote = statusFeedbackNode ? el("div", { class: "task-status-note" }, [statusFeedbackNode]) : null;
+        if (statusNote) stopRowInteraction(statusNote);
+        row = el("div", { class: `row${run ? " run-layout" : ""}${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
           idCell,
           titleCell,
           buildCrewUpdateControl(t, context),
           run ? buildRunCell(t) : null,
           buildQuickAction(t, context),
           ...(quickError ? [quickError] : []),
+          statusNote,
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;
@@ -3763,6 +3815,7 @@ export function renderTasks(tasks, context) {
         if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
       }
       groupNodes.push(row);
+      rowIds.add(t.id);
       if (expandedTaskIds.has(t.id)) {
         const key = `detail-${t.id}`;
         const draft = drafts.get(key);
@@ -3804,6 +3857,7 @@ export function renderTasks(tasks, context) {
     });
     nodes.push(...groupNodes);
   }
+  nodes.splice(noticeIndex, 0, ...buildFoldedStatusNotices(rowIds, context));
   syncNodes(body, nodes);
   const commentHash = getCommentHash();
   if (commentHash.startsWith("#comment-")) {

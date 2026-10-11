@@ -850,3 +850,17 @@ input.field-editor-input {
   font-size: 12px;
   background: rgba(16, 185, 129, 0.1);
 }
+/* A folded status change whose task has no row on screen (its new status is
+   filtered out): the feedback carries its own state colour and undo. */
+.task-status-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--fg-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-elev);
+}
