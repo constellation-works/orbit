@@ -150,7 +150,7 @@ impl OrbitRuntime {
                 }
             };
             let key = hold_key(&hold);
-            let Some(attempt) = self.next_fulfilment_attempt(&runs, &key)? else {
+            let Some(attempt) = self.next_fulfilment_attempt(task.id.as_str(), &key)? else {
                 continue;
             };
             let input = json!({
@@ -193,9 +193,19 @@ impl OrbitRuntime {
     /// worker died or was interrupted) counts as an attempt, not a decision.
     fn next_fulfilment_attempt(
         &self,
-        runs: &[JobRun],
+        task_id: &str,
         key: &str,
     ) -> Result<Option<usize>, OrbitError> {
+        // Attempt limits are decisions about a hold's entire history, not
+        // retry handles in the newest-run admission window. Scope the read
+        // to this task, then match its hold so other review attempts do not
+        // consume the budget or hide a final outcome.
+        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(REVIEW_EVIDENCE_FULFILMENT_JOB.to_string()),
+            task_id: Some(task_id.to_string()),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
         let mut attempts = 0;
         for run in runs
             .iter()

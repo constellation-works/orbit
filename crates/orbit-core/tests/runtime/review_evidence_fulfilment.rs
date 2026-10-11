@@ -29,6 +29,8 @@ use serde_json::{Value, json};
 use super::review_continuation::run_review_pipeline;
 use super::review_gate_audit::Fixture;
 
+mod attempts;
+
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls";
 const EVIDENCE: &str = "evidence/codeql-rust-linux.json";
 const EVIDENCE_LOG: &str = "evidence/codeql-rust-linux.log.json";
