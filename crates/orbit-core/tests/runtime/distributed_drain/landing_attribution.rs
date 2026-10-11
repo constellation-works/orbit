@@ -3,7 +3,6 @@
 
 use super::*;
 
-use orbit_core::application::automation::evaluate_auto_task;
 use orbit_core::application::task::TaskAddParams;
 use orbit_engine::{HandoffLandingStep, HandoffLandingUpdate, TaskAutomationUpdate};
 use orbit_store::contracts::FrictionAddParams;
@@ -346,7 +345,7 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
     owner.auto_task_toggle(CONSUMER, true).unwrap();
     let definition = owner.auto_task_show(CONSUMER).unwrap().unwrap();
     publish_origin(repo);
-    let baseline = evaluate_auto_task(owner, &definition, false, Utc::now()).expect("baseline");
+    let baseline = evaluate_landing(owner, &definition);
     assert!(baseline.state.is_some(), "{baseline:#?}");
 
     // Each PR squash-merges as one first-parent commit; the stand-in `gh`
@@ -410,7 +409,7 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
     }
 
     publish_origin(repo);
-    let diagnostic = evaluate_auto_task(owner, &definition, false, Utc::now()).unwrap();
+    let diagnostic = evaluate_landing(owner, &definition);
     let state = diagnostic
         .state
         .clone()

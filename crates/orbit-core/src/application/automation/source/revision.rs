@@ -169,7 +169,7 @@ impl<'a> Source<'a> {
 
     fn remaining_budget(&self) -> Result<Duration, AutomationError> {
         SOURCE_DEADLINE
-            .checked_sub(self.started.elapsed())
+            .checked_sub(self.elapsed())
             .filter(|remaining| !remaining.is_zero())
             .ok_or_else(|| AutomationError::Deferred("source_deadline".into()))
     }

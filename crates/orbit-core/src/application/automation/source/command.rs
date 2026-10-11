@@ -7,12 +7,12 @@ use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
     path::Path,
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(test)]
 use super::revision::source_deadline_forced;
-use super::{SOURCE_DEADLINE, Source};
+use super::{SOURCE_DEADLINE, Source, budget_now};
 
 /// Budget for one local git or provider command. A fetch uses the time left
 /// on [`SOURCE_DEADLINE`] instead: two seconds is not a network fetch.
@@ -55,7 +55,7 @@ impl<'a> Source<'a> {
     pub(crate) fn at(root: &'a Path, now: DateTime<Utc>) -> Self {
         Self {
             root,
-            started: Instant::now(),
+            started: budget_now(),
             cache: None,
             now,
             fetch_origin: true,
@@ -167,7 +167,7 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
 
-        if self.started.elapsed() > SOURCE_DEADLINE {
+        if self.elapsed() > SOURCE_DEADLINE {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
 
@@ -224,7 +224,7 @@ impl<'a> Source<'a> {
                 })?,
         );
 
-        let start = Instant::now();
+        let start = budget_now();
 
         loop {
             if let Some(status) = child
@@ -242,8 +242,8 @@ impl<'a> Source<'a> {
                 break;
             }
 
-            let over_budget = start.elapsed() > budget
-                || self.started.elapsed() > SOURCE_DEADLINE
+            let over_budget = budget_now().saturating_duration_since(start) > budget
+                || self.elapsed() > SOURCE_DEADLINE
                 || file
                     .metadata()
                     .map(|meta| meta.len() > limit)
@@ -280,7 +280,7 @@ impl<'a> Source<'a> {
         args: &[&str],
         keep: impl Fn(&str) -> bool,
     ) -> Result<Vec<String>, AutomationError> {
-        let budget = match SOURCE_DEADLINE.checked_sub(self.started.elapsed()) {
+        let budget = match SOURCE_DEADLINE.checked_sub(self.elapsed()) {
             Some(budget) if !budget.is_zero() => budget,
             _ => return Err(AutomationError::Deferred("source_deadline".into())),
         };
@@ -350,7 +350,7 @@ impl<'a> Source<'a> {
         args: &[&str],
         input: Option<&[u8]>,
     ) -> Result<String, AutomationError> {
-        let budget = match SOURCE_DEADLINE.checked_sub(self.started.elapsed()) {
+        let budget = match SOURCE_DEADLINE.checked_sub(self.elapsed()) {
             Some(budget) if !budget.is_zero() => budget,
             _ => return Err(AutomationError::Deferred("source_deadline".into())),
         };

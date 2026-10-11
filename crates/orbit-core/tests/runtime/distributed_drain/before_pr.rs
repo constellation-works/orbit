@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use super::*;
 
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
-use orbit_core::application::automation::evaluate_auto_task;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
@@ -148,7 +147,7 @@ impl ReviewedHandoff {
         owner.auto_task_toggle(CONSUMER, true).unwrap();
         let definition = owner.auto_task_show(CONSUMER).unwrap().unwrap();
         publish_origin(&repo);
-        evaluate_auto_task(&owner, &definition, false, Utc::now()).expect("baseline");
+        evaluate_landing(&owner, &definition);
 
         let base = revision(&repo, "HEAD");
         let branch = format!("orbit/{task_id}");
@@ -442,8 +441,7 @@ impl ReviewedHandoff {
     /// Publish `main` and run one pass of the after-landing consumer.
     pub(super) fn observe(&self) -> AutomationState {
         publish_origin(&self.repo);
-        let diagnostic =
-            evaluate_auto_task(&self.owner, &self.definition, false, Utc::now()).unwrap();
+        let diagnostic = evaluate_landing(&self.owner, &self.definition);
         diagnostic
             .state
             .clone()

@@ -122,7 +122,7 @@ impl<'a> Source<'a> {
             .collect::<Vec<_>>();
 
         for sha in &candidates {
-            if self.started.elapsed() > Duration::from_secs(20) {
+            if self.elapsed() > Duration::from_secs(20) {
                 break;
             }
 
@@ -149,7 +149,8 @@ impl<'a> Source<'a> {
             };
             let raw = match response {
                 Ok(raw) => raw,
-                Err(_) => {
+                Err(error) => {
+                    tracing::warn!(%sha, %error, "delivery identity lookup unavailable");
                     unresolved.insert(sha.clone(), "evidence_unavailable".into());
                     continue;
                 }

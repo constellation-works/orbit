@@ -32,7 +32,11 @@ if [ "$1" = auth-recovery-probe ]; then
     [ -z "$ORBIT_TASK_ID" ] || exit 25
     printf 'probe\n' >> probe-calls
     cat > probe-stdin
-    [ ! -f probe-hang ] || sleep 30
+    if [ -f probe-hang ]; then
+        mkfifo probe-release
+        printf 'ready\n' > probe-ready
+        read release < probe-release
+    fi
     [ -f auth-ok ] || exit 1
     printf 'ORBIT_AUTH_OK\n'
 else
@@ -119,6 +123,14 @@ fn auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain() {
     ) {
         return;
     }
+    let clock = std::time::Instant::now();
+    orbit_core::test_support::with_cli_supervision_clock(
+        move || clock,
+        auth_probe_backoff_recovery_fixture,
+    );
+}
+
+fn auth_probe_backoff_recovery_fixture() {
     let _env = orbit_common::test_env::scoped([
         ("AUTH_FIXTURE_ALLOWED", Some("permitted")),
         ("AUTH_FIXTURE_NOT_ALLOWED", Some("private")),
@@ -329,11 +341,29 @@ fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
             due(&pair, &drain);
             std::fs::write(pair.follower_repo.join("probe-hang"), "hang").unwrap();
         }
+        // Freeze the supervisor clock until the real child has validated its
+        // environment and consumed stdin. Then expire the declared one-second
+        // budget while it blocks on a FIFO. No shell-startup race or sleep.
         let started = std::time::Instant::now();
-        pair.pass(&drain);
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "declared timeout bounds a hung provider"
+        let expired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let observed = expired.clone();
+        let ready = pair.follower_repo.join("probe-ready");
+        let initialized = std::cell::Cell::new(false);
+        orbit_core::test_support::with_cli_supervision_clock(
+            move || {
+                if initialized.replace(true) && ready.exists() {
+                    observed.set(true);
+                    started + Duration::from_secs(2)
+                } else {
+                    started
+                }
+            },
+            || pair.pass(&drain),
+        );
+        assert_eq!(
+            expired.get(),
+            expect_probe,
+            "the hung probe reaches its deadline"
         );
         assert_eq!(
             pair.follower_repo.join("probe-calls").exists(),

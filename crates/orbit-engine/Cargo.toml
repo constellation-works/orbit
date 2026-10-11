@@ -11,6 +11,10 @@ stability = "internal"
 [lints]
 workspace = true
 
+[features]
+# Scoped deadline clocks for downstream integration fixtures only.
+test-support = []
+
 [dependencies]
 chrono.workspace = true
 libc = { workspace = true }
