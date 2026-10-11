@@ -82,6 +82,11 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 | `orbit task export` \| `import` \| `reindex` | Export and import portable `tar.zst` task bundles, and rebuild the task index. |
 | `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, check, read, or restore a task snapshot. Nothing publishes automatically. |
 
+With `task show --fields ... --json`, a single field returns its bare JSON value,
+whether read locally or from another host. The `terminal` field stays keyed as
+`{"terminal": true}` or `{"terminal": false}`. Multiple fields return an object
+keyed by the requested field names.
+
 ### Friction and search
 
 | Command | Purpose |

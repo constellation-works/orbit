@@ -454,14 +454,32 @@ fn with_host(mut value: Value, holder: &HostEntry) -> Value {
 fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> CommandOut {
     match render {
         Render::TaskShow { fields } => {
-            let value = match fields.as_slice() {
-                [field] if !value.is_object() => json!({ field.as_str(): value }),
-                _ => value,
-            };
-            let text = if fields.is_empty() {
-                task_summary(&value, holder)
+            // MCP structuredContent wraps arrays and scalars in objects. Undo
+            // only those envelopes for a bare single-field projection.
+            let value = if matches!(fields.as_slice(), [field] if field != "terminal")
+                && value.as_object().is_some_and(|object| object.len() == 1)
+            {
+                value
+                    .get("items")
+                    .filter(|value| value.is_array())
+                    .or_else(|| {
+                        value
+                            .get("value")
+                            .filter(|value| !value.is_object() && !value.is_array())
+                    })
+                    .cloned()
+                    .unwrap_or(value)
             } else {
-                field_lines(&value, &fields)
+                value
+            };
+            let text = match fields.as_slice() {
+                [] => task_summary(&value, holder),
+                // Human field lines need keys even when the JSON value is an
+                // object itself; terminal already has its documented key.
+                [field] if field != "terminal" => {
+                    field_lines(&json!({ field.as_str(): &value }), &fields)
+                }
+                _ => field_lines(&value, &fields),
             };
             let doc = if fields.is_empty() {
                 with_host(value, holder)
