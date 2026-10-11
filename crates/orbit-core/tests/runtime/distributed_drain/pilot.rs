@@ -20,6 +20,67 @@ fn prepare(pair: &Pair, task_id: &str) -> Value {
 }
 
 #[test]
+fn pilot_can_record_a_claimed_prerequisite_without_mutating_it() {
+    if !isolated(
+        module_path!(),
+        "pilot_can_record_a_claimed_prerequisite_without_mutating_it",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+    let dependent = &pair.tasks[1];
+    pair.wire
+        .owner
+        .update_task_as_human(
+            dependent,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Proposed),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let drain = pair.start_drain();
+    let leaf = pair.queued_leaf(&drain, 1);
+    let blocker = &pair.tasks[0];
+    assert_eq!(pair.claimed_task(&leaf), *blocker);
+    let before = pair.owner_task(blocker);
+    for _ in 0..2 {
+        let prepared = prepare(&pair, dependent);
+        let output = action(
+            &pair,
+            "apply_task_pilot_results",
+            json!({
+                "workspace_path": pair.owner_repo, "prepared": prepared,
+                "results": [{"partition_index": 0, "task_ids": [dependent], "tasks": [{
+                    "task_id": dependent, "context_files_after": ["file:src/f1.rs"],
+                    "disposition": "selectors", "recommended_crew": "fixture",
+                    "recommended_complexity": "low", "confidence": "high",
+                    "assessment_rationale": "The second file contains the repair.",
+                    "validation_approach": "Inspect dependency admission.",
+                    "evidence_gaps": [], "reassessment_triggers": [],
+                    "blocked_by": [format!("Wait for {blocker} to land")],
+                    "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+                    "duplicate_of": null, "already_landed": null,
+                }]}],
+            }),
+        );
+        assert_eq!(output["status"], "succeeded", "{output}");
+        assert_eq!(output["applied_count"], 1, "{output}");
+        assert_eq!(
+            pair.wire
+                .owner
+                .get_task(dependent)
+                .unwrap()
+                .dependencies()
+                .as_slice(),
+            std::slice::from_ref(blocker)
+        );
+        assert_eq!(pair.owner_task(blocker), before);
+    }
+}
+
+#[test]
 fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
     if !isolated(
         module_path!(),

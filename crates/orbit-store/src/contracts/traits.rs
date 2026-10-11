@@ -289,6 +289,17 @@ pub trait TaskStoreBackend: Send + Sync {
         op()
     }
 
+    /// Read a stable dependency snapshot while another task is mutated.
+    /// This grants no write authority over the dependency, including a task
+    /// protected by an execution claim; every mutation retains its own guard.
+    fn with_task_read_lock(
+        &self,
+        _id: &str,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        op()
+    }
+
     /// Atomically apply a freshness-guarded task mutation and its durable
     /// idempotency receipt. Backends that cannot provide one commit point must
     /// reject the operation rather than emulate it with partial writes.
