@@ -2,14 +2,14 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::child_guard::ChildGuard;
-use std::time::{Duration, Instant};
+use crate::bound_server::{Announcement, BoundServer};
+use std::time::Duration;
 
 use orbit_common::test_env;
 use serde_json::{Value, json};
@@ -290,38 +290,26 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
         "{legacy}"
     )
     .unwrap();
-    let port = TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
     let mut server_cmd = Command::new(env!("CARGO_BIN_EXE_orbit"));
     test_env::clear_inherited_authority(|name| {
         server_cmd.env_remove(name);
     });
-    let mut server = ChildGuard::new(
+    let mut server = BoundServer::new(
         server_cmd
             .current_dir(&fixture.work)
             .env("HOME", &fixture.home)
             .env("USERPROFILE", &fixture.home)
-            .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .args(["web", "serve", "--port", "0", "--no-open"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
+        Announcement::Dashboard,
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(
-            server.try_wait().unwrap().is_none(),
-            "dashboard exited before readiness"
-        );
-        assert!(
-            Instant::now() < deadline,
-            "dashboard readiness exceeded 10s"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let port = server
+        .wait_for_address(Duration::from_secs(10))
+        .expect("dashboard bound")
+        .port();
     let web_logs = get(
         port,
         &format!(
