@@ -9,36 +9,46 @@
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
 //! `/api/scoreboard` (keyed by the canonical window), and the codebase
 //! analytics scan behind `/api/codebase/analytics`, which caches typed facts
-//! rather than a response body.
+//! rather than a response body. Every payload served from a memo reports its
+//! age in an `Age` header.
 
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use axum::http::{HeaderName, header};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::Value;
 
-/// Freshness bound for a cached audit summary. Short enough that header tiles
-/// still move, long enough that overlapping dashboard polls collapse.
-pub(crate) const AUDIT_SUMMARY_TTL: Duration = Duration::from_secs(15);
-
-/// Freshness bound for scoreboard summaries and their joined incident scans.
-pub(crate) const SCOREBOARD_TTL: Duration = Duration::from_secs(15);
-
-/// Freshness bound for a cached diagnostics error list. The Errors tab polls
-/// every 30s and each miss scans up to 50k audit rows plus stderr blobs, so
-/// this only needs to collapse overlapping tabs, not hide new errors long.
-pub(crate) const DIAGNOSTICS_ERRORS_TTL: Duration = Duration::from_secs(15);
-
-/// Freshness bound for cached friction rows. Matches the diagnostics errors
-/// memo so overlapping Runs-tab polls share one bounded audit/blob scan.
-pub(crate) const DIAGNOSTICS_FRICTION_TTL: Duration = Duration::from_secs(15);
+/// Freshness bound for the dashboard memos the 30 s poll reads: audit summary,
+/// scoreboard, diagnostics errors and diagnostics friction. A viewer's polls
+/// land about 31 s apart (the interval plus the refresh's own duration), so
+/// three poll intervals keep the second and third poll on the entry the first
+/// one computed. A miss scans up to 50k audit rows plus stderr blobs, so a new
+/// failure can stay hidden for up to this long; the `Age` header shows how old
+/// the served payload is.
+pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 
 /// Freshness bound for the codebase analytics scan. A miss reads every task
 /// bundle's history, and the rankings it feeds move over days, so the 30 s
 /// dashboard poll must not repeat it.
 pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
+
+/// A memoized body and how long ago it was computed.
+pub(crate) struct Served<V> {
+    pub(crate) body: Arc<V>,
+    /// Time since `body` was computed, read when it was served. Zero on a miss.
+    pub(crate) age: Duration,
+}
+
+impl<V> Served<V> {
+    /// `Age` header (RFC 9111 section 5.1) in whole seconds. A header rather
+    /// than a body field because the friction payload is a bare JSON array.
+    pub(crate) fn age_header(&self) -> [(HeaderName, String); 1] {
+        [(header::AGE, self.age.as_secs().to_string())]
+    }
+}
 
 /// In-process TTL cache and single-flight gate for one dashboard server.
 pub(crate) struct RuntimeMemo<K, V = Value> {
@@ -81,7 +91,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
         key: K,
         ttl: Duration,
         compute: F,
-    ) -> Result<Arc<V>, OrbitError>
+    ) -> Result<Served<V>, OrbitError>
     where
         F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
     {
@@ -114,7 +124,10 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             ttl,
             body: Arc::clone(&computed),
         });
-        Ok(computed)
+        Ok(Served {
+            body: computed,
+            age: Duration::ZERO,
+        })
     }
 
     fn slot(&self, key: (usize, K)) -> Arc<Slot<V>> {
@@ -132,11 +145,14 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 }
 
 impl<V> Slot<V> {
-    fn hit(&self, runtime: &Arc<OrbitRuntime>) -> Option<Arc<V>> {
+    fn hit(&self, runtime: &Arc<OrbitRuntime>) -> Option<Served<V>> {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         let cached = guard.as_ref().filter(|cached| cached.is_fresh())?;
         let live = cached.runtime.upgrade()?;
-        Arc::ptr_eq(&live, runtime).then(|| Arc::clone(&cached.body))
+        Arc::ptr_eq(&live, runtime).then(|| Served {
+            body: Arc::clone(&cached.body),
+            age: cached.computed_at.elapsed(),
+        })
     }
 
     /// Drop expired or orphaned ready entries once no caller owns the slot.

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::runtime_memo::SCOREBOARD_TTL;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -47,12 +47,12 @@ pub(super) async fn scoreboard(
     };
 
     let runtime_for_compute = runtime.clone();
-    let value = match state
+    let served = match state
         .scoreboard_memo()
         .get_or_compute(
             &runtime,
             window.as_str().to_string(),
-            SCOREBOARD_TTL,
+            DASHBOARD_POLL_MEMO_TTL,
             move || {
                 let summary = runtime_for_compute.build_scoreboard_summary(Some(window))?;
                 let mut value = serde_json::to_value(&summary)
@@ -63,11 +63,11 @@ pub(super) async fn scoreboard(
         )
         .await
     {
-        Ok(value) => value,
+        Ok(served) => served,
         Err(error) => return map_runtime_error(error),
     };
 
-    Json((*value).clone()).into_response()
+    (served.age_header(), Json((*served.body).clone())).into_response()
 }
 
 fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, value: &mut Value) {

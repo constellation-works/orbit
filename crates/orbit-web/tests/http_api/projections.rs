@@ -796,6 +796,42 @@ fn scoreboard_polls_reuse_window_memo_without_writing_summary() {
     );
 }
 
+#[test]
+fn dashboard_memo_polls_report_payload_age() {
+    isolated(
+        "projections::dashboard_memo_polls_report_payload_age",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(false);
+            for path in [
+                "/api/audit/summary?since=24h&workspace=ws_http_fixture",
+                "/api/scoreboard?window=1h&workspace=ws_http_fixture",
+                "/api/diagnostics/errors?since=24h&workspace=ws_http_fixture",
+                "/api/diagnostics/friction?month=2026-04&workspace=ws_http_fixture",
+            ] {
+                let first = server.get(path);
+                let first_age = first.headers()["age"].to_str().unwrap().to_owned();
+                let first = json_ok(first);
+                let repeat = server.get(path);
+                let repeat_age = repeat.headers()["age"].to_str().unwrap().to_owned();
+                assert!(
+                    first_age.parse::<u64>().is_ok(),
+                    "{path}: Age {first_age:?}"
+                );
+                assert!(
+                    repeat_age.parse::<u64>().is_ok(),
+                    "{path}: Age {repeat_age:?}"
+                );
+                assert_eq!(
+                    json_ok(repeat),
+                    first,
+                    "{path}: a repeat poll inside the TTL is served from the memo"
+                );
+            }
+        },
+    );
+}
+
 /// A `github-pr` ref recorded with only its number links to the pull request
 /// in the workspace's own GitHub repository, in the detail and on list rows.
 /// A recorded page is kept; a ref whose id is not a PR number, or a workspace

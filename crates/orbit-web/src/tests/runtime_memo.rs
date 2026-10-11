@@ -52,7 +52,7 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
         assert!(poll_once(first.as_mut()).await.is_pending());
         publish.send(()).expect("publish expired entry");
         assert_eq!(
-            *initial.await.expect("initial compute"),
+            *initial.await.expect("initial compute").body,
             json!({"generation": 0})
         );
 
@@ -74,8 +74,11 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
             })
             .await
             .unwrap();
-        assert_eq!(*other_workspace, json!({"generation": "other workspace"}));
-        assert_eq!(*other_window, json!({"generation": "other window"}));
+        assert_eq!(
+            *other_workspace.body,
+            json!({"generation": "other workspace"})
+        );
+        assert_eq!(*other_window.body, json!({"generation": "other window"}));
 
         let second_count = Arc::clone(&refreshes);
         let mut second = pin!(memo.get_or_compute(&runtime, "key", ttl, move || {
@@ -98,9 +101,9 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
             1,
             "an expired entry must retain the in-flight gate and run one refresh"
         );
-        assert_eq!(*first, json!({"generation": 1}));
+        assert_eq!(*first.body, json!({"generation": 1}));
         assert!(
-            Arc::ptr_eq(&first, &second),
+            Arc::ptr_eq(&first.body, &second.body),
             "callers share the refreshed payload"
         );
     })
