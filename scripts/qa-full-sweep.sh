@@ -7,6 +7,7 @@ run_commands=0
 playwright_module=""
 playwright_browsers_path=""
 browser_ld_library_path=""
+browser_fontconfig_file=""
 browser_evidence_dir=""
 website_build=0
 build_candidate=0
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --playwright-module) playwright_module="$2"; shift 2 ;;
     --playwright-browsers-path) playwright_browsers_path="$2"; shift 2 ;;
     --browser-ld-library-path) browser_ld_library_path="$2"; shift 2 ;;
+    --browser-fontconfig-file) browser_fontconfig_file="$2"; shift 2 ;;
     --browser-evidence-dir) browser_evidence_dir="$2"; shift 2 ;;
     --website-build) website_build=1; shift ;;
     --build-candidate) build_candidate=1; shift ;;
@@ -46,6 +48,9 @@ if [[ -n "$playwright_browsers_path" ]]; then
 fi
 if [[ -n "$browser_ld_library_path" ]]; then
   extra_args+=(--browser-ld-library-path "$browser_ld_library_path")
+fi
+if [[ -n "$browser_fontconfig_file" ]]; then
+  extra_args+=(--browser-fontconfig-file "$browser_fontconfig_file")
 fi
 if [[ -n "$browser_evidence_dir" ]]; then
   extra_args+=(--browser-evidence-dir "$browser_evidence_dir")

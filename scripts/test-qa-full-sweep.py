@@ -502,7 +502,8 @@ def scenario_decision(inventory, results, candidate_id):
 
 
 def isolated_environment(temp: Path, host_env=None):
-    keep = ["PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "RUSTUP_TOOLCHAIN"]
+    keep = ["PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "RUSTUP_TOOLCHAIN",
+            "CARGO_BUILD_JOBS", "RUST_TEST_THREADS", "NEXTEST_TEST_THREADS"]
     host_env = os.environ if host_env is None else host_env
     env = {key: host_env[key] for key in keep if key in host_env}
     user_home = Path.home()
@@ -516,14 +517,40 @@ def isolated_environment(temp: Path, host_env=None):
 
 
 def browser_environment(base: dict, playwright_browsers_path: Path | None,
-                        browser_ld_library_path: Path | None):
+                        browser_ld_library_path: str | None,
+                        browser_fontconfig_file: Path | None = None):
     """Add only declared browser capability paths to the disposable child env."""
     env = dict(base)
     if playwright_browsers_path:
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_browsers_path)
     if browser_ld_library_path:
-        env["LD_LIBRARY_PATH"] = str(browser_ld_library_path)
+        env["LD_LIBRARY_PATH"] = browser_ld_library_path
+    if browser_fontconfig_file:
+        env["FONTCONFIG_FILE"] = str(browser_fontconfig_file)
     return env
+
+
+def website_build_evidence(repo: Path, temp: Path, env: dict, command):
+    """Install and build a scratch copy, leaving candidate dependencies untouched."""
+    root = temp / "website-validation"
+    root.mkdir()
+    shutil.copytree(repo / "website", root / "website",
+                    ignore=shutil.ignore_patterns("node_modules", "dist", ".astro"))
+    # The website imports the repository changelog one directory above its root.
+    shutil.copyfile(repo / "CHANGELOG.md", root / "CHANGELOG.md")
+    website_env = {**env, "npm_config_cache": str(root / "npm-cache"),
+                   "ASTRO_TELEMETRY_DISABLED": "1"}
+    preparation = run(["npm", "--prefix", "website", "ci"],
+                      cwd=root, env=website_env, timeout=1800)
+    if preparation["outcome"] == "PASS":
+        evidence = run(command, cwd=root, env=website_env, timeout=1800)
+    else:
+        evidence = {"command": command, "exit_code": preparation["exit_code"],
+                    "stdout": "", "stderr": "website dependency preparation failed; build not run",
+                    "outcome": "FAIL", "cleanup_verified": preparation["cleanup_verified"]}
+    evidence["preparation"] = preparation
+    evidence["working_directory"] = str(root)
+    return evidence
 
 
 def inspect_browser_capability(playwright_module: Path, env: dict, repo: Path):
@@ -1569,33 +1596,102 @@ def self_test():
     with tempfile.TemporaryDirectory(prefix="orbit-qa-browser-self-test-") as tmp:
         temp = Path(tmp)
         browser_cache = temp / "browsers"
-        browser_libs = temp / "sysroot"
+        browser_libs = f"{temp / 'sysroot'}:{temp / 'extra-libraries'}"
+        fontconfig = temp / "fonts.conf"
+        fontconfig.write_text("<fontconfig/>\n")
         browser_cache.mkdir()
-        browser_libs.mkdir()
         isolated = isolated_environment(temp, {
             "PATH": os.environ.get("PATH", ""), "ORBIT_ROOT": "must-not-leak",
             "PLAYWRIGHT_BROWSERS_PATH": "/host/browser-cache",
             "LD_LIBRARY_PATH": "/host/browser-libraries",
+            "FONTCONFIG_FILE": "/host/fonts.conf",
         })
-        browser = browser_environment(isolated, browser_cache, browser_libs)
+        browser = browser_environment(isolated, browser_cache, browser_libs, fontconfig)
         if browser.get("PLAYWRIGHT_BROWSERS_PATH") != str(browser_cache):
             raise AssertionError("declared Playwright browser cache was dropped")
         if browser.get("LD_LIBRARY_PATH") != str(browser_libs):
             raise AssertionError("declared browser library path was dropped")
-        if "ORBIT_ROOT" in isolated:
-            raise AssertionError("isolated environment inherited host Orbit configuration")
-        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'ORBIT_ROOT']}))"],
+        if any(key in isolated for key in ("ORBIT_ROOT", "PLAYWRIGHT_BROWSERS_PATH",
+                                          "LD_LIBRARY_PATH", "FONTCONFIG_FILE")):
+            raise AssertionError("isolated environment inherited host configuration")
+        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'ORBIT_ROOT']}))"],
                        cwd=temp, env=browser)
         child = parse_json(observed, "browser environment regression")
         if child != {"PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
-                     "LD_LIBRARY_PATH": str(browser_libs), "ORBIT_ROOT": None}:
+                     "LD_LIBRARY_PATH": browser_libs, "FONTCONFIG_FILE": str(fontconfig),
+                     "ORBIT_ROOT": None}:
             raise AssertionError(f"browser child environment is not bounded: {child!r}")
+        native = browser_environment(isolated, browser_cache, None)
+        if "LD_LIBRARY_PATH" in native or "FONTCONFIG_FILE" in native:
+            raise AssertionError("native browser capability inherited Linux kit inputs")
         evidence = temp / "retained-evidence"
         evidence.mkdir()
         (evidence / "failure.png").write_bytes(b"failure evidence")
         excluded = [str(evidence.relative_to(temp))]
         if not any(str(evidence.relative_to(temp)).startswith(path) for path in excluded):
             raise AssertionError("retained browser evidence is not excluded from candidate inputs")
+
+        # Exercise the shell boundary too: python3 is a capture fixture, so no
+        # full sweep or candidate build is launched by this regression check.
+        capture = temp / "bin/python3"
+        capture.parent.mkdir()
+        capture.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+        capture.chmod(0o755)
+        wrapper_args = ["--playwright-module", str(temp / "playwright/index.mjs"),
+                        "--playwright-browsers-path", str(browser_cache),
+                        "--browser-ld-library-path", browser_libs,
+                        "--browser-fontconfig-file", str(fontconfig), "--website-build"]
+        wrapper = run(["bash", str(Path(__file__).with_name("qa-full-sweep.sh")),
+                       "--orbit-bin", sys.executable, *wrapper_args],
+                      cwd=temp, env={**isolated, "PATH": f"{capture.parent}:{isolated['PATH']}"})
+        forwarded = parse_json(wrapper, "sweep shell capability forwarding")
+        if forwarded[-len(wrapper_args):] != wrapper_args:
+            raise AssertionError(f"shell dropped or rewrote declared kit inputs: {forwarded!r}")
+
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-website-self-test-") as tmp:
+        temp = Path(tmp)
+        repo = temp / "candidate"
+        website = repo / "website"
+        website.mkdir(parents=True)
+        package = {"name": "qa-website-fixture", "version": "1.0.0",
+                   "scripts": {"build": "node build.cjs"}}
+        (website / "package.json").write_text(json.dumps(package))
+        (website / "package-lock.json").write_text(json.dumps({
+            "name": package["name"], "version": package["version"], "lockfileVersion": 3,
+            "packages": {"": {"name": package["name"], "version": package["version"]}}}))
+        (repo / "CHANGELOG.md").write_text("fixture changelog\n")
+        (website / "build.cjs").write_text(
+            "const fs = require('node:fs'); "
+            "if (fs.readFileSync('../CHANGELOG.md', 'utf8') !== 'fixture changelog\\n') process.exit(2); "
+            "fs.mkdirSync('dist'); fs.writeFileSync('dist/built', 'built'); "
+            "console.log(JSON.stringify({cache: process.env.npm_config_cache, orbit: process.env.ORBIT_ROOT ?? null}));\n")
+        for generated in ("node_modules", "dist", ".astro"):
+            (website / generated).mkdir()
+            (website / generated / "sentinel").write_text("candidate output must survive\n")
+        env = isolated_environment(temp, {"PATH": os.environ.get("PATH", ""),
+                                          "ORBIT_ROOT": "must-not-leak",
+                                          "npm_config_cache": "/host/npm-cache"})
+        command = ["npm", "--prefix", "website", "run", "build"]
+        built = website_build_evidence(repo, temp, env, command)
+        root = temp / "website-validation"
+        if built["outcome"] != "PASS" or built["preparation"]["outcome"] != "PASS":
+            raise AssertionError(f"isolated website install/build failed: {built!r}")
+        observed = json.loads(built["stdout"].splitlines()[-1])
+        if observed != {"cache": str(root / "npm-cache"), "orbit": None}:
+            raise AssertionError(f"website build inherited host state: {observed!r}")
+        if (root / "website/dist/built").read_text() != "built":
+            raise AssertionError("website command did not produce a scratch build")
+        for generated in ("node_modules", "dist", ".astro"):
+            if (website / generated / "sentinel").read_text() != "candidate output must survive\n":
+                raise AssertionError(f"website validation changed candidate {generated}")
+        failed_temp = temp / "failed-preparation"
+        failed_temp.mkdir()
+        (website / "package.json").write_text("invalid package JSON\n")
+        failed = website_build_evidence(repo, failed_temp, env, command)
+        if failed["outcome"] != "FAIL" or failed["preparation"]["exit_code"] == 0:
+            raise AssertionError(f"failed website install earned a build pass: {failed!r}")
+        if (failed_temp / "website-validation/website/dist").exists():
+            raise AssertionError("website build ran after dependency preparation failed")
 
     with tempfile.TemporaryDirectory(prefix="orbit-qa-platform-self-test-") as tmp:
         repo = Path(tmp)
@@ -1698,7 +1794,9 @@ def main():
                         help="with --check, compile and list each exact Cargo selection without executing it")
     parser.add_argument("--playwright-module", type=Path)
     parser.add_argument("--playwright-browsers-path", type=Path)
-    parser.add_argument("--browser-ld-library-path", type=Path)
+    parser.add_argument("--browser-ld-library-path",
+                        help="explicit loader search path, including colon-separated directories")
+    parser.add_argument("--browser-fontconfig-file", type=Path)
     parser.add_argument("--browser-evidence-dir", type=Path)
     parser.add_argument("--website-build", action="store_true")
     parser.add_argument("--build-candidate", action="store_true")
@@ -1759,7 +1857,7 @@ def main():
     binary = None if args.build_candidate else (Path(args.orbit_bin).resolve() if args.orbit_bin else None)
     browser_inputs_valid = bool(args.playwright_module and args.playwright_module.is_file()
                                 and args.playwright_browsers_path and args.playwright_browsers_path.is_dir()
-                                and args.browser_ld_library_path and args.browser_ld_library_path.is_dir())
+                                and (not args.browser_fontconfig_file or args.browser_fontconfig_file.is_file()))
     capabilities = {"local": bool(binary) or args.build_candidate,
                     "browser": browser_inputs_valid,
                     "website-build": args.website_build,
@@ -1772,14 +1870,17 @@ def main():
                                       if args.playwright_module and args.playwright_module.is_file() else None),
         "playwright_browsers_path": str(args.playwright_browsers_path) if args.playwright_browsers_path else None,
         "browser_ld_library_path": str(args.browser_ld_library_path) if args.browser_ld_library_path else None,
+        "browser_fontconfig_file": str(args.browser_fontconfig_file) if args.browser_fontconfig_file else None,
         "version": None,
         "capability_probe": None,
     }
-    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-") as tmp:
+    scratch = repo / ".orbit/tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch) as tmp:
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
-                                          args.browser_ld_library_path)
+                                          args.browser_ld_library_path, args.browser_fontconfig_file)
         if browser_inputs_valid:
             probe, browser_record["version"] = inspect_browser_capability(
                 args.playwright_module, browser_env, repo)
@@ -1824,7 +1925,10 @@ def main():
                            .replace("{evidence_dir}", str(browser_evidence_dir))
                            for part in scenario["command"]]
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
-                evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
+                if scenario["id"] == "website-build":
+                    evidence = website_build_evidence(repo, temp, env, command)
+                else:
+                    evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
                 if scenario["capability"] == "browser":
                     browser_evidence_dir.mkdir(parents=True, exist_ok=True)
                     (browser_evidence_dir / "harness-result.json").write_text(
