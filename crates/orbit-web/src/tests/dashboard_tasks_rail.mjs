@@ -549,6 +549,50 @@ for (const item of cardTasks) {
   const title = rowFor(item.id).querySelector('button.title');
   title.parentNode.dispatch('click', { target: title });
 }
+
+// A live child run belongs to the task's workspace, even when the page is in
+// the aggregate view or the task is pinned from another workspace. Its link
+// keeps the selected host and time window as well.
+const liveRunEntries = new Map([
+  ['ORB-998', { task_id: 'ORB-998', status: 'backlog', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-owner'] }],
+  ['ORB-999', { task_id: 'ORB-999', status: 'backlog', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-owner'] }],
+]);
+const liveRunReads = [];
+context.fetch = path => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname.endsWith('/workflows/auto/readiness')) liveRunReads.push(url);
+  const id = url.searchParams.get('task');
+  return Promise.resolve(readinessResponse({ tasks: [liveRunEntries.get(id)] }));
+};
+common.setRegisteredHosts(hostRows('owner', 'hm_local'));
+common.setWindow('7d');
+for (const fixture of [
+  { id: 'ORB-998', pageWorkspace: null, label: 'aggregate task' },
+  { id: 'ORB-999', pageWorkspace: 'ws_selected', label: 'cross-workspace pinned task' },
+]) {
+  common.setWorkspace(fixture.pageWorkspace);
+  const liveTask = task(Number(fixture.id.slice(4)), { status: 'backlog', workspace_id: 'ws_owner', readiness: readyGaps });
+  served = { total: 1, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = [liveTask];
+  renderTasks(currentTasks, cardContext);
+  const title = rowFor(fixture.id).querySelector('button.title');
+  title.parentNode.dispatch('click', { target: title });
+  await settleReads();
+
+  const read = liveRunReads.findLast(url => url.searchParams.get('task') === fixture.id);
+  assert.ok(read, `${fixture.label} reads its readiness: ${liveRunReads.map(url => url.href).join(', ')}`);
+  assert.equal(read.searchParams.get('workspace'), 'ws_owner', `${fixture.label} readiness request uses its owner`);
+  const link = readinessCard(fixture.id).querySelector('.readiness-drain a');
+  assert.ok(link, `${fixture.label} links to its live run`);
+  const href = new URL(link.href, 'http://dashboard.test');
+  assert.equal(href.searchParams.get('host'), 'box-a', `${fixture.label} run link keeps its host`);
+  assert.equal(href.searchParams.get('workspace'), 'ws_owner', `${fixture.label} run link uses the task owner`);
+  assert.equal(href.searchParams.get('window'), '7d', `${fixture.label} run link keeps its time window`);
+  assert.equal(href.hash, '#runs?run_id=jrun-owner', `${fixture.label} run link opens its live run`);
+}
+common.setWorkspace('ws_orbit');
+common.setWindow('24h');
+
 drainWaits.setDrainReadiness({ tasks: [] });
 
 // ORB-15380: pinned readiness invalidation follows its rendered answer even
