@@ -2264,7 +2264,10 @@ impl Gate {
 
     /// Fails wherever it runs, the base included.
     fn fails(&self) {
-        self.set("echo 'gate is red' >&2\nexit 3");
+        self.set(&format!(
+            "{}\necho 'gate is red' >&2\nexit 3",
+            reported_tests(3)
+        ));
     }
 
     fn runs(&self) -> usize {
@@ -3019,6 +3022,273 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                         "{case}: the PR names {test}: {body}"
                     );
                 }
+            }
+        },
+    );
+}
+
+/// [ORB-15548] Shared failed tests do not waive unexecuted host coverage.
+/// Both delivery paths retain complete-output notices even when the bounded
+/// log drops them, and check declared replay counts before known-red admission.
+#[test]
+fn known_red_failures_cannot_waive_host_notices_or_replay_coverage() {
+    isolated(
+        "known_red_failures_cannot_waive_host_notices_or_replay_coverage",
+        |sandbox| {
+            let base = ["suite::broken", "suite::flaky"];
+            let cases = [
+                (
+                    "bubblewrap",
+                    Some(bwrap_notice()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("sandbox_unavailable"),
+                ),
+                (
+                    "seatbelt",
+                    Some(seatbelt_notice()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("sandbox_unavailable"),
+                ),
+                (
+                    "deferred",
+                    Some("DEFERRED: sandbox fixture did not run".to_string()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("self_skipped"),
+                ),
+                (
+                    "skip",
+                    Some("SKIP: sandbox fixture did not run".to_string()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("self_skipped"),
+                ),
+                (
+                    "skipping-colon",
+                    Some("skipping: sandbox fixture".to_string()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("self_skipped"),
+                ),
+                (
+                    "skipping-space",
+                    Some("skipping sandbox fixture".to_string()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("self_skipped"),
+                ),
+                (
+                    "raw-refusal",
+                    Some("bwrap: No permissions to create a new namespace".to_string()),
+                    false,
+                    false,
+                    Some(3),
+                    Some("sandbox_unavailable"),
+                ),
+                (
+                    "dropped-deferral",
+                    Some(bwrap_notice()),
+                    true,
+                    false,
+                    Some(3),
+                    Some("sandbox_unavailable"),
+                ),
+                (
+                    "dropped-skip",
+                    Some("SKIP: sandbox fixture did not run".to_string()),
+                    true,
+                    false,
+                    Some(3),
+                    Some("self_skipped"),
+                ),
+                (
+                    "replay-with-notice",
+                    Some(bwrap_notice()),
+                    false,
+                    true,
+                    Some(3),
+                    Some("sandbox_unavailable"),
+                ),
+                ("replay-zero-tests", None, false, true, Some(0), None),
+                ("replay-missing-count", None, false, true, None, None),
+                ("replay-missing-tool", None, false, true, None, None),
+                ("replay-executed", None, false, true, Some(3), None),
+            ];
+            for (case, notice, dropped, replay, tests_run, reason) in cases {
+                let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
+                let padding = if dropped {
+                    "padding line that names no failure\n".repeat(8 * 1024)
+                } else {
+                    String::new()
+                };
+                // Alternate complete stdout and stderr, including notices in
+                // the dropped middle, without depending on sandbox availability.
+                let stream = if case == "skip" || dropped {
+                    ""
+                } else {
+                    " >&2"
+                };
+                let notice_script = if dropped {
+                    "cat failing.txt\n".to_string()
+                } else {
+                    notice.as_ref().map_or_else(String::new, |notice| {
+                        format!("printf '%s\\n' '{notice}'{stream}\n")
+                    })
+                };
+                if dropped {
+                    fx.commit(
+                        "failing.txt",
+                        &format!("{padding}{}\n{padding}", notice.as_ref().unwrap()),
+                    );
+                }
+                let gate = Gate::new(sandbox);
+                gate.set(&format!(
+                    "{notice_script}{}\n{}\nexit 2",
+                    nextest_failures(&base)
+                        .lines()
+                        .map(|line| format!("echo '{line}'\n"))
+                        .collect::<String>(),
+                    tests_run.map_or_else(String::new, reported_tests),
+                ));
+                if case == "replay-missing-tool" {
+                    gate.set(&format!(
+                        "'{}'",
+                        sandbox.join("missing-required-tool").display()
+                    ));
+                }
+                let command = gate.command();
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                host.require_commands(&[&command]);
+                let record = deferral(&fx, &command);
+                if replay {
+                    host.attach_task_validation_log(
+                        TASK_ID,
+                        RUN_ID,
+                        DEFERRED_SANDBOX_ARTIFACT,
+                        serde_json::to_vec(&json!({
+                            "schema_version": 1,
+                            "run_id": RUN_ID,
+                            "deferred": record,
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap();
+                }
+                let outcome = action(&host, "candidate_validate", &fx.validate_input());
+                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                assert_eq!(
+                    log["exit_code"],
+                    if case == "replay-missing-tool" {
+                        127
+                    } else {
+                        2
+                    },
+                    "{case}"
+                );
+                assert_eq!(log["deferred_sandbox_replay"], replay, "{case}");
+                let mut claim_input = json!({
+                    "workspace_path": fx.repo,
+                    "base_sync": "local",
+                    "base_sha": fx.base_sha,
+                });
+                if replay {
+                    claim_input["implementation"] =
+                        json!({ "deferred_sandbox_validation": record });
+                }
+                let claim = action(&host, "claim_validate", &claim_input);
+                if notice.is_none() && tests_run == Some(3) {
+                    assert_eq!(
+                        outcome.unwrap()["decision"],
+                        "passed_with_known_red",
+                        "{case}"
+                    );
+                    assert_eq!(
+                        claim.unwrap()["decision"],
+                        "passed_with_known_red",
+                        "{case}"
+                    );
+                    continue;
+                }
+                let failure = outcome
+                    .expect_err(&format!("{case}: unresolved coverage is refused"))
+                    .to_string();
+                let claim_failure = claim
+                    .expect_err(&format!("{case}: claimed coverage is refused"))
+                    .to_string();
+                if let Some(reason) = reason {
+                    assert!(
+                        is_baseline_red_failure(None, Some(&failure)),
+                        "{case}: {failure}"
+                    );
+                    assert!(
+                        is_baseline_red_failure(None, Some(&claim_failure)),
+                        "{case}: {claim_failure}"
+                    );
+                    assert_eq!(log["host_output_refusal"]["reason"], reason, "{case}");
+                    assert_eq!(
+                        log["host_output_refusal"]["detail"],
+                        notice.as_deref().unwrap(),
+                        "{case}"
+                    );
+                    let claim_log: Value = serde_json::from_slice(
+                        &host.claim_log_contents.lock().unwrap()
+                            ["validation/claim-landing/0.failed.json"],
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        claim_log["host_output_refusal"], log["host_output_refusal"],
+                        "{case}"
+                    );
+                    if dropped {
+                        let captured = log["output"].as_str().unwrap();
+                        assert!(
+                            captured.contains("truncated")
+                                && !captured.contains(notice.as_deref().unwrap()),
+                            "{case}: the retained refusal comes from the dropped middle"
+                        );
+                    }
+                } else if case == "replay-missing-tool" {
+                    assert!(
+                        orbit_types::workflow::is_validation_environment_failure(
+                            None,
+                            Some(&failure)
+                        ),
+                        "{case}: {failure}"
+                    );
+                    assert!(
+                        orbit_types::workflow::is_validation_environment_failure(
+                            None,
+                            Some(&claim_failure)
+                        ),
+                        "{case}: {claim_failure}"
+                    );
+                    assert_eq!(log["failure_kind"], "environment", "{case}");
+                } else {
+                    assert!(failure.contains("replayed nothing"), "{case}: {failure}");
+                    assert!(
+                        claim_failure.contains("replayed nothing"),
+                        "{case}: {claim_failure}"
+                    );
+                }
+                assert!(log["known_red"].is_null(), "{case}: no known-red admission");
+                assert!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
+                    "{case}: no known-red history"
+                );
+                assert!(
+                    host.handoffs.lock().unwrap().is_empty(),
+                    "{case}: no publication"
+                );
             }
         },
     );

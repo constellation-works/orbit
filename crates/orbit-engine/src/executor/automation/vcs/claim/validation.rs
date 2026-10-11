@@ -162,9 +162,10 @@ pub(super) struct ClaimedResult {
 /// Run `commands` on the observed candidate, in order, and return each
 /// command's result with the last run's validation environment. A failing
 /// command is judged by [`claim_failure`], which refuses it unless its
-/// failing tests are known red on the base. A passing one still must not
-/// have deferred a sandbox-confined path, and a command in `replays` must
-/// report executed tests. Shared by the ordinary route and clean-base NoDiff
+/// failing tests are known red on the base and its host coverage ran. A
+/// passing one still must not have deferred a sandbox-confined path, and a
+/// command in `replays` must report executed tests before either continuation.
+/// Shared by the ordinary route and clean-base NoDiff
 /// validation so neither can attach a passing log the other would refuse.
 pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -181,15 +182,10 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
         let run = run_validation_command(host, workspace_path, command, None)?;
         validation_env = run.environment_record();
         let commit = &candidate.candidate.commit;
+        if let Some(failure) = run.coverage_failure(commit, replays.contains(&run.command)) {
+            return Err(failure);
+        }
         let known_red = if run.passed {
-            if let Some(failure) = run.deferral_failure(commit).or_else(|| {
-                replays
-                    .contains(&run.command)
-                    .then(|| run.replay_failure(commit))
-                    .flatten()
-            }) {
-                return Err(failure);
-            }
             None
         } else {
             Some(claim_failure(
@@ -453,6 +449,10 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         "exit_code": run.exit_code,
         "timed_out": run.timed_out,
         "output": run.output,
+        "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
+            "reason": refusal.reason.as_str(),
+            "detail": refusal.detail,
+        })),
         "validation_env": run.environment_record(),
         "failure_kind": if red {
             json!("baseline_red")

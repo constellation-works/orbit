@@ -22,7 +22,9 @@
 //! of them. The step records the known-red tests in its output, its log and
 //! each delivered task's history ([`KNOWN_RED_VALIDATION_EVENT`]), where
 //! `pr_open` reads them for the pull request, and goes on to the next
-//! command.
+//! command. Complete-output host coverage refusals and declared replay
+//! execution counts are checked first: shared failed tests cannot waive an
+//! unexecuted sandbox path [ORB-15548].
 //!
 //! [ORB-15287] An implementer whose affected-test gate passed with only
 //! Bubblewrap deferrals hands the gate off instead of failing, and the task
@@ -161,15 +163,19 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         let red = baseline
             .as_ref()
             .is_some_and(|check| check.reproduces(&run));
-        let known = baseline.as_ref().and_then(|check| {
-            check.known_red(&run).map(|failures| KnownRedValidation {
-                command: run.command.clone(),
-                base_sha: check.base_sha.clone(),
-                tested_head: candidate.clone(),
-                run_id: run_id.clone(),
-                failures: BaselineRedFailures::new(failures.iter().cloned(), ""),
-            })
-        });
+        let coverage_failure = run.coverage_failure(&candidate, replays.contains(&run.command));
+        let known = baseline
+            .as_ref()
+            .filter(|_| coverage_failure.is_none())
+            .and_then(|check| {
+                check.known_red(&run).map(|failures| KnownRedValidation {
+                    command: run.command.clone(),
+                    base_sha: check.base_sha.clone(),
+                    tested_head: candidate.clone(),
+                    run_id: run_id.clone(),
+                    failures: BaselineRedFailures::new(failures.iter().cloned(), ""),
+                })
+            });
         let content = serde_json::to_vec(&json!({
             "schema_version": 1,
             "run_id": run_id,
@@ -193,6 +199,10 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             },
             "known_red": known.as_ref().map(|known| &known.failures),
             "deferred_notice": run.deferred_notice,
+            "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
+                "reason": refusal.reason.as_str(),
+                "detail": refusal.detail,
+            })),
             "deferred_sandbox_replay": replays.contains(&run.command),
             "missing_tool": run.missing_tool_name(),
             "network_retries": run.network_retries,
@@ -208,6 +218,10 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 OrbitError::Execution(format!("encode baseline validation log: {error}"))
             })?;
             logs.push((path.clone(), content));
+        }
+        if let Some(failure) = coverage_failure {
+            attach_logs(host, &task_ids, &run_id, &logs)?;
+            return Err(failure);
         }
         if let Some(known) = known {
             record_known_red(host, &task_ids, &known)?;
@@ -243,15 +257,6 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 baseline.as_ref(),
                 &evidence,
             ));
-        }
-        if let Some(failure) = run.deferral_failure(&candidate).or_else(|| {
-            replays
-                .contains(&run.command)
-                .then(|| run.replay_failure(&candidate))
-                .flatten()
-        }) {
-            attach_logs(host, &task_ids, &run_id, &logs)?;
-            return Err(failure);
         }
         require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
         passed.push(run.command);
