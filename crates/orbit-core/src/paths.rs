@@ -51,12 +51,13 @@ pub(crate) fn find_git_repo_root(start: &Path) -> Option<PathBuf> {
             return Some(ancestor.to_path_buf());
         }
         if git_path.is_file() {
-            // Git worktree: .git is a file pointing to the main repo's gitdir.
-            // Follow the pointer so orbit tool calls from within a worktree resolve
-            // to the main repo's .orbit directory rather than creating a new one.
-            if let Some(main_root) = resolve_main_repo_from_worktree_gitfile(&git_path) {
-                return Some(main_root);
-            }
+            // Only linked worktrees share their main checkout's state. Other
+            // gitfiles (including submodules) mark an independent repository
+            // boundary; never continue into an enclosing superproject.
+            return Some(
+                resolve_main_repo_from_worktree_gitfile(&git_path)
+                    .unwrap_or_else(|| ancestor.to_path_buf()),
+            );
         }
     }
     None
@@ -109,8 +110,10 @@ pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
     if !may_be_linked_worktree(start) {
         return None;
     }
-    find_git_main_worktree_root_with_git(start)
-        .or_else(|| find_git_main_worktree_root_from_gitfile(start))
+    match find_git_main_worktree_root_with_git(start) {
+        Some(main_root) => main_root,
+        None => find_git_main_worktree_root_from_gitfile(start),
+    }
 }
 
 /// Whether `start` could sit in a linked worktree, judged from the nearest
@@ -141,14 +144,18 @@ fn may_be_linked_worktree(start: &Path) -> bool {
         })
 }
 
-fn find_git_main_worktree_root_with_git(start: &Path) -> Option<PathBuf> {
+/// `Some(None)` is Git's conclusive answer that this is not linked. Only an
+/// unavailable answer (`None`) permits the filesystem fallback.
+fn find_git_main_worktree_root_with_git(start: &Path) -> Option<Option<PathBuf>> {
     let git_dir = git_rev_parse_path(start, "--git-dir")?;
     let common_dir = git_rev_parse_path(start, "--git-common-dir")?;
     if git_dir == common_dir {
-        return None;
+        return Some(None);
     }
 
-    main_root_from_common_git_dir(&common_dir).or_else(|| git_worktree_list_main_root(start))
+    main_root_from_common_git_dir(&common_dir)
+        .or_else(|| git_worktree_list_main_root(start))
+        .map(Some)
 }
 
 /// `None` when Git cannot answer, including when it could not run or timed
@@ -222,23 +229,34 @@ fn find_git_main_worktree_root_from_gitfile(start: &Path) -> Option<PathBuf> {
 /// A worktree `.git` file contains a single line:
 ///   `gitdir: /path/to/main/repo/.git/worktrees/<name>`
 ///
-/// The main repo root is three levels up from that path.
+/// Its `commondir` must resolve to the enclosing `.git` directory. Submodule
+/// gitfiles point into `modules/` and do not imply a shared main checkout.
 fn resolve_main_repo_from_worktree_gitfile(git_file: &Path) -> Option<PathBuf> {
     let content = std::fs::read_to_string(git_file).ok()?;
     let raw_path = content.strip_prefix("gitdir:")?.trim();
+    if raw_path.is_empty() {
+        return None;
+    }
     let gitdir = if Path::new(raw_path).is_absolute() {
         PathBuf::from(raw_path)
     } else {
         git_file.parent()?.join(raw_path)
     };
-    // gitdir = /main/repo/.git/worktrees/<name>
-    // repo root = gitdir/../../../  (up past worktrees/, .git/, repo/)
-    let repo_root = gitdir.parent()?.parent()?.parent()?;
-    if repo_root.join(".git").is_dir() {
-        Some(repo_root.to_path_buf())
-    } else {
-        None
+    let gitdir = gitdir.canonicalize().ok()?;
+    let worktrees_dir = gitdir.parent()?;
+    if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
+        return None;
     }
+    let common_path = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let common_path = common_path.trim();
+    if common_path.is_empty() {
+        return None;
+    }
+    let common_dir = gitdir.join(common_path).canonicalize().ok()?;
+    if common_dir != worktrees_dir.parent()? || !common_dir.is_dir() {
+        return None;
+    }
+    main_root_from_common_git_dir(&common_dir)
 }
 
 pub(crate) fn normalize_path_components(path: &Path) -> PathBuf {
