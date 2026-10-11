@@ -8,9 +8,8 @@ paths: []
 related_artifacts:
   - ORB-14777
   - ORB-15156
-  - ORB-15385
-  - ORB-15397
   - ORB-15400
+  - ORB-15406
 ---
 
 # Run failure log
@@ -35,6 +34,30 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-11: A finished candidate is refused because its deferral record has no `probe.command`
+
+- **Where:** owner, `implement_one`, at the step boundary that checks the
+  implementer's output, before commit.
+- **Symptom:** `implementer output rejected before delivery:
+  deferred_sandbox_validation is not a {command, exit_code, tests_run, base,
+  notices, probe: {command, exit_code, output}} record: missing field
+  command`. Step recovery returns `not_recovered`. Final recovery resumes the
+  implementer, which repeats the record, and the run ends in a failure-handoff
+  PR.
+- **Cause:** the schema in `agent_implement.yaml` requires `probe.command`,
+  but the instruction prose describes `probe` as the bwrap probe's "exit code
+  and output" and never names the field. Implementers return `probe:
+  {exit_code, output}`. Everything else in the record is valid: the gate
+  passed, and every notice is a Bubblewrap `DEFERRED:` line.
+- **Fix:** ORB-15406 (open). Until it lands, rescue by hand. Replay the gate on
+  the owner host in the run's worktree (`CI_TEST_BASE=<record base> make
+  ci-test-affected`), then land the handoff PR once the replay and hosted CI
+  are green.
+- **Tasks:** ORB-15206 (sol; replay 2763/2763, PR #4248), ORB-15403 (luna,
+  PR #4254).
+- **Final recovery:** `resume` from `implement_bundle`; it failed the same way
+  (`jrun-20261011-0323-c8`).
+
 ## 2026-10-11: A full-workspace affected-test gate is killed at the capture limit and held as baseline red
 
 - **Where:** owner, `validate` (`candidate_validate`) and its base replay; the
@@ -55,54 +78,6 @@ entries.
 - **Tasks:** ORB-15374.
 - **Final recovery:** none; the run released the candidate as a hold
   (`jrun-20261011-0131-c8`).
-
-## 2026-10-11: An implementer blocks on a ci-fast subcheck the sandbox can only skip
-
-- **Where:** owner, `implement_bundle`. The implementer runs the required gates
-  inside its Bubblewrap sandbox.
-- **Symptom:** `task_blocked_by_agent kind=sandbox.userns_restricted`, with no
-  PR, after an otherwise complete implementation.
-- **Cause:** `make ci-fast` runs `scripts/test-compiler-cache-namespaces.sh`,
-  which cannot create a mount namespace inside the sandbox. It prints
-  `skip:` and exits 0. The deferral handoff (`deferred_sandbox.rs`) accepts
-  only `DEFERRED:` notices backed by a failing namespace probe, so the
-  implementer cannot hand the check to the host replay. It blocks instead.
-  On the host, outside any agent sandbox, the check runs.
-- **Fix:** ORB-15397. When the compiler cache is disabled (no sccache, an
-  unwritable cache directory, or `ORBIT_COMPILER_CACHE=0`), the script prints a
-  not-applicable line and exits 0 before probing namespaces. It no longer
-  prints `skip:` there. The `DEFERRED:` route was dropped: `make ci-fast` stays
-  individually required.
-- **Tasks:** ORB-15380. Rescued by hand: every other gate had passed, and the
-  change does not touch the compiler-cache scripts. PR #4234.
-- **Final recovery:** none; an agent-declared blocker stops the run before it
-  (`jrun-20261011-0214-c10`).
-
-## 2026-10-11: Mac claimed leaves go red on timing-bound tests under oversubscription
-
-- **Where:** Mac follower, the implementer's and reviewer's `make
-  ci-test-affected` runs in `task_claimed_pr_pipeline`.
-- **Symptom:** About 20 tests fail on the candidate *and* on the unchanged
-  base, none related to the change:
-  - `delivery_remote_source::*` with `automation_deferred: source_budget`;
-  - `build_budget` deadline tests ("bounded deadline plus process cleanup:
-    2000ms");
-  - `antigravity_fake_agent` 1 s print timeout.
-
-  Implementers spend their wall clock proving the failures are base failures,
-  and reviewers settle `incomplete`.
-- **Cause:** `scripts/build-budget.py` bounds compile jobs per slot
-  (`CARGO_BUILD_JOBS`) but not nextest test threads. Three concurrent gates on
-  the 14-core Mac each run 14 test processes, so load reaches about 33.
-- **Fix:** ORB-15385 (open), a per-slot test-thread setting. Interim since
-  2026-10-11: the Mac's ws_orbit `execution.env.pass` lists
-  `NEXTEST_TEST_THREADS` and `RUST_TEST_THREADS`, and Mac pull drains are
-  started with both set to 4.
-- **Tasks:** ORB-15332 (passed after proving base failures, about 30 min),
-  ORB-15206 (two 2.5–3 h Mac failures on 2026-10-10, then steered to the box
-  with `os:linux`).
-- **Final recovery:** see each task. Most Mac claims settled `incomplete`
-  before final recovery.
 
 ## Operational causes (no code defect)
 
@@ -135,6 +110,16 @@ entries.
   Clock-started runs read it from `~/.orbit/clock.env`. A Claude activity
   without a token is refused before `claude` starts, instead of 401ing
   mid-run on the Desktop login (ORB-15154).
+- **Test threads uncapped on a host that runs several gates at once.**
+  `scripts/build-budget.py` caps compile jobs per slot, but test threads only
+  when `ORBIT_TEST_THREADS` or `<budget-dir>/test-threads` is set (ORB-15385).
+  On a host where slots × cores oversubscribes the CPU (three gates on the
+  14-core Mac), timing-bound tests go red on the candidate and the base alike,
+  and implementers spend their wall clock proving base failures. Set
+  `test-threads` so that slots × threads fits the cores; see
+  [build budget](../runbooks/build-budget.md). On 2026-10-11 the Mac was
+  capped instead by starting pull drains with `NEXTEST_TEST_THREADS=4` and
+  `RUST_TEST_THREADS=4`, which its ws_orbit `execution.env.pass` lists.
 - **Release bump without the follower.** Drain admission requires the exact owner
   version and protocol schema. After a release bump the follower is refused until
   it is upgraded.
