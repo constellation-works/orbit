@@ -20,6 +20,7 @@ use orbit_store::contracts::{
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation, HandoffReviewObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::identity::lower_hex;
 use orbit_types::task::TaskArtifact;
 use orbit_types::workflow::AutoTaskDefinition;
 use orbit_types::workflow::automation::AutomationState;
@@ -312,7 +313,7 @@ impl ReviewedHandoff {
         let content = serde_json::to_vec(&certificate).unwrap();
         let reference = HandoffArtifactRef {
             path: REVIEW_GATE_ARTIFACT.into(),
-            sha256: format!("{:x}", Sha256::digest(&content)),
+            sha256: lower_hex(Sha256::digest(&content)),
         };
         owner
             .mutate_execution_claim(

@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Component, Path};
 
 use orbit_common::OrbitError;
+use orbit_types::identity::lower_hex;
 use orbit_types::plugin::{PluginBuildOutput, PluginBuildOutputRecord, artifact_digest_preimage};
 use sha2::{Digest, Sha256};
 
@@ -236,14 +237,14 @@ fn open_file_sha256(mut file: std::fs::File, path: &Path) -> Result<String, Orbi
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(lower_hex(hasher.finalize()))
 }
 
 /// `sha256:<hex>` over `outputs` (§3.6).
 pub fn plugin_artifact_digest(outputs: &[PluginBuildOutputRecord]) -> String {
     format!(
-        "sha256:{:x}",
-        Sha256::digest(artifact_digest_preimage(outputs).as_bytes())
+        "sha256:{}",
+        lower_hex(Sha256::digest(artifact_digest_preimage(outputs).as_bytes()))
     )
 }
 

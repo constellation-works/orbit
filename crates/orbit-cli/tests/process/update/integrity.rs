@@ -22,6 +22,7 @@ use orbit_common::fs::generation::{
     executable_generation,
 };
 use orbit_common::test_env;
+use orbit_types::identity::lower_hex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -1003,7 +1004,7 @@ fn candidate_script(version: &str) -> Vec<u8> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    lower_hex(Sha256::digest(bytes))
 }
 
 /// Asset name for this build. Matches `channel::release_target_triple`.

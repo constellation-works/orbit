@@ -404,7 +404,7 @@ pub struct ArtifactManifestFileV2 {
     pub writer: Option<ArtifactWriter>,
     pub path: String,
     pub blob: String,
-    /// Lowercase hex SHA-256 digest; writers should format bytes with `{:x}`.
+    /// Lowercase hex SHA-256 digest; writers encode it with [`crate::identity::lower_hex`].
     pub sha256: String,
     pub media_type: String,
     pub size_bytes: u64,

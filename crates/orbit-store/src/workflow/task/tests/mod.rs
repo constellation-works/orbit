@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use chrono::{TimeZone, Utc};
+use orbit_types::identity::lower_hex;
 use orbit_types::task::{
     ArtifactManifestFileV2, TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_ARTIFACTS_DIR_NAME, TaskEnvelopeV2, TaskEventRowV2, TaskPriority, TaskRelation,
@@ -132,7 +133,7 @@ fn seed_artifact_blob(
         writer: None,
         path: path.to_string(),
         blob,
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: lower_hex(Sha256::digest(bytes)),
         media_type: "application/octet-stream".to_string(),
         size_bytes: bytes.len() as u64,
         created_by: actor.to_string(),

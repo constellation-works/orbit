@@ -117,6 +117,7 @@ fn lifecycle_digest(
     history: &[TaskHistoryEntry],
     observed_at: Option<DateTime<Utc>>,
 ) -> String {
+    use orbit_types::identity::lower_hex;
     use sha2::{Digest, Sha256};
     let widened_since = observed_at.map_or_else(Vec::new, |observed_at| {
         history
@@ -157,7 +158,7 @@ fn lifecycle_digest(
             .map(|comment| json!([comment.at, comment.by, comment.message]))
             .collect::<Vec<_>>(),
     });
-    format!("{:x}", Sha256::digest(content.to_string().as_bytes()))
+    lower_hex(Sha256::digest(content.to_string().as_bytes()))
 }
 
 /// Whether `by` is Orbit writing for a run — locally, or through a claimed

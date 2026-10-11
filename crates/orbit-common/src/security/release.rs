@@ -12,10 +12,10 @@
 //! expiry and revocation testable without freezing wall-clock time.
 
 use chrono::NaiveDate;
+use orbit_types::identity::lower_hex;
 use rsa::RsaPublicKey;
 use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
-use rsa::sha2::Sha256 as RsaSha256;
 use rsa::signature::Verifier;
 use sha2::{Digest, Sha256};
 
@@ -72,7 +72,7 @@ pub const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[TrustedReleaseKey {
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    lower_hex(Sha256::digest(bytes))
 }
 
 /// Normalize a user- or manifest-supplied digest to lowercase hex, rejecting
@@ -150,7 +150,7 @@ pub fn verify_checksum_signature_with_key(
             "release checksum signature verification failed for {RELEASE_CHECKSUMS_FILENAME}: {error}"
         ))
     })?;
-    VerifyingKey::<RsaSha256>::new(public_key)
+    VerifyingKey::<Sha256>::new(public_key)
         .verify(manifest, &signature)
         .map_err(|error| {
             OrbitError::Execution(format!(

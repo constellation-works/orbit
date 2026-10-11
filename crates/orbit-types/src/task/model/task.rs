@@ -83,18 +83,20 @@ impl Task {
     /// hints, not what the task means, so editing them keeps the candidate
     /// [ORB-14450].
     pub fn spec_digest(&self) -> String {
+        use crate::identity::lower_hex;
         use sha2::{Digest, Sha256};
         let spec = serde_json::json!({
             "description": self.description,
             "acceptance_criteria": self.acceptance_criteria,
         });
-        format!("{:x}", Sha256::digest(spec.to_string().as_bytes()))
+        lower_hex(Sha256::digest(spec.to_string().as_bytes()))
     }
 
     /// Whether a recorded [`Self::spec_digest`] still describes this task.
     /// Digests recorded before [ORB-14450] also covered the selectors; they
     /// match while the selectors are unchanged too.
     pub fn spec_digest_matches(&self, recorded: &str) -> bool {
+        use crate::identity::lower_hex;
         use sha2::{Digest, Sha256};
         if recorded == self.spec_digest() {
             return true;
@@ -107,7 +109,7 @@ impl Task {
             "acceptance_criteria": self.acceptance_criteria,
             "context_files": selectors,
         });
-        recorded == format!("{:x}", Sha256::digest(legacy.to_string().as_bytes()))
+        recorded == lower_hex(Sha256::digest(legacy.to_string().as_bytes()))
     }
 
     /// The task an envelope and its body documents describe.

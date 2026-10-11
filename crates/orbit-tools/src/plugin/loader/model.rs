@@ -1,3 +1,5 @@
+use orbit_types::identity::lower_hex;
+
 use super::*;
 
 /// Manifest digests of first-party plugins that may claim `orbit.<ns>.*`
@@ -136,7 +138,7 @@ impl LoadedPlugin {
 pub fn manifest_digest(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    lower_hex(hasher.finalize())
 }
 
 /// Walk `root` without following links and refuse any symbolic link, naming

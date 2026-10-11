@@ -25,6 +25,7 @@ use std::sync::OnceLock;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
+use orbit_types::identity::lower_hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -157,7 +158,7 @@ fn installed_defaults_digest(global_root: &Path) -> String {
     hasher.update(global_root.to_string_lossy().as_bytes());
     hasher.update([0]);
     hasher.update(std::env::consts::OS.as_bytes());
-    format!("{:x}", hasher.finalize())
+    lower_hex(hasher.finalize())
 }
 
 /// Digest of every embedded default a global-scope bootstrap seeds. The inputs
@@ -183,6 +184,6 @@ fn embedded_defaults_digest() -> &'static str {
                 hasher.update([0]);
             }
         }
-        format!("{:x}", hasher.finalize())
+        lower_hex(hasher.finalize())
     })
 }

@@ -26,6 +26,7 @@ use std::fmt;
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::identity::lower_hex;
 use orbit_types::task::Task;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -161,7 +162,7 @@ pub(crate) fn task_scope_digest(task: &Task) -> String {
         "description": task.description,
         "acceptance_criteria": task.acceptance_criteria,
     });
-    format!("{:x}", Sha256::digest(scope.to_string().as_bytes()))
+    lower_hex(Sha256::digest(scope.to_string().as_bytes()))
 }
 
 /// The paths the candidate `original_base..original_head` changed, and the

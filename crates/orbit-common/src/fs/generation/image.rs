@@ -1,6 +1,5 @@
 //! Digesting the running executable image, and verifying it is the installed one.
 
-use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read;
 #[cfg(target_os = "macos")]
@@ -11,13 +10,13 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
+use orbit_types::identity::lower_hex;
 // Every command whose generation root lacks a cached digest hashes its whole
-// executable, and a debug build is about 200 MB. The workspace's sha2 0.10
-// hashes in software on aarch64 (its ARMv8 backend needs the C `asm`
-// feature); the 0.11 that `rsa` brings detects the SHA-2 extension at run
-// time, as both versions do on x86. On Apple silicon that cuts a debug-binary
-// digest from about 370 ms to 90 ms. The digest itself is unchanged.
-use rsa::sha2::{Digest, Sha256};
+// executable, and a debug build is about 200 MB. sha2 0.11 detects the SHA-2
+// instructions at run time on both x86 and aarch64; 0.10 hashed in software on
+// aarch64 (its ARMv8 backend needed the C `asm` feature), which cost about
+// 370 ms per digest of a debug binary on Apple silicon instead of about 90 ms.
+use sha2::{Digest, Sha256};
 
 use super::image_digest;
 use super::paths::{IMAGE_DIGEST_CACHE, validated_generation_record_path};
@@ -39,13 +38,7 @@ fn hash_executable(mut file: File) -> Result<String, OrbitError> {
         }
         hash.update(&buf[..n]);
     }
-    Ok(hash
-        .finalize()
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        }))
+    Ok(lower_hex(hash.finalize()))
 }
 
 /// Digest the running inode, even after its installed path has been replaced.

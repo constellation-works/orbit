@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
+use orbit_types::identity::lower_hex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -334,7 +335,7 @@ fn tracked_patch_identity(
         hasher.update((worktree_patch.len() as u64).to_be_bytes());
         hasher.update(worktree_patch);
     }
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", lower_hex(hasher.finalize()))
 }
 
 fn parse_porcelain_v2(bytes: &[u8]) -> Result<(Vec<String>, Vec<String>), DispatchError> {
@@ -832,7 +833,7 @@ fn sha256_identity(domain: &str, bytes: &[u8]) -> String {
     hasher.update([0]);
     hasher.update((bytes.len() as u64).to_be_bytes());
     hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", lower_hex(hasher.finalize()))
 }
 
 fn optional_sha256_identity(domain: &str, bytes: &[u8]) -> Option<String> {

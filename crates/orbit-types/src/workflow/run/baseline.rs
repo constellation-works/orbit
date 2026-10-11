@@ -24,6 +24,7 @@
 //! task and the pull request record those tests as known red
 //! ([`KnownRedValidation`]).
 
+use crate::identity::lower_hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -155,7 +156,7 @@ impl BaselineRedFailures {
         }
         let omitted = identities.len().saturating_sub(MAX_BASELINE_RED_FAILURES);
         Self {
-            identity_digest: Some(format!("{:x}", digest.finalize())),
+            identity_digest: Some(lower_hex(digest.finalize())),
             identities: identities
                 .into_iter()
                 .take(MAX_BASELINE_RED_FAILURES)

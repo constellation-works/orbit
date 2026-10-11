@@ -16,8 +16,8 @@ use orbit_common::security::release::{
 use rsa::RsaPrivateKey;
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::DecodePrivateKey;
-use rsa::sha2::Sha256;
 use rsa::signature::{SignatureEncoding, Signer};
+use sha2::Sha256;
 use tempfile::TempDir;
 
 use crate::update::channel::InstallChannel;

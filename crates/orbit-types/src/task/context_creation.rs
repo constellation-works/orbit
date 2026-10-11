@@ -16,6 +16,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::identity::lower_hex;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -101,7 +102,7 @@ impl ContextCreationGrant {
             &self.generation,
         );
         let encoded = serde_json::to_string(&identity).unwrap_or_default();
-        format!("{:x}", Sha256::digest(encoded.as_bytes()))
+        lower_hex(Sha256::digest(encoded.as_bytes()))
     }
 }
 
@@ -109,7 +110,7 @@ impl ContextCreationGrant {
 pub fn context_files_sha256(context_files: &[String]) -> String {
     let set = context_files.iter().collect::<BTreeSet<_>>();
     let encoded = serde_json::to_string(&set).unwrap_or_default();
-    format!("{:x}", Sha256::digest(encoded.as_bytes()))
+    lower_hex(Sha256::digest(encoded.as_bytes()))
 }
 
 /// The creation authorization a task's history grants its current scope.

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::identity::lower_hex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -586,13 +587,13 @@ fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String], run_id: &str)
     if task_ids.len() == 1 {
         // A retry for the same run must address the same ref even after the
         // checkout has been removed and only its candidate branch remains.
-        let run_hash = format!("{:x}", Sha256::digest(run_id.as_bytes()));
+        let run_hash = lower_hex(Sha256::digest(run_id.as_bytes()));
         return format!("{branch_prefix}/{}-{}", task_ids[0], &run_hash[..8]);
     }
 
     let mut sorted_ids = task_ids.to_vec();
     sorted_ids.sort();
     let digest = Sha256::digest(sorted_ids.join(","));
-    let bundle_hash = format!("{digest:x}");
+    let bundle_hash = lower_hex(digest);
     format!("{branch_prefix}/bundle-{}", &bundle_hash[..8])
 }

@@ -49,6 +49,7 @@ use orbit_store::workflow::task::{
     PublicationRestoreMode, PublicationRestoreRequest, ScannerFailureBehavior, export_tasks,
     import_tasks, publish_task_snapshot, restore_publication,
 };
+use orbit_types::identity::lower_hex;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ORB_TASK_ID_MAX,
     TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME,
@@ -1071,9 +1072,9 @@ fn reserved_key_publishes_a_new_bundle_before_replaying() {
             context_creation: Vec::new(),
         };
         let id = owner.registry.allocate_task_id(PARTITION_ID).unwrap();
-        let input_digest = digest.map(str::to_string).unwrap_or_else(|| {
-            format!("{:x}", Sha256::digest(serde_json::to_vec(&params).unwrap()))
-        });
+        let input_digest = digest
+            .map(str::to_string)
+            .unwrap_or_else(|| lower_hex(Sha256::digest(serde_json::to_vec(&params).unwrap())));
         // Crash injection: durable key admission succeeded, but bundle
         // publication never ran. Reservation alone is not a creation replay.
         rusqlite::Connection::open(task_registry_path(root.path()))
@@ -1462,7 +1463,7 @@ impl Delivery {
         let content = serde_json::to_vec(certificate).unwrap();
         let reference = HandoffArtifactRef {
             path: REVIEW_GATE_ARTIFACT.into(),
-            sha256: format!("{:x}", Sha256::digest(&content)),
+            sha256: lower_hex(Sha256::digest(&content)),
         };
         self.owner
             .backends
@@ -1623,7 +1624,7 @@ fn handoff_with_logs(
         .iter()
         .map(|artifact| HandoffArtifactRef {
             path: artifact.path.clone(),
-            sha256: format!("{:x}", Sha256::digest(&artifact.content)),
+            sha256: lower_hex(Sha256::digest(&artifact.content)),
         })
         .collect();
     if artifacts.is_empty() {
@@ -2627,10 +2628,7 @@ fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
         "schema_version": 1,
         "events_len": std::fs::metadata(&events_path).unwrap().len(),
         "comments_len": std::fs::metadata(&comments_path).map_or(0, |m| m.len()),
-        "envelope_sha256": format!(
-            "{:x}",
-            Sha256::digest(std::fs::read(bundle.join(TASK_ENVELOPE_FILE_NAME)).unwrap())
-        ),
+        "envelope_sha256": lower_hex(Sha256::digest(std::fs::read(bundle.join(TASK_ENVELOPE_FILE_NAME)).unwrap())),
         "documents": documents,
     });
     std::fs::write(
