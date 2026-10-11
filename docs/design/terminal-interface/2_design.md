@@ -72,7 +72,7 @@ Table-backed empty results print their configured empty-state line to stderr and
 
 Errors are routed through `main.rs::print_error`, which emits the JSON error payload when the command declared a JSON preference *or* the sink resolved a JSON mode, and a plain message otherwise. **Both go to stderr, in every mode** [ORB-10570]. This is a breaking change for any script that parsed the error object off stdout; the exit code (`1`, or `2` for a clap usage error) was already the reliable signal and is unchanged.
 
-A closed stdout is not an error. `output/pipe.rs` installs a panic hook that turns the `failed printing to stdout: … (os error 32)` panic `println!` raises into a silent `exit(0)`, and `log tail` maps a `BrokenPipe` write error to `Ok`. `orbit audit list --limit 20000 | head -1` (2.5 MB, well past the pipe buffer) exits 0 with empty stderr. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §5.
+A closed stdout is not an error. During rendering, `output/pipe.rs` suppresses the `failed printing to stdout: … (os error 32)` panic report and catches its unwind as a successful rendering outcome, so the command audit can finalize before exit. Outside that boundary its panic hook exits 0 silently. `log tail` maps a `BrokenPipe` write error to `Ok`. `orbit audit list --limit 20000 | head -1` (2.5 MB, well past the pipe buffer) exits 0 with empty stderr. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §5.
 
 ## 8. Test Coverage of Output
 

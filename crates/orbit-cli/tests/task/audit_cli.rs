@@ -6,12 +6,15 @@
 use std::fs;
 use std::path::PathBuf;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_core::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
+
+#[cfg(unix)]
+#[path = "../support/child_guard.rs"]
+mod child_guard;
 
 struct Fixture {
     _temp: TempDir,
@@ -67,7 +70,11 @@ impl Fixture {
     }
 
     fn command(&self, args: &[&str]) -> assert_cmd::Command {
-        let mut command = cargo_bin_cmd!("orbit");
+        assert_cmd::Command::from_std(self.std_command(args))
+    }
+
+    fn std_command(&self, args: &[&str]) -> std::process::Command {
+        let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
@@ -110,6 +117,16 @@ impl Fixture {
             "audit", "list", "--kind", "task", "--status", "success", "--json",
         ])
     }
+
+    fn command_events(&self, command: &str, subcommand: &str) -> Vec<Value> {
+        self.json(&["audit", "list", "--json"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["command"] == command && row["subcommand"] == subcommand)
+            .cloned()
+            .collect()
+    }
 }
 
 /// Re-executes `test` in a child process with its own HOME, after `configure`
@@ -136,6 +153,205 @@ fn run_in_child(test: &str, configure: impl FnOnce(&mut std::process::Command)) 
     let output = test_env::run_child_test(&mut child, test, home.path());
     test_env::assert_child_test_passed(test, output.status, &output.stdout, &output.stderr);
     true
+}
+
+#[test]
+fn audit_cli_missing_log_records_the_render_failure() {
+    const TEST: &str = "audit_cli::audit_cli_missing_log_records_the_render_failure";
+    if run_in_child(TEST, |_| {}) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // A non-default basename avoids the split operational/agent feed behavior.
+    let path = fixture.repo.join("missing-explicit.jsonl");
+    let output = fixture
+        .command(&["log", "tail", "--path", path.to_str().unwrap(), "--json"])
+        .timeout(test_env::FIXTURE_STEP_DEADLINE)
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains(path.to_str().unwrap())
+    );
+    let rows = fixture.command_events("log", "tail");
+    assert_eq!(rows.len(), 1, "one audit row for the failed invocation");
+    assert_eq!(rows[0]["status"], "failure");
+    assert_eq!(rows[0]["exit_code"], output.status.code().unwrap());
+    assert_eq!(rows[0]["error_message"], error["error"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_cli_follow_stream_records_final_outcome_and_elapsed_duration() {
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    const TEST: &str =
+        "audit_cli::audit_cli_follow_stream_records_final_outcome_and_elapsed_duration";
+    if run_in_child(TEST, |_| {}) {
+        return;
+    }
+    // Both a late read failure and a successful closed pipe must finalize the
+    // same guard, after the stream has spent time following a live file.
+    for close_pipe in [false, true] {
+        let fixture = Fixture::new();
+        let path = fixture.repo.join("explicit-follow.jsonl");
+        let record = json!({"level": "INFO", "fields": {"message": "ready"}});
+        fs::write(&path, format!("{record}\n")).unwrap();
+        let mut stderr = tempfile::tempfile().unwrap();
+        let mut command = fixture.std_command(&[
+            "log",
+            "tail",
+            "--path",
+            path.to_str().unwrap(),
+            "--follow",
+            "--json",
+        ]);
+        let mut child = child_guard::ChildGuard::new(
+            command
+                .stdout(Stdio::piped())
+                .stderr(stderr.try_clone().unwrap())
+                .spawn()
+                .unwrap(),
+        );
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut stdout = BufReader::new(stdout);
+            let mut line = String::new();
+            let result = stdout.read_line(&mut line);
+            let _ = tx.send((stdout, line, result));
+        });
+        let (stdout, line, read) = rx
+            .recv_timeout(test_env::FIXTURE_STEP_DEADLINE)
+            .unwrap_or_else(|error| panic!("stream readiness: {error}; {}", test_env::host_load()));
+        reader.join().unwrap();
+        assert!(read.unwrap() > 0, "stream exited before emitting readiness");
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), record);
+        assert!(child.try_wait().unwrap().is_none());
+
+        let db = Connection::open(fixture.root.join("orbit.db")).unwrap();
+        let completed: i64 = db
+            .query_row(
+                "SELECT count(*) FROM audit_events WHERE command = 'log' AND pid = ?1",
+                [child.id()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(completed, 0, "a live stream has no completed command row");
+        drop(db);
+
+        let held = Instant::now();
+        // This is an intentional idle interval after observed readiness, not
+        // a race window or a startup deadline. The audit must include it.
+        std::thread::sleep(Duration::from_millis(150));
+        let held_ms = held.elapsed().as_millis() as u64;
+        if close_pipe {
+            drop(stdout);
+            let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(file, "{record}").unwrap();
+        } else {
+            // The open descriptor keeps the old file valid. On the next EOF
+            // poll the replacement directory deterministically fails reading.
+            fs::rename(&path, fixture.repo.join("retained.jsonl")).unwrap();
+            fs::create_dir(&path).unwrap();
+        }
+        let mut status = None;
+        test_env::wait_until("log stream termination", || {
+            status = child.try_wait().unwrap();
+            status.is_some()
+        });
+        let status = status.unwrap();
+        stderr.seek(SeekFrom::Start(0)).unwrap();
+        let mut errors = String::new();
+        stderr.read_to_string(&mut errors).unwrap();
+        assert_eq!(
+            status.code(),
+            Some(if close_pipe { 0 } else { 1 }),
+            "{errors}"
+        );
+        let rows = fixture.command_events("log", "tail");
+        assert_eq!(rows.len(), 1, "one final row per stream: {rows:?}");
+        let row = &rows[0];
+        assert_eq!(row["pid"], child.id());
+        assert_eq!(row["exit_code"], status.code().unwrap());
+        assert_eq!(
+            row["status"],
+            if close_pipe { "success" } else { "failure" }
+        );
+        assert!(
+            row["duration_ms"].as_u64().unwrap() >= held_ms,
+            "audit duration must include time spent streaming: {row}"
+        );
+        if close_pipe {
+            assert!(
+                errors.is_empty(),
+                "closed pipe must remain silent: {errors}"
+            );
+            assert!(row["error_message"].is_null());
+        } else {
+            let error: Value = serde_json::from_str(&errors).unwrap();
+            assert_eq!(row["error_message"], error["error"]);
+            assert!(!row["error_message"].as_str().unwrap().is_empty());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_cli_closed_stdout_preserves_the_success_row_for_human_rendering() {
+    use std::io::Read;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+
+    const TEST: &str =
+        "audit_cli::audit_cli_closed_stdout_preserves_the_success_row_for_human_rendering";
+    if run_in_child(TEST, |_| {}) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+    let mut command = fixture.std_command(&["task", "list", "--format", "plain"]);
+    let mut child = child_guard::ChildGuard::new(
+        command
+            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut status = None;
+    test_env::wait_until("human rendering with closed stdout", || {
+        status = child.try_wait().unwrap();
+        status.is_some()
+    });
+    let mut errors = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut errors)
+        .unwrap();
+    assert!(status.unwrap().success(), "{errors}");
+    assert!(errors.is_empty(), "{errors}");
+    let rows = fixture.command_events("task", "list");
+    assert_eq!(
+        rows.len(),
+        1,
+        "closed stdout still finalizes the command audit"
+    );
+    assert_eq!(rows[0]["status"], "success");
+    assert_eq!(rows[0]["exit_code"], 0);
+    assert!(rows[0]["error_message"].is_null());
 }
 
 #[test]

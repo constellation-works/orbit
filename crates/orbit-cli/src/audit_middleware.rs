@@ -6,7 +6,6 @@ use orbit_core::{
     AuditEventInsertParams, AuditEventStatus, OrbitError, OrbitRuntime, redact_sensitive_env_text,
 };
 
-use crate::command::CommandOut;
 pub use crate::command::operation::CommandMeta;
 
 /// Feeds the **persistent** SQLite audit event store on every CLI invocation.
@@ -53,14 +52,19 @@ impl<'a> AuditGuard<'a> {
         self.error_message = None;
     }
 
-    /// Classify the command's complete outcome, including rendered payloads
-    /// that deliberately request a nonzero process exit.
-    pub fn mark_result(&mut self, result: &CommandOut) {
+    /// Classify the complete dispatch and rendering outcome. Rendering errors
+    /// take precedence over a payload's declared exit code and audit message.
+    pub fn mark_result(
+        &mut self,
+        result: &Result<(), OrbitError>,
+        exit_code: i32,
+        audit_message: Option<&str>,
+    ) {
         match result {
-            Ok(output) if output.exit_code() != 0 => {
+            Ok(()) if exit_code != 0 => {
                 self.status = AuditEventStatus::Failure;
-                self.exit_code = output.exit_code();
-                self.error_message = output.audit_message().map(redact_sensitive_env_text);
+                self.exit_code = exit_code;
+                self.error_message = audit_message.map(redact_sensitive_env_text);
             }
             Ok(_) => self.mark_success(),
             Err(OrbitError::PolicyDenied(msg) | OrbitError::CapabilityDenied(msg)) => {

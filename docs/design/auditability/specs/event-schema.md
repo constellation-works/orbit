@@ -25,6 +25,14 @@ Required invariants:
 - `timestamp`, `command`, `role`, `status`, `exit_code`, `duration_ms`, `working_directory`, and `pid` are always present.
 - `status` is one of `success`, `failure`, or `denied`.
 - A denied command uses `status: denied` and a non-zero exit code.
+- CLI command rows are finalized after dispatch and output rendering, including
+  stream execution. Their duration includes that work; a rendering or stream
+  error records failure with exit code 1. Successfully rendered payloads retain
+  their declared exit code and audit message. Closing stdout is a successful
+  rendering outcome.
+- A following CLI stream has no completed command row while it is running.
+  Tool-owned audit rows retain their runtime dispatch scope; the CLI guard
+  suppresses its own row when tool dispatch already recorded one.
 - Error messages are redacted before insertion.
 - Command rows do not embed full provider request/response bodies.
 - Legacy `host`, `session_id`, and `job_run_id` retain their meanings: executing-process hostname, legacy session correlation, and canonical run correlation respectively.
@@ -37,6 +45,9 @@ Required invariants:
 Failure modes:
 
 - If the command exits through an early return, the RAII guard still writes one row.
+- The CLI explicitly drops the finalized guard before a process exit, which
+  would otherwise bypass destructors. Closed stdout during rendering unwinds
+  to the rendering boundary so the success row can be persisted first.
 - If audit insertion fails during `Drop`, the CLI prints a warning and does not mask the command result.
 - If a tool implementation succeeds but its runtime audit insertion fails, the call fails closed and does not surface a successful result. The non-fatal `Drop` rule applies only to guard-side RAII persistence.
 - If runtime initialization fails before the guard exists, no command audit row is written.
