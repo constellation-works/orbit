@@ -5,8 +5,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::sync::Mutex;
-use std::time::Duration;
 
+use orbit_common::test_env::FIXTURE_STEP_DEADLINE;
 use serde_json::{Value, json};
 
 const ADDRESS: &str = "ORBIT_TEST_WORKFLOW_GATE_ADDR";
@@ -33,7 +33,7 @@ impl WorkflowGate {
             "command": std::env::current_exe().unwrap(),
             "args": ["--exact", test, "--nocapture", "--test-threads=1"],
             "env": {ADDRESS: self.listener.local_addr().unwrap().to_string()},
-            "timeout_ms": 30000
+            "timeout_ms": FIXTURE_STEP_DEADLINE.as_millis()
         }}})
     }
 
@@ -47,16 +47,16 @@ impl WorkflowGate {
         };
         // SAFETY: a single valid descriptor owned by this fixture, for this call.
         assert_eq!(
-            unsafe { libc::poll(&mut fd, 1, 30000) },
+            unsafe { libc::poll(&mut fd, 1, FIXTURE_STEP_DEADLINE.as_millis() as i32) },
             1,
             "worker did not enter the gate"
         );
         let (mut stream, _) = self.listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(30)))
+            .set_read_timeout(Some(FIXTURE_STEP_DEADLINE))
             .unwrap();
         stream
-            .set_write_timeout(Some(Duration::from_secs(30)))
+            .set_write_timeout(Some(FIXTURE_STEP_DEADLINE))
             .unwrap();
         let mut ready = [0];
         stream.read_exact(&mut ready).unwrap();
@@ -97,7 +97,7 @@ pub(crate) fn wait_if_requested() -> bool {
     };
     let mut stream = TcpStream::connect(address).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
+        .set_read_timeout(Some(FIXTURE_STEP_DEADLINE))
         .unwrap();
     stream.write_all(b"R").unwrap();
     let mut release = [0];

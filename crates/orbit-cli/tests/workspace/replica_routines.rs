@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use assert_cmd::assert::OutputAssertExt;
 use assert_cmd::cargo::cargo_bin_cmd;
 use chrono::{Duration as ChronoDuration, Utc};
 use orbit_common::test_env;
@@ -20,6 +21,8 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 use crate::{fixture_crew, git_repo};
+mod owned_runs;
+use owned_runs::RoutineRuns;
 
 const OWNER: &str = "gc-owner";
 const REPLICA: &str = "gc-replica";
@@ -27,7 +30,24 @@ const REMOTE_OWNER: &str = "hm_fixture_remote";
 
 #[test]
 fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged() {
+    if !isolated("replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged") {
+        return;
+    }
+    exercise_routine_settlement(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn held_owner_is_settled_before_fixture_teardown_on_assertion_failure() {
+    if !isolated("held_owner_is_settled_before_fixture_teardown_on_assertion_failure") {
+        return;
+    }
+    exercise_routine_settlement(true);
+}
+
+fn exercise_routine_settlement(assertion_failure: bool) {
     let temp = tempdir().expect("tempdir");
+    let temp_path = temp.path().to_owned();
     let home = temp.path().join("home");
     let owner_repo = temp.path().join("owner");
     let replica_repo = temp.path().join("replica");
@@ -47,6 +67,7 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
             "RR",
         ],
     );
+
     fixture_crew::configure_sol(&home.join(".orbit"));
     run_success(&owner_repo, &home, &["workspace", "init", "--name", OWNER]);
     run_success(
@@ -64,6 +85,41 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
         ],
     );
 
+    // Own the temporary roots before any worker can be submitted. Discovery
+    // on drop also covers a sweep whose CLI output/assertions fail before its
+    // submitted IDs can be read.
+    let mut runs = RoutineRuns::new(temp, &home, &[&owner_repo, &replica_repo]);
+    run_success(
+        &owner_repo,
+        &home,
+        &[
+            "config",
+            "set",
+            "workflow.resource_throttle.enabled",
+            "false",
+            "--global",
+        ],
+    );
+    for repo in [&owner_repo, &replica_repo] {
+        let shown = run_json(repo, &home, &["workspace", "show", "--format", "json"]);
+        assert_eq!(shown["registered"], true, "{shown}");
+        for (field, expected) in [
+            ("repo_root", repo.canonicalize().expect("fixture checkout")),
+            (
+                "orbit_dir",
+                repo.canonicalize()
+                    .expect("fixture checkout")
+                    .join(".orbit"),
+            ),
+        ] {
+            assert_eq!(
+                shown["checkout"][field],
+                expected.to_string_lossy().as_ref(),
+                "{shown}"
+            );
+        }
+    }
+
     // Every replica-side candidate is switched on, so only the replica rule
     // can keep the owner work from firing.
     enable_routine(&replica_repo, "worktree_gc.yaml");
@@ -72,6 +128,8 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
     enable_routine(&owner_repo, "worktree_gc.yaml");
     zero_worktree_gc_age_floor(&home);
     let replica_worktree = seed_replica_worktree(&replica_repo, &home);
+    #[cfg(unix)]
+    runs.hold_owner(&owner_repo);
 
     let replica_gc = format!("worktree-gc-{REPLICA}");
     let replica_ship = format!("ship-sweep-{REPLICA}");
@@ -119,11 +177,13 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
 
     // First observation baselines the cursors; then both GC routines are due.
     let baseline = sweep(&owner_repo, &home);
+    runs.retain_sweep(&baseline);
     assert_owner_work_refused(&baseline, &replica_ship);
     make_routine_due(&home, &replica_gc);
     make_routine_due(&home, &owner_gc);
 
     let fired = sweep(&owner_repo, &home);
+    runs.retain_sweep(&fired);
     assert_owner_work_refused(&fired, &replica_ship);
     for name in [&replica_gc, &owner_gc] {
         let report = routine_report(&fired, name)
@@ -153,6 +213,12 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
         .as_str()
         .expect("fired replica GC carries a run id")
         .to_string();
+    let owner_run_id = routine_report(&fired, &owner_gc).expect("owner GC row")["run_id"]
+        .as_str()
+        .expect("fired owner GC carries a run id")
+        .to_string();
+    #[cfg(unix)]
+    runs.wait_owner_ready();
     let replica_orbit_dir = replica_repo
         .canonicalize()
         .expect("resolve replica checkout")
@@ -178,10 +244,77 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
         "{retained}"
     );
     assert!(replica_worktree.exists(), "retained worktree was removed");
+
+    #[cfg(unix)]
+    {
+        let owner = run_json(
+            &owner_repo,
+            &home,
+            &["run", "show", &owner_run_id, "--json"],
+        );
+        assert_eq!(
+            owner["run"]["state"], "running",
+            "owner must still be held: {owner}"
+        );
+        assert!(
+            temp_path.exists(),
+            "replica completion must retain shared roots"
+        );
+    }
+
+    if assertion_failure {
+        let settlements = runs.settlements.clone();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owned_runs = runs;
+            assert!(
+                !assertion_failure,
+                "exercise fixture assertion-failure cleanup"
+            );
+        }));
+        assert!(panic.is_err(), "the negative control must unwind");
+        let settled = settlements.lock().expect("cleanup observations");
+        for id in [&gc_run_id, &owner_run_id] {
+            let run = settled
+                .iter()
+                .find(|run| run.run_id == *id)
+                .expect("cleanup observed the dispatched run");
+            assert_eq!(
+                run.state,
+                orbit_types::workflow::JobRunState::Success,
+                "{run:?}"
+            );
+        }
+        assert!(
+            !temp_path.exists(),
+            "roots drop only after both workers settle"
+        );
+    } else {
+        runs.release_owner();
+        let owner = wait_for_terminal_run(&owner_repo, &home, &owner_run_id);
+        assert_eq!(owner["run"]["state"], "success", "{owner}");
+        // Explicit settlement checks worker exit as well as terminal history;
+        // Drop repeats discovery to protect every earlier assertion.
+        runs.settle().expect("settle every fixture worker");
+        for run in runs
+            .settlements
+            .lock()
+            .expect("settlement observations")
+            .iter()
+        {
+            assert_eq!(
+                run.state,
+                orbit_types::workflow::JobRunState::Success,
+                "{run:?}"
+            );
+        }
+    }
 }
 
 #[test]
 fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() {
+    if !isolated("replica_auto_task_definition_mutations_refuse_without_changing_local_state") {
+        return;
+    }
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let owner_repo = temp.path().join("owner");
@@ -469,12 +602,12 @@ fn make_routine_due(home: &Path, routine: &str) {
 }
 
 fn wait_for_terminal_run(repo: &Path, home: &Path, run_id: &str) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + test_env::FIXTURE_STEP_DEADLINE;
     loop {
         let run = run_json(repo, home, &["run", "show", run_id, "--json"]);
         let terminal = matches!(
             run["run"]["state"].as_str(),
-            Some("success" | "failed" | "cancelled")
+            Some("success" | "failed" | "cancelled" | "timeout" | "interrupted" | "held")
         );
         if terminal || Instant::now() >= deadline {
             return run;
@@ -484,17 +617,23 @@ fn wait_for_terminal_run(repo: &Path, home: &Path, run_id: &str) -> Value {
 }
 
 fn run_success(cwd: &Path, home: &Path, args: &[&str]) {
-    command(cwd, home).args(args).assert().success();
+    let started = Instant::now();
+    let output = command(cwd, home)
+        .args(args)
+        .output()
+        .expect("run fixture CLI");
+    test_env::assert_step_finished(&args.join(" "), started.elapsed(), &output.status);
+    output.assert().success();
 }
 
 fn run_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
+    let started = Instant::now();
     let output = command(cwd, home)
         .args(args)
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+        .output()
+        .expect("run fixture CLI");
+    test_env::assert_step_finished(&args.join(" "), started.elapsed(), &output.status);
+    let output = output.assert().success().get_output().stdout.clone();
     serde_json::from_slice(&output).unwrap_or_else(|error| {
         panic!(
             "parse JSON from `orbit {}`: {error}\nstdout:\n{}",
@@ -512,8 +651,47 @@ fn command(cwd: &Path, home: &Path) -> assert_cmd::Command {
     command
         .current_dir(cwd)
         .env("HOME", home)
-        .env("USERPROFILE", home);
+        .env("USERPROFILE", home)
+        .timeout(test_env::FIXTURE_STEP_DEADLINE);
     command
+}
+
+fn isolated(name: &str) -> bool {
+    #[cfg(unix)]
+    if crate::workflow_gate::wait_if_requested() {
+        // The owner checks these after release. Deleting the shared roots
+        // when the replica finishes would fail this supervised step and the
+        // subsequent successful-terminal assertions.
+        let home = std::env::var_os("HOME").expect("owner's isolated home");
+        assert!(
+            Path::new(&home).join(".orbit/orbit.db").is_file(),
+            "owner resumes before HOME teardown"
+        );
+        assert!(
+            std::env::current_dir()
+                .expect("owner checkout still exists")
+                .join(".orbit")
+                .is_dir(),
+            "owner resumes before checkout teardown"
+        );
+        std::process::exit(0);
+    }
+    const MARKER: &str = "ORBIT_REPLICA_ROUTINES_CHILD";
+    if std::env::var(MARKER).ok().as_deref() == Some(name) {
+        return true;
+    }
+    let temp = tempdir().expect("child test output");
+    let qualified = format!("replica_routines::{name}");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    test_env::clear_inherited_authority(|key| {
+        child.env_remove(key);
+    });
+    child
+        .args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
+        .env(MARKER, name);
+    let output = test_env::run_child_test(&mut child, &qualified, temp.path());
+    test_env::assert_child_test_passed(&qualified, output.status, &output.stdout, &output.stderr);
+    false
 }
 
 fn init_git_repo(repo: &Path) {

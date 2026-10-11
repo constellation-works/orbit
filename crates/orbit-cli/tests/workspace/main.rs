@@ -15,6 +15,9 @@ mod child_guard;
 mod fixture_crew;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
+#[cfg(unix)]
+#[path = "../support/workflow_gate.rs"]
+mod workflow_gate;
 
 mod ambient_authority_isolation;
 mod config_set_root;
