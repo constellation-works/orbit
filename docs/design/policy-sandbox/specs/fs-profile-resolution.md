@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Filesystem Profile Resolution"
 tags: ["policy-sandbox"]
-last_validated: 2026-10-06
+last_validated: 2026-10-11
 ---
 
 # Spec: Filesystem Profile Resolution

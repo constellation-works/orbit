@@ -2,7 +2,7 @@
 title: Distributed Drain — Vision
 owner: claude
 last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_validated: 2026-10-11
 status: Draft
 feature: distributed-drain
 doc_role: vision
