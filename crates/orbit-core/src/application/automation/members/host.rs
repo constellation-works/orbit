@@ -50,7 +50,7 @@ pub(crate) fn evaluate(
 
     members::evaluate(
         runtime.automation_store()?.as_ref(),
-        &Host::new(runtime, &definition.name, &effective),
+        &Host::new(runtime, &definition.name, &effective, dry_run),
         MemberEvaluation {
             consumer: &consumer,
             epoch: &epoch,
@@ -68,11 +68,13 @@ impl<'a> Host<'a> {
         runtime: &'a OrbitRuntime,
         routine: &'a str,
         trigger: &'a StateTrigger,
+        dry_run: bool,
     ) -> Self {
         Self {
             runtime,
             routine,
             trigger,
+            dry_run,
             policy: preparation::resolve_policy(runtime, Some(trigger)),
             incidents: RefCell::new(super::super::incidents::IncidentSession::new()),
             instructions: RefCell::new(BTreeMap::new()),
@@ -83,7 +85,12 @@ impl<'a> Host<'a> {
     }
 
     pub(super) fn source(&self) -> Source<'_> {
-        Source::new(&self.runtime.paths().repo_root)
+        let root = &self.runtime.paths().repo_root;
+        if self.dry_run {
+            Source::read_only(root)
+        } else {
+            Source::new(root)
+        }
     }
 
     pub(super) fn owner(&self) -> Result<pins::Owner, AutomationError> {

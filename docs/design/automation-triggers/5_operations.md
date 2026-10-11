@@ -884,6 +884,16 @@ implementation authority. Operation mode, which once supplied this evaluator a
 grant scope and due interval and let the drain promote in-scope tasks, was
 removed on 2026-09-21 ([orbit-core decisions](../orbit-core/4_decisions.md)).
 
+State routine inspection (`orbit routine list` / `show`, dashboard
+`GET /api/routines`, and dry-run clock sweeps) does not fetch origin. A
+preparation routine compares the existing remote-tracking ref with its local
+branch, retaining the local head when it is ahead or the tracking ref is
+unavailable. Its pending-member and scheduling reasons retain that local
+fallback when the ref has never been fetched. A real clock tick still
+best-effort fetches before selecting the preparation source; incident routines
+remain local-only. Status polling therefore reflects cached source evidence
+until a real evaluation refreshes it.
+
 Keep definitions disabled for rollout review. Inspect `orbit routine list`,
 `orbit routine show <name> --json` (which reports the resolved owner, branch and
 eligibility), and the existing `orbit clock tick --dry-run` preview before

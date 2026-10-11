@@ -21,6 +21,9 @@ pub(crate) struct Host<'a> {
     /// trigger [ORB-13016].
     routine: &'a str,
     trigger: &'a StateTrigger,
+    /// Status inspection and sweep previews resolve cached refs without
+    /// fetching; only a real evaluation refreshes origin.
+    dry_run: bool,
     /// The one policy this consumer observes, admits and fingerprints with
     /// [ORB-12745, ORB-13638].
     policy: PreparationPolicy,
@@ -31,8 +34,8 @@ pub(crate) struct Host<'a> {
     pinned: RefCell<BTreeMap<String, Option<String>>>,
     /// The pin namespace owner, resolved once [ORB-14164].
     owner: RefCell<Option<pins::Owner>>,
-    /// Resolve (and best-effort fetch) once per evaluation, shared by page
-    /// observation, reconciliation and admission.
+    /// Resolve once per evaluation, best-effort fetching only outside dry
+    /// runs, shared by page observation, reconciliation and admission.
     head: RefCell<Option<(String, SourceRevision)>>,
 }
 
