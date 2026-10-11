@@ -163,6 +163,43 @@ impl OrbitRuntime {
         }))
     }
 
+    /// Why a settled run ended as it did, from its own records: the error its
+    /// explaining step recorded, else the leaf its recorded root cause echoes.
+    /// `None` when the run is unknown, still active, succeeded, or recorded
+    /// neither. Reads the run row and its state, never the audit trail, so a
+    /// parent can afford it once per settled child [ORB-15435].
+    pub(crate) fn run_outcome_reason(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        let Some(run) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        if !run.state.is_terminal() {
+            return Ok(None);
+        }
+        let step_error = run_error_step(&run).and_then(|step| {
+            match (step.error_code.as_deref(), step.error_message.as_deref()) {
+                (Some(code), Some(message)) => Some(format!("{code}: {message}")),
+                (Some(text), None) | (None, Some(text)) => Some(text.to_string()),
+                (None, None) => None,
+            }
+        });
+        if step_error.is_some() {
+            return Ok(step_error);
+        }
+        let known = |value: Option<String>| value.unwrap_or_else(|| "-".to_string());
+        Ok(self
+            .read_run_state(run_id)?
+            .and_then(|state| state.root_cause)
+            .map(|cause| {
+                format!(
+                    "echoes leaf run {} (task {}, step {}, code {})",
+                    cause.leaf_run_id,
+                    known(cause.task_id),
+                    known(cause.step),
+                    known(cause.code),
+                )
+            }))
+    }
+
     /// Record on a parent run the leaf failure its own failure echoes. Best
     /// effort: the parent's failure stands whether or not the record lands.
     pub(crate) fn record_run_root_cause(&self, run_id: &str, cause: &RunRootCause) {

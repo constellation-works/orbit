@@ -25,6 +25,9 @@ use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::{
+    pipeline_wait_status_is_held, pipeline_wait_status_is_success,
+};
 
 /// Audit command for a child submission attempt, successful or not.
 const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
@@ -168,6 +171,14 @@ pub(super) fn advance_child_phase(
 }
 
 /// Record that the parent observed the child's terminal state.
+///
+/// [ORB-15435] Every non-success row carries a message that names the child
+/// run and its status, with the child's own reason when the wait entry had no
+/// error. A held child awaits evidence or a forge and passes the parent's
+/// guard; a cancelled one was stopped deliberately and ends its parent
+/// cancelled [ORB-15202]. Neither is a failed observation, so both record
+/// success with the message kept in the payload; any other non-success
+/// status stays a failure the incident list reports.
 pub(super) fn record_child_wait_outcome(
     runtime: &OrbitRuntime,
     action: &str,
@@ -176,16 +187,21 @@ pub(super) fn record_child_wait_outcome(
     status: &str,
     error_message: Option<&str>,
 ) -> Result<(), DispatchError> {
-    let succeeded = crate::application::job::pipeline::pipeline_wait_status_is_success(status);
+    let message = (!pipeline_wait_status_is_success(status))
+        .then(|| child_wait_message(runtime, child_run_id, status, error_message));
+    let settled = pipeline_wait_status_is_success(status)
+        || pipeline_wait_status_is_held(status)
+        || status == "cancelled";
+    let audit_status = if settled {
+        AuditEventStatus::Success
+    } else {
+        AuditEventStatus::Failure
+    };
     record_child_audit(
         runtime,
         action,
         CHILD_WAIT_AUDIT,
-        if succeeded {
-            AuditEventStatus::Success
-        } else {
-            AuditEventStatus::Failure
-        },
+        audit_status,
         parent_run_id,
         Some(child_run_id),
         serde_json::json!({
@@ -193,9 +209,38 @@ pub(super) fn record_child_wait_outcome(
             "child_run_id": child_run_id,
             "status": status,
             "error": error_message,
+            "message": message,
         }),
-        error_message,
+        message.as_deref().filter(|_| !settled),
     )
+}
+
+/// The diagnosis for a non-success child: the wait entry's error when it has
+/// one, else the child's own recorded reason, always prefixed by the run and
+/// status so a row without any reason still says which child to inspect.
+fn child_wait_message(
+    runtime: &OrbitRuntime,
+    child_run_id: &str,
+    status: &str,
+    error_message: Option<&str>,
+) -> String {
+    if let Some(error) = error_message {
+        return error.to_string();
+    }
+    let reason = runtime
+        .run_outcome_reason(child_run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(child_run_id, %error, "could not read a settled child's reason");
+            None
+        })
+        .unwrap_or_else(|| match status {
+            // The wait projects its own deadline onto a child still running.
+            "timeout" => {
+                "no reason recorded; the wait deadline passed before the child settled".to_string()
+            }
+            _ => "the child recorded no reason".to_string(),
+        });
+    format!("child run {child_run_id} status {status}: {reason}")
 }
 
 /// Record a submission that never produced a durable child run.
