@@ -270,7 +270,7 @@ No heartbeat or automatic reclamation is introduced. Age and TTL support inspect
 ## Owner ordering does not require a materialized queue
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs::sort_tasks_for_automatic_dispatch`
+**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion/ordering.rs::sort_tasks_for_automatic_dispatch`
 
 ### Context
 
@@ -706,7 +706,7 @@ is off on the Mac by design.
 ## No-diff-expected work does not hold context locks
 
 **Recorded:** 2026-10-06 · [ORB-14247]
-**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
+**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion/`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
 
 ### Context
 
