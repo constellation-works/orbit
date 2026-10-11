@@ -848,6 +848,8 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
 /// the new run would make validation name a run that does not own the task.
 /// A binding outside the lineage never reaches this copy; planning refuses it.
 /// Forge-hold expiry is run-local and starts unacknowledged.
+/// Interrupted-review preservation is run-local too: the source keeps its
+/// record and repair ref, but neither suppresses preservation in the new run.
 pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) -> PipelineState {
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
@@ -855,6 +857,9 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     seeded.forge_hold_expired_at = None;
     // The resumed run's own outcome decides whether it echoes a child.
     seeded.root_cause = None;
+    if let Some(pipeline) = seeded.pipeline.as_object_mut() {
+        pipeline.remove(orbit_engine::review_gate::INTERRUPTED_REVIEW_KEY);
+    }
     seeded.updated_at = chrono::Utc::now();
     seeded
 }
