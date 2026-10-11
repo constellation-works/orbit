@@ -19,3 +19,6 @@ pub(crate) mod automation;
 pub(crate) mod review;
 
 pub(crate) mod friction_write;
+
+#[cfg(test)]
+mod tests;
