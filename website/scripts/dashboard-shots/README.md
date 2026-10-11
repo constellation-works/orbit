@@ -24,14 +24,16 @@ unreachable example target, so the Hosts view shows its real error reporting.
 The page clock is pinned to 2026-10-08 07:26:47 PDT, so relative times and the
 refresh clock come out the same on every capture.
 
-The run detail is the one live image. Pick a successful `task_pr_pipeline` run
-and capture it by id:
+The run detail uses a dated live capture. The script replaces its task,
+friction and run identifiers with demo labels in the capture DOM before
+taking the screenshot; the server's records are unchanged. Pick a successful
+`task_pr_pipeline` run and capture it by id:
 
 ```bash
 NODE_PATH="$PWD/.orbit/tmp/orbit-playwright/node_modules" \
   node website/scripts/dashboard-shots/capture.mjs \
   "http://localhost:7878/?workspace=ws_orbit" website/src/assets/dashboard \
-  --run-detail jrun-20261010-2230-c11
+  --run-detail <run-id>
 ```
 
 Without an id, `--run-detail` opens the newest successful `task_pr_pipeline`
@@ -56,8 +58,9 @@ taller (1600) for the task list, the Drain dock, and the run detail so nothing
 is cut. Every crop stops above the log ticker along the bottom edge, which
 prints host paths. The Hosts crop also excludes the scope strip and trailing
 SSH error detail, which can contain host paths. Before committing, look at
-each image for anything that shouldn't be public, such as a task title or a
-user name; the pages show them as they are.
+each image for anything that shouldn't be public, including production task,
+friction or run identifiers, a task title or a user name. Inspect the rendered
+pixels even when the capture script sanitizes text.
 
 | File | Size (px) | Shows | Used on |
 |---|---|---|---|
@@ -69,6 +72,6 @@ user name; the pages show them as they are.
 | `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with each host's health | Use the Dashboard |
 
 All six were captured on 2026-10-10 from the redesigned dashboard (status-card
-task list, Drain and Log dock, full-width top bar). The run detail is
-`jrun-20261010-2230-c11` on the live `ws_orbit` workspace: ORB-15347, a red-CI
-fix, 21 steps in 20m 35s. Its counts are from that moment, not live.
+task list, Drain and Log dock, full-width top bar). The run detail shows a
+red-CI fix, 21 steps in 20m 35s, with its artifact identifiers replaced by
+demo labels. Its counts are from that moment, not live.

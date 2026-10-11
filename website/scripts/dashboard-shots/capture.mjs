@@ -226,6 +226,18 @@ async function runDetailShot(id) {
   }
   await tall(1600, async () => {
     const panel = page.locator("#run-detail-panel");
+    // Public captures retain the dated run's counts and timeline, but omit
+    // the live store's artifact identifiers. This edits only the capture DOM.
+    await panel.evaluate((root) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        node.textContent = node.textContent
+          .replace(/\bORBA?-\d+\b/g, "demo-task")
+          .replace(/\bF\d{4}-\d{2}-\d+\b/g, "demo-friction")
+          .replace(/\bjrun-\d{8}-\d{4}-[a-z0-9]+\b/gi, "demo-run");
+      }
+    });
     await shot("dashboard-run-detail", [panel.locator(":scope > header"), panel.locator(".gantt-panel")], 0);
   });
 }

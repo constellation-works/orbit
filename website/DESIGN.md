@@ -115,7 +115,10 @@ default chrome (auto title, sidebar, TOC).
   `prefers-reduced-motion: reduce`, its caption dates the capture so its counts
   read as a snapshot, and its `aria-label` narrates it. The source lives in
   `marketing/media/video/orbit-dashboard-tour-v2`; the site serves a web re-encode
-  from `public/media/`.
+  from `public/media/`. Public cuts omit production task, friction and run
+  identifiers, including those in source screenshots, address bars and
+  diagnostic prose. Sanitize before camera pans and encoding; inspect decoded
+  frames across every chapter and transition before publishing.
 - **Below the hero:** short sections that take a reader from what Orbit
   promises, to how it works and runs unattended, to where to go next. Each
   opens on a two-column head: a mono eyebrow and one-sentence heading, then a
