@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::extract::Query;
+use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::security::redaction::redact_all;
@@ -26,8 +26,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    DEFAULT_SUMMARY_WINDOW, HISTORY_MAX_LIMIT, bad_request, bounded_limit, map_runtime_error,
-    server_error,
+    DEFAULT_SUMMARY_WINDOW, HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit,
+    map_runtime_error, message_excerpt, not_found, server_error,
 };
 use crate::parse::parse_since;
 use crate::state::Ws;
@@ -125,6 +125,32 @@ pub(super) async fn list_failure_incidents(
         role.as_deref(),
     ))
     .into_response()
+}
+
+/// `GET /api/audit/events/:id/message`: one audit row's full failure
+/// message, redacted like the incidents feed. The feed bounds each message to
+/// `LIST_MESSAGE_MAX_BYTES`; the detail panel fetches this for a
+/// `truncated` one. The lookup reads the same store, unscoped, as the
+/// incident grouping it serves.
+pub(super) async fn incident_event_message(Ws(runtime): Ws, Path(id): Path<i64>) -> Response {
+    if id <= 0 {
+        return bad_request("id must be a positive audit row ID".to_string());
+    }
+    match blocking("audit event message", move || {
+        runtime.list_audit_events_by_ids(&[id], None)
+    })
+    .await
+    {
+        Ok(events) => match events.into_iter().next() {
+            Some(event) => Json(json!({
+                "id": event.id,
+                "message": event.error_message.as_deref().map(redact_all),
+            }))
+            .into_response(),
+            None => not_found(format!("audit event not found: {id}")),
+        },
+        Err(response) => *response,
+    }
 }
 
 fn parse_class(raw: &str) -> Option<FailureClass> {
@@ -225,7 +251,20 @@ pub(super) fn failure_category_summaries(report: &FailureIncidentReport) -> Valu
     Value::Object(categories)
 }
 
+/// Every `message` below is bounded to `LIST_MESSAGE_MAX_BYTES`: one long
+/// failure was copied into the incident, each of its events and samples, and
+/// every propagation link [ORB-15527]. An object whose message was cut
+/// carries `truncated: true`, and an incident names in `message_event_id` the
+/// audit row its message came from, for [`incident_event_message`].
 fn incident_to_json(incident: &FailureIncident) -> Value {
+    let message = incident.message.as_deref().map(message_excerpt);
+    let message_event_id = incident.message.as_deref().and_then(|message| {
+        incident
+            .events
+            .iter()
+            .find(|event| event.message.as_deref() == Some(message))
+            .map(|event| event.id)
+    });
     json!({
         "incident_id": incident.incident_id,
         "signature": redact_all(&incident.signature),
@@ -234,7 +273,9 @@ fn incident_to_json(incident: &FailureIncident) -> Value {
         "actor": incident.role,
         "surface": incident.surface,
         "activity_id": incident.activity_id,
-        "message": incident.message.as_deref().map(redact_all),
+        "message": message.as_ref().map(|message| &message.text),
+        "truncated": message.as_ref().is_some_and(|message| message.truncated),
+        "message_event_id": message_event_id,
         "event_count": incident.event_count,
         "root_event_count": incident.root_event_count,
         "propagated_event_count": incident.propagated_event_count(),
@@ -269,6 +310,7 @@ fn incident_to_json(incident: &FailureIncident) -> Value {
 }
 
 fn event_ref_to_json(event: &IncidentEventRef) -> Value {
+    let message = event.message.as_deref().map(message_excerpt);
     json!({
         "id": event.id,
         "ts": event.ts.to_rfc3339(),
@@ -280,11 +322,13 @@ fn event_ref_to_json(event: &IncidentEventRef) -> Value {
         "task_id": event.task_id,
         "tool": event.tool_name,
         "activity_id": event.activity_id,
-        "message": event.message.as_deref().map(redact_all),
+        "message": message.as_ref().map(|message| &message.text),
+        "truncated": message.as_ref().is_some_and(|message| message.truncated),
     })
 }
 
 fn propagation_to_json(link: &PropagationLink) -> Value {
+    let message = link.message.as_deref().map(message_excerpt);
     json!({
         "signature": redact_all(&link.signature),
         "surface": link.surface,
@@ -292,7 +336,8 @@ fn propagation_to_json(link: &PropagationLink) -> Value {
         "event_count": link.event_count,
         "first_ts": link.first_ts.to_rfc3339(),
         "last_ts": link.last_ts.to_rfc3339(),
-        "message": link.message.as_deref().map(redact_all),
+        "message": message.as_ref().map(|message| &message.text),
+        "truncated": message.as_ref().is_some_and(|message| message.truncated),
         "sample_events": link
             .sample_events
             .iter()

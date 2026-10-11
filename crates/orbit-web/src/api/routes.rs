@@ -126,6 +126,10 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/log/stream", get(log::stream_log))
         .route("/audit/summary", get(audit::audit_summary))
         .route("/audit/incidents", get(incidents::list_failure_incidents))
+        .route(
+            "/audit/events/:id/message",
+            get(incidents::incident_event_message),
+        )
         .route("/routines", get(routines::list_routine_health))
         .route("/routines/toggle", post(routines::toggle_routine))
         .route("/routines/clock", post(routines::control_clock))

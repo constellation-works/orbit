@@ -961,14 +961,12 @@ fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Preview {
-    pub(super) text: String,
-    pub(super) truncated: bool,
+struct Preview {
+    text: String,
+    truncated: bool,
 }
 
-// Shared with audit-derived friction rows so dashboard stderr previews use
-// the same byte/line bounds and defensive redaction.
-pub(super) fn bounded_preview(raw: &str) -> Preview {
+fn bounded_preview(raw: &str) -> Preview {
     let mut out = String::new();
     let mut truncated = false;
     for (index, line) in raw.lines().enumerate() {

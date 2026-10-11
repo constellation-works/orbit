@@ -11,8 +11,9 @@
 // a 375px phone with no horizontal page scroll. It also checks grouping by
 // cause [ORB-15434]: cause headers over signatures that share one, a
 // single-signature cause as one row, the By signature toggle, and the
-// detail panel's same-cause list and grouping basis. No Orbit store is
-// contacted.
+// detail panel's same-cause list and grouping basis, and that a message the
+// feed cut to its list cap loads in full on demand [ORB-15527]. No Orbit
+// store is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -48,6 +49,12 @@ const VALIDATE_MESSAGE = "execution failed: action `fixture_validate` failed: re
 const VALIDATE_CAUSE = { key: 'cause-validate', label: 'action `fixture_validate`', basis: 'step_message' };
 const SANDBOX_MESSAGE = '[blocked_by_agent] kind=sandbox_refused\nThe host refuses unprivileged user namespaces.';
 const SANDBOX_CAUSE = { key: 'cause-sandbox', label: 'kind=sandbox_refused', basis: 'code' };
+// The feed's per-message cap; a longer message arrives cut, flagged
+// `truncated`, with the audit row that holds it in full.
+const LIST_MESSAGE_MAX_BYTES = 2048;
+const REFUSAL_MESSAGE = ['transition refused: task is not in review',
+  ...Array.from({ length: 60 }, (_, index) => `  blocker ${index}: required evidence is missing for criterion ${index}`)].join('\n');
+const REFUSAL_EVENT_ID = 3001;
 
 // One incident per (run, signature), as the store keys them.
 function incident(id, fields) {
@@ -92,7 +99,11 @@ function allIncidents(now) {
   rows.push(incident(26, { role: 'human', surface: 'job worker', message: VALIDATE_MESSAGE, runId: 'run-val-2', firstAgo: 10 * HOUR, cause: VALIDATE_CAUSE, now }));
   // G: a structured code only one signature carries.
   rows.push(incident(27, { role: 'admin', surface: 'fixture.wait', message: SANDBOX_MESSAGE, runId: 'run-sandbox', firstAgo: 12 * HOUR, cause: SANDBOX_CAUSE, now }));
-  rows.push(incident(30, { cls: 'expected', surface: 'orbit.task.transition', message: 'transition refused: task is not in review', firstAgo: 2 * HOUR, now }));
+  const refusal = incident(30, { cls: 'expected', surface: 'orbit.task.transition', message: REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES), firstAgo: 2 * HOUR, now });
+  refusal.truncated = true;
+  refusal.message_event_id = REFUSAL_EVENT_ID;
+  for (const event of refusal.events) event.truncated = true;
+  rows.push(refusal);
   // Enough policy denials to make the list taller than the viewport.
   for (let index = 0; index < 30; index += 1) {
     rows.push(incident(40 + index, { cls: 'denied', role: 'codex', surface: `orbit.denied.tool_${index}`, message: `denied by policy: tool ${index} is not in the crew allowlist`, runId: `run-deny-${index}`, firstAgo: (index + 1) * 30 * MINUTE, now }));
@@ -101,6 +112,7 @@ function allIncidents(now) {
 }
 
 const incidentRequests = [];
+const messageRequests = [];
 function incidentsApi(url) {
   const now = Date.now();
   const window = url.searchParams.get('since') || '24h';
@@ -132,6 +144,10 @@ function api(rest, url, res) {
   if (rest === 'audit/incidents') {
     incidentRequests.push(Object.fromEntries(url.searchParams));
     return json(incidentsApi(url));
+  }
+  if (rest === `audit/events/${REFUSAL_EVENT_ID}/message`) {
+    messageRequests.push(rest);
+    return json({ id: REFUSAL_EVENT_ID, message: REFUSAL_MESSAGE });
   }
   if (rest === 'hosts') return json(HOSTS);
   if (rest === 'hosts/alpha/connection') {
@@ -436,6 +452,17 @@ try {
   assert(lastRequest().class === 'expected', `the tile asks for its class: ${JSON.stringify(lastRequest())}`);
   assert((await tiles()).find((tile) => tile.cls === 'expected').pressed === 'true', 'the chosen tile is pressed');
   assert((await rows())[0].headline === 'transition refused: task is not in review', 'only the chosen class is listed');
+  // The feed cut this message to its cap: the panel shows the start and
+  // fetches the rest from its audit row only when asked.
+  panel = await detail();
+  evidenceLog.cappedDetail = { note: panel.note, length: panel.message.length };
+  assert(panel.message === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES) && panel.note !== null, `a capped message shows its start and a note: ${JSON.stringify(evidenceLog.cappedDetail)}`);
+  assert(messageRequests.length === 0, 'the full message is not fetched until asked for');
+  await page.locator('#diag-body .incident-message-note button').click();
+  await until('the full message', async () => (await detail()).message === REFUSAL_MESSAGE);
+  assert((await detail()).note === null && messageRequests.length === 1, `one fetch loads the full message: ${messageRequests}`);
+  await page.locator('#diag-body .incident-copy').click();
+  assert(await page.evaluate(() => navigator.clipboard.readText()) === REFUSAL_MESSAGE, 'Copy copies the loaded full message');
 
   // 8. A long list keeps the detail panel in view while it scrolls.
   await page.locator('#diag-body .incident-tile[data-class="denied"]').click();
@@ -520,6 +547,7 @@ try {
       'browser-incidents-cause-headers-group-signatures',
       'browser-incidents-by-signature-toggle',
       'browser-incidents-same-cause-signatures-and-basis',
+      'browser-incidents-capped-message-loads-full-text',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,

@@ -115,6 +115,25 @@ function runDashboardLink(runId, workspaceId) {
   return link;
 }
 
+// The feed bounds each message and flags a cut one `truncated` [ORB-15527].
+// The owning run keeps the full text: its step error and run events.
+function truncatedMessageNote(row, ctx) {
+  if (row.truncated !== true) return null;
+  if (!row.job_run) {
+    return el("p", { class: "error-message-note", text: "The feed shows the start of this long message; the process log keeps the rest." });
+  }
+  const workspaceId = row.workspace_id || getWorkspace();
+  const link = runDashboardLink(row.job_run, workspaceId);
+  link.textContent = "Open the run";
+  link.addEventListener("click", event => {
+    event.stopPropagation();
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(row.job_run, workspaceId);
+  });
+  return el("p", { class: "error-message-note" }, ["The feed shows the start of this long message. ", link, " for the full text."]);
+}
+
 function errorMessageDisclosure(value, row, ctx, td) {
   const full = value || "";
   const shortened = shortenWorktreePaths(full);
@@ -127,6 +146,8 @@ function errorMessageDisclosure(value, row, ctx, td) {
   }));
   details.appendChild(summary);
   details.appendChild(el("div", { class: "error-message-full", text: full }));
+  const note = truncatedMessageNote(row, ctx);
+  if (note) details.appendChild(note);
   return details;
 }
 

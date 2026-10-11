@@ -41,34 +41,40 @@ fn seed_cli_failure(fixture: &Fixture, id: &str, ts: DateTime<Utc>, blob_ref: &s
 }
 
 #[test]
-fn friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs() {
+fn friction_stderr_excerpts_bound_bytes_and_tolerate_missing_blobs() {
     isolated(
-        "projections::friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs",
+        "projections::friction_stderr_excerpts_bound_bytes_and_tolerate_missing_blobs",
         || {
+            // The dashboard API's per-message cap for list projections.
+            const CAP: usize = 2048;
             let fixture = Fixture::new();
             let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
             let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
             let cases = [
+                ("oversized", "x".repeat(1024 * 1024), "x".repeat(CAP), true),
+                ("exact-cap", "x".repeat(CAP), "x".repeat(CAP), false),
+                ("over-cap", "x".repeat(CAP + 1), "x".repeat(CAP), true),
                 (
-                    "oversized",
-                    "x".repeat(1024 * 1024),
-                    format!("{}\n[truncated]", "x".repeat(8192)),
+                    "short",
+                    "short stderr\n".into(),
+                    "short stderr\n".into(),
+                    false,
                 ),
-                ("exact-cap", "x".repeat(8192), "x".repeat(8192)),
-                ("short", "short stderr\n".into(), "short stderr\n".into()),
                 (
                     "many-lines",
-                    "line\n".repeat(121),
-                    format!("{}\n[truncated]", "line\n".repeat(120)),
+                    "line\n".repeat(500),
+                    "line\n".repeat(500)[..CAP].to_string(),
+                    true,
                 ),
                 (
                     "unicode",
-                    format!("{}☃tail", "x".repeat(8191)),
-                    format!("{}\n[truncated]", "x".repeat(8191)),
+                    format!("{}☃tail", "x".repeat(CAP - 1)),
+                    "x".repeat(CAP - 1),
+                    true,
                 ),
-                ("missing", String::new(), String::new()),
+                ("missing", String::new(), String::new(), false),
             ];
-            for (id, content, _) in &cases {
+            for (id, content, _, _) in &cases {
                 let blob_ref = if *id == "missing" {
                     "0".repeat(64)
                 } else {
@@ -83,9 +89,10 @@ fn friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs() {
                 ));
             let rows = result.as_array().unwrap();
             assert_eq!(rows.len(), cases.len());
-            for (id, _, expected) in cases {
+            for (id, _, expected, truncated) in cases {
                 let row = rows.iter().find(|row| row["command"] == id).unwrap();
                 assert_eq!(row["stderr"], expected, "bounded stderr for {id}");
+                assert_eq!(row["truncated"], truncated, "truncation flag for {id}");
                 assert_eq!(row["step"], "implement");
                 assert_eq!(row["exit_code"], 1);
             }

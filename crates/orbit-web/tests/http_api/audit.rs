@@ -411,6 +411,117 @@ fn incidents_carry_the_cause_one_failure_shares_across_surfaces() {
     );
 }
 
+/// The feed's per-message cap, as documented on the dashboard API.
+const LIST_MESSAGE_MAX_BYTES: usize = 2048;
+
+/// A failure message of a few hundred KB, as a failed validation records,
+/// with a bare token straddling the cap: cutting before redacting would leave
+/// its first bytes in the excerpt.
+fn long_failure_message(head: &str) -> String {
+    let mut message = format!("{head}: ");
+    message.push_str(&"x".repeat(LIST_MESSAGE_MAX_BYTES - 8 - message.len()));
+    message.push_str(&format!(" ghp_{} ", "b".repeat(36)));
+    message.push_str(&"y".repeat(300_000));
+    message.push_str(" tail-marker");
+    message
+}
+
+/// Every `message` in the payload, with the object that carries it.
+fn messages(value: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get("message").is_some_and(serde_json::Value::is_string) {
+                out.push(value.clone());
+            }
+            map.values().for_each(|child| messages(child, out));
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|child| messages(child, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn incident_messages_are_bounded_and_the_full_text_loads_by_audit_row() {
+    isolated(
+        "audit::incident_messages_are_bounded_and_the_full_text_loads_by_audit_row",
+        || {
+            let fixture = Fixture::new();
+            let root = long_failure_message("validation failed");
+            let child = long_failure_message("child run failed");
+            // Three sightings of one failure, then another surface in the same
+            // run: the incidents, each event and each sample repeat a long
+            // message, as do propagation links where the grouping makes them.
+            for (index, tool, message) in [
+                (0, "fixture.validate", &root),
+                (1, "fixture.validate", &root),
+                (2, "fixture.validate", &root),
+                (3, "fixture.wait", &child),
+            ] {
+                let mut event = row(
+                    &format!("long-{index}"),
+                    Some(tool),
+                    AuditEventStatus::Failure,
+                );
+                event.job_run_id = Some("run-long".into());
+                event.error_message = Some(message.clone());
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            let server = fixture.server(false);
+            let response = server.get("/api/audit/incidents?since=24h&workspace=ws_http_fixture");
+            let body = response.text().unwrap();
+            let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert!(
+                body.len() < 64 * 1024,
+                "one long message no longer multiplies the payload: {} bytes",
+                body.len()
+            );
+            assert!(!body.contains("ghp_"), "redaction precedes the cut");
+
+            let incident = payload["incidents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|incident| incident["surface"] == "fixture.validate")
+                .unwrap();
+            assert_eq!(
+                incident["events"].as_array().unwrap().len(),
+                3,
+                "{incident}"
+            );
+            let mut carried = Vec::new();
+            messages(&payload, &mut carried);
+            assert!(
+                carried.len() >= 10,
+                "incidents, events, samples: {}",
+                carried.len()
+            );
+            for object in &carried {
+                let text = object["message"].as_str().unwrap();
+                assert!(text.len() <= LIST_MESSAGE_MAX_BYTES, "{} bytes", text.len());
+                assert_eq!(object["truncated"], true, "a cut message says so");
+            }
+
+            let id = incident["message_event_id"].as_i64().unwrap();
+            let full = json_ok(server.get(&format!(
+                "/api/audit/events/{id}/message?workspace=ws_http_fixture"
+            )));
+            assert_eq!(full["id"], id);
+            let full = full["message"].as_str().unwrap();
+            assert!(full.ends_with("tail-marker"), "the whole message loads");
+            assert!(!full.contains("ghp_"), "the full text is redacted too");
+            assert!(full.starts_with(incident["message"].as_str().unwrap()));
+
+            for (path, status) in [
+                ("/api/audit/events/999999/message", 404),
+                ("/api/audit/events/0/message", 400),
+            ] {
+                let response = server.get(&format!("{path}?workspace=ws_http_fixture"));
+                assert_eq!(response.status().as_u16(), status, "{path}");
+            }
+        },
+    );
+}
+
 #[test]
 fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
     isolated(
