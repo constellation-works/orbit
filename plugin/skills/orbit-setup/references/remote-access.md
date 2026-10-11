@@ -199,7 +199,9 @@ the machine is not registered, when you need `--no-operator` or a non-default
   therefore reports `unreachable_destination`.
 - `?host=<name|machine_id>` selects the host in the URL and wins over the
   browser's remembered last choice, which only fills a URL with no `?host=`.
-  The serving host's own name selects the serving host.
+  The serving host's own name selects the serving host. Back and Forward
+  restore the host each history entry names, and an entry without `?host=`
+  is the serving host.
 - Every panel, action, log tail and resource chip follows the selected host,
   and the workspace picker lists that host's workspaces. Settings › Hosts
   keeps editing the serving host's `hosts.toml`. It also shows each reachable

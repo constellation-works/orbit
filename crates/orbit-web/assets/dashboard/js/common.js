@@ -33,9 +33,16 @@ let currentHost = params.get("host") || null;
 let servingHost = null;
 let registeredHosts = [];
 let hostWrites = null;
+let hostRevision = 0;
 
 export function getHost() {
   return currentHost;
+}
+
+/// Bumped on every host change, so a read started for one visit of a host can
+/// tell it was retired even when the operator has since come back to that host.
+export function getHostRevision() {
+  return hostRevision;
 }
 
 /// `{name, machine_id}` of the host serving this page, once `/api/hosts` named it.
@@ -109,6 +116,7 @@ export function setHost(name) {
   const next = !name || (named && named.local) ? null : named ? named.name : String(name);
   if (next === currentHost) return false;
   currentHost = next;
+  hostRevision += 1;
   hostWrites = null;
   hostUnavailable = false;
   workspaceRevision += 1;
@@ -117,15 +125,17 @@ export function setHost(name) {
 }
 
 /// Settings › Hosts registers nothing itself. The dashboard wires this to the
-/// host picker's switch so a row's Show link does that same switch.
+/// host picker's switch so a row's Show link, and Back and Forward
+/// (`restoreScopeFromUrl`, with `{ fromHistory: true }`), do that same switch.
 let hostSwitchHandler = null;
 
 export function setHostSwitchHandler(handler) {
   hostSwitchHandler = typeof handler === "function" ? handler : null;
 }
 
-export function requestHostSwitch(name) {
-  if (hostSwitchHandler) hostSwitchHandler(name);
+export function requestHostSwitch(name, options = {}) {
+  if (hostSwitchHandler) hostSwitchHandler(name, options);
+  else setHost(name);
 }
 
 // The host-file routes, `/api/hosts` and `/api/hosts/<host>/connection`,
@@ -247,17 +257,18 @@ export function notifyScopeChange() {
   if (scopeChangeListener) scopeChangeListener();
 }
 
-// The workspace and window the address names. Scope writers keep `addressScope`
-// at what they last wrote, so `restoreScopeFromUrl` can tell a traversal into
-// another scope from a move between hashes (which also fires popstate).
+// The host, workspace and window the address names. Scope writers keep
+// `addressScope` at what they last wrote, so `restoreScopeFromUrl` can tell a
+// traversal into another scope from a move between hashes (which also fires
+// popstate).
 function addressScopeKey() {
   const query = new URLSearchParams(window.location.search);
-  return `${query.get("workspace")}|${query.get("window")}`;
+  return `${query.get("host")}|${query.get("workspace")}|${query.get("window")}`;
 }
 
 let addressScope = addressScopeKey();
 
-// Mirror workspace + window into the query string without a navigation.
+// Mirror host + workspace + window into the query string without a navigation.
 // Hash routes still own view/filter history; this keeps reload-safe scope.
 export function persistScopeToUrl() {
   const url = new URL(window.location.href);
@@ -531,15 +542,22 @@ function syncWorkspaceSelector() {
 
 /// Bring the in-memory scope in line with the address after Back or Forward.
 /// Every scope change writes its own entry's address, so the address is the
-/// scope that entry was left in. An address without a workspace names none and
-/// leaves the scope alone, as does a move that keeps the address's scope. The
-/// router refreshes the view after a traversal, so this only restores state.
+/// scope that entry was left in. The host always follows the address, and an
+/// address without one is the serving host: the dashboard writes `host` into
+/// every entry it leaves on another host, and a remembered host only seeds a
+/// bare address at startup. An address without a workspace names none and
+/// leaves the workspace alone, as does a move that keeps the address's scope.
+/// The router refreshes the view after a traversal, so this only restores state.
 export function restoreScopeFromUrl() {
   const key = addressScopeKey();
   if (key === addressScope) return;
   addressScope = key;
   const href = window.location.href;
   const query = new URLSearchParams(window.location.search);
+  // The host switch first: it resets every host-scoped panel, resource and
+  // stream, and marks the host's workspaces for reloading. The workspace below
+  // is then the one this entry names on that host.
+  requestHostSwitch(query.get("host") || null, { fromHistory: true });
   const linked = query.get("workspace");
   if (linked === ALL_WORKSPACES_TOKEN) {
     if (multiWorkspace) {
