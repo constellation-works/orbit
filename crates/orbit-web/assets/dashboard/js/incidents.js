@@ -7,12 +7,17 @@
 //   the list shows (the server filters by class before its row limit);
 // - the list rolls a signature up across runs and draws each one's first to
 //   last sighting on an axis shared by every row and the selected window;
+// - by default it groups signatures under the cause the server derived from
+//   their structured evidence [ORB-15434], so one failure seen at several
+//   surfaces reads as one problem; By signature restores the flat list;
 // - the detail panel shows the selected signature's full message, its runs
 //   and its underlying audit events, and links out to both.
 //
 // Every count states what it is out of and which window it covers. The
 // grouping signature is an internal key: it decides which rows roll up and
 // which other signatures share a message, but it is never shown as one.
+// Counts stay per signature: a cause header counts signatures, never runs or
+// events added across them.
 
 import { incidentClassLabel, auditActorLabel, el, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, formatDateTime, runHref, bindTaskLink, makeCopyButton } from './common.js';
 import { navigateToDrilldown } from './audit.js';
@@ -44,11 +49,20 @@ const DAY_MS = 24 * HOUR_MS;
 const INCIDENT_PAGE = 50;
 const INCIDENT_PAGE_MAX = 200;
 const RELATED_MAX = 5;
+// How each cause basis reads after "Grouped by", so a wrong merge can be
+// traced to the evidence that made it.
+const CAUSE_BASIS_PHRASES = {
+  step_code: "the same step and structured code",
+  step_message: "the same step and message",
+  code: "the same structured code",
+};
+const GROUP_MODES = [["cause", "By cause"], ["signature", "By signature"]];
 
 let incidentClass = "unexpected";
 let windowOverride = null;
 let searchQuery = "";
 let lastHourOnly = false;
+let groupMode = "cause";
 let noMessageOnly = false;
 let selectedKey = null;
 let runsOpen = false;
@@ -167,6 +181,29 @@ function incidentGroupKey(incident) {
   const signature = typeof incident.signature === "string" ? incident.signature.trim() : "";
   if (!signature) return "";
   return `${incident.class || "unexpected"}|${signature}`;
+}
+
+// The cause the server derived for an incident [ORB-15434]. An older server
+// sends none, and each signature is then its own cause.
+function incidentCause(incident) {
+  const cause = incident && incident.cause;
+  if (!cause || typeof cause.key !== "string" || !cause.key) return null;
+  return {
+    key: cause.key,
+    label: typeof cause.label === "string" ? cause.label : "",
+    basis: typeof cause.basis === "string" ? cause.basis : "signature",
+  };
+}
+
+// A cause backed by a step or code. The signature fallback groups nothing.
+function structuredCause(group) {
+  return group.cause && CAUSE_BASIS_PHRASES[group.cause.basis] ? group.cause : null;
+}
+
+function causeBasisText(group) {
+  const cause = structuredCause(group);
+  if (!cause) return "Grouped by its own signature: no step or structured code was recorded.";
+  return `Grouped by ${CAUSE_BASIS_PHRASES[cause.basis]}: ${cause.label}`;
 }
 
 function incidentInstant(incident, field) {
@@ -304,9 +341,37 @@ function groupIncidents(incidents) {
       message,
       title: headline(message.text),
       sameMessage: signatureMessage(sample) || (message.recorded ? message.text : ""),
+      // The newest incident's, as for the title: a signature is filed under
+      // the cause it is failing with now.
+      cause: incidentCause(sample),
     });
   }
   return groups.sort((a, b) => (b.lastMs ?? 0) - (a.lastMs ?? 0) || a.order - b.order);
+}
+
+/// Signature groups under their shared cause. Groups arrive newest first, so
+/// each cause sorts by its newest signature and lists its signatures newest
+/// first.
+function groupCauses(groups) {
+  const causes = [];
+  const byKey = new Map();
+  for (const group of groups) {
+    const key = group.cause ? `cause:${group.cause.key}` : `own:${group.key}`;
+    let cause = byKey.get(key);
+    if (!cause) {
+      cause = { key, groups: [] };
+      byKey.set(key, cause);
+      causes.push(cause);
+    }
+    cause.groups.push(group);
+  }
+  return causes;
+}
+
+function causeSiblings(group, groups) {
+  const cause = structuredCause(group);
+  if (!cause) return [];
+  return groups.filter(other => other.key !== group.key && other.cause && other.cause.key === cause.key);
 }
 
 function listCap(payload) {
@@ -400,6 +465,10 @@ function trackNode(group, axis, now, className) {
 function replaceMarks(container, groups, axis, now) {
   const byKey = new Map(groups.map(group => [group.key, group]));
   for (const node of Array.from(container.children)) {
+    for (const [key, mark] of node.incidentCauseMarks || []) {
+      const member = byKey.get(key);
+      if (member) placeMark(mark, member, axis, now);
+    }
     const group = byKey.get(node.incidentGroupKey);
     if (group && node.incidentTrack) placeMark(node.incidentTrack.incidentMark, group, axis, now);
   }
@@ -458,7 +527,7 @@ function selectWindow(value) {
 
 function headNode() {
   const node = el("div", { class: "incident-head-bar" }, [
-    el("p", { class: "incident-intro", text: "Failed audit events, rolled up by signature across runs." }),
+    el("p", { class: "incident-intro", text: "Failed audit events, rolled up by signature across runs and grouped by the cause they share." }),
     windowSegmentsNode(),
   ]);
   node.dataset.key = "incident-head";
@@ -573,7 +642,7 @@ function matchesSearch(group, query) {
   const haystack = group.incidents.flatMap(incident => [
     incident.message, incident.surface, incident.actor, incident.activity_id, incident.incident_id,
     ...incidentRunIds(incident), ...(Array.isArray(incident.task_ids) ? incident.task_ids : []),
-  ]).concat(group.message.text).filter(Boolean).join("\n").toLowerCase();
+  ]).concat(group.message.text, structuredCause(group) ? group.cause.label : "").filter(Boolean).join("\n").toLowerCase();
   return haystack.includes(query);
 }
 
@@ -584,25 +653,34 @@ function visibleGroups(groups, now) {
     && matchesSearch(group, query));
 }
 
-function rowNode(group, axis, now, ctx, cap) {
+function causeCodeNode(cause) {
+  return el("span", { class: "incident-code", text: cause.label, title: `Cause: ${cause.label}` });
+}
+
+// A signature row. Beneath a cause header it is indented (`child`); a cause
+// with one signature is that row alone and carries the cause code; the flat
+// list names the cause after surface and actor.
+function rowNode(group, axis, now, ctx, cap, { child = false, flat = false } = {}) {
   const selected = group.key === selectedKey;
   const live = isLive(group, now);
   const track = trackNode(group, axis, now, "incident-track");
   const cadence = group.recurring ? cadenceLabel(group.incidents) : "";
   const lastLabel = group.last ? fmtRelativeValue(ctx, group.last) : "-";
+  const cause = structuredCause(group);
   const row = el("button", {
-    class: `incident-row ${group.cls}${selected ? " selected" : ""}`,
+    class: `incident-row ${group.cls}${selected ? " selected" : ""}${child ? " child" : ""}`,
     type: "button",
     "aria-pressed": selected ? "true" : "false",
   }, [
     el("span", { class: "incident-main" }, [
       el("span", { class: "incident-title" }, [
         el("span", { class: "incident-headline", text: truncateValue(ctx, group.title, 240) }),
+        cause && !child && !flat ? causeCodeNode(cause) : null,
         group.message.recorded ? null : el("span", { class: "incident-flag", text: "no message" }),
       ]),
       el("span", {
         class: "incident-sub",
-        text: [group.sample.surface || "unknown surface", actorLabel(group.incidents), cadence].filter(Boolean).join(" · "),
+        text: [group.sample.surface || "unknown surface", actorLabel(group.incidents), cadence, flat && cause ? cause.label : ""].filter(Boolean).join(" · "),
       }),
     ]),
     track,
@@ -610,11 +688,72 @@ function rowNode(group, axis, now, ctx, cap) {
     el("span", { class: `incident-last${live ? " live" : ""}`, text: lastLabel, title: group.last ? `last seen ${formatDateTime(group.last)}` : "" }),
   ]);
   row.dataset.key = `incident-${group.key}`;
-  row.dataset.hash = JSON.stringify([selected, live, lastLabel, group.events, group.incidents.length, row.textContent]);
+  row.dataset.hash = JSON.stringify([selected, live, child, lastLabel, group.events, group.incidents.length, row.textContent]);
   row.incidentGroupKey = group.key;
   row.incidentTrack = track;
   row.addEventListener("click", () => selectGroup(group.key, { reveal: true }));
   return row;
+}
+
+// The header over a cause's signatures. It counts signatures only: their runs
+// and events are different units per signature and are never added up. It
+// is a label, not a control; each signature below it is selectable.
+function causeHeadNode(cause, axis, now, ctx) {
+  const groups = cause.groups;
+  const newest = groups[0];
+  const bounds = groupBounds(groups.flatMap(group => group.incidents));
+  const live = groups.some(group => isLive(group, now));
+  const lastLabel = bounds.last ? fmtRelativeValue(ctx, bounds.last.text) : "-";
+  const marks = groups.map(group => {
+    const mark = el("span", { class: "incident-mark" });
+    placeMark(mark, group, axis, now);
+    return [group.key, mark];
+  });
+  const node = el("div", { class: `incident-cause-head ${newest.cls}` }, [
+    el("span", { class: "incident-main" }, [
+      el("span", { class: "incident-title" }, [
+        el("span", { class: "incident-headline", text: truncateValue(ctx, newest.title, 240) }),
+        causeCodeNode(newest.cause),
+      ]),
+      el("span", {
+        class: "incident-sub",
+        text: [plural(groups.length, "signature"), bounds.first ? `first ${fmtRelativeValue(ctx, bounds.first.text)} ago` : ""].filter(Boolean).join(" · "),
+      }),
+    ]),
+    el("span", { class: "incident-track", "aria-hidden": "true" }, marks.map(([, mark]) => mark)),
+    el("span", {
+      class: "incident-count",
+      text: `${groups.length} sigs`,
+      title: `${plural(groups.length, "signature")} share this cause; each keeps its own run and event count`,
+    }),
+    el("span", { class: `incident-last${live ? " live" : ""}`, text: lastLabel, title: bounds.last ? `last seen ${formatDateTime(bounds.last.text)}` : "" }),
+  ]);
+  node.dataset.key = `cause-${cause.key}`;
+  node.dataset.hash = JSON.stringify([live, groups.map(group => group.key), node.textContent]);
+  node.incidentCauseMarks = marks;
+  return node;
+}
+
+function listRows(groups, visible, axis, now, ctx, cap) {
+  if (groupMode !== "cause") return visible.map(group => rowNode(group, axis, now, ctx, cap, { flat: true }));
+  const shown = new Set(visible.map(group => group.key));
+  const nodes = [];
+  for (const cause of groupCauses(groups)) {
+    const members = cause.groups.filter(group => shown.has(group.key));
+    if (members.length === 0) continue;
+    if (cause.groups.length > 1) {
+      nodes.push(causeHeadNode(cause, axis, now, ctx));
+      for (const group of members) nodes.push(rowNode(group, axis, now, ctx, cap, { child: true }));
+    } else {
+      nodes.push(rowNode(members[0], axis, now, ctx, cap));
+    }
+  }
+  return nodes;
+}
+
+function causeCount(groups, visible) {
+  const shown = new Set(visible.map(group => group.key));
+  return groupCauses(groups).filter(cause => cause.groups.some(group => shown.has(group.key))).length;
 }
 
 function selectGroup(key, { reveal = false } = {}) {
@@ -641,9 +780,22 @@ function ensureLayout(body) {
   searchLabel.htmlFor = "incident-search";
   const lastHour = el("button", { class: "incident-toggle", type: "button", text: "Last hour only" });
   lastHour.addEventListener("click", () => { lastHourOnly = !lastHourOnly; rerender(); });
+  const modes = el("div", { class: "incident-windows incident-modes", role: "group", "aria-label": "Group rows" });
+  const modeButtons = GROUP_MODES.map(([mode, text]) => {
+    const button = el("button", { class: "incident-seg", type: "button", text });
+    button.dataset.mode = mode;
+    button.addEventListener("click", () => {
+      if (groupMode === mode) return;
+      groupMode = mode;
+      rerender();
+    });
+    modes.appendChild(button);
+    return button;
+  });
   const toolbar = el("div", { class: "incident-toolbar" }, [
     heading,
     el("div", { class: "incident-search-wrap" }, [searchLabel, search]),
+    modes,
     lastHour,
   ]);
   const axisHead = el("div", { class: "incident-axis-head", "aria-hidden": "true" });
@@ -654,7 +806,7 @@ function ensureLayout(body) {
   const root = el("div", { class: "incident-layout" }, [master, detail]);
   root.dataset.key = "incident-layout";
   root.dataset.hash = "incident-layout";
-  layout = { root, heading, search, lastHour, axisHead, rows, footer, master, detail };
+  layout = { root, heading, search, lastHour, modeButtons, axisHead, rows, footer, master, detail };
   return layout;
 }
 
@@ -711,19 +863,21 @@ function summarySentence(group, ctx) {
 
 function factsNode(group, ctx) {
   const facts = el("dl", { class: "incident-facts" });
-  const fact = (label, value, { mono = false, title = "" } = {}) => {
-    facts.appendChild(el("div", {}, [
+  const fact = (label, value, { mono = false, title = "", wide = false } = {}) => {
+    facts.appendChild(el("div", { class: wide ? "wide" : "" }, [
       el("dt", { text: label }),
       el("dd", { class: mono ? "mono" : "", text: value, title }),
     ]));
   };
   const steps = [...new Set(group.incidents.map(incident => incident.activity_id).filter(Boolean))];
+  const cause = structuredCause(group);
   fact("Surface", group.sample.surface || "-", { mono: true });
   fact("Actor", actorLabel(group.incidents), { title: sharedIncidentActor(group.incidents) || "" });
   fact("Step", steps.length ? steps.join(" · ") : "-", { mono: true });
   fact("Count", [eventCountLabel(group.events), group.runs ? plural(group.runs, "run") : "no run recorded"].join(" · "));
   fact("First seen", group.first ? `${fmtRelativeValue(ctx, group.first)} ago` : "-", { title: formatDateTime(group.first) });
   fact("Last seen", group.last ? `${fmtRelativeValue(ctx, group.last)} ago` : "-", { title: formatDateTime(group.last) });
+  fact("Cause code", cause ? cause.label : "none recorded", { mono: Boolean(cause), title: causeBasisText(group), wide: true });
   return facts;
 }
 
@@ -866,13 +1020,7 @@ function evidenceNode(group, ctx) {
   return details;
 }
 
-function relatedNode(group, groups, ctx) {
-  if (!group.sameMessage) return null;
-  const related = groups.filter(other => other.key !== group.key && other.sameMessage === group.sameMessage);
-  if (related.length === 0) return null;
-  const section = el("section", { class: "incident-related", "aria-label": "Other signatures with this message" }, [
-    el("h4", { class: "incident-eyebrow", text: "Same message, other signatures" }),
-  ]);
+function relatedItems(section, related, ctx, noun) {
   for (const other of related.slice(0, RELATED_MAX)) {
     const button = el("button", { class: "incident-related-item", type: "button" }, [
       el("span", { class: "mono", text: `${other.sample.surface || "unknown surface"} · ${actorLabel(other.incidents)}` }),
@@ -883,9 +1031,34 @@ function relatedNode(group, groups, ctx) {
   }
   if (related.length > RELATED_MAX) {
     const more = related.length - RELATED_MAX;
-    section.appendChild(el("p", { class: "incident-related-more", text: `${plural(more, "more signature")} ${more === 1 ? "shares" : "share"} this message.` }));
+    section.appendChild(el("p", { class: "incident-related-more", text: `${plural(more, "more signature")} ${more === 1 ? "shares" : "share"} this ${noun}.` }));
   }
   return section;
+}
+
+// Other signatures with this signature's cause, and the evidence that
+// grouped them, so a wrong merge is visible where it is read.
+function sameCauseNode(group, groups, ctx) {
+  const siblings = causeSiblings(group, groups);
+  if (siblings.length === 0) return null;
+  const section = el("section", { class: "incident-related incident-same-cause", "aria-label": "Other signatures with this cause" }, [
+    el("h4", { class: "incident-eyebrow", text: "Same cause, other signatures" }),
+    el("p", { class: "incident-cause-basis", text: causeBasisText(group) }),
+  ]);
+  return relatedItems(section, siblings, ctx, "cause");
+}
+
+// Signatures with the same normalized message that the cause did not
+// already list: the same text with no structured evidence tying it together.
+function relatedNode(group, groups, ctx) {
+  if (!group.sameMessage) return null;
+  const siblings = new Set(causeSiblings(group, groups).map(other => other.key));
+  const related = groups.filter(other => other.key !== group.key && !siblings.has(other.key) && other.sameMessage === group.sameMessage);
+  if (related.length === 0) return null;
+  const section = el("section", { class: "incident-related", "aria-label": "Other signatures with this message" }, [
+    el("h4", { class: "incident-eyebrow", text: "Same message, other signatures" }),
+  ]);
+  return relatedItems(section, related, ctx, "message");
 }
 
 function detailNode(group, groups, axis, now, ctx) {
@@ -939,6 +1112,7 @@ function detailNode(group, groups, axis, now, ctx) {
     ]),
     factsNode(group, ctx),
     el("section", { class: "incident-message", "aria-label": "Message" }, messageChildren),
+    sameCauseNode(group, groups, ctx),
     relatedNode(group, groups, ctx),
     group.incidents.some(incident => incidentRunIds(incident).length) ? runsNode(group, ctx) : null,
     evidenceNode(group, ctx),
@@ -985,14 +1159,20 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   const view = ensureLayout(body);
   const label = CLASS_TITLES[incidentClass];
   view.heading.textContent = label;
+  const byCause = groupMode === "cause";
   view.heading.appendChild(el("span", {
     class: "incident-list-count",
-    text: pending ? "" : ` ${plural(visible.length, "signature")}${visible.length === groups.length ? "" : ` of ${groups.length}`}`,
+    text: pending ? "" : ` ${plural(visible.length, "signature")}${visible.length === groups.length ? "" : ` of ${groups.length}`}${byCause ? ` in ${plural(causeCount(groups, visible), "cause")}` : ""}`,
   }));
+  for (const button of view.modeButtons) {
+    const on = button.dataset.mode === groupMode;
+    button.className = `incident-seg${on ? " on" : ""}`;
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  }
   view.lastHour.className = `incident-toggle${lastHourOnly ? " on" : ""}`;
   view.lastHour.setAttribute("aria-pressed", lastHourOnly ? "true" : "false");
   const axisHead = el("div", { class: "incident-axis-row" }, [
-    el("span", { class: "incident-main", text: "Signature" }),
+    el("span", { class: "incident-main", text: byCause ? "Cause · signature" : "Signature" }),
     axisNode(axis, 2, "incident-track incident-axis"),
     el("span", { class: "incident-count", text: "Count" }),
     el("span", { class: "incident-last", text: "Last" }),
@@ -1005,7 +1185,7 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   if (pending) rows = [emptyNode(`Loading ${label.toLowerCase()} ${windowPhrase(window)}…`, { status: true })];
   else if (groups.length === 0) rows = [emptyNode(`No ${label.toLowerCase()} ${windowPhrase(window)}.`)];
   else if (visible.length === 0) rows = [emptyNode("No incident matches these filters.", { clear: true })];
-  else rows = visible.map(group => rowNode(group, axis, now, ctx, cap));
+  else rows = listRows(groups, visible, axis, now, ctx, cap);
   syncNodes(view.rows, rows);
   replaceMarks(view.rows, groups, axis, now);
   const footer = el("div", { class: "incident-footer-row" }, pending ? [] : footerNodes(payload, cap, ctx, window));

@@ -15,7 +15,7 @@
 //! audit columns (status, role, tool/command, error message, run/task ids,
 //! timestamps). No tool name, agent, workspace, or task id is special-cased.
 //!
-//! Grouping runs in three passes:
+//! Grouping runs in these passes:
 //!
 //! 1. **Classify** each failed row as [`FailureClass::Denied`],
 //!    [`FailureClass::Expected`], [`FailureClass::Diagnostic`],
@@ -36,7 +36,14 @@
 //!    raw message names another incident's `job_run_id` (parent/child guard
 //!    copies) folds onto that cited root. Matching is token ∩ known run ids,
 //!    not a special-cased tool or activity name.
+//! 5. **Derive a cause** for each incident from its root's structured
+//!    evidence (a named step or action, a structured code), so the same
+//!    failure reported at several surfaces shares one cause key while each
+//!    keeps its own signature and counts [ORB-15434]. A cited-run fold keeps
+//!    its root, and so its cause. The share-or-split rule for codes is
+//!    documented in `cause.rs`.
 
+mod cause;
 mod classify;
 mod grouping;
 mod signature;
@@ -49,8 +56,8 @@ pub use classify::{
 pub use grouping::{build_report, group_failure_incidents};
 pub use signature::{normalize_message, signature_for};
 pub use types::{
-    CASCADE_WINDOW_SECS, DEFAULT_SCAN_LIMIT, DOCTOR_FINDINGS_MESSAGE_PREFIX,
+    CASCADE_WINDOW_SECS, CauseBasis, DEFAULT_SCAN_LIMIT, DOCTOR_FINDINGS_MESSAGE_PREFIX,
     FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass, FailureIncident, FailureIncidentQuery,
-    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
-    PropagationLink, RUN_DEFERRED_SURFACE,
+    FailureIncidentReport, IncidentCause, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL,
+    LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink, RUN_DEFERRED_SURFACE,
 };
