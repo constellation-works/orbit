@@ -133,11 +133,13 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     for (index, command) in commands.iter().enumerate() {
         let run = run_validation_command(host, &workspace_path, command, None)?;
         validation_env = run.environment_record();
-        // [ORB-14258] A failure that is not a missing tool is rerun on the
+        // [ORB-14258] A conclusive failure that is not a missing tool is rerun on the
         // synchronized base, so a red base is told apart from the candidate.
         let baseline: Option<BaselineCheck> = base_sha
             .as_deref()
-            .filter(|_| !run.passed && run.missing_tool.is_none())
+            .filter(|_| {
+                !run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none()
+            })
             .map(|base| compare_with_base(host, &workspace_path, base, command, run.selection()));
         let log_path = format!("validation/{run_id}/{index}.json");
         let baseline_path = baseline
@@ -158,7 +160,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "timed_out": run.timed_out,
             "output": run.output,
             "validation_env": validation_env,
-            "failure_kind": if red { json!("baseline_red") } else { run.failure_kind() },
+            "failure_kind": if red { json!("baseline_red") } else if baseline.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) { json!("environment") } else { run.failure_kind() },
             "deferred_notice": run.deferred_notice,
             "deferred_sandbox_replay": replays.contains(&run.command),
             "missing_tool": run.missing_tool_name(),
@@ -180,7 +182,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             // The failing log is the evidence a recovery agent or reader
             // repairs from, so it is attached before the step fails.
             attach_logs(host, &task_ids, &run_id, &logs)?;
-            if run.missing_tool.is_some() {
+            if run.missing_tool.is_some() || run.infrastructure_failure.is_some() {
                 return Err(run.failure(&candidate));
             }
             let evidence = match &baseline_path {

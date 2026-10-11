@@ -426,6 +426,9 @@ class NextestOutputTransportTests(unittest.TestCase):
                                 env=environment, text=True, capture_output=True)
         self.assertEqual(result.returncode, returncode, result.stderr)
         self.summary = json.loads(summary.read_text())
+        logs = list((root / ".orbit/tmp").glob("ci-test-affected-nextest-*.log"))
+        self.assertEqual(len(logs), 1, result.stderr)
+        self.full_output = logs[0].read_text()
         return result.stdout + result.stderr
 
     def notices(self, output):
@@ -436,6 +439,35 @@ class NextestOutputTransportTests(unittest.TestCase):
             with self.subTest(stream=stream):
                 output = self.run_gate(f'#[test]\nfn deferred() {{ {stream}!("{self.NOTICE}"); }}\n')
                 self.assertEqual(self.notices(output), [self.NOTICE], output)
+
+    def test_passing_noise_is_archived_and_all_host_refusal_markers_are_relayed(self):
+        # A bounded fixture reproduces the output-volume incident without load
+        # or timing races. Both nextest capture streams must retain notices.
+        notices = [self.NOTICE, "SKIP: fixture", "skipping: fixture", "skipping fixture",
+                   "fixture: sandbox_apply: Operation not permitted",
+                   "fixture: sandbox-exec cannot apply a profile",
+                   "fixture: No permissions to create a new namespace"]
+        body = ('#[test]\nfn noisy() { println!("FAIL [fixture sample]\\nSummary [fixture sample]");'
+                'println!("{}", "ordinary-noise\\n".repeat(100_000));')
+        for stream in ("println", "eprintln"):
+            for notice in notices:
+                body += f'{stream}!("\\x1b[31m{{}}\\x1b[0m", {json.dumps(notice)});'
+        output = self.run_gate(body + '}\n')
+        self.assertGreater(len(self.full_output.encode()), 1024 * 1024)
+        self.assertLess(len(output.encode()), 16 * 1024)
+        self.assertNotIn("ordinary-noise", output)
+        self.assertNotIn("fixture sample", output)
+        self.assertIn("ordinary-noise", self.full_output)
+        for notice in notices:
+            self.assertEqual([line.strip() for line in output.splitlines()].count(notice), 2, output)
+        self.assertEqual(self.summary["tests_run"], 1, output)
+
+    def test_failure_output_is_relayed_and_archived(self):
+        output = self.run_gate('#[test]\nfn broken() { println!("failure-body"); panic!("failure-detail"); }',
+                               returncode=100)
+        for diagnostic in ("failure-body", "failure-detail"):
+            self.assertIn(diagnostic, output)
+            self.assertIn(diagnostic, self.full_output)
 
     def test_a_failing_tests_selection_runs_only_the_named_tests(self):
         # [ORB-15328] The identities a failed run printed select exactly those

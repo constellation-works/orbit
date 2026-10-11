@@ -176,6 +176,57 @@ def write_summary(path, selection, tests_run):
             dict(schema_version=1, selection=selection, tests_run=tests_run)))
 
 
+# Keep every notice the required-command host judge refuses, including ones
+# from a passing test. Ordinary passing-test output stays in the full log.
+HOST_NOTICE_PREFIXES = ("SKIP:", "DEFERRED:", "skipping:", "skipping ")
+HOST_NOTICE_MARKERS = ("sandbox_apply: Operation not permitted",
+                       "sandbox-exec cannot apply a profile",
+                       "No permissions to create a new namespace")
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+NEXTEST_STATUS = re.compile(r"^( *)([A-Z][A-Z0-9 +/]*?)\s+\[")
+
+
+def run_nextest(command, environment):
+    """Retain the complete merged stream, relaying diagnostics and failed blocks.
+
+    Nextest prints a status header before each captured test-output block.
+    Passing blocks are suppressed except for host-evidence notices; progress
+    headers and the summary delimit them and are always relayed.
+    """
+    scratch = ROOT / ".orbit/tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix="ci-test-affected-nextest-", suffix=".log",
+                                     dir=scratch, delete=False) as log:
+        print(f"ci-test-affected: full nextest output: {log.name}", file=sys.stderr, flush=True)
+        passing_block = False
+        with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT) as process:
+            try:
+                for raw in process.stdout:
+                    log.write(raw)
+                    line = raw.decode("utf-8", errors="replace")
+                    plain = ANSI_ESCAPE.sub("", line)
+                    status = NEXTEST_STATUS.match(plain)
+                    # Nextest right-aligns the status in a 12-column field.
+                    # Captured payload has its own indentation: a test printing
+                    # nested runner output must not open a failing block here.
+                    if status and status.end(2) != 12:
+                        status = None
+                    if status:
+                        passing_block = status.group(2).endswith("PASS")
+                    elif plain.startswith("────────") or plain.startswith("     Summary "):
+                        passing_block = False
+                    notice = (plain.lstrip().startswith(HOST_NOTICE_PREFIXES)
+                              or any(marker in plain for marker in HOST_NOTICE_MARKERS))
+                    if status or not passing_block or notice:
+                        print(plain if notice else line, end="", file=sys.stderr, flush=True)
+                return process.wait()
+            except BaseException:
+                process.terminate()
+                process.wait()
+                raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -269,7 +320,7 @@ def main():
             # nextest hides a passing test's stdout and stderr, and with it the
             # `DEFERRED:` notice of a test that returned without running its
             # sandboxed path [ORB-15161]. The host judge classifies the gate's
-            # complete output, so passing tests' output must reach it.
+            # notice output, so those lines from passing tests must reach it.
             command = [*cargo, "nextest", "run", "--no-fail-fast", "--success-output", "immediate",
                        *report_flags, *package_flags, *run_target_flags, *filters]
         else:
@@ -279,10 +330,14 @@ def main():
         # A run stopped before nextest finishes still reports what it selected,
         # so its failures so far can be replayed alone [ORB-15328].
         write_summary(summary, selection, None)
-        result = subprocess.run([*budget, "--", *command], cwd=ROOT, env=test_environment)
+        if nextest.returncode == 0:
+            exit_code = run_nextest([*budget, "--", *command], test_environment)
+        else:
+            exit_code = subprocess.run([*budget, "--", *command], cwd=ROOT,
+                                       env=test_environment).returncode
         write_summary(summary, selection, executed_tests(junit))
-    if result.returncode:
-        return result.returncode
+    if exit_code:
+        return exit_code
     if not doc_packages:
         return 0
     doc_flags = [argument for name in doc_packages for argument in ("-p", name)]

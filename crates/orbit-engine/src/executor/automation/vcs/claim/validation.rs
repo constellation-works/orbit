@@ -335,7 +335,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     run: &RequiredCommandRun,
 ) -> OrbitError {
     let commit = &candidate.candidate.commit;
-    if run.missing_tool.is_some() {
+    if run.missing_tool.is_some() || run.infrastructure_failure.is_some() {
         return run.failure(commit);
     }
     let check = compare_with_base(
@@ -365,6 +365,8 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         "validation_env": run.environment_record(),
         "failure_kind": if red {
             json!("baseline_red")
+        } else if check.infrastructure_failure().is_some() {
+            json!("environment")
         } else if run.network_evidence.is_some() {
             json!("transient")
         } else {

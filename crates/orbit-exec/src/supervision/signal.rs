@@ -89,7 +89,7 @@ impl Drop for SignalHandlerGuard {
 }
 
 pub(super) fn signal_message(signal: i32) -> String {
-    format!("process interrupted by signal {}", signal_name(signal))
+    format!("{}{}", super::INTERRUPTED_SIGNAL_NOTE, signal_name(signal))
 }
 
 fn signal_name(signal: i32) -> &'static str {
