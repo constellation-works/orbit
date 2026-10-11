@@ -189,7 +189,10 @@ fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         .earliest()?
         .with_timezone(&Utc);
     if at <= now && date == today {
-        at.checked_add_signed(TimeDelta::try_days(1)?)
+        let tomorrow = date.succ_opt()?;
+        zone.from_local_datetime(&tomorrow.and_time(time))
+            .earliest()
+            .map(|at| at.with_timezone(&Utc))
     } else {
         Some(at)
     }

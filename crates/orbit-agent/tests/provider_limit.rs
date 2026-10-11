@@ -87,6 +87,63 @@ fn well_formed_relative_resets_resolve_against_reference_time() {
     assert_eq!(limit2.resets_at, Some(expected2));
 }
 
+#[test]
+fn time_only_reset_across_autumn_dst_transition_preserves_local_clock() {
+    // 16:00 PDT on 2026-10-31; 3pm PDT (22:00 UTC) has already passed.
+    // Overnight on 2026-11-01, America/Los_Angeles falls back from PDT (UTC-7) to PST (UTC-8).
+    let now = Utc.with_ymd_and_hms(2026, 10, 31, 23, 0, 0).unwrap();
+    let text = "You've hit your limit · resets 3pm (America/Los_Angeles)";
+
+    let limit = provider_usage_limit_details(text, now, utc());
+
+    // Next-day 3pm PST on 2026-11-01 is 23:00 UTC (not 22:00 UTC).
+    let expected = Utc.with_ymd_and_hms(2026, 11, 1, 23, 0, 0).unwrap();
+    assert_eq!(limit.resets_at, Some(expected));
+}
+
+#[test]
+fn time_only_reset_across_spring_dst_transition_preserves_local_clock() {
+    // 15:00 PST on 2026-03-07; 3pm PST (23:00 UTC) has already passed.
+    // Overnight on 2026-03-08, America/Los_Angeles springs forward from PST (UTC-8) to PDT (UTC-7).
+    let now = Utc.with_ymd_and_hms(2026, 3, 7, 23, 0, 0).unwrap();
+    let text = "You've hit your limit · resets 3pm (America/Los_Angeles)";
+
+    let limit = provider_usage_limit_details(text, now, utc());
+
+    // Next-day 3pm PDT on 2026-03-08 is 22:00 UTC (not 23:00 UTC).
+    let expected = Utc.with_ymd_and_hms(2026, 3, 8, 22, 0, 0).unwrap();
+    assert_eq!(limit.resets_at, Some(expected));
+}
+
+#[test]
+fn nonexistent_or_invalid_reset_clocks_fail_safely_without_panicking() {
+    // 2:30am does not exist on 2026-03-08 in America/Los_Angeles due to spring forward.
+    let now = Utc.with_ymd_and_hms(2026, 3, 7, 23, 0, 0).unwrap();
+    let nonexistent_next_day = "You've hit your limit · resets 2:30am (America/Los_Angeles)";
+    assert!(provider_usage_limit(nonexistent_next_day));
+    let limit = provider_usage_limit_details(nonexistent_next_day, now, utc());
+    assert_eq!(limit.resets_at, None);
+
+    // Explicit date nonexistent clock.
+    let nonexistent_explicit = "You've hit your limit · resets Mar 8, 2:30am (America/Los_Angeles)";
+    assert!(provider_usage_limit(nonexistent_explicit));
+    let limit = provider_usage_limit_details(nonexistent_explicit, now, utc());
+    assert_eq!(limit.resets_at, None);
+
+    // Invalid clock formats (hour out of range 1..=12, missing meridiem).
+    let invalid_clocks = [
+        "You've hit your limit · resets 0am (America/Los_Angeles)",
+        "You've hit your limit · resets 13pm (America/Los_Angeles)",
+        "You've hit your limit · resets 3:60pm (America/Los_Angeles)",
+        "You've hit your limit · resets 3 (America/Los_Angeles)",
+    ];
+    for text in invalid_clocks {
+        assert!(provider_usage_limit(text));
+        let limit = provider_usage_limit_details(text, now, utc());
+        assert_eq!(limit.resets_at, None);
+    }
+}
+
 fn utc() -> FixedOffset {
     FixedOffset::east_opt(0).unwrap()
 }
