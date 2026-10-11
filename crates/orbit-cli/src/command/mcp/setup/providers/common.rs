@@ -70,3 +70,25 @@ pub(super) fn server_args(launch: ServerLaunch<'_>) -> Vec<String> {
     }
     args
 }
+
+/// Reconciliation must retain the operator's existing launch, including its
+/// binding and any other options. Removing the entry first is the explicit
+/// way to replace that authority with a new agent-only registration.
+pub(super) fn preserve_operator<'a>(
+    launch: ServerLaunch<'_>,
+    args: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    let args = args.into_iter().collect::<Vec<_>>();
+    matches!(launch, ServerLaunch::Local { .. })
+        && args.windows(2).any(|pair| pair == ["mcp", "serve"])
+        && args.contains(&"--operator")
+}
+
+pub(super) fn preserve_json_operator(launch: ServerLaunch<'_>, entry: &serde_json::Value) -> bool {
+    entry
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|args| {
+            preserve_operator(launch, args.iter().filter_map(serde_json::Value::as_str))
+        })
+}

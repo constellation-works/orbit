@@ -213,9 +213,9 @@ pub struct InitArgs {
 impl InitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         let layout = federated_layout(self.federated, self.scope, root_override)?;
-        // Bare `orbit mcp init` keeps its pre-existing agent-only authority;
-        // only the `orbit workspace init --mcp` bootstrap path (below, via
-        // `init_auto_for_workspace`) selects operator authority.
+        // New entries use agent authority. Provider reconciliation retains an
+        // existing operator launch; removing it first explicitly resets it.
+        // Only `workspace init --mcp` selects operator authority for new entries.
         let launch = if self.federated {
             ServerLaunch::Federated
         } else {

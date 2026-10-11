@@ -53,6 +53,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["plugin", "validate"], "plugin/validate.txt"),
     (&["plugin", "scaffold"], "plugin/scaffold.txt"),
     (&["plugin", "test"], "plugin/test.txt"),
+    (&["mcp", "init"], "mcp/init.txt"),
     (&["mcp", "listen"], "mcp/listen.txt"),
     (&["tool", "run"], "tool/run.txt"),
     (&["web", "serve"], "web/serve.txt"),

@@ -11,18 +11,46 @@ use crate::command::mcp::{ORBIT_MCP_SERVER_ID, safe_mcp_tool_names};
 use super::super::args::ScopeArg;
 use super::super::dispatch::ConfigTarget;
 use super::super::format::*;
-use super::common::{ServerLaunch, server_args, server_id};
+use super::common::{ServerLaunch, preserve_json_operator, server_args, server_id};
 
 pub(in crate::command::mcp::setup) fn apply_claude_init(
     target: &ConfigTarget,
     launch: ServerLaunch<'_>,
 ) -> Result<(), OrbitError> {
-    let server_id = server_id(launch);
-    cleanup_legacy_mcp_path(target, server_id)?;
+    apply_claude_init_with_legacy(target, launch, None)
+}
 
+pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
+    target: &ConfigTarget,
+    launch: ServerLaunch<'_>,
+    inherited: Option<&JsonValue>,
+) -> Result<(), OrbitError> {
+    let server_id = server_id(launch);
     let update_mcp = || {
         let mut root = load_json_object(&target.mcp_path)?;
         let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
+        if mcp_servers
+            .get(server_id)
+            .is_some_and(|entry| preserve_json_operator(launch, entry))
+        {
+            return Ok(());
+        }
+        if let Some(entry) = inherited.filter(|entry| preserve_json_operator(launch, entry)) {
+            mcp_servers.insert(server_id.to_string(), entry.clone());
+            return write_json_object(&target.mcp_path, &root);
+        }
+        // Carry authority forward before removing an obsolete config path.
+        if let Some(legacy_path) = &target.legacy_mcp_path {
+            let legacy = load_json_object(legacy_path)?;
+            if let Some(entry) = legacy
+                .get("mcpServers")
+                .and_then(|servers| servers.get(server_id))
+                .filter(|entry| preserve_json_operator(launch, entry))
+            {
+                mcp_servers.insert(server_id.to_string(), entry.clone());
+                return write_json_object(&target.mcp_path, &root);
+            }
+        }
         mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
         write_json_object(&target.mcp_path, &root)
     };
@@ -34,6 +62,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_init(
     } else {
         update_mcp()?;
     }
+    cleanup_legacy_mcp_path(target, server_id)?;
 
     if let Some(settings_path) = &target.settings_path {
         let mut settings = load_json_object(settings_path)?;
