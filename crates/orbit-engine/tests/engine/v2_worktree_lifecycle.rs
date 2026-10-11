@@ -1350,6 +1350,77 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
     );
 }
 
+/// [ORB-15548] Resume cannot validate a known-red candidate that still skips
+/// a host path or whose durable replay reports no executed tests.
+#[test]
+fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
+    isolated(
+        "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
+        || {
+            let notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace";
+            for (case, output_notice, replay, tests_run, validated) in [
+                ("executed", "", false, 3, true),
+                ("deferred", notice, false, 3, false),
+                ("skipped", "SKIP: sandbox fixture", false, 3, false),
+                ("replay-zero", "", true, 0, false),
+                ("replay-executed", "", true, 3, true),
+                ("replay-deferred", notice, true, 3, false),
+            ] {
+                let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                let command = format!(
+                    "printf 'test fixture ... FAILED\\n{output_notice}\\n'; \
+                     printf '{{\"schema_version\":1,\"selection\":{{\"packages\":[\"fixture\"]}},\"tests_run\":{tests_run}}}' \
+                     > \"$ORBIT_VALIDATION_SUMMARY\"; exit 2"
+                );
+                preserved.host.set_required_commands(&[&command]);
+                if replay {
+                    preserved.host.set_artifact(RESUME_TASK, TaskArtifact {
+                        path: orbit_types::workflow::DEFERRED_SANDBOX_ARTIFACT.to_string(),
+                        content: json!({
+                            "schema_version": 1,
+                            "run_id": FAILED_RUN,
+                            "deferred": {
+                                "command": command,
+                                "exit_code": 0,
+                                "tests_run": 3,
+                                "base": git(&preserved.fixture.repo, &["rev-parse", BASE]),
+                                "notices": [notice],
+                                "probe": {
+                                    "command": "bwrap --unshare-user --ro-bind / / -- /bin/true",
+                                    "exit_code": 1,
+                                    "output": "bwrap: No permissions to create a new namespace",
+                                },
+                            },
+                        }).to_string().into_bytes(),
+                        media_type: "application/json".to_string(),
+                        created_by: Some("system".to_string()),
+                    });
+                }
+                let setup = preserved.next_setup();
+                let resumed = preserved.resume(&setup).unwrap();
+                assert_eq!(
+                    resumed["outcome"],
+                    if validated {
+                        "resumed_validated"
+                    } else {
+                        "resumed_unjudged"
+                    },
+                    "{case}: {resumed}"
+                );
+                if case == "replay-zero" {
+                    assert!(
+                        resumed["reason"]
+                            .as_str()
+                            .unwrap()
+                            .contains("replayed nothing"),
+                        "{resumed}"
+                    );
+                }
+            }
+        },
+    );
+}
+
 /// A spec change since the candidate's run, or an operator discard recorded
 /// since that run began, forces a fresh implementation with the reason, and
 /// leaves the checkout untouched. A discard older than the run does not.

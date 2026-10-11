@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::baseline::{compare_with_base, run_validation_command};
+use super::super::deferred_sandbox::{deferred_replays, with_replays};
 use super::super::git::{
     git_command_success, git_output, git_run, git_success, timeout_recovery_error,
 };
@@ -228,8 +229,12 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
             ),
         })));
     }
-    for command in host.required_validation_commands() {
+    let replays = deferred_replays(host, &[task_id.to_string()])?;
+    for command in with_replays(host.required_validation_commands(), &replays) {
         let run = run_validation_command(host, workspace_path, &command, None)?;
+        if let Some(failure) = run.coverage_failure(base_sha, replays.contains(&run.command)) {
+            return Ok(Outcome::Unjudged(failure.to_string()));
+        }
         if run.passed {
             continue;
         }

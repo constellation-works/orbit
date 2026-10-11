@@ -27,6 +27,8 @@
 //! the recorded text still holds it. The failures a failed run names are read
 //! from the complete streams first ([`RequiredCommandRun::failures`]), so a
 //! failure in the dropped middle still counts [ORB-15375].
+//! Host coverage refusals are also read from the complete streams, even on
+//! nonzero exits: known-red failed tests cannot waive a skipped path.
 //!
 //! A command that exits zero after printing a `DEFERRED:` notice returned
 //! without running a sandbox-confined path, because the host it ran on could
@@ -36,6 +38,7 @@
 //! pass as the validation environment's failure. A command replayed for an
 //! implementer's Bubblewrap deferral must also report executed tests
 //! ([`RequiredCommandRun::replay_failure`]) [ORB-15287].
+//! Replay coverage is checked before accepting known-red failures too.
 //!
 //! A command may also say what it ran [ORB-15131]. Every run gets
 //! [`VALIDATION_SUMMARY_ENV`], naming a fresh file outside the checkout; a
@@ -93,7 +96,9 @@ pub(super) struct RequiredCommandRun {
     pub(super) timed_out: bool,
     pub(super) passed: bool,
     pub(super) output: String,
-    /// Why a successful host run cannot count as passing evidence.
+    /// Why the complete output cannot count as executed host coverage,
+    /// independently of the exit status. Ordinary failed tests stay in
+    /// `failures`; skips and sandbox refusals prevent known-red continuation.
     pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
     /// The first `DEFERRED:` or Seatbelt `SKIP: sandbox-exec cannot apply a
     /// profile:` line the run printed: a test returned without running its
@@ -242,6 +247,18 @@ impl RequiredCommandRun {
         })
     }
 
+    /// Coverage that must be resolved before either a pass or a known-red
+    /// continuation: a successful deferral, or a replay that executed nothing.
+    /// Missing tools, supervisor stops and timeouts keep their ordinary
+    /// failure handling; none can reach a known-red continuation.
+    pub(super) fn coverage_failure(&self, candidate: &str, replay: bool) -> Option<OrbitError> {
+        if self.missing_tool.is_some() || self.infrastructure_failure.is_some() || self.timed_out {
+            return None;
+        }
+        self.deferral_failure(candidate)
+            .or_else(|| replay.then(|| self.replay_failure(candidate)).flatten())
+    }
+
     /// How the environment was resolved, as recorded on logs and step output.
     pub(super) fn environment_record(&self) -> Value {
         environment_record(&self.environment)
@@ -348,19 +365,18 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     )?;
     let summary = ValidationSummary::read(&summary_path);
     // Judge the complete streams before `capture` bounds the log. A skip or
-    // deferral in the middle of a large output must still refuse a host pass.
+    // deferral in the middle of a large output must still refuse a host pass
+    // or known-red continuation. Exit status is judged separately by `passed`
+    // and `failures`, so ask the host judge about coverage even on a failed
+    // run (its ordinary nonzero branch precedes its skip scan).
     let passed = outcome.success && !outcome.timed_out;
-    let host_output_refusal = passed
-        .then(|| {
-            judge_host_test_output(
-                &HostSandboxCommand::RequiredValidation(command.to_string()),
-                outcome.success,
-                outcome.timed_out,
-                &format!("{}\n{}", outcome.stdout, outcome.stderr),
-            )
-            .err()
-        })
-        .flatten();
+    let host_output_refusal = judge_host_test_output(
+        &HostSandboxCommand::RequiredValidation(command.to_string()),
+        true,
+        outcome.timed_out,
+        &format!("{}\n{}", outcome.stdout, outcome.stderr),
+    )
+    .err();
     let deferred_notice = outcome
         .stdout
         .lines()
