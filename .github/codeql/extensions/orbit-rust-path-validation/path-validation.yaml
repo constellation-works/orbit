@@ -76,7 +76,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_common::fs::io::validated_private_file_path",
+          "orbit_common::fs::io::private::validated_private_file_path",
           "ReturnValue",
           "path-injection",
           "manual",
@@ -118,7 +118,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_common::fs::io::validated_atomic_target",
+          "orbit_common::fs::io::atomic::validated_atomic_target",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
           "manual",

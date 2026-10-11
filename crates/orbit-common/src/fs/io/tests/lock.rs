@@ -1,31 +1,9 @@
 use std::io;
-
-#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
-use crate::fs::io::{remove_path_if_exists, with_exclusive_file_lock};
-
-#[cfg(unix)]
-#[test]
-fn private_append_rejects_a_final_symlink() {
-    let root = tempfile::tempdir().expect("root tempdir");
-    let outside = tempfile::tempdir().expect("outside tempdir");
-    let outside_file = outside.path().join("outside.log");
-    std::fs::write(&outside_file, b"unchanged").expect("outside file");
-    let link = root.path().join("log");
-    std::os::unix::fs::symlink(&outside_file, &link).expect("symlink");
-
-    let error = super::super::io::append_private_file(&link)
-        .expect_err("private append must reject a symlink target");
-
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!(
-        std::fs::read(&outside_file).expect("outside file remains"),
-        b"unchanged"
-    );
-}
+use crate::fs::io::with_exclusive_file_lock;
 
 /// [ORB-12029]: the previous implementation checked `symlink_metadata` on the
 /// resolved candidate and opened it in a later, unguarded `File::open` — a
@@ -108,12 +86,12 @@ fn start_fifo_reader(
     use_unsafe_blocking_open: bool,
 ) -> std::process::Child {
     crate::test_env::assert_child_test_exists(
-        "fs::tests::io::read_file_lock_holder_fifo_reader_child",
+        "fs::io::tests::lock::read_file_lock_holder_fifo_reader_child",
     );
     let test_binary = std::env::current_exe().expect("locate test binary");
     let mut command = std::process::Command::new(test_binary);
     command
-        .arg("fs::tests::io::read_file_lock_holder_fifo_reader_child")
+        .arg("fs::io::tests::lock::read_file_lock_holder_fifo_reader_child")
         .arg("--exact")
         .arg("--ignored")
         .arg("--nocapture")
@@ -227,27 +205,6 @@ fn read_file_lock_holder_fifo_reader_child() {
     assert!(holder.is_none(), "a swapped FIFO is not holder metadata");
 }
 
-#[cfg(unix)]
-#[test]
-fn remove_path_if_exists_unlinks_a_directory_symlink_without_removing_its_target() {
-    let temp = TempDir::new().expect("tempdir");
-    let target = temp.path().join("target");
-    std::fs::create_dir(&target).expect("target directory");
-    let target_file = target.join("keep");
-    std::fs::write(&target_file, b"preserved").expect("target file");
-    let link = temp.path().join("link");
-    std::os::unix::fs::symlink(&target, &link).expect("symlink");
-
-    remove_path_if_exists(&link).expect("remove directory symlink");
-
-    let error = std::fs::symlink_metadata(&link).expect_err("link must be removed");
-    assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    assert_eq!(
-        std::fs::read(target_file).expect("target preserved"),
-        b"preserved"
-    );
-}
-
 /// ORB-10988: nesting the same lock path on one thread must re-enter, not
 /// deadlock. `flock(2)` belongs to the open file description, so the inner
 /// call's fresh descriptor would otherwise block on the outer call's lock
@@ -307,27 +264,4 @@ fn exclusive_lock_re_enters_when_the_outer_call_creates_the_parent_under_a_symli
         .expect("nested lock deadlocked instead of re-entering")
         .expect("nested locks must re-enter");
     assert_eq!(depth, 2);
-}
-
-#[cfg(unix)]
-#[test]
-fn private_open_repairs_a_permissive_existing_file() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = TempDir::new().expect("tempdir");
-    let path = temp.path().join("shared.lock");
-    std::fs::write(&path, b"").expect("create lock file");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-        .expect("make the file permissive");
-
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).read(true).write(true);
-    let _file = crate::fs::io::open_private_file(&path, &mut options).expect("open private");
-
-    let mode = std::fs::metadata(&path)
-        .expect("metadata")
-        .permissions()
-        .mode()
-        & 0o7777;
-    assert_eq!(mode, 0o600, "a permissive file is restricted to its owner");
 }
