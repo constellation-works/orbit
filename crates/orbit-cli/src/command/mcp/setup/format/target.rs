@@ -49,3 +49,8 @@ pub(in crate::command::mcp::setup) fn resolve_config_target(
         path.display()
     )))
 }
+
+/// Whether `path` is itself a symlink, rather than the file it resolves to.
+pub(in crate::command::mcp::setup) fn is_config_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+}
