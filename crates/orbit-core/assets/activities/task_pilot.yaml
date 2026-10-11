@@ -354,8 +354,11 @@ spec:
        compatibility — populate it only with concrete current-code or
        current-contract conflicts and their evidence; a historical ADR is not
        by itself a reason to block or reshape work), `utility_warnings`, and
-       `surface_warnings`. Each of `blocked_by`, `adr_conflicts`,
-       `utility_warnings`, and `surface_warnings` is an array of plain strings,
+       `surface_warnings`.
+       A task never lists itself as a dependency or blocker: every task ID in
+       `blocked_by` must name another task.
+       Each of `blocked_by`, `adr_conflicts`, `utility_warnings`, and
+       `surface_warnings` is an array of plain strings,
        one string per finding combining the finding and its citation — for
        example a non-empty adr_conflicts entry reads
        ["the module this task would change still exports the type it removes

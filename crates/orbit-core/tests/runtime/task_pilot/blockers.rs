@@ -1,7 +1,7 @@
 //! Prerequisite prose becomes durable dependencies at the real pilot boundary.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{Task, TaskStatus};
+use orbit_core::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use super::{Workspace, races::apply_input};
@@ -178,6 +178,126 @@ fn terminal_missing_foreign_and_free_text_blockers_remain_warnings() {
 }
 
 #[test]
+fn self_blockers_are_dropped_with_a_warning_and_other_metadata_applies() {
+    if !isolated(
+        "task_pilot::blockers::self_blockers_are_dropped_with_a_warning_and_other_metadata_applies",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let blocker = target(&workspace, TaskStatus::Backlog);
+    let existing = target(&workspace, TaskStatus::Done);
+    for case in 0..4 {
+        let task = workspace.task(&format!("Self-reference case {case}"));
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    dependencies: Some(vec![existing.id.clone()]),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        let (warnings, expected) = match case {
+            0 => (vec![task.id.clone()], vec![]),
+            1 => (vec![format!("Wait for `{}` to land.", task.id)], vec![]),
+            2 => {
+                let other = format!("Wait for {} to land.", blocker.id);
+                let free_text = "Await operator credentials".to_string();
+                (
+                    vec![task.id.clone(), other.clone(), free_text.clone()],
+                    vec![other, free_text],
+                )
+            }
+            _ => (
+                vec![format!(
+                    "Wait for `{}` and `{}`; {} is repeated. Keep {}0 as evidence.",
+                    task.id, blocker.id, task.id, task.id
+                )],
+                vec![format!(
+                    "Wait for `` and `{}`;  is repeated. Keep {}0 as evidence.",
+                    blocker.id, task.id
+                )],
+            ),
+        };
+        let candidate = input(&workspace, &task, &warnings);
+        let applied = workspace.action("apply_task_pilot_results", candidate.clone());
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        assert_eq!(applied["applied_count"], 1, "{applied}");
+        assert_eq!(applied["repair_count"], 0, "{applied}");
+        assert_eq!(applied["partition_decisions"][0]["outcome"], "applied");
+        let recorded = &applied["tasks"][0];
+        assert_eq!(recorded["blocked_by"], json!(expected), "{recorded}");
+        let warning = &recorded["pilot_normalizations"][0];
+        assert_eq!(warning["field"], "blocked_by", "{warning}");
+        assert_eq!(warning["dropped_self_reference"], task.id, "{warning}");
+        let note = warning["note"].as_str().unwrap();
+        assert!(
+            note.contains("warning") && note.contains(&task.id),
+            "{note}"
+        );
+        let current = workspace.runtime.get_task(&task.id).unwrap();
+        let mut dependencies = vec![existing.id.clone()];
+        if case >= 2 {
+            dependencies.push(blocker.id.clone());
+        }
+        assert_eq!(current.dependencies(), dependencies, "{current:?}");
+        assert_eq!(current.context_files, ["file:README.md"]);
+        assert_eq!(current.complexity, Some(TaskComplexity::Low));
+        let history = workspace.runtime.get_task_history(&task.id).unwrap();
+        assert!(
+            history.iter().any(|event| {
+                event.event == "task_pilot_applied"
+                    && event
+                        .note
+                        .as_deref()
+                        .is_some_and(|text| text.contains(note))
+            }),
+            "the atomic application history must retain its warning: {history:?}"
+        );
+        assert_eq!(
+            workspace
+                .runtime
+                .task_pilot_blocker_warnings(&task.id)
+                .unwrap(),
+            expected
+        );
+        let replay = workspace.action("apply_task_pilot_results", candidate);
+        assert_eq!(replay["status"], "succeeded", "{replay}");
+        assert_eq!(replay["tasks"][0]["outcome"], "already_applied");
+        assert_eq!(replay["tasks"][0]["pilot_normalizations"][0], *warning);
+        assert_eq!(
+            workspace.runtime.get_task_history(&task.id).unwrap(),
+            history
+        );
+    }
+
+    // Agent-supplied normalization notes cannot invent a host warning or
+    // inject text into the atomic history of an otherwise clean assessment.
+    let task = workspace.task("Clean assessment with an untrusted note");
+    let mut candidate = input(&workspace, &task, &[]);
+    candidate["results"][0]["tasks"][0]["pilot_normalizations"] = json!([{
+        "field": "blocked_by", "dropped_self_reference": task.id,
+        "note": "untrusted warning supplied by the pilot",
+    }]);
+    let applied = workspace.action("apply_task_pilot_results", candidate);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert!(applied["tasks"][0].get("pilot_normalizations").is_none());
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    assert!(
+        history.iter().all(|event| {
+            event
+                .note
+                .as_deref()
+                .is_none_or(|note| !note.contains("untrusted warning"))
+        }),
+        "pilot prose must not become a host-authored history warning: {history:?}"
+    );
+}
+
+#[test]
 fn a_pilot_dependency_cycle_refuses_the_entire_assessment() {
     if !isolated("task_pilot::blockers::a_pilot_dependency_cycle_refuses_the_entire_assessment") {
         return;
@@ -196,8 +316,11 @@ fn a_pilot_dependency_cycle_refuses_the_entire_assessment() {
             "human:fixture".into(),
         )
         .unwrap();
-    for id in [&blocker.id, &task.id] {
-        let candidate = input(&workspace, &task, &[format!("Wait for {id}")]);
+    for warnings in [
+        vec![format!("Wait for {}", blocker.id)],
+        vec![format!("Wait for {} and {}", task.id, blocker.id)],
+    ] {
+        let candidate = input(&workspace, &task, &warnings);
         let before = workspace.runtime.get_task(&task.id).unwrap();
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let result = workspace.action("apply_task_pilot_results", candidate);

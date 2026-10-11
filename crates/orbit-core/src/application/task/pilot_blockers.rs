@@ -8,6 +8,51 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 
+fn task_id_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '-' | '_')
+}
+
+/// Drop self-only prerequisites and remove whole self-ID tokens from mixed
+/// findings, keeping the other prerequisite IDs and their evidence. Malformed
+/// findings remain for the pilot contract validator to reject.
+pub(crate) fn normalize_pilot_self_blockers(assessment: &mut Value, task_id: &str) -> bool {
+    let Some(findings) = assessment
+        .get_mut("blocked_by")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    let mut dropped = false;
+    findings.retain_mut(|finding| {
+        let Some(text) = finding.as_str() else {
+            return true;
+        };
+        let ids = text.split(|character| !task_id_character(character));
+        if !ids.clone().any(|id| id == task_id) {
+            return true;
+        }
+        dropped = true;
+        if !ids
+            .clone()
+            .any(|id| id != task_id && is_valid_orb_task_id(id))
+        {
+            return false;
+        }
+        let mut retained = String::new();
+        for part in text.split_inclusive(|character| !task_id_character(character)) {
+            let token = part.trim_end_matches(|character| !task_id_character(character));
+            if token == task_id {
+                retained.push_str(&part[token.len()..]);
+            } else {
+                retained.push_str(part);
+            }
+        }
+        *finding = Value::String(retained);
+        true
+    });
+    dropped
+}
+
 /// Collect whole task IDs from prerequisite prose, including multiple IDs
 /// in one finding. A name alone never establishes workspace ownership.
 pub(crate) fn pilot_blocker_task_ids(assessment: &Value) -> BTreeSet<String> {
@@ -16,11 +61,7 @@ pub(crate) fn pilot_blocker_task_ids(assessment: &Value) -> BTreeSet<String> {
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .flat_map(|text| {
-            text.split(|character: char| {
-                !character.is_alphanumeric() && !matches!(character, '-' | '_')
-            })
-        })
+        .flat_map(|text| text.split(|character| !task_id_character(character)))
         .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
         .map(str::to_string)
         .collect()

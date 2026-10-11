@@ -217,6 +217,16 @@ pub(super) fn apply_task(
             let tags_after =
                 normalize_task_tags(current.tags.iter().chain(&add_tags).cloned().collect());
             let mut history_summary = assessment_history_summary(&task.assessment);
+            for warning in task.assessment[super::PILOT_NORMALIZATIONS]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|normalization| normalization.get("dropped_self_reference").is_some())
+                .filter_map(|normalization| normalization["note"].as_str())
+            {
+                history_summary.push_str("; ");
+                history_summary.push_str(warning);
+            }
             if task.after.is_empty() {
                 // Record the meaning *after* the atomic write. A marker made
                 // from the prepared task would immediately be stale when the

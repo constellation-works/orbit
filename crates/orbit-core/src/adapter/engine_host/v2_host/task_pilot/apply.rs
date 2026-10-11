@@ -583,9 +583,16 @@ pub(in super::super) fn apply(
                 }
             };
             let mut normalized = (*assessment).clone();
-            let pilot_normalizations = normalize_evidence_gaps(&mut normalized)
+            let mut pilot_normalizations = normalize_evidence_gaps(&mut normalized)
                 .into_iter()
                 .collect::<Vec<_>>();
+            if crate::application::task::normalize_pilot_self_blockers(&mut normalized, task_id) {
+                pilot_normalizations.push(json!({
+                    "field": "blocked_by",
+                    "dropped_self_reference": task_id,
+                    "note": format!("warning: dropped self-reference {task_id} from blocked_by"),
+                }));
+            }
             let assessment = &normalized;
             let complexity = match validate_recommendations(action, task_id, assessment) {
                 Ok(complexity) => complexity,
@@ -666,6 +673,8 @@ pub(in super::super) fn apply(
                     CONTEXT_ATTACHMENT_WARNINGS.to_string(),
                     json!(over_attachment_findings(complexity, &after)),
                 );
+                // Only the host's normalization notes may enter task history.
+                fields.remove(PILOT_NORMALIZATIONS);
                 if !pilot_normalizations.is_empty() {
                     fields.insert(
                         PILOT_NORMALIZATIONS.to_string(),
