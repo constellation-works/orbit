@@ -193,21 +193,12 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
         test_env::clear_inherited_authority(|name| {
             child.env_remove(name);
         });
-        let output = child
+        child
             .env("ORBIT_TMP_GC_TEST_CHILD", TEST)
-            .args(["--exact", TEST, "--nocapture"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
-            "child must exercise one boundary test"
-        );
+            .args(["--exact", TEST, "--nocapture"]);
+        let output_dir = tempfile::tempdir().unwrap();
+        let output = test_env::run_child_test(&mut child, TEST, output_dir.path());
+        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
         return;
     }
     let fixture = Fixture::new();
