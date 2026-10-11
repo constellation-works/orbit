@@ -81,15 +81,12 @@ impl WorkspaceTeardownArgs {
 
             let mut removed: Vec<String> = Vec::new();
 
-            // 1. Deregister from workspace registry (before deleting .orbit/)
+            // Prepare deregistration in memory, but keep the saved checkout
+            // binding until every deletion succeeds. Failures (or a crash
+            // before the final save) must remain retryable with the same selector.
             let ws = workspace_registry::remove_workspace(&mut registry, &workspace_id)?;
-            workspace_registry::save_registry_to(&registry, &registry_path)?;
-            removed.push(format!(
-                "deregistered workspace '{}' from registry",
-                ws.name
-            ));
 
-            // 2. Delete the task-store partition this checkout's task state is
+            // 1. Delete the task-store partition this checkout's task state is
             //    bound to. The catalog id above is not that partition's name
             //    unless the two id spaces happen to coincide, so the task registry
             //    resolves it and retires its bindings [ORB-12119].
@@ -99,9 +96,9 @@ impl WorkspaceTeardownArgs {
                 removed.push(format_deleted_partition(&partition, &workspace_name));
             }
 
-            // 3. Remove the legacy repo-local skill links workspace init wrote
+            // 2. Remove the legacy repo-local skill links workspace init wrote
             //    into .agents/skills/ and .claude/skills/. Only links into this
-            //    checkout's .orbit/skills/ are Orbit-owned; must run before step 4
+            //    checkout's .orbit/skills/ are Orbit-owned; must run before step 3
             //    deletes that target.
             for dir_name in LEGACY_SKILL_DISCOVERY_DIRS {
                 let cleanup = remove_owned_skill_links(&repo_root, &orbit_dir, dir_name)?;
@@ -117,11 +114,18 @@ impl WorkspaceTeardownArgs {
                 }
             }
 
-            // 4. Delete .orbit/ directory
+            // 3. Delete .orbit/ directory
             if orbit_dir.is_dir() {
                 std::fs::remove_dir_all(&orbit_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
                 removed.push(format!("deleted {}", orbit_dir.display()));
             }
+
+            // 4. Persist deregistration only after local deletion is complete.
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+            removed.push(format!(
+                "deregistered workspace '{}' from registry",
+                ws.name
+            ));
 
             let mut text = format!("teardown plan:\n{plan}\nteardown complete:");
             for item in &removed {

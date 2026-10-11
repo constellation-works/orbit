@@ -652,16 +652,25 @@ fn bound_to_another_checkout(
     Ok(binding.is_some_and(|binding| binding.orbit_dir != canonical))
 }
 
-/// Retire one partition's registry bindings, then delete its directory —
-/// bindings first, so an interrupted removal leaves recoverable bundles rather
-/// than a binding pointing at a directory that is gone. Returns whether a
-/// partition directory was deleted; bindings are retired either way, including
-/// for a workspace that never wrote a bundle.
+/// Delete one partition's directory, then retire its registry bindings.
+/// Keeping the binding until deletion succeeds lets a retry find a partially
+/// removed partition even when its id differs from the workspace catalog id.
+/// A retry after deletion but before unbinding also succeeds. Returns whether
+/// a partition directory was deleted; bindings are retired either way,
+/// including for a workspace that never wrote a bundle.
 fn remove_partition(
     tasks: &TaskRegistryStore,
     global_root: &Path,
     partition_id: &str,
 ) -> Result<bool, OrbitError> {
+    let path = task_store_partition_path(global_root, partition_id);
+    let removed = path.is_dir();
+    if removed {
+        std::fs::remove_dir_all(&path).map_err(|error| {
+            OrbitError::Io(format!("remove task store {}: {error}", path.display()))
+        })?;
+    }
+
     // A directory name that is not a well-formed partition id can hold no
     // bindings; its directory is still this function's to remove.
     if let Err(error) = tasks.unbind_workspace(partition_id)
@@ -670,12 +679,5 @@ fn remove_partition(
         return Err(error);
     }
 
-    let path = task_store_partition_path(global_root, partition_id);
-    if !path.is_dir() {
-        return Ok(false);
-    }
-    std::fs::remove_dir_all(&path).map_err(|error| {
-        OrbitError::Io(format!("remove task store {}: {error}", path.display()))
-    })?;
-    Ok(true)
+    Ok(removed)
 }

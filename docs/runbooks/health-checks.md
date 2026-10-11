@@ -181,10 +181,14 @@ individual flag; neither command upgrades the binary or pulls a remote repositor
 
 `orbit workspace teardown <workspace> --confirm` requires an explicit registered name,
 `ws_*` id, or absolute checkout path — it never infers the target from cwd. It prints the
-resolved catalog name and id, checkout root, and task-store partition path, then deregisters
-the workspace and deletes both the checkout's `.orbit/` and the global task-store partition
-its task state is bound to, retiring that partition's rows in `~/.orbit/tasks/index.sqlite`
-in the same step. The summary names the catalog workspace the deleted partition belonged to.
+resolved catalog name and id, checkout root, and task-store partition path, then deletes
+the global task-store partition its task state is bound to, the owned legacy skill links,
+and the checkout's `.orbit/` before saving the workspace deregistration. Task-registry
+bindings in `~/.orbit/tasks/index.sqlite` are retired only after their partition deletion
+succeeds. If deletion fails, correct the filesystem error and retry with the same name,
+id, or absolute checkout path. The saved workspace binding also survives a crash between
+deletion and deregistration; a retry accepts already removed files. The summary names
+the catalog workspace the deleted partition belonged to.
 
 A partition directory is named for a **task-store partition id**
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`

@@ -46,6 +46,8 @@ mod ship_sweep_root;
 mod store_gc;
 mod sweep_root;
 mod sweep_workspace;
+#[cfg(unix)]
+mod teardown_retry;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tmp_gc;
 mod workspace_selector;
