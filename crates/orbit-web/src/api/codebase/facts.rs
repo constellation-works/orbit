@@ -17,7 +17,7 @@ use orbit_core::{
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskHistoryEntry, TaskRelationType,
 };
-use orbit_types::workflow::ProviderFailureClass;
+use orbit_types::workflow::{BUBBLEWRAP_NAMESPACE_REFUSAL, ProviderFailureClass};
 use serde_json::Value;
 
 /// Lock-conflict denials read per scan. Audit rows are pruned by retention,
@@ -378,16 +378,56 @@ pub(super) fn classify_block(event: &str, note: Option<&str>) -> BlockCause {
 
 fn infra_cause(text: &str) -> Option<&'static str> {
     let lower = text.to_ascii_lowercase();
-    let any = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+    // A component or test name is not evidence of a failed infrastructure
+    // operation. Match concrete diagnostics, outside identifier tokens.
+    let any = |needles: &[&str]| {
+        needles.iter().any(|needle| {
+            let needle = needle.to_ascii_lowercase();
+            lower.match_indices(&needle).any(|(start, matched)| {
+                let identifier = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-');
+                !lower[..start].chars().next_back().is_some_and(identifier)
+                    && !lower[start + matched.len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(identifier)
+            })
+        })
+    };
     if any(&[
-        "oauth",
-        "authenticat",
-        "unauthorized",
+        BUBBLEWRAP_NAMESPACE_REFUSAL,
+        "sandbox_apply: Operation not permitted",
+        "sandbox-exec cannot apply a profile",
+        "trusted sandbox-exec not available at",
+        "Bubblewrap capability probe failed",
+        "trusted Bubblewrap not available at",
+        "bwrap: Creating new namespace failed:",
+        "Orbit linux-bwrap policy denied the attempted write",
+        "macOS sandbox hid the stored credential",
+    ]) {
+        return Some("sandbox");
+    }
+    if any(&[
+        "oauth session expired",
+        "authentication failed",
+        "provider authentication failure",
+        "failed to authenticate",
+        "authentication required",
+        "not authenticated",
+        "no authentication information found",
+        "401 unauthorized",
+        "http 401",
+        "oauth token revoked",
+        "invalid api key",
+        "api key not valid",
+        "login required",
+        "please log in",
+        "please login",
         "token expired",
         "expired token",
         "invalid token",
         "token has expired",
         "not logged in",
+        "real login failure",
         "provider_unavailable/auth",
     ]) {
         return Some("auth");
@@ -395,14 +435,23 @@ fn infra_cause(text: &str) -> Option<&'static str> {
     if any(&["no space left", "enospc", "disk full", "disk quota"]) {
         return Some("disk");
     }
-    if any(&["sandbox", "bwrap", "bubblewrap", "seatbelt"]) {
-        return Some("sandbox");
-    }
     let error_code = text
         .split_once("error_code=")
         .map(|(_, rest)| rest.split([',', ' ']).next().unwrap_or(""))
         .filter(|code| !code.is_empty() && *code != "-");
     match ProviderFailureClass::of(error_code, Some(text)) {
+        // Terse provider responses need the typed infrastructure evidence:
+        // these tokens alone also occur as symbols in repository failures.
+        Some(ProviderFailureClass::Unavailable)
+            if any(&[
+                "unauthorized",
+                "unauthenticated",
+                "authentication_error",
+                "invalid_api_key",
+            ]) =>
+        {
+            Some("auth")
+        }
         Some(ProviderFailureClass::Limit | ProviderFailureClass::Capacity) => {
             Some("provider_limit")
         }
