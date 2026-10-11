@@ -15,7 +15,7 @@ workspace = true
 clap = ["orbit-types/clap"]
 # Test-only hooks for downstream crates' tests (`orbit_core::test_support`).
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
-test-support = []
+test-support = ["orbit-engine/test-support"]
 
 [dependencies]
 getrandom.workspace = true

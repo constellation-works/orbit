@@ -63,6 +63,10 @@ audit writes as well as seeded history.
 Core's dev-only edge to itself enables its `test-support` feature for its own
 integration tests, which substitute the detached pipeline worker and execute
 submitted runs in-process.
+That feature also enables Engine's `test-support` feature for scoped CLI
+supervision clocks. Landing fixtures freeze Core's source budget clock; auth
+fixtures expire Engine's deadline only after a real child signals readiness.
+Both clocks are thread-local, restored on unwind, and absent from shipped builds.
 
 The `orbit-core` → `orbit-exec` edge supports the Linux host probe and sandbox
 regression tests. The dependency-direction guard

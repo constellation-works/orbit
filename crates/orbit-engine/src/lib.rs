@@ -29,6 +29,11 @@
 //! → `orbit-engine` → orbit-core
 
 pub mod activity_job;
+/// Scoped hooks for downstream integration fixtures, enabled only in tests.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    pub use crate::activity_job::cli_runner::with_cli_supervision_clock;
+}
 mod condition;
 mod context;
 mod executor;

@@ -159,6 +159,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     } = request;
 
     let started = Instant::now();
+    let deadline_start = supervision_now();
     let spawned = match spawned_child {
         Some(spawned) => spawned,
         None => spawn_for_supervision(program, args, env, cwd, sandbox, trace.provider)?,
@@ -241,7 +242,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         )
     });
 
-    let deadline = started + timeout;
+    let deadline = deadline_start + timeout;
     let wait_directory = env
         .iter()
         .rev()
@@ -332,6 +333,15 @@ struct StoppedWatch<'a> {
     report: &'a dyn Fn(&StoppedDescendant),
 }
 
+/// Only deadline decisions use the injected clock; cleanup retains real guards.
+fn supervision_now() -> Instant {
+    #[cfg(feature = "test-support")]
+    if let Some(now) = super::test_support::now() {
+        return now;
+    }
+    Instant::now()
+}
+
 /// Block until the child exits or `deadline` elapses.
 ///
 /// Production uses `wait_timeout` for the remaining wall-clock budget so a
@@ -350,17 +360,17 @@ fn wait_until_exit_or_deadline(
     mut stopped: Option<&mut StoppedWatch<'_>>,
     extended_deadline: Option<&dyn Fn() -> Instant>,
 ) -> io::Result<Option<ExitStatus>> {
-    let mut next_sample = progress.map(|(interval, _)| Instant::now() + interval);
+    let mut next_sample = progress.map(|(interval, _)| supervision_now() + interval);
     loop {
         let deadline = extended_deadline.map_or(deadline, |read| read());
         let mut slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
         if extended_deadline.is_some() {
-            slice_end = slice_end.min(Instant::now() + Duration::from_millis(100));
+            slice_end = slice_end.min(supervision_now() + Duration::from_millis(100));
         }
         if let Some(stopped) = stopped.as_ref() {
             slice_end = slice_end.min(stopped.watch.next_sample_at());
         }
-        let remaining = slice_end.saturating_duration_since(Instant::now());
+        let remaining = slice_end.saturating_duration_since(supervision_now());
         let result = match wait {
             Some(wait) => wait(child),
             None => child.wait_timeout(remaining),
@@ -368,7 +378,7 @@ fn wait_until_exit_or_deadline(
         match result {
             Ok(Some(status)) => return Ok(Some(status)),
             Ok(None) => {
-                let now = Instant::now();
+                let now = supervision_now();
                 if now >= extended_deadline.map_or(deadline, |read| read()) {
                     return Ok(None);
                 }

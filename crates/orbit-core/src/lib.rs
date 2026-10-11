@@ -63,6 +63,7 @@ pub fn mark_process_as_pipeline_worker_binary() {
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     /// Replaced with the run id in every argv entry of a substitute worker.
     pub use crate::application::job::pipeline::worker_command_override::RUN_ID_PLACEHOLDER;
     /// Substitute the detached pipeline worker program for this whole test
@@ -71,6 +72,7 @@ pub mod test_support {
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    pub use orbit_engine::test_support::with_cli_supervision_clock;
     /// The review ledger requests that admit an attempt and record its
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.

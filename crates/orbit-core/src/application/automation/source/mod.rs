@@ -5,6 +5,8 @@ mod inspection;
 mod observe;
 mod replay;
 mod revision;
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
 
 pub(super) use command::{LISTING_LIMIT, OUTPUT_LIMIT};
 #[cfg(test)]
@@ -39,4 +41,19 @@ pub(crate) struct Source<'a> {
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,
     fetch_origin: bool,
+}
+
+/// The source's monotonic budget clock; fixture clocks never affect UTC backoff.
+fn budget_now() -> Instant {
+    #[cfg(feature = "test-support")]
+    if let Some(now) = test_support::now() {
+        return now;
+    }
+    Instant::now()
+}
+
+impl Source<'_> {
+    fn elapsed(&self) -> Duration {
+        budget_now().saturating_duration_since(self.started)
+    }
 }

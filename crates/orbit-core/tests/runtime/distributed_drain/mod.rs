@@ -97,6 +97,27 @@ const FOLLOWER: &str = "hm_follower";
 const LEAF_JOB: &str = "task_claimed_pr_pipeline";
 const LOCAL_LEAF_JOB: &str = "task_claimed_local_pipeline";
 
+/// These fixtures exercise landing evidence, not elapsed subprocess budgets.
+/// Real commands still must exit and all size/identity guards still apply.
+fn evaluate_landing(
+    runtime: &OrbitRuntime,
+    definition: &orbit_types::workflow::AutoTaskDefinition,
+) -> orbit_types::workflow::automation::AutomationDiagnostic {
+    let now = std::time::Instant::now();
+    orbit_core::test_support::with_delivery_source_clock(
+        move || now,
+        || {
+            orbit_core::application::automation::evaluate_auto_task(
+                runtime,
+                definition,
+                false,
+                Utc::now(),
+            )
+            .unwrap()
+        },
+    )
+}
+
 /// Run `test` (declared in `module_path`, the caller's `module_path!()`)
 /// alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. `HOME/bin`

@@ -189,6 +189,16 @@ Test design (boundary first, unit tests by exception, binary layout) is in [test
 
 ### Fixtures on a loaded host
 
+Fixtures whose assertions concern evidence rather than elapsed execution use
+scoped clocks from `orbit_core::test_support`: `with_delivery_source_clock`
+controls command, lookup and whole-pass budgets; `with_cli_supervision_clock`
+controls a provider's supervision deadline. Freeze time while real commands
+complete, or advance it only after a child signals readiness to exercise a
+timeout. The distributed-drain landing and auth fixtures demonstrate both.
+These thread-local hooks restore prior clocks on unwind and require the
+dev-only `test-support` feature. Cleanup and the outer child-test hang guard
+keep their real clocks, so a broken handshake still fails and is reaped.
+
 Gates often run beside a busy drain, where a fixture's wall-clock time stretches tenfold. Keep outcomes independent of host load:
 
 - Re-execute child tests through `orbit_common::test_env::run_child_test` and verify them with `assert_child_test_passed`. It kills a child that prints nothing for `CHILD_TEST_DEADLINE` (300 s), so a child that reports progress is slow, not hung, and keeps running until `CHILD_TEST_CEILING` (540 s, below nextest's ten-minute kill). Either overrun reports load averages and the child's output. The child leads its own process group; a watchdog process kills that group if the test process dies first (nextest interrupt or timeout), so no fixture child outlives its parent.
