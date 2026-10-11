@@ -1789,9 +1789,9 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
 /// is refused, and a replay red on the base too is held as `baseline_red`. A
 /// later implementation that deferred nothing clears the obligation.
 #[test]
-fn a_bubblewrap_deferral_is_replayed_natively_before_delivery() {
+fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     isolated(
-        "a_bubblewrap_deferral_is_replayed_natively_before_delivery",
+        "a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery",
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
@@ -1869,6 +1869,11 @@ fn a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step() {
             };
             let alongside = |line: &str| json!([bwrap_notice(), line]);
             let probe = |exit_code: i32, output: &str| json!({ "command": BUBBLEWRAP_NAMESPACE_PROBE, "exit_code": exit_code, "output": output });
+            let mut missing_probe_command = valid.clone();
+            missing_probe_command["probe"]
+                .as_object_mut()
+                .expect("probe is an object")
+                .remove("command");
             let cases = [
                 (
                     "a SKIP line",
@@ -1923,6 +1928,23 @@ fn a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step() {
                     "a probe that never reached the kernel",
                     with("probe", probe(127, "sh: bwrap: not found")),
                     "no failing namespace probe",
+                ),
+                (
+                    "a probe missing its command",
+                    missing_probe_command,
+                    "probe: missing field `command`",
+                ),
+                (
+                    "a different probe command",
+                    with(
+                        "probe",
+                        json!({
+                            "command": "bwrap --unshare-user --ro-bind / / -- /bin/false",
+                            "exit_code": 1,
+                            "output": "bwrap: No permissions to create a new namespace",
+                        }),
+                    ),
+                    "names the probe",
                 ),
                 (
                     "a command no host replays",
@@ -2103,8 +2125,8 @@ fn bwrap_notice() -> String {
     )
 }
 
-/// An implementer's record of a passing gate whose only gap is a Bubblewrap
-/// deferral, backed by a failing namespace probe in the same lane.
+/// The accepted record example from `agent_implement.yaml`, with the gate and
+/// base substituted for this run's values.
 fn deferral(fx: &Fixture, command: &str) -> Value {
     json!({
         "command": command,
