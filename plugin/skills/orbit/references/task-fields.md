@@ -176,6 +176,12 @@ task by its tags), when the acceptance criteria are re-scoped, when a newer
 assessment carries no such finding, or through the same evidenced human
 decision as above, which records `native_os_requirement_resolved`.
 
+A trusted native-host decision stays valid across later pilot assessments with
+the same acceptance-criteria digest, OS requirement set and machine requirement.
+Requirement order does not matter. Changed criteria or requirements supersede
+the decision. Operator-validation and host-operational decisions remain scoped
+to the assessment they answered; a new assessment supersedes them.
+
 
 ## Duplicate recovery
 

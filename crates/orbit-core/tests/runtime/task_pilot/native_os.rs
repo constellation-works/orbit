@@ -247,6 +247,10 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
         let decision = format!(
             "task-pilot-admission: {clearing}\nThe operator ran the macOS launch on their own host."
         );
+        let required_os = json!([
+            {"criterion": 1, "os": "macos", "evidence": "A native sandbox-exec launch."},
+            {"criterion": 1, "os": "linux", "evidence": "A native Bubblewrap launch."},
+        ]);
         // A decision made before the assessment cannot approve it.
         workspace
             .runtime
@@ -259,7 +263,7 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
                 "human:fixture".into(),
             )
             .unwrap();
-        assess(&workspace, &task, Some(needs_macos(1)));
+        assess(&workspace, &task, Some(required_os.clone()));
         assert_eq!(tags(&workspace, &task), ["os:linux"], "{clearing}");
         assert_native_os_wait(&workspace, &task, 1);
         // Agent provenance cannot mint the decision, and a decision without
@@ -332,9 +336,115 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
             "{clearing}"
         );
         if clearing != "rescope" {
-            // A newer assessment with the finding supersedes the decision.
+            // A new pass with the same requirement set preserves a trusted
+            // decision even if the pilot emits it in a different order.
+            let mut reordered = required_os.as_array().unwrap().clone();
+            reordered.reverse();
+            reordered.push(reordered[0].clone());
+            assess(&workspace, &task, Some(json!(reordered)));
+            if clearing == "reassessed" {
+                assert_native_os_wait(&workspace, &task, 1);
+            } else {
+                assert_eq!(exclusion(&workspace, &task), None, "{clearing}");
+                assert_eq!(resolutions(&workspace, &task), ["human:fixture"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_native_os_decision_is_superseded_by_changed_findings() {
+    if !isolated("task_pilot::native_os::a_native_os_decision_is_superseded_by_changed_findings") {
+        return;
+    }
+    for decision in ["approve-anyway", "clear"] {
+        for change in ["criteria", "os", "criterion", "machine"] {
+            let mut workspace = Workspace::new();
+            on(&mut workspace, HostOs::Linux);
+            let task = backlog_task(
+                &workspace,
+                &[NATIVE_CRITERION, "A native Windows launch succeeds."],
+                &["os:linux"],
+            );
             assess(&workspace, &task, Some(needs_macos(1)));
             assert_native_os_wait(&workspace, &task, 1);
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(format!(
+                            "task-pilot-admission: {decision}\nThe operator recorded the native launch."
+                        )),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+            assert_eq!(exclusion(&workspace, &task), None);
+
+            match change {
+                "criteria" => {
+                    workspace
+                        .runtime
+                        .update_task_as_human(
+                            &task.id,
+                            TaskUpdateParams {
+                                acceptance_criteria: Some(vec![
+                                    "A real macOS sandbox-exec launch of the revised fixture succeeds."
+                                        .into(),
+                                    "A native Windows launch succeeds.".into(),
+                                ]),
+                                ..Default::default()
+                            },
+                            "human:fixture".into(),
+                        )
+                        .unwrap();
+                    assess(&workspace, &task, Some(needs_macos(1)));
+                    assert_native_os_wait(&workspace, &task, 1);
+                }
+                "os" => {
+                    assess(
+                        &workspace,
+                        &task,
+                        Some(json!([{
+                            "criterion": 1, "os": "windows", "evidence": "A native Windows launch.",
+                        }])),
+                    );
+                    let (reason, detail) =
+                        exclusion(&workspace, &task).expect("changed OS is held");
+                    assert_eq!(reason, "native_os_required");
+                    assert!(detail.contains("native windows evidence"), "{detail}");
+                }
+                "criterion" => {
+                    assess(&workspace, &task, Some(needs_macos(2)));
+                    assert_native_os_wait(&workspace, &task, 2);
+                }
+                "machine" => {
+                    let applied = apply_findings(
+                        &workspace,
+                        &task,
+                        Some(json!({
+                            "required_os": needs_macos(1),
+                            "required_machine": [{
+                                "criterion": 1, "machine": "fixture-machine",
+                                "evidence": "The owner's live store is also needed.",
+                            }],
+                        })),
+                    );
+                    assert_eq!(applied["applied_count"], 1, "{applied}");
+                    workspace.runtime = workspace
+                        .runtime
+                        .clone()
+                        .with_automation_machine_identity(Some("other-machine".into()));
+                    let (reason, detail) =
+                        exclusion(&workspace, &task).expect("changed machine is held");
+                    assert_eq!(reason, "native_os_required");
+                    assert!(detail.starts_with("Machine requirement:"), "{detail}");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(resolutions(&workspace, &task), ["human:fixture"]);
         }
     }
 }
