@@ -205,22 +205,14 @@ jobs:
           rm -f "$archive"
           uv --version | grep -F "${UV_VERSION}"
 
-      - name: Run CI guardrails
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/ci-guardrails.sh
-
-      # [ORB-13884] The ubuntu-latest image does not ship Bubblewrap, and Ubuntu
-      # 24.04 restricts unprivileged user namespaces through AppArmor, so the
-      # live boundary tests below need the prerequisite prepared the way
-      # docs/runbooks/linux-sandbox.md prepares a host: distro `bubblewrap`,
-      # and only if the real probe still fails with the AppArmor UID-map
-      # denial, the packaged narrow `bwrap-userns-restrict` profile. The
-      # global `kernel.apparmor_restrict_unprivileged_userns` control is never
-      # touched. The step ends with the exact namespace-and-mount probe Orbit
-      # runs, as the unprivileged runner user, and fails with a diagnostic when
-      # it does not pass; the tests' own assertions are unchanged. The profile
-      # lives on this ephemeral runner only.
+      # [ORB-13884] Ubuntu does not ship Bubblewrap, and Ubuntu 24.04 restricts
+      # unprivileged user namespaces through AppArmor. Prepare and probe it
+      # before the portable suite so probe-gated tests take their live branch.
+      # This adds apt package setup and possible AppArmor loading before the
+      # guardrails; a setup failure therefore preempts their output. The test
+      # runner shows successful nextest output immediately, increasing log
+      # volume so the live assertions are visible. The profile is ephemeral,
+      # and the global user-namespace controls are never changed.
       - name: Prepare and probe Bubblewrap for the Linux boundary tests
         run: |
           set -euo pipefail
@@ -286,6 +278,11 @@ jobs:
             echo "Bubblewrap probe passed after loading the packaged bwrap-userns-restrict profile"
           fi
 
+      - name: Run CI guardrails
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/ci-guardrails.sh
+
       # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
       # explicit, named gate for orbit-policy's evaluation matrix (incl. the
       # ORB-00418 symlink-resolution tests), orbit-tools' runtime
@@ -310,8 +307,9 @@ jobs:
       # add `--no-tests` here.
       # The uv-locked Python plugin fixture runs in the portable suite above:
       # the pinned uv binary is installed before Run CI guardrails.
-      # A prior failure in this job (including `Run CI guardrails`) skips this
-      # gate; if this step is missing, the gate did not pass.
+      # A prior failure in this job (including Bubblewrap preparation or
+      # `Run CI guardrails`) skips this gate; if this step is missing, it did
+      # not pass.
       - name: Linux sandbox/policy enforcement gate
         run: |
           cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
