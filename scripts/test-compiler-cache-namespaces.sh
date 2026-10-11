@@ -35,6 +35,34 @@ if [[ -n "${ORBIT_COMPILER_CACHE_BIN-}" && -f "${ORBIT_COMPILER_CACHE_BIN}" ]] \
   fail "ORBIT_COMPILER_CACHE_BIN is the unit-test fake sccache"
 fi
 
+# Resolve the cache as rustc-compiler-cache.sh does. Without an enabled cache,
+# sccache binary, and writable cache directory the wrapper runs plain rustc, so
+# there is no cached compile to verify. Say so; do not skip or probe namespaces.
+sccache_bin=""
+if [[ -n "${ORBIT_COMPILER_CACHE_BIN:-}" && -x "$ORBIT_COMPILER_CACHE_BIN" ]]; then
+  sccache_bin="$ORBIT_COMPILER_CACHE_BIN"
+elif [[ -n "${HOME:-}" && -x "$HOME/.orbit/cache/bin/sccache" ]]; then
+  sccache_bin="$HOME/.orbit/cache/bin/sccache"
+elif command -v sccache >/dev/null 2>&1; then
+  sccache_bin="$(command -v sccache)"
+fi
+cache_dir="${SCCACHE_DIR:-}"
+if [[ -z "$cache_dir" && -n "${HOME:-}" ]]; then
+  cache_dir="$HOME/.orbit/cache/compiler"
+fi
+cache_disabled_reason=""
+if [[ "${ORBIT_COMPILER_CACHE:-}" == "0" ]]; then
+  cache_disabled_reason="ORBIT_COMPILER_CACHE=0"
+elif [[ -z "$sccache_bin" ]]; then
+  cache_disabled_reason="no sccache binary"
+elif [[ -z "$cache_dir" ]] || ! mkdir -p "$cache_dir" 2>/dev/null || [[ ! -w "$cache_dir" ]]; then
+  cache_disabled_reason="cache directory unset or not writable"
+fi
+if [[ -n "$cache_disabled_reason" ]]; then
+  printf 'test-compiler-cache-namespaces: not applicable: host compiler cache is disabled (%s)\n' "$cache_disabled_reason"
+  exit 0
+fi
+
 if ! command -v bwrap >/dev/null 2>&1; then
   skip "bwrap not on PATH"
 fi
@@ -47,16 +75,6 @@ if ! bwrap --die-with-parent --unshare-all --share-net --ro-bind / / --tmpfs /tm
 fi
 rm -f "$probe_err"
 
-sccache_bin="${ORBIT_COMPILER_CACHE_BIN:-}"
-if [[ -z "$sccache_bin" && -x "${HOME:-}/.orbit/cache/bin/sccache" ]]; then
-  sccache_bin="$HOME/.orbit/cache/bin/sccache"
-fi
-if [[ -z "$sccache_bin" ]] && command -v sccache >/dev/null 2>&1; then
-  sccache_bin="$(command -v sccache)"
-fi
-if [[ -z "$sccache_bin" || ! -x "$sccache_bin" ]]; then
-  skip "sccache not available for live namespace compile"
-fi
 if ! command -v cargo >/dev/null 2>&1; then
   skip "cargo not on PATH"
 fi

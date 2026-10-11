@@ -143,6 +143,16 @@ scripts/test-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/test-compiler-cache-namespaces.sh
 ```
 
+When the cache is disabled, that namespace script prints one line,
+`test-compiler-cache-namespaces: not applicable: host compiler cache is disabled (...)`,
+and exits 0 before probing namespaces. The reason is `ORBIT_COMPILER_CACHE=0`,
+no sccache binary, or an unwritable `SCCACHE_DIR`. **That line is not a
+validation gap.** No compile on that host uses the shared cache, so there is no
+namespace hazard to test. It does not fail under `ORBIT_COMPILER_CACHE_REQUIRE_NS=1`
+either; the regression applies once the cache is enabled. With the cache enabled
+and namespaces unavailable, the script still prints `skip:`, or fails under
+`REQUIRE_NS=1`. A `skip:` line is not a pass.
+
 Only after that regression passes should the orchestrator leave the host cache
 directory writable for workers.
 

@@ -422,6 +422,94 @@ set -e
 grep -F -q 'unit-test fake sccache' "$TMP/guard-bin.err" \
   || fail "live suite should reject fixture sccache, got: $(tr '\n' ' ' <"$TMP/guard-bin.err")"
 
+# 11. The live namespace check reports a disabled cache as not applicable and
+# never probes namespaces. With a usable cache it still probes, so the skip (and
+# the REQUIRE_NS failure) stays reachable. A stub bwrap refuses namespaces and
+# records each probe. env -i keeps the suite's fixture variables out.
+NS_BWRAP_LOG="$TMP/ns-bwrap.log"
+ns_bwrap_dir="$TMP/ns-bwrap"
+ns_sccache="$TMP/ns-cache/sccache"
+ns_out="$TMP/ns.out"
+ns_err="$TMP/ns.err"
+mkdir -p "$ns_bwrap_dir" "$(dirname "$ns_sccache")"
+cat > "$ns_bwrap_dir/bwrap" <<'EOF'
+#!/usr/bin/env bash
+printf 'probe\n' >> "$FAKE_BWRAP_LOG"
+printf 'bwrap: No permissions to create a new namespace\n' >&2
+exit 1
+EOF
+chmod +x "$ns_bwrap_dir/bwrap"
+# Usable-looking sccache. Not the unit-test fake, which the live guard rejects.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ns_sccache"
+chmod +x "$ns_sccache"
+
+run_live_ns() {
+  local home="$1" path="$2" out="$3" err="$4"
+  shift 4
+  set +e
+  env -i HOME="$home" PATH="$path" FAKE_BWRAP_LOG="$NS_BWRAP_LOG" "$@" \
+    "$ROOT/scripts/test-compiler-cache-namespaces.sh" >"$out" 2>"$err"
+  NS_STATUS=$?
+  set -e
+}
+
+assert_ns_not_applicable() {
+  local label="$1"
+  [[ "$NS_STATUS" -eq 0 ]] || fail "$label: expected exit 0, got $NS_STATUS"
+  [[ "$(grep -c '' "$ns_out")" -eq 1 ]] || fail "$label: expected exactly one stdout line"
+  grep -Fq 'not applicable' "$ns_out" || fail "$label: expected the not-applicable line"
+  if grep -Fq 'skip:' "$ns_out"; then
+    fail "$label: the not-applicable line must not use skip wording"
+  fi
+  [[ ! -s "$ns_err" ]] || fail "$label: unexpected stderr"
+  [[ ! -e "$NS_BWRAP_LOG" ]] || fail "$label: must not probe namespaces"
+}
+
+ns_home="$TMP/ns-home"
+ns_path="$ns_bwrap_dir:/usr/bin:/bin"
+unset ORBIT_COMPILER_CACHE_BIN
+
+# Disabled by ORBIT_COMPILER_CACHE=0 even though a usable sccache is present.
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE=0 ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+assert_ns_not_applicable "cache forced off"
+
+# No sccache binary on HOME or PATH.
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+assert_ns_not_applicable "no sccache"
+
+# Cache directory not writable. Root ignores directory mode bits, as in case 3.
+if [[ "$(id -u)" -eq 0 ]]; then
+  printf 'test-compiler-cache: skip unwritable namespace-cache case (running as root)\n'
+else
+  ns_home_ro="$TMP/ns-home-ro"
+  mkdir -p "$ns_home_ro/.orbit/cache/compiler"
+  chmod a-w "$ns_home_ro/.orbit/cache/compiler"
+  rm -f "$NS_BWRAP_LOG"
+  run_live_ns "$ns_home_ro" "$ns_path" "$ns_out" "$ns_err" \
+    ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+  chmod u+w "$ns_home_ro/.orbit/cache/compiler"
+  assert_ns_not_applicable "unwritable cache directory"
+fi
+
+# Usable cache, namespaces refused: the existing skip, and a failure under REQUIRE_NS=1.
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=0
+[[ "$NS_STATUS" -eq 0 ]] || fail "usable cache with refused namespaces should exit 0, got $NS_STATUS"
+grep -Fq 'skip: cannot create a mount namespace' "$ns_out" \
+  || fail "usable cache with refused namespaces should keep the skip line"
+[[ -e "$NS_BWRAP_LOG" ]] || fail "usable cache must still probe namespaces"
+
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+[[ "$NS_STATUS" -ne 0 ]] || fail "usable cache with REQUIRE_NS=1 must fail when namespaces are refused"
+grep -Fq 'namespace test required' "$ns_err" \
+  || fail "REQUIRE_NS failure should name the required namespace test, got: $(tr '\n' ' ' <"$ns_err")"
+
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.
 
