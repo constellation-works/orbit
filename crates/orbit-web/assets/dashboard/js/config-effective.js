@@ -13,6 +13,9 @@
 // Writes go through the same PUT and DELETE key routes as every other
 // Settings view, then the view re-reads the payload, so what it shows after
 // a save is the server's answer.
+//
+// The value helpers and the typed value field are exported for the Workspace
+// file view (config-workspace-file.js), which edits keys the same way.
 
 import { el, formatDateTime, getWorkspace, requestJson } from './common.js';
 
@@ -175,7 +178,7 @@ function firstVisible(model) {
 // --------------------------------------------------------------- values
 
 /// A value as text, the way `orbit config show` prints it.
-function display(value) {
+export function display(value) {
   if (value == null) return "unset";
   if (Array.isArray(value)) return value.length ? value.map(display).join(" ") : "empty";
   if (typeof value === "string") return value === "" ? "empty" : value;
@@ -183,7 +186,7 @@ function display(value) {
 }
 
 /// A value as tokens: one per array entry, with a pool weight dimmed.
-function valueTokens(value) {
+export function valueTokens(value) {
   const node = el("span", { class: "cfx-value" });
   if (value == null || value === "" || (Array.isArray(value) && !value.length)) {
     node.appendChild(el("span", { class: "cfx-empty", text: value == null ? "unset" : "empty" }));
@@ -200,11 +203,11 @@ function valueTokens(value) {
   return node;
 }
 
-function pill(layer) {
+export function pill(layer) {
   return el("span", { class: `cfx-pill ${layer}`, text: layer });
 }
 
-function button(label, onClick, cls = "cfx-btn") {
+export function button(label, onClick, cls = "cfx-btn") {
   const node = el("button", { class: cls, type: "button", text: label });
   node.addEventListener("click", onClick);
   return node;
@@ -693,7 +696,7 @@ function editor(payload, info, context) {
   const form = el("form", { class: "cfx-editor" });
   form.noValidate = true;
   form.appendChild(el("h3", { class: "cfx-eyebrow", text: "Change value" }));
-  const field = valueField(row);
+  const field = valueField(row, draft, { id: "cfx-edit-value", disabled: pending });
   const fieldLabel = el("label", { class: "cfx-label", text: field.label });
   fieldLabel.htmlFor = "cfx-edit-value";
   form.appendChild(fieldLabel);
@@ -762,7 +765,7 @@ function editor(payload, info, context) {
   return form;
 }
 
-function draftText(row) {
+export function draftText(row) {
   const value = row.value;
   if (Array.isArray(value)) return value.map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry))).join("\n");
   if (value == null) return row.value_type === "bool" ? "false" : "";
@@ -771,8 +774,8 @@ function draftText(row) {
 
 /// A field typed by the registry: a choice list for an enum or a bool, a
 /// number field for an integer, one entry per line for an array, and a text
-/// field otherwise. It edits `draft.text`, so a re-render keeps the input.
-function valueField(row) {
+/// field otherwise. It edits `state.text`, so a re-render keeps the input.
+export function valueField(row, state, { id, disabled }) {
   const type = String(row.value_type || "");
   const options = Array.isArray(row.options) ? row.options : [];
   let node;
@@ -781,36 +784,36 @@ function valueField(row) {
   if (options.length || type === "bool") {
     const choices = options.length ? options : ["true", "false"];
     node = el("select", { class: "cfx-input mono" });
-    if (!choices.includes(draft.text)) draft.text = choices[0];
+    if (!choices.includes(state.text)) state.text = choices[0];
     for (const choice of choices) {
       const option = el("option", { text: choice });
       option.value = choice;
       node.appendChild(option);
     }
-    node.value = draft.text;
+    node.value = state.text;
   } else if (type.startsWith("array")) {
     node = el("textarea", { class: "cfx-input mono" });
-    node.rows = Math.min(8, Math.max(3, draft.text.split("\n").length + 1));
-    node.value = draft.text;
+    node.rows = Math.min(8, Math.max(3, state.text.split("\n").length + 1));
+    node.value = state.text;
     label = "New value, one entry per line";
     hint = "An empty list clears every entry.";
   } else {
     node = el("input", { class: "cfx-input mono", type: type === "integer" ? "number" : "text" });
     if (type === "integer") node.inputMode = "numeric";
-    node.value = draft.text;
+    node.value = state.text;
   }
-  node.id = "cfx-edit-value";
-  node.disabled = pending;
+  node.id = id;
+  node.disabled = disabled;
   const listeners = [];
   node.addEventListener(node.tagName === "SELECT" ? "change" : "input", () => {
-    draft.text = node.value;
+    state.text = node.value;
     for (const listener of listeners) listener();
   });
   return { node, label, hint, onInput: (listener) => listeners.push(listener) };
 }
 
 /// The draft as the JSON value the key route admits, or an error message.
-function draftValue(row, text) {
+export function draftValue(row, text) {
   const type = String(row.value_type || "");
   if (type === "bool") return { value: text === "true" };
   if (type === "integer") {
@@ -824,7 +827,7 @@ function draftValue(row, text) {
 
 /// The `orbit config set` command that makes the same write. Its value is a
 /// TOML literal the CLI parses, quoted for a POSIX shell.
-function cliCommand(row, current) {
+export function cliCommand(row, current) {
   const type = String(row.value_type || "");
   const text = current.text;
   let literal;

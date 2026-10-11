@@ -402,7 +402,7 @@ layering and descriptions as `orbit config show`.
 | View | Shows |
 |---|---|
 | **Effective** | The merged result: workspace values over global values over built-in defaults. |
-| **Workspace file** | `.orbit/config.toml` alone (`orbit config show --scope workspace`). |
+| **Workspace file** | The keys `.orbit/config.toml` sets, and what each would fall back to if removed. |
 | **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
 | **Crews** | The crew table. |
 | **Keys** | Every settable key with its type, section, description, and accepted values. |
@@ -431,6 +431,30 @@ lower layer. **All keys** shows the rest.
 A **registry strip** shows the registered `base_branch` and `ship_mode`.
 Delivery uses these, not `workflow.base_branch`, and the strip flags a
 disagreement. Change them with `orbit workspace`; the strip is read-only.
+
+### Tidy the workspace file
+
+**Workspace file** lists only the keys `.orbit/config.toml` sets, grouped by
+TOML table. Three cards count them by what removing a key would do:
+
+- **Own value**: the effective value would change.
+- **Restates global**: the global file sets the same value.
+- **Restates built-in default**: Orbit ships the same value.
+
+Click a card to filter the table to that kind of key.
+
+Each row's **If removed** column names the layer and value the key would fall
+back to, followed by `no change` or `value changes`. When that fallback is not
+reported, it says `may change`. Execution keys fall back to the built-in
+default, not the global value, while the workspace file exists, and the row
+says so.
+
+When some keys only restate a value, a callout counts them. Its **Select**
+button checks those rows. **Remove from file** then removes each checked key
+from the file in turn and lists each key's outcome. A key the server refuses
+to remove stays checked, with the reason on its row. **Edit**
+changes a value in place and previews the matching `orbit config set`
+command. **+ Add key** offers the registered keys the file does not set yet.
 
 ### Edit a value
 

@@ -10,11 +10,13 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 //
-// The Effective sub-view is its own module (config-effective.js); this one
-// owns the tab, the file views, Crews, Keys and System.
+// The Effective and Workspace file sub-views are their own modules
+// (config-effective.js, config-workspace-file.js); this one owns the tab, the
+// Global file view, Crews, Keys and System.
 
 import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 import { renderEffective, resetEffective } from './config-effective.js';
+import { renderWorkspaceFile, resetWorkspaceFile, workspaceFileCount } from './config-workspace-file.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
@@ -61,6 +63,7 @@ export function initConfig() {
     editing = null;
     expandedSections.clear();
     resetEffective();
+    resetWorkspaceFile();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
   // editor's focus, so it waits until nothing is being edited.
@@ -154,13 +157,13 @@ function renderPanels(payload, body) {
     return;
   }
   if (activeSubtab === "effective") {
-    renderEffective(body, payload, {
-      canEdit: editable(payload),
-      refusal: hostWriteRefusal() || payload?.config_set?.reason || "",
-      render,
-      reload: fetchAndRenderConfig,
-    });
+    renderEffective(body, payload, viewContext(payload));
     $("config-count").textContent = countSummary(payload);
+    return;
+  }
+  if (activeSubtab === "workspace-file") {
+    renderWorkspaceFile(body, payload, viewContext(payload));
+    $("config-count").textContent = workspaceFileCount(payload);
     return;
   }
   body.appendChild(layersStrip(payload));
@@ -169,6 +172,17 @@ function renderPanels(payload, body) {
   }
   body.appendChild(pathsPanel(payload));
   $("config-count").textContent = countSummary(payload);
+}
+
+/// What a sub-view module needs from the tab: whether this session may write
+/// and why not, and how to rebuild or re-read the view.
+function viewContext(payload) {
+  return {
+    canEdit: editable(payload),
+    refusal: hostWriteRefusal() || payload?.config_set?.reason || "",
+    render,
+    reload: fetchAndRenderConfig,
+  };
 }
 
 function countSummary(payload) {
@@ -190,7 +204,7 @@ function renderControls(payload) {
   const controls = $("config-controls");
   if (!controls) return;
   controls.replaceChildren();
-  controls.hidden = activeSubtab === "crews";
+  controls.hidden = ownsControls(activeSubtab);
   if (controls.hidden) return;
 
   if (activeSubtab === "system") {
@@ -241,6 +255,11 @@ function renderControls(payload) {
     });
     controls.appendChild(reveal);
   }
+}
+
+/// Crews has no controls; the Workspace file view carries its own actions.
+function ownsControls(subtab) {
+  return subtab === "crews" || subtab === "workspace-file";
 }
 
 function reloadButton() {
@@ -318,7 +337,7 @@ function updateConfigChrome() {
   const explainer = $("config-explainer");
   if (explainer) explainer.hidden = activeSubtab !== "effective";
   const controls = $("config-controls");
-  if (controls && activeSubtab === "crews") controls.hidden = true;
+  if (controls && ownsControls(activeSubtab)) controls.hidden = true;
 }
 
 // ---------------------------------------------------------------- sections
@@ -953,14 +972,7 @@ function crewsPanel(payload, { standalone }) {
   }
   body.appendChild(head);
   if (!crews.length && !(editing && editing.kind === "crew" && editing.name === "")) {
-    body.appendChild(
-      el("div", {
-        class: "config-empty",
-        text: standalone
-          ? "No crew is defined for this workspace."
-          : "No crew is defined; the built-in crew registry applies.",
-      }),
-    );
+    body.appendChild(el("div", { class: "config-empty", text: noCrewText(payload, standalone) }));
   }
   if (editing && editing.kind === "crew" && editing.name === "") {
     body.appendChild(crewEditor({ name: "", tags: [] }, payload, true));
@@ -968,6 +980,19 @@ function crewsPanel(payload, { standalone }) {
   for (const crew of crews) body.appendChild(crewRow(crew, payload));
   panel.appendChild(body);
   return panel;
+}
+
+/// A file view cannot build crew rows (`crews_enumerated: false`), so an
+/// empty list there names the file's crew tables rather than claiming that
+/// no crew is defined.
+function noCrewText(payload, standalone) {
+  if (payload.crews_enumerated === false) {
+    const tables = Array.isArray(payload.crew_tables) ? payload.crew_tables : [];
+    return tables.length
+      ? `This file defines ${tables.length === 1 ? "one crew table" : `${tables.length} crew tables`}: ${tables.join(", ")}. Crews shows them with the other layers.`
+      : "This file defines no crew table. Crews shows every crew this workspace can use.";
+  }
+  return standalone ? "No crew is defined for this workspace." : "No crew is defined; the built-in crew registry applies.";
 }
 
 function addCrewButton() {
