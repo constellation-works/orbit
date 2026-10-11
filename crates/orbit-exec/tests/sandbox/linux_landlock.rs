@@ -311,6 +311,32 @@ fn the_child_cannot_read_another_processs_status() {
     );
 }
 
+/// The child's own `/proc/self` resolves to its `/proc/<pid>` entry, which no
+/// grant covers. A confined child that needs its identity has to get it from
+/// the parent or the kernel, so this pins the denial rather than a grant.
+#[test]
+fn the_child_cannot_read_its_own_proc_entry() {
+    if unenforceable() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let profile = profile(&["**"]);
+
+    // Prove that cat works inside the boundary before testing denial.
+    fixture.write("visible.txt", "CAT_OK");
+    fixture
+        .run(&profile, "cat visible.txt")
+        .assert_returned("CAT_OK");
+    let output = fixture.run(&profile, "cat /proc/self/stat");
+    assert!(
+        !output.succeeded && output.stdout.is_empty(),
+        "the confined child must not read its own /proc entry: succeeded={} stdout={:?} stderr={:?}",
+        output.succeeded,
+        output.stdout,
+        output.stderr
+    );
+}
+
 /// Criterion 3: the programs shipped activity allowlists name still work, and
 /// they work for the reasons the host grants claim — `cargo` needs its
 /// toolchain home, `gh` and networked `git` need the resolver and trust store.
