@@ -1025,14 +1025,16 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
         orbit_common::test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
-        let output = command
+        command
             .args(["--exact", TEST, "--nocapture"])
             .env(CHILD, TEST)
+            // Attribution requires every stubbed lookup, independent of the
+            // shared host's two-second command budget.
+            .env(orbit_core::test_support::SOURCE_ELAPSED_ENV, "0")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
-            .current_dir(home.path())
-            .output()
-            .unwrap();
+            .current_dir(home.path());
+        let output = orbit_common::test_env::run_child_test(&mut command, TEST, home.path());
         orbit_common::test_env::assert_child_test_passed(
             TEST,
             output.status,
