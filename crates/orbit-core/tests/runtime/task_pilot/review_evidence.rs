@@ -86,6 +86,140 @@ fn outcome(applied: &Value) -> &Value {
 }
 
 #[test]
+fn root_selectors_apply_at_the_pinned_source() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::review_evidence::root_selectors_apply_at_the_pinned_source",
+    ) {
+        return;
+    }
+    for after in [&["dir:."][..], &["dir:.", "file:README.md"][..]] {
+        let workspace = Workspace::new();
+        let task = workspace.filed_task("root scope", &[], &["file:README.md"]);
+        let pinned = workspace.object("HEAD");
+        let prepared = workspace.prepare(&[&task.id]);
+        assert_eq!(prepared["source"]["source_revision"], pinned);
+
+        // The assessment remains bound to preparation even when the live
+        // checkout and branch no longer contain its narrower target.
+        workspace.git(&["rm", "README.md"]);
+        workspace.git(&["commit", "-m", "remove the live target"]);
+        assert_ne!(workspace.object("HEAD"), pinned);
+        assert!(!workspace.repo.join("README.md").exists());
+
+        let applied = workspace.assess(&prepared, after, "medium");
+        assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        assert_eq!(workspace.scope(&task.id), after);
+    }
+}
+
+#[test]
+fn omitted_root_is_retained_as_review_evidence_and_is_never_missing() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::review_evidence::omitted_root_is_retained_as_review_evidence_and_is_never_missing",
+    ) {
+        return;
+    }
+    for tags in [&["code-review"][..], &[][..]] {
+        let workspace = Workspace::new();
+        let filed = ["dir:.", "file:README.md"];
+        let task = workspace.filed_task("root evidence", tags, &filed);
+        let prepared = workspace.prepare(&[&task.id]);
+        assert_eq!(
+            prepared["source"]["source_revision"],
+            workspace.object("HEAD")
+        );
+        let applied = workspace.assess(&prepared, &["file:README.md"], "medium");
+        assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        assert!(
+            applied["tasks"][0]
+                .get("context_reauthorization_required")
+                .is_none(),
+            "the omitted root exists at the pinned source: {applied}"
+        );
+        if tags.is_empty() {
+            // Non-review narrowing reaches missing-target inspection with
+            // the root still omitted, rather than hidden by retention.
+            assert_eq!(workspace.scope(&task.id), ["file:README.md"]);
+        } else {
+            assert_eq!(
+                applied["tasks"][0]["context_evidence_retained"],
+                json!(["dir:."])
+            );
+            assert_eq!(workspace.scope(&task.id), filed);
+        }
+    }
+}
+
+#[test]
+fn root_assessments_preserve_pinned_path_confinement_and_kind_checks() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::review_evidence::root_assessments_preserve_pinned_path_confinement_and_kind_checks",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.commit_file("src/module.rs", "fn fixture() {}\n", "add a directory");
+    let commit = workspace.object("HEAD");
+    workspace.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000",
+        &commit,
+        "submodule",
+    ]);
+    workspace.git(&["commit", "-m", "add an unsupported gitlink"]);
+    let mut refused = vec![
+        "dir:..".to_string(),
+        "dir:../repo".to_string(),
+        format!("dir:{}", workspace.root.path().display()),
+        format!("dir:{}", workspace.repo.display()),
+        "module:fixture".to_string(),
+        "command:orbit".to_string(),
+        "file:.".to_string(),
+        "symbol:.#root:function".to_string(),
+        "file:src".to_string(),
+        "dir:README.md".to_string(),
+        "dir:submodule".to_string(),
+        "file:later.rs".to_string(),
+    ];
+    #[cfg(unix)]
+    {
+        // Both an in-repository link and an escaping link remain unsupported
+        // Git objects even when the assessment also contains the root.
+        std::os::unix::fs::symlink("README.md", workspace.repo.join("link.rs")).unwrap();
+        std::os::unix::fs::symlink("..", workspace.repo.join("link-dir")).unwrap();
+        workspace.git(&["add", "link.rs", "link-dir"]);
+        workspace.git(&["commit", "-m", "add symlinks"]);
+        refused.extend(["file:link.rs".into(), "dir:link-dir".into()]);
+    }
+    let task = workspace.filed_task("confined root", &[], &["file:README.md"]);
+    let prepared = workspace.prepare(&[&task.id]);
+    workspace.commit_file("later.rs", "fn later() {}\n", "advance after preparation");
+    for selector in refused {
+        let applied = workspace.assess(&prepared, &["dir:.", &selector], "medium");
+        assert_eq!(
+            outcome(&applied)["outcome"],
+            "invalid",
+            "{selector}: {applied}"
+        );
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+    }
+    let applied = workspace.assess(
+        &prepared,
+        &["dir:.", "dir:src", "file:src/module.rs"],
+        "medium",
+    );
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(
+        workspace.scope(&task.id),
+        ["dir:.", "dir:src", "file:src/module.rs"]
+    );
+}
+
+#[test]
 fn review_evidence_survives_narrowing_reassessment_and_replay() {
     if !super::super::dispatch_admission::isolated(
         "task_pilot::review_evidence::review_evidence_survives_narrowing_reassessment_and_replay",
