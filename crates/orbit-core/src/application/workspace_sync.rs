@@ -221,59 +221,64 @@ fn reconcile_managed_artifacts(
     // moved into the settings table first, so reconciliation below finds the
     // restored body managed instead of preserving the fork [ORB-14909].
     let auto_tasks_root = auto_tasks_dir(workspace_orbit_root);
-    let migrated = if mode.creates_only() {
-        Vec::new()
-    } else {
-        let migrate = || migrate_settings_only_forks(&auto_tasks_root, base_branch, mode);
-        if mode.writes() {
-            // Serialize the whole settings read-modify-write and body restore
-            // with CRUD, which uses this same workspace cursor sidecar.
-            let state_path = cursor_state_path(&workspace_orbit_root.join("state"));
-            with_exclusive_file_lock(&state_path, "auto-task cursor", migrate)?
+    let reconcile_auto_tasks = || {
+        let migrated = if mode.creates_only() {
+            Vec::new()
         } else {
-            migrate()?
-        }
-    };
-    let mut auto_tasks = reconcile_managed_assets_in_mode(
-        &auto_tasks_root,
-        "auto_task",
-        ManagedAssetLayout::YamlStem,
-        DEFAULT_AUTO_TASK_FILES,
-        false,
-        mode,
-        |name, content| {
-            // Validate what lands on disk: the delivery defaults only become a
-            // loadable definition once their branch placeholder is rendered.
-            let rendered = render_default_auto_task(content, base_branch);
-            let definition = parse_auto_task_yaml(&rendered).map_err(|error| {
-                OrbitError::InvalidInput(format!(
-                    "default auto-task `{name}` failed validation: {error}"
-                ))
-            })?;
-            if definition.name != name || definition.enabled {
-                return Err(OrbitError::InvalidInput(format!(
-                    "default auto-task `{name}` must have the matching name and ship disabled"
-                )));
-            }
-            Ok(rendered)
-        },
-    )?;
-    // One row per migrated definition: in `Check` mode reconciliation still
-    // sees the fork and would also report it preserved.
-    let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
-        .into_iter()
-        .partition(|action| {
-            migrated
+            migrate_settings_only_forks(&auto_tasks_root, base_branch, mode)?
+        };
+        let mut auto_tasks = reconcile_managed_assets_in_mode(
+            &auto_tasks_root,
+            "auto_task",
+            ManagedAssetLayout::YamlStem,
+            DEFAULT_AUTO_TASK_FILES,
+            false,
+            mode,
+            |name, content| {
+                // Validate what lands on disk: the delivery defaults only become a
+                // loadable definition once their branch placeholder is rendered.
+                let rendered = render_default_auto_task(content, base_branch);
+                let definition = parse_auto_task_yaml(&rendered).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "default auto-task `{name}` failed validation: {error}"
+                    ))
+                })?;
+                if definition.name != name || definition.enabled {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "default auto-task `{name}` must have the matching name and ship disabled"
+                    )));
+                }
+                Ok(rendered)
+            },
+        )?;
+        // One row per migrated definition: in `Check` mode reconciliation still
+        // sees the fork and would also report it preserved.
+        let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
+            .into_iter()
+            .partition(|action| {
+                migrated
+                    .iter()
+                    .any(|migration| migration.name == action.name)
+            });
+        auto_tasks.warnings.retain(|warning| {
+            !superseded
                 .iter()
-                .any(|migration| migration.name == action.name)
+                .any(|action| action.detail.as_ref() == Some(warning))
         });
-    auto_tasks.warnings.retain(|warning| {
-        !superseded
-            .iter()
-            .any(|action| action.detail.as_ref() == Some(warning))
-    });
-    kept.extend(migrated);
-    auto_tasks.actions = kept;
+        kept.extend(migrated);
+        auto_tasks.actions = kept;
+        Ok::<_, OrbitError>(auto_tasks)
+    };
+    let auto_tasks = if mode.writes() {
+        // Keep migration and the entire manifest read/materialize/write
+        // transaction under CRUD's cursor sidecar. Releasing it after
+        // migration lets reconciliation erase a delete's opt-out [ORB-15609].
+        // Create-only seeding writes the same manifest and needs exclusion too.
+        let state_path = cursor_state_path(&workspace_orbit_root.join("state"));
+        with_exclusive_file_lock(&state_path, "auto-task cursor", reconcile_auto_tasks)?
+    } else {
+        reconcile_auto_tasks()?
+    };
     append_actions(
         &mut report,
         ManagedArtifactScope::WorkspaceLocal,

@@ -5,6 +5,8 @@
 mod manifest;
 mod reconcile;
 mod retired;
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
 
 pub(crate) use manifest::{
     ConfinedAssetPath, record_managed_manifest_write, resolve_confined_asset_path,

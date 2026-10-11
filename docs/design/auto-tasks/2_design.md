@@ -292,8 +292,10 @@ down through the audited reset, and writes an audit event. Deleting a shipped
 default also records it under `optedOut` in the auto-task managed-asset
 manifest. Reconciliation then leaves it absent and doctor does not report it
 missing. `orbit auto-task restore` writes the shipped content back and clears
-the opt-out. The opt-out and cursor removal come before the reset because they
-can be undone: a failed delete puts the definition, cursor and manifest back.
+the opt-out under the same cursor lock, from the existence check through the
+definition write and manifest update. The opt-out and cursor removal come before
+the reset because they can be undone: a failed delete puts the definition,
+cursor and manifest back.
 The reset cannot be, so a ref release failing after it leaves only that
 audited reset applied.
 
@@ -320,6 +322,14 @@ Orbit wrote for each shipped default, so a default dropped from a later release
 can be retired by content provenance instead of remaining loadable forever.
 Seeding still never overwrites an existing definition, and an operator-edited
 default is preserved under `.retired-managed/auto_tasks/` rather than deleted.
+
+Workspace sync, workspace initialization and create-only seeding hold the
+workspace cursor sidecar for the complete auto-task manifest
+read/materialize/write transaction. Delete holds it through definition removal,
+opt-out persistence and any rollback; restore holds it through clearing the
+opt-out. These operations therefore cannot overwrite each other's manifest
+snapshots or recreate a concurrently deleted shipped default. Read-only sync
+checks remain lock-free and may report a concurrent operation's earlier state.
 
 A workspace definition that existed before a default of the same name shipped
 (Orbit's own `qa-full-sweep` predates the generic default) has no recorded
@@ -406,8 +416,9 @@ conservatively; the manifest's exact-byte provenance behavior is unchanged.
 
 Apply-mode migration holds the same workspace auto-task cursor sidecar lock as
 CRUD from the settings-table load through the table write, body restoration and
-digest update. A concurrent toggle or update therefore commits before migration
-loads its settings, or after migration completes; neither its entry nor its
+digest update and the subsequent managed reconciliation, with one acquisition
+covering both operations. A concurrent toggle or update therefore commits before
+migration loads its settings, or after migration completes; neither its entry nor its
 body edit can be overwritten by migration's stale view. Check mode reports
 without taking the write lock, and create-only seeding does not migrate forks.
 
