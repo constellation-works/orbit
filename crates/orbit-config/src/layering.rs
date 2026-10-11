@@ -190,6 +190,11 @@ pub struct EffectiveConfigValue {
     /// Layers that define the key without supplying the effective value,
     /// highest-precedence first. Empty for the ordinary case.
     pub shadowed_by: Vec<ShadowedConfigValue>,
+    /// The global value, admitted for registry keys in the effective crew/settings context,
+    /// including when shadowed. `None` when the global file does not set the
+    /// key or its value cannot be admitted in that context. `shadowed_by`
+    /// retains the raw file value for provenance compatibility.
+    pub global_value: Option<serde_json::Value>,
     /// The value Orbit ships with, before any file, the environment, or a
     /// configured crew registry; JSON null when the key has none. A crew
     /// field reports the built-in crew of that name. A plugin key reports
@@ -651,10 +656,22 @@ fn effective_values(
         .into_iter()
         .map(|(key, value)| {
             let source = source_for_key(key, global, workspace);
+            let global_value = global.and_then(|document| {
+                value_at_path(&document.value, key)?;
+                if source.kind() == ConfigValueSourceKind::Global {
+                    return Some(value.clone());
+                }
+                resolved
+                    .snapshot
+                    .admit_override(&document.value, key, &document.path, &resolved.crews)
+                    .ok()
+                    .flatten()
+            });
             EffectiveConfigValue {
                 shadowed_by: shadowed_for_key(key, &source, global, workspace),
                 built_in: below.shipped_value(key),
-                fallback: fallback_for_key(key, &source, global, &below),
+                fallback: fallback_for_key(key, &source, global, global_value.as_ref(), &below),
+                global_value,
                 key: key.to_string(),
                 value,
                 source,
@@ -677,6 +694,10 @@ fn effective_values(
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_crew_field(name, field, &source, global),
                 fallback: fallback_for_crew_field(name, field, &source, global, &built_in),
+                global_value: global
+                    .and_then(|document| crew_entry(&document.value, name))
+                    .and_then(|entry| entry.get(field))
+                    .map(json_from_toml),
                 built_in,
                 source,
                 key,
@@ -695,10 +716,14 @@ fn effective_values(
         for (field, value) in entries {
             let key = format!("plugins.{namespace}.{field}");
             let source = source_for_key(&key, global, workspace);
+            let global_value = global
+                .and_then(|document| value_at_path(&document.value, &key))
+                .map(json_from_toml);
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_key(&key, &source, global, workspace),
                 built_in: serde_json::Value::Null,
-                fallback: fallback_for_key(&key, &source, global, &below),
+                fallback: fallback_for_key(&key, &source, global, global_value.as_ref(), &below),
+                global_value,
                 source,
                 key,
                 value: value.clone(),
@@ -811,6 +836,7 @@ fn fallback_for_key(
     key: &str,
     source: &ConfigValueSource,
     global: Option<&ConfigDocument>,
+    global_value: Option<&serde_json::Value>,
     below: &BelowFiles,
 ) -> Option<ConfigFallback> {
     match source.kind() {
@@ -820,15 +846,19 @@ fn fallback_for_key(
         ConfigValueSourceKind::Workspace if WORKSPACE_REPLACE_ONLY_KEYS.contains(&key) => {
             Some(below.built_in(key))
         }
-        ConfigValueSourceKind::Workspace => Some(
-            match global.and_then(|document| value_at_path(&document.value, key)) {
-                Some(value) => ConfigFallback {
+        ConfigValueSourceKind::Workspace => {
+            if global
+                .and_then(|document| value_at_path(&document.value, key))
+                .is_some()
+            {
+                global_value.map(|value| ConfigFallback {
                     layer: ConfigValueSourceKind::Global,
-                    value: json_from_toml(value),
-                },
-                None => below.below_files(key),
-            },
-        ),
+                    value: value.clone(),
+                })
+            } else {
+                Some(below.below_files(key))
+            }
+        }
     }
 }
 

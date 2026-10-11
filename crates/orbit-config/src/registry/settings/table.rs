@@ -98,6 +98,29 @@ macro_rules! define_config_settings {
                 Ok(snapshot)
             }
 
+            /// Admit one lower-layer setting in the effective snapshot's
+            /// context. Other workspace settings may supply constraints or
+            /// repair unrelated global values, so admitting the whole global
+            /// document alone would not predict removal of just this key.
+            pub(crate) fn admit_override(
+                &self,
+                document: &toml::Value,
+                key: &str,
+                config_path: &Path,
+                crews: &BTreeMap<String, Crew>,
+            ) -> Result<Option<JsonValue>, OrbitError> {
+                let mut snapshot = self.clone();
+                match key {
+                    $($key => {
+                        let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
+                        snapshot.$field = ($resolve)(raw_value)?;
+                    },)+
+                    _ => return Ok(None),
+                }
+                snapshot.finish_admission(crews, None, false)?;
+                Ok(snapshot.value_for(key))
+            }
+
             /// JSON projection of one registry key, or `None` when the key is
             /// not a registered setting.
             pub fn value_for(&self, key: &str) -> Option<JsonValue> {

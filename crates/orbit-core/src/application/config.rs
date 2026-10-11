@@ -869,7 +869,7 @@ fn file_row(
                 .then(|| provenance::global_value(entry))
                 .flatten();
             let reach = if store.scope() == ConfigScope::Global {
-                provenance::reach_json(entry, value)
+                provenance::reach_json(entry)
             } else {
                 JsonValue::Null
             };

@@ -411,6 +411,205 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
 }
 
 #[test]
+fn settings_fallback_and_equality_use_admitted_global_values() {
+    if !isolated("config_settings::settings_fallback_and_equality_use_admitted_global_values") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let crews = "[crews.sol]\nprovider = 'codex'\nmodel = 'sol-model'\n\n\
+                 [crews.opus]\nprovider = 'claude'\nmodel = 'opus-model'\n";
+    // Keep a policy file after key removal, including a workspace-only crew.
+    let remaining_workspace = "[crews.terra]\nprovider = 'codex'\nmodel = 'terra-model'\n";
+    for (key, section, global_literal, workspace_literal, raw_global, equal, fallback_layer) in [
+        (
+            "operation.review_crew",
+            "operation",
+            "'sol'",
+            "'sol'",
+            json!("sol"),
+            true,
+            "global",
+        ),
+        (
+            "workflow.low_complexity_crews",
+            "workflow",
+            "['sol', 'opus']",
+            "['sol', 'opus']",
+            json!(["sol", "opus"]),
+            true,
+            "global",
+        ),
+        (
+            "workflow.low_complexity_crews",
+            "workflow",
+            "['sol', 'opus']",
+            "['opus', ' sol ', 'sol']",
+            json!(["sol", "opus"]),
+            true,
+            "global",
+        ),
+        (
+            "workflow.low_complexity_crews",
+            "workflow",
+            "['sol', 'opus']",
+            "['sol']",
+            json!(["sol", "opus"]),
+            false,
+            "global",
+        ),
+        (
+            "workflow.low_complexity_crews",
+            "workflow",
+            "['sol:2', 'opus:3']",
+            "['opus:3', 'sol:2']",
+            json!(["sol:2", "opus:3"]),
+            true,
+            "global",
+        ),
+        (
+            "operation.review_crew",
+            "operation",
+            "'sol'",
+            "'opus'",
+            json!("sol"),
+            false,
+            "global",
+        ),
+        (
+            "execution.env.pass",
+            "execution.env",
+            "[' B ', 'A', 'A']",
+            "['A', 'B']",
+            json!([" B ", "A", "A"]),
+            true,
+            "built-in",
+        ),
+        (
+            "execution.codex.sandbox",
+            "execution.codex",
+            "' read-only '",
+            "'read-only'",
+            json!(" read-only "),
+            true,
+            "built-in",
+        ),
+    ] {
+        let field = key.rsplit('.').next().unwrap();
+        std::fs::write(
+            global.join("config.toml"),
+            format!("[{section}]\n{field} = {global_literal}\n\n{crews}"),
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!("[{section}]\n{field} = {workspace_literal}\n\n{remaining_workspace}"),
+        )
+        .unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+        let effective = config::effective_view(&runtime).expect("effective view");
+        let effective_row = row(&effective, key);
+        let workspace_view =
+            config::file_view(&runtime, ConfigScope::Workspace).expect("workspace view");
+        let workspace_row = row(&workspace_view, key);
+        assert_eq!(
+            effective_row["equals"]["global"],
+            json!(equal),
+            "{key}: {workspace_literal}"
+        );
+        assert_eq!(
+            workspace_row["equals"]["global"],
+            json!(equal),
+            "{key}: {workspace_literal}"
+        );
+        assert_eq!(
+            effective_row["shadowed_by"][0]["value"], raw_global,
+            "raw provenance stays compatible"
+        );
+        assert_eq!(
+            effective_row["shadowed_by"][0]["reason"],
+            json!("overridden")
+        );
+        assert_eq!(workspace_row["fallback"], effective_row["fallback"]);
+        assert_eq!(effective_row["fallback"]["layer"], json!(fallback_layer));
+        let global_view = config::file_view(&runtime, ConfigScope::Global).expect("global view");
+        let reach = &row(&global_view, key)["reach"];
+        assert_eq!(reach["state"], json!("overridden"));
+        assert_eq!(
+            reach["equals_global"],
+            json!(equal),
+            "{key}: {workspace_literal}"
+        );
+        assert_eq!(reach["workspace_value"], effective_row["value"]);
+
+        let predicted = effective_row["fallback"]["value"].clone();
+        std::fs::write(workspace.join("config.toml"), remaining_workspace).unwrap();
+        let reloaded =
+            OrbitRuntime::from_roots(&global, &workspace).expect("reload after key removal");
+        let after_removal = config::effective_view(&reloaded).expect("view after key removal");
+        assert_eq!(
+            predicted,
+            row(&after_removal, key)["value"],
+            "fallback must predict the admitted JSON value and type for {key}"
+        );
+    }
+}
+
+#[test]
+fn settings_global_facts_keep_workspace_admission_context() {
+    if !isolated("config_settings::settings_global_facts_keep_workspace_admission_context") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        global.join("config.toml"),
+        "[operation]\nreview_crew = 'terra'\n\n\
+         [workflow]\nbase_branch = ''\n\n\
+         [workflow.resource_throttle]\ncpu_resume_percent = 95\n",
+    )
+    .unwrap();
+    let remaining = "[workflow]\nbase_branch = 'agent-main'\ndefault_crew = 'terra'\n\n\
+                     [workflow.resource_throttle]\ncpu_high_percent = 99\n\n\
+                     [crews.terra]\nprovider = 'codex'\nmodel = 'terra-model'\n";
+    std::fs::write(
+        workspace.join("config.toml"),
+        format!("[operation]\nreview_crew = ['terra']\n\n{remaining}"),
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let effective = config::effective_view(&runtime).expect("effective view");
+    let review = row(&effective, "operation.review_crew");
+    assert_eq!(review["equals"]["global"], json!(true));
+    assert_eq!(review["fallback"]["value"], json!(["terra"]));
+    let workspace_view =
+        config::file_view(&runtime, ConfigScope::Workspace).expect("workspace view");
+    assert_eq!(
+        row(&workspace_view, "operation.review_crew")["equals"]["global"],
+        json!(true)
+    );
+    // The overwritten global branch cannot be admitted. Do not claim a
+    // successful removal or compare its raw value with an admitted one.
+    let branch = row(&effective, "workflow.base_branch");
+    assert_eq!(branch["fallback"], Value::Null);
+    assert_eq!(branch["equals"]["global"], Value::Null);
+    std::fs::write(workspace.join("config.toml"), remaining).unwrap();
+    let reloaded = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("reload with workspace context retained");
+    let after_removal = config::effective_view(&reloaded).expect("view after key removal");
+    assert_eq!(
+        review["fallback"]["value"],
+        row(&after_removal, "operation.review_crew")["value"]
+    );
+}
+
+#[test]
 fn a_plugin_only_workspace_file_leaves_global_security_keys_in_effect() {
     if !isolated(
         "config_settings::a_plugin_only_workspace_file_leaves_global_security_keys_in_effect",

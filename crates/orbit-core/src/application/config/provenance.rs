@@ -54,20 +54,13 @@ pub(super) fn equals_json(
 /// The value the global file sets for this key, whether or not it is the one
 /// in force.
 pub(super) fn global_value(entry: &EffectiveConfigValue) -> Option<&JsonValue> {
-    if entry.source.kind() == ConfigValueSourceKind::Global {
-        return Some(&entry.value);
-    }
-    entry
-        .shadowed_by
-        .iter()
-        .find(|shadow| shadow.layer == ConfigValueSourceKind::Global)
-        .map(|shadow| &shadow.value)
+    entry.global_value.as_ref()
 }
 
 /// How far a value the global file sets reaches into the bound workspace: in
 /// effect, overridden by the workspace file (with its value and whether it
 /// equals `global`), or not inherited by a replace-only security key.
-pub(super) fn reach_json(entry: &EffectiveConfigValue, global: &JsonValue) -> JsonValue {
+pub(super) fn reach_json(entry: &EffectiveConfigValue) -> JsonValue {
     let not_inherited = entry
         .shadowed_by
         .iter()
@@ -77,7 +70,7 @@ pub(super) fn reach_json(entry: &EffectiveConfigValue, global: &JsonValue) -> Js
         ConfigValueSourceKind::Workspace => json!({
             "state": "overridden",
             "workspace_value": entry.value,
-            "equals_global": &entry.value == global,
+            "equals_global": global_value(entry).map(|global| &entry.value == global),
         }),
         _ if not_inherited => json!({"state": "not-inherited"}),
         // Layering records a shadow whenever the global value is not the one
