@@ -26,8 +26,9 @@
 //! Admission reads only the latest verdict after the hold. A hold with no
 //! verdict yet stays held until one is recorded.
 //!
-//! [ORB-15374] The tick also makes sure every standing hold's red base
-//! failure has one open repair task ([`super::baseline_repair`]), and the
+//! [ORB-15374] The tick also makes sure every standing hold that its check
+//! does not lift has its red base failure's one open repair task
+//! ([`super::baseline_repair`]), and the
 //! readiness detail and each verdict name the failures the hold recorded.
 
 use std::time::Instant;
@@ -180,9 +181,9 @@ impl OrbitRuntime {
 
     /// Judge every standing, unlifted hold with `status` and record each
     /// changed verdict. A hold `status` cannot judge is listed `unchecked`.
-    /// With `repairs`, which only the clock tick passes, each such hold is
-    /// first linked to its red base failure's repair task, filed when none
-    /// is open ([`super::baseline_repair`]).
+    /// With `repairs`, which only the clock tick passes, each hold that
+    /// `status` does not lift is linked to its red base failure's repair
+    /// task, filed when none is open ([`super::baseline_repair`]).
     fn check_baseline_holds(
         &self,
         deadline: Option<Instant>,
@@ -218,7 +219,12 @@ impl OrbitRuntime {
             {
                 continue;
             }
-            if let Some(index) = repairs.as_deref_mut() {
+            // Judge first: a hold the base already lifts has no failure left
+            // to repair, so filing one for it would only leave backlog noise.
+            let judged = status(&standing.hold);
+            if !matches!(judged, Some(BaselineHoldStatus::Lifted(_)))
+                && let Some(index) = repairs.as_deref_mut()
+            {
                 match self.link_baseline_red_repair(&task, &standing.hold, index) {
                     Ok(RepairLink::Filed(repair_id)) => refresh.repairs_filed.push(repair_id),
                     Ok(RepairLink::Linked(_)) => refresh.repairs_linked.push(task.id.clone()),
@@ -229,7 +235,7 @@ impl OrbitRuntime {
                     ),
                 }
             }
-            let verdict = match status(&standing.hold) {
+            let verdict = match judged {
                 None => {
                     refresh.unchecked.push(task.id.clone());
                     continue;
