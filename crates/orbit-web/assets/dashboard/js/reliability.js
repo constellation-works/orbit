@@ -19,7 +19,7 @@
 // still in flight, so the summary spells out the excluded bucket rather than
 // letting the two visible numbers imply they add up.
 
-import { el, syncNodes, fetchJson, requestPanel, getWindow, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
+import { el, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -440,18 +440,78 @@ function renderReliability(payload) {
   renderActivities(payload);
 }
 
+// Every node renderReliability paints outside `reliability-status`. A report
+// belongs to one host and window: a change to either retires all of it, so a
+// pending or failed read for the new scope never sits under the old figures.
+const RELIABILITY_REPORT = [
+  "reliability-summary",
+  "reliability-over-time",
+  "reliability-breakdown",
+  "reliability-activities",
+];
+const RELIABILITY_TEXT = [
+  "reliability-denominator-note",
+  "reliability-truncation-note",
+  "reliability-over-time-axis",
+];
+
+function retireReliabilityReport() {
+  for (const id of RELIABILITY_REPORT) {
+    const node = $(id);
+    if (node) syncNodes(node, []);
+  }
+  for (const id of RELIABILITY_TEXT) {
+    const node = $(id);
+    if (node) node.textContent = "";
+  }
+  const truncNote = $("reliability-truncation-note");
+  if (truncNote) truncNote.style.display = "none";
+  for (const id of ["reliability-meta", "reliability-count"]) {
+    const node = $(id);
+    if (node) node.textContent = "—";
+  }
+  const badge = $("reliability-scope-badge");
+  if (badge) badge.hidden = true;
+}
+
+let reliabilityReportScope = null;
+
+onWorkspaceChange(() => {
+  reliabilityReportScope = null;
+  retireReliabilityReport();
+});
+
+function reliabilityPath() {
+  const rel = reliabilityWindowFor(getWindow());
+  return `/api/metrics/reliability?window=${encodeURIComponent(rel.window)}`;
+}
+
+function syncReliabilityScope(path = reliabilityPath()) {
+  const scope = `${getWorkspaceRevision()}\0${path}`;
+  if (reliabilityReportScope === scope) return;
+  reliabilityReportScope = scope;
+  retireReliabilityReport();
+}
+
 // `reliability-status` holds only the panel's load state: a cold load reads
 // "Loading…" and a failed read says so, instead of leaving four blank panels
-// under a green connection line.
+// under a green connection line. A same-scope refresh keeps the report under
+// "Refreshing…" or "Refresh failed; showing stale data".
 function fetchAndRenderReliability() {
-  const rel = reliabilityWindowFor(getWindow());
-  const path = `/api/metrics/reliability?window=${encodeURIComponent(rel.window)}`;
+  const path = reliabilityPath();
+  syncReliabilityScope(path);
   return requestPanel("reliability-status", path, () => fetchJson(path), renderReliability, "reliability-count");
 }
 
-// Idempotent attach, matching the scoreboard selector's contract.
+// Idempotent attach, matching the scoreboard selector's contract. The scope
+// listener is added after the shared one, so it sees the new window and
+// retires the old report on the change itself, not when the next read starts.
 function wireReliabilityWindowSelector() {
+  const selector = $("reliability-window-selector");
+  const fresh = selector && selector.dataset.wired !== "true";
   wireWindowSelector("reliability-window-selector", { allowAll: false });
+  if (!fresh) return;
+  for (const type of ["click", "keydown"]) selector.addEventListener(type, () => syncReliabilityScope());
 }
 
 export {
