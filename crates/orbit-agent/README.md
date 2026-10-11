@@ -6,6 +6,21 @@ Provider CLI runtimes and audit contracts for Orbit. Provider adapters drive
 The engine runs those descriptors through `orbit-exec`; stdout helpers project
 provider answers into Orbit response envelopes and diagnostics.
 
+## Response selection
+
+`ParsedStdout` uses the same bounded discovery for status, declared failure,
+completion-protocol checks and result parsing. Complete JSON documents and
+arrays are searched newest first. JSON-encoded answer strings and answers with
+surrounding prose select the last complete envelope too; warning lines cannot
+make an earlier success override a terminal failure or timeout. Within provider
+wrapper objects, preferred answer fields (starting with `structured_output`)
+retain priority over other fields.
+
+Discovery caps JSON parse attempts and visited nodes. Exhausting either budget
+returns a protocol error, with no peeked status or failure, rather than returning
+an earlier envelope or synthesizing an outcome. Surrounding prose never supplies
+response fields.
+
 ## Provider boundary tests
 
 `./scripts/build-budget.py -- cargo test -p orbit-agent --test provider_invocation`
