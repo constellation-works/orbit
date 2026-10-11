@@ -824,7 +824,12 @@ still settle).
 and now plus `--for` (at most 24 hours from now), on the same run: its leaves,
 claims and settlements are untouched, and `--concurrency` retunes it as
 `orbit run concurrency` does. It also works in the settling tail after the
-window closed, and the drain resumes requesting. A shorter window is a no-op
+window closed, and the drain resumes requesting: each pass reads the window
+from run state, not from the window answer its loop forwarded. The pass that
+finds the window closed and nothing left to settle records the close in the
+same transaction that rereads the deadline, so an extension accepted before
+it keeps the drain admitting and one requested after it is refused, never
+reported as accepted on a drain that is ending. A shorter window is a no-op
 (`outcome: unchanged`). It refuses a drain whose admissions were stopped
 (`--stop`) or that is being cancelled, since an extension never reopens one,
 and a drain started without `--for`, which makes its single pass only. Each

@@ -13,15 +13,19 @@
 //! An extension never shortens a window, never reopens admissions an operator
 //! stopped, and never turns a single-pass drain (submitted without a window)
 //! into a timed one. A pull drain keeps iterating after its window closes,
-//! until its leaves settle, so extending it in that tail resumes its requests.
-//! An owner drain leaves its loop on the first expired answer, so once its
-//! window has closed it is refused instead of accepted and never read.
+//! until its leaves settle, so extending it in that tail resumes its requests:
+//! each pass reads the window from run state, not from the answer its job
+//! forwarded. The pass that would end a pull drain records the close in the
+//! transaction that rereads its deadline [ORB-15417], so an extension accepted
+//! first keeps it admitting and one after the close is refused. An owner drain
+//! leaves its loop on the first expired answer, so once its window has closed
+//! it is refused instead of accepted and never read.
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunStateUpdate};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState, PullWindowClose, RunStateUpdate};
 use serde_json::{Value, json};
 
 use super::worker_limit::{
@@ -239,6 +243,43 @@ impl OrbitRuntime {
         })
     }
 
+    /// Close a timed pull drain's window for good, when its pass found the
+    /// window expired and nothing left to settle [ORB-15417]: `false` when
+    /// the window reads open again, because an extension was accepted after
+    /// the pass read it. The reread and the close share one transaction with
+    /// the extension's own check, so exactly one of them wins.
+    /// `forwarded_expired` is the job's window answer, which governs a drain
+    /// whose state holds no stamped window; no extension can reach that
+    /// drain, so its close is not recorded.
+    pub(crate) fn close_pull_window(
+        &self,
+        run_id: &str,
+        forwarded_expired: bool,
+    ) -> Result<bool, OrbitError> {
+        let mut closed = false;
+        let update = self.stores().jobs().update_run_state(
+            run_id,
+            &mut |_, state: &mut PipelineState| {
+                closed = pull_window_closed(state, forwarded_expired, Utc::now());
+                // Only a stamped window can be extended, so only its close
+                // needs recording; an unstamped one keeps the forwarded answer.
+                if closed && state.pull_window_close.is_none() && drain_deadline(state).is_some() {
+                    state.pull_window_close = Some(PullWindowClose {
+                        closed_at: Utc::now(),
+                    });
+                    state.updated_at = Utc::now();
+                }
+                Ok(())
+            },
+        )?;
+        if update != RunStateUpdate::Updated {
+            return Err(OrbitError::Store(format!(
+                "pull drain {run_id} has no run state to record its window close in"
+            )));
+        }
+        Ok(closed)
+    }
+
     fn record_extension_request(
         &self,
         run: &JobRun,
@@ -306,6 +347,24 @@ pub(crate) fn drain_deadline(state: &PipelineState) -> Option<DateTime<Utc>> {
     stamped_drain_deadline(state).map(|stamped| state.effective_drain_deadline(stamped))
 }
 
+/// Whether a pull drain's window is closed at `now`, read from its own state:
+/// closed for good once a pass recorded the close, otherwise when admissions
+/// were stopped or the deadline in force has passed, as the drain's window
+/// answer reads it. A state with no stamped window falls back to
+/// `forwarded_expired`, the answer the job forwarded.
+pub(crate) fn pull_window_closed(
+    state: &PipelineState,
+    forwarded_expired: bool,
+    now: DateTime<Utc>,
+) -> bool {
+    if state.pull_window_close.is_some() {
+        return true;
+    }
+    drain_deadline(state).map_or(forwarded_expired, |deadline| {
+        state.admissions_stopped() || deadline <= now
+    })
+}
+
 /// The deadline a drain's `open_window` step stamped, before any extension.
 fn stamped_drain_deadline(state: &PipelineState) -> Option<DateTime<Utc>> {
     let window = state.pipeline.get(DRAIN_WINDOW_STEP)?;
@@ -319,8 +378,9 @@ fn stamped_drain_deadline(state: &PipelineState) -> Option<DateTime<Utc>> {
 }
 
 /// Refuse a drain an extension must not reopen or reshape: one whose
-/// admissions an operator stopped or is cancelling, and one submitted without
-/// a window, whose single admission pass is all it was authorized for.
+/// admissions an operator stopped or is cancelling, a pull drain whose last
+/// pass closed its window, and one submitted without a window, whose single
+/// admission pass is all it was authorized for.
 fn refuse_closed_drain(
     run_id: &str,
     run: &JobRun,
@@ -336,6 +396,12 @@ fn refuse_closed_drain(
             "job run '{run_id}' had its admissions stopped by {} at {}; an extension does not reopen them, so start a new drain",
             stop.actor,
             rfc3339(stop.stopped_at)
+        )));
+    }
+    if let Some(close) = &state.pull_window_close {
+        return Err(OrbitError::JobValidation(format!(
+            "job run '{run_id}' closed its window at {}: its last pass found nothing left to settle and ended admissions, so start a new drain",
+            rfc3339(close.closed_at)
         )));
     }
     if state.pull_single_pass.is_some()

@@ -132,6 +132,19 @@ pub struct PullSinglePass {
     pub consumed_at: DateTime<Utc>,
 }
 
+/// The pass that closed a timed pull drain's window for good [ORB-15417].
+///
+/// A pull drain keeps passing after its window lapses, until its leaves
+/// settle, and an operator may extend the window during that tail. The pass
+/// that finds the window still closed and nothing left to settle ends the
+/// drain; it records this in the same transaction that rereads the deadline,
+/// so an extension accepted first keeps the drain admitting and one requested
+/// afterwards is refused instead of reported as accepted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullWindowClose {
+    pub closed_at: DateTime<Utc>,
+}
+
 /// A graceful cancel of a pull drain that is waiting for its launched leaves.
 ///
 /// The drain stops admitting at once and hands its unlaunched claims back to

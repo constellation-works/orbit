@@ -13,7 +13,7 @@ use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDis
 use super::{
     ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
     DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint,
-    FinalRecoveryCheckpoint, PullAuthRecovery, PullCrewPreflight, PullSinglePass,
+    FinalRecoveryCheckpoint, PullAuthRecovery, PullCrewPreflight, PullSinglePass, PullWindowClose,
     TaskCancellationPolicy,
 };
 
@@ -130,6 +130,11 @@ pub struct PipelineState {
     /// is never taken twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_single_pass: Option<PullSinglePass>,
+    /// The pass that closed this timed pull drain's window [ORB-15417]: once
+    /// present, no extension reopens it. Survives terminalization and resume,
+    /// so a retried pass never admits past it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_window_close: Option<PullWindowClose>,
     /// What this drain's last admission pass left waiting. Survives
     /// terminalization: it is how `run show` reports the backlog a finished
     /// drain never started.
@@ -224,6 +229,7 @@ impl PipelineState {
             pull_crew_preflight: None,
             pull_auth_recovery: BTreeMap::new(),
             pull_single_pass: None,
+            pull_window_close: None,
             drain_last_pass: None,
             drain_approvals: None,
             failure_activity_checkpoint: None,

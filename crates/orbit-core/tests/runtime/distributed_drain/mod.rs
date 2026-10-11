@@ -84,6 +84,7 @@ mod recovery;
 mod settlement;
 mod single_pass;
 mod waiting;
+mod window_extension;
 mod worktree_gc;
 
 const OWNER: &str = "hm_owner";
@@ -171,6 +172,9 @@ struct Wire {
     prefix_hosts: Mutex<BTreeMap<String, (String, OrbitRuntime)>>,
     /// The id of every task read routed by prefix to a non-owner host.
     by_id_reads: Mutex<Vec<String>>,
+    /// Run once when the next settlement arrives, before the owner answers:
+    /// an operator acting while a pass is delivering.
+    before_settle: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Wire {
@@ -271,6 +275,11 @@ impl DrainOwnerTransport for Wire {
             return Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
             ));
+        }
+        if name == "orbit.drain.claim.settle"
+            && let Some(operator) = self.before_settle.lock().unwrap().take()
+        {
+            operator();
         }
         if name == "orbit.drain.claim.settle"
             && let Some(message) = self.refuse_settle.lock().unwrap().clone()
@@ -558,6 +567,7 @@ impl Pair {
             local: Mutex::default(),
             prefix_hosts: Mutex::default(),
             by_id_reads: Mutex::default(),
+            before_settle: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower

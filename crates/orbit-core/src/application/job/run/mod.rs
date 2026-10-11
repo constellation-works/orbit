@@ -56,6 +56,6 @@ pub use projection::{
 };
 pub use root_cause::{RunIncident, fold_run_incidents};
 pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild, UnstoppedLeaf};
-pub(crate) use window_extension::drain_deadline;
 pub use window_extension::{DrainWindowExtensionChange, DrainWindowExtensionRequest};
+pub(crate) use window_extension::{drain_deadline, pull_window_closed};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};
