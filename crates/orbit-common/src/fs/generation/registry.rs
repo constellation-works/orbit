@@ -206,9 +206,19 @@ pub(super) fn register(root: &Path, record: &ParticipantRecord) -> Option<Regist
             path: path.clone(),
         })
     })();
-    if registered.is_none() {
-        let _ = std::fs::remove_file(&staged);
-        let _ = std::fs::remove_file(&path);
+    match registered {
+        // Each registration costs a durable write, so how many a process
+        // makes is worth seeing when admission is slow.
+        Some(_) => tracing::debug!(
+            target: "orbit.generation.participant",
+            pid = record.pid,
+            role = %record.role,
+            "registered generation participant"
+        ),
+        None => {
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_file(&path);
+        }
     }
     registered
 }
