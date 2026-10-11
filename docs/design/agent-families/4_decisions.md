@@ -4,7 +4,7 @@ type: design
 title: "Agent Families — Decisions"
 owner: grok
 last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_validated: 2026-10-10
 status: Draft
 feature: agent-families
 doc_role: decisions
@@ -94,7 +94,7 @@ Planning-duel artifacts and scoreboards compared model strings even though model
 
 ### Decision
 
-Family is identity, model is configuration, and slot is role. Orbit identity surfaces use exactly `codex`, `claude`, `gemini`, or `grok`. While planning duels existed, their assignments persisted `family`; `planner_a`, `planner_b`, and `arbiter` were slots used in artifact paths and signatures. The planning-duel surface was later removed. Exact model strings stay in crew config, CLI invocation translation, and resolved-crew run records; the retired `[duel.models]` setting is compatibility-only.
+Family is identity, model is configuration, and slot is role. The supported CLI-family registry uses exactly `codex`, `claude`, `gemini`, or `grok`; model inference separately recognizes `ollama:` labels for audit attribution, but that does not add an orchestrated CLI family. While planning duels existed, their assignments persisted `family`; `planner_a`, `planner_b`, and `arbiter` were slots used in artifact paths and signatures. The planning-duel surface was later removed. Exact model strings stay in crew config, CLI invocation translation, and resolved-crew run records; the retired `[duel.models]` setting is compatibility-only.
 
 ### Consequences
 

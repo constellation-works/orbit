@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Auditability"
 tags: ["auditability"]
-last_validated: 2026-10-06
+last_validated: 2026-10-10
 ---
 
 # Glossary: Auditability
@@ -19,6 +19,7 @@ This glossary covers Orbit-specific auditability terms only. Generic observabili
 | **Loop audit event** | A provider/tool-level event emitted by the HTTP loop engine for sessions, HTTP turns, tool calls, iteration boundaries, or policy denials. See [../2_design.md §5](../2_design.md#5-retained-provider-and-tool-event-contracts). |
 | **Redaction boundary** | The point before durable write where Orbit removes known secret shapes from audit payloads or error strings. See [../2_design.md §6](../2_design.md#6-blob-storage-and-redaction). |
 | **Run trace** | The workspace-local reconstruction material for one activity/job run: v2 envelope rows, loop-event rows, and content-addressed blobs. See [../2_design.md §4](../2_design.md#4-activityjob-envelope-events). |
+| **Self-reported actor** | An unverified caller or client name captured at MCP initialization in a separate audit field; it is never an authentication or authorization input. See [the self-reported actor spec](../specs/self-reported-actor.md). |
 | **Task history** | The persisted lifecycle and comment trail attached to a task, used beside command/tool audit rows to show task-state changes over time. See [../2_design.md §7](../2_design.md#7-identity-and-attribution) and [../specs/coverage-matrix.md](../specs/coverage-matrix.md). |
 | **V2 audit envelope** | The activity/job wrapper event containing schema version, event id, run id, agent identity, optional parent id, optional workspace path, and a typed body. See [../2_design.md §4](../2_design.md#4-activityjob-envelope-events). |
 | **Workspace provenance** | The `workspace_path` attached to v2 audit envelope events so traces can be filtered back to the repository that produced them. See [../2_design.md §4](../2_design.md#4-activityjob-envelope-events). |
