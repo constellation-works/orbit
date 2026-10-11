@@ -156,6 +156,11 @@ fn seeded_run(
 
 #[test]
 fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unauthorized_calls() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unauthorized_calls",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let id = "jrun-stdio-workers";
@@ -210,6 +215,11 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
 /// live drain when no `id` is given — past the former leaf ceiling of ten.
 #[test]
 fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let id = "jrun-stdio-pull-workers";
@@ -247,6 +257,11 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
 
 #[test]
 fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_lineage() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_lineage",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let jobs = workspace.home.join(".orbit/resources/jobs");

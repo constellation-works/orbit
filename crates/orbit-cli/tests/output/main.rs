@@ -10,6 +10,8 @@
 
 #[path = "../support/git_repo.rs"]
 mod git_repo;
+#[path = "../support/isolated_test.rs"]
+mod isolated_test;
 #[path = "../support/task_workspace.rs"]
 mod task_workspace;
 

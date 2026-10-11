@@ -624,12 +624,16 @@ fn plain_search_rows_and_empty_plugin_doctor_have_no_dangling_separators() {
     );
 }
 
-/// Git location variables exported into the process outrank `-C`. A sibling
-/// test can hold them (`output_goldens`' managed-routing sentinel), so a
-/// fixture built under them must create its own repository and leave the
-/// exported one untouched.
+/// Git location variables exported into the process outrank `-C`. In an
+/// isolated child, a fixture built under them must create its own repository
+/// and leave the exported one untouched.
 #[test]
 fn fixture_ignores_exported_git_location_variables() {
+    if crate::isolated_test::run_in_child(
+        "machine_readable_confirmations::fixture_ignores_exported_git_location_variables",
+    ) {
+        return;
+    }
     let temp = tempdir().expect("tempdir");
     let sentinel = temp.path().join("sentinel");
     crate::git_repo::init(&sentinel);

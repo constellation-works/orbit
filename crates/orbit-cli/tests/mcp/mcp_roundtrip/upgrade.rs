@@ -703,6 +703,11 @@ fn stop(child: &mut ChildGuard) {
 
 #[test]
 fn refusal_during_concurrent_calls_and_after_discarded_mutation_reply_never_replays() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::upgrade::refusal_during_concurrent_calls_and_after_discarded_mutation_reply_never_replays",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
     client.call_tool_ok("orbit_workspace_list", json!({}));
@@ -888,6 +893,11 @@ fn read_only_candidate_joins_a_v1_generation_without_rewriting_the_record() {
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_only_foreign_digest_refuses_when_store_schema_differs() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::upgrade::read_only_foreign_digest_refuses_when_store_schema_differs",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     {
         let mut client = workspace.serve();

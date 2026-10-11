@@ -8,6 +8,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 #[path = "../support/child_guard.rs"]
 mod child_guard;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -18,13 +20,15 @@ mod generation_fixture;
 mod git_authority;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
+#[path = "../support/isolated_test.rs"]
+mod isolated_test;
 
 mod mcp_roundtrip;
 mod mcp_setup_root;
 
 /// Re-execute the real setup, status/push and linked-worktree fixtures with
-/// repository locators aimed at a disposable sentinel. No process-wide scrub
-/// runs here: each fixture Git command must contain its own authority.
+/// repository locators aimed at a disposable sentinel. Re-executed children
+/// keep the deliberate locators: each fixture Git command must scrub them.
 #[cfg(unix)]
 #[test]
 fn mcp_git_fixtures_preserve_inherited_authority_decoy() {

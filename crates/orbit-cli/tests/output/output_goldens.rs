@@ -316,6 +316,11 @@ fn redact(text: &str, home: &Path) -> String {
 
 #[test]
 fn fixture_ignores_inherited_managed_routing_and_identity() {
+    if crate::isolated_test::run_in_child(
+        "output_goldens::fixture_ignores_inherited_managed_routing_and_identity",
+    ) {
+        return;
+    }
     let sentinel = Fixture::new();
     let sentinel_registry = sentinel.home.join(".orbit");
     let sentinel_registry = sentinel_registry
@@ -478,19 +483,7 @@ fn plugin_build_doctor_matches_golden() {
     };
     use sha2::{Digest, Sha256};
 
-    const CHILD: &str = "ORBIT_TEST_BUILD_DOCTOR_GOLDEN_CHILD";
-    const EXACT: &str = "output_goldens::plugin_build_doctor_matches_golden";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        let output = command
-            .args(["--exact", EXACT, "--nocapture"])
-            .env(CHILD, "1")
-            .output()
-            .expect("isolated golden child");
-        test_env::assert_child_test_passed(EXACT, output.status, &output.stdout, &output.stderr);
+    if crate::isolated_test::run_in_child("output_goldens::plugin_build_doctor_matches_golden") {
         return;
     }
     let fixture = Fixture::new();

@@ -924,6 +924,11 @@ fn shipped_step_index(job_id: &str, step_id: &str) -> u32 {
 /// run was submitted with reaches the wire.
 #[test]
 fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run",
+    ) {
+        return;
+    }
     const SECRET: &str = "sk-live-delivery-roundtrip-must-not-echo";
     const BASE: &str = "1111111111111111111111111111111111111111";
     const HEAD: &str = "2222222222222222222222222222222222222222";
@@ -5400,6 +5405,11 @@ fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::readonly_orbit_command_scrubs_inherited_managed_run_authority",
+    ) {
+        return;
+    }
     if let Some(detail) = bubblewrap_mount_namespaces_unavailable() {
         orbit_exec::report_bwrap_deferral(
             "readonly_orbit_command_scrubs_inherited_managed_run_authority",
@@ -5439,8 +5449,8 @@ fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
 
     // Present the sentinel exactly the way a managed Orbit run presents live
     // authority to every process it launches, including the test binary
-    // itself. Held only for the mutation attempt below, under the process-wide
-    // lock `test_env::scoped` takes.
+    // itself. This complete body runs alone in an isolated child, so the
+    // deliberate process-wide changes cannot reach sibling parent tests.
     let _ambient_authority = test_env::scoped([
         ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
         ("ORBIT_RUN_ID", Some("jrun-orb-12097-regression")),
@@ -6316,6 +6326,11 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
 #[cfg(unix)]
 #[test]
 fn agent_invoke_mcp_reports_a_saturated_queue() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::agent_invoke_mcp_reports_a_saturated_queue",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let shown = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
