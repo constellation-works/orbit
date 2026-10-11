@@ -19,10 +19,10 @@ use super::{SOURCE_DEADLINE, Source};
 const COMMAND_BUDGET: Duration = Duration::from_secs(2);
 
 /// Largest stdout one command's evidence may carry.
-const OUTPUT_LIMIT: u64 = 1_048_576;
+pub(in crate::application::automation) const OUTPUT_LIMIT: u64 = 1_048_576;
 /// Largest listing [`Source::git_matching_paths`] streams through a filter.
 /// Only the kept paths are held in memory, so this bounds disk, not evidence.
-const LISTING_LIMIT: u64 = 256 * 1_048_576;
+pub(in crate::application::automation) const LISTING_LIMIT: u64 = 256 * 1_048_576;
 
 /// A source command owns its descendants as well as its direct child. Drop
 /// cleans up on timeout, I/O failure and a leader exiting before its helpers.
@@ -68,6 +68,16 @@ impl<'a> Source<'a> {
         Self {
             fetch_origin: false,
             ..Self::new(root)
+        }
+    }
+
+    pub(in crate::application::automation) fn read_only_with_cache(
+        root: &'a Path,
+        cache: &'a SourceCache,
+    ) -> Self {
+        Self {
+            cache: Some(cache),
+            ..Self::read_only(root)
         }
     }
 

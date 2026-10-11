@@ -60,7 +60,7 @@ fn automation(workspace: &Workspace, now: chrono::DateTime<Utc>) -> Value {
 
 fn fetches(trace: &Path) -> usize {
     std::fs::read_to_string(trace)
-        .unwrap()
+        .unwrap_or_default()
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .filter(|event| event["event"] == "start" && event["argv"][1] == "fetch")
@@ -116,6 +116,16 @@ fn routine_status_reads_cached_refs_while_clock_sweep_fetches() {
     }
     let cached = cached.unwrap();
     let inspection_fetches = fetches(&trace);
+    let inspection_children = std::fs::read_to_string(&trace)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event"] == "start")
+        .count();
+    assert_eq!(
+        inspection_children, 0,
+        "routine status reads refs, ancestry and immutable task material without Git subprocesses"
+    );
     assert_eq!(cached["reason"], "debouncing");
     assert_eq!(
         cached["state"]["members"]["pending"][&task.id]["source"]["commit"],
@@ -216,5 +226,83 @@ fn inspection_uses_cached_origin_and_preserves_unfetched_source_reasons() {
             .git(&["for-each-ref", "refs/remotes/origin/main"])
             .is_empty(),
         "inspection must leave a never-fetched ref absent"
+    );
+}
+
+/// libgit2 refuses repository extensions it does not implement, such as a
+/// partial clone's. Status then reads the same refs and material through Git,
+/// so every automation field is unchanged, and a branch that does not resolve
+/// reports Git's own text from either reader.
+#[test]
+fn inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::inspection::inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = workspace.task("fallback candidate");
+    workspace.commit_file("AGENTS.md", "repository instructions\n", "instructions");
+    workspace.commit_file("nested/CLAUDE.md", "nested instructions\n", "nested");
+    let local = workspace.object("HEAD");
+    workspace.commit_file("README.md", "remote material\n", "advance origin");
+    let origin = workspace.object("HEAD");
+    let remote = workspace.root.path().join("origin.git");
+    workspace.git(&["clone", "--bare", ".", remote.to_str().unwrap()]);
+    workspace.git(&["reset", "--hard", &local]);
+    workspace.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+    workspace.git(&["update-ref", "refs/remotes/origin/main", &origin]);
+    let now = Utc::now();
+    let inspect = |definition: &RoutineDefinition| {
+        orbit_core::application::automation::inspect_routine(&workspace.runtime, definition, now)
+            .unwrap()
+    };
+    let delivery = |branch: &str| -> RoutineDefinition {
+        serde_json::from_value(json!({
+            "schemaVersion": 1, "name": "fixture-delivery", "enabled": true,
+            "target": "job:task_pilot_pipeline",
+            "trigger": {"deliveries_landed": {
+                "owner_machine": "fixture-machine", "branch": branch, "threshold": 1,
+                "max_wait_minutes": 10, "coverage": "landed_code_review_v1",
+            }},
+        }))
+        .unwrap()
+    };
+    let observe = || {
+        (
+            json!(inspect(&pilot_routine())),
+            inspect(&delivery("main")).reason,
+            inspect(&delivery("no-such-branch")).reason,
+            inspect(&delivery("bad..name")).reason,
+        )
+    };
+
+    let in_process = observe();
+    assert_eq!(
+        in_process.0["state"]["members"]["pending"][&task.id]["source"]["commit"],
+        origin
+    );
+    assert_eq!(in_process.1, "awaiting_baseline");
+    assert_eq!(
+        in_process.2,
+        "evidence_unavailable: git rev-parse --verify --end-of-options \
+         refs/heads/no-such-branch^{commit}: fatal: Needed a single revision"
+    );
+    assert_eq!(
+        in_process.3,
+        "evidence_unavailable: git check-ref-format --branch bad..name: \
+         fatal: 'bad..name' is not a valid branch name"
+    );
+
+    workspace.git(&["config", "core.repositoryformatversion", "1"]);
+    workspace.git(&["config", "extensions.partialClone", "origin"]);
+    assert!(
+        git2::Repository::open(&workspace.repo).is_err(),
+        "the fixture must be a repository libgit2 refuses"
+    );
+    assert_eq!(
+        observe(),
+        in_process,
+        "Git reads the refused repository to the same status"
     );
 }

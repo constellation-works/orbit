@@ -289,6 +289,53 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 json_ok(server.get("/api/routines?workspace=ws_http_fixture"))["routines"][0]["last_fire"].clone()
             };
             assert_eq!(last_fire()["run_id"], "jrun-cron-fire");
+            let cold = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            let warm = json_ok(server.get("/api/routines"));
+            assert_eq!(
+                cold, warm,
+                "host memo shares the complete status across workspace selections"
+            );
+            let definition = routines.join("pilot.yaml");
+            let raw = fs::read_to_string(&definition).unwrap();
+            fs::write(&definition, raw.replace("enabled: false", "enabled: true")).unwrap();
+            let requests = (0..4)
+                .map(|_| server.get("/api/routines?workspace=ws_http_fixture"))
+                .collect::<Vec<_>>();
+            let responses = std::thread::scope(|scope| {
+                requests
+                    .into_iter()
+                    .map(|request| scope.spawn(move || json_ok(request)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|thread| thread.join().unwrap())
+                    .collect::<Vec<_>>()
+            });
+            let changed = &responses[0];
+            assert!(
+                responses.iter().all(|response| response == changed),
+                "concurrent invalidated polls share one computation"
+            );
+            assert_eq!(
+                changed["routines"][0]["enabled"], true,
+                "a definition edit invalidates the next poll"
+            );
+            // Restore the disabled routine so inspection has no Git prerequisites.
+            fs::write(&definition, raw).unwrap();
+            let restored = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            assert_eq!(restored["routines"][0]["enabled"], false);
+            let config = fixture.global.join("config.toml");
+            let raw_config = fs::read_to_string(&config).unwrap();
+            fs::write(
+                &config,
+                raw_config.replace("http-fixture", "renamed-fixture"),
+            )
+            .unwrap();
+            let configured = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            assert_eq!(
+                configured["machine_name"], "renamed-fixture",
+                "workspace settings and host config invalidate the next poll"
+            );
+            fs::write(&config, raw_config).unwrap();
 
             // The run is created after the cron fire, as a later state-triggered fire is.
             std::thread::sleep(std::time::Duration::from_millis(1100));

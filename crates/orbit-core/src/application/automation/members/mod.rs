@@ -6,7 +6,7 @@ mod member_host;
 mod stale;
 
 pub(crate) use claim::claim;
-pub(crate) use host::evaluate;
+pub(crate) use host::{evaluate, evaluate_with_cache};
 pub(crate) use stale::stale_tasks;
 
 use super::{pins, preparation::InstructionSnapshot};
@@ -37,6 +37,7 @@ pub(crate) struct Host<'a> {
     /// Resolve once per evaluation, best-effort fetching only outside dry
     /// runs, shared by page observation, reconciliation and admission.
     head: RefCell<Option<(String, SourceRevision)>>,
+    inspection_cache: Option<&'a super::source_cache::SourceCache>,
 }
 
 /// The task outcome reason apply and prepare record for a task the branch

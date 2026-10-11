@@ -38,6 +38,9 @@ impl<'a> Source<'a> {
     /// This reads `refs/heads` only. Delivery observation uses [`Self::head`],
     /// which follows `origin` when that remote exists.
     pub(crate) fn verify_branch(&self, branch: &str) -> Result<SourceRevision, AutomationError> {
+        if let Some(head) = self.inspection_head(branch, false) {
+            return head.map(|(_, head)| head);
+        }
         self.git(&["check-ref-format", "--branch", branch])?;
         self.revision(&format!("refs/heads/{branch}"))
     }
@@ -48,6 +51,9 @@ impl<'a> Source<'a> {
         &self,
         branch: &str,
     ) -> Result<(String, SourceRevision), AutomationError> {
+        if let Some(head) = self.inspection_head(branch, false) {
+            return head;
+        }
         let head = self.verify_branch(branch)?;
         let repository = self.repository()?;
         Ok((repository, head))
@@ -62,6 +68,9 @@ impl<'a> Source<'a> {
         &self,
         branch: &str,
     ) -> Result<(String, SourceRevision), AutomationError> {
+        if let Some(head) = self.inspection_head(branch, true) {
+            return head;
+        }
         let (repository, local) = self.local_head(branch)?;
         let head = match self.fetched_head(branch) {
             Ok(origin) => {

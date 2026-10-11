@@ -26,6 +26,16 @@ pub(crate) fn evaluate(
     dry_run: bool,
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    evaluate_with_cache(runtime, definition, dry_run, now, None)
+}
+
+pub(crate) fn evaluate_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    cache: Option<&super::super::source_cache::SourceCache>,
+) -> Result<AutomationDiagnostic, OrbitError> {
     let trigger = definition
         .trigger
         .state
@@ -48,9 +58,11 @@ pub(crate) fn evaluate(
     let mut effective = trigger.clone();
     effective.retries = effective.retries.min(definition.policy.retries.max);
 
+    let mut host = Host::new(runtime, &definition.name, &effective, dry_run);
+    host.inspection_cache = cache;
     members::evaluate(
         runtime.automation_store()?.as_ref(),
-        &Host::new(runtime, &definition.name, &effective, dry_run),
+        &host,
         MemberEvaluation {
             consumer: &consumer,
             epoch: &epoch,
@@ -81,13 +93,17 @@ impl<'a> Host<'a> {
             pinned: RefCell::new(BTreeMap::new()),
             owner: RefCell::new(None),
             head: RefCell::new(None),
+            inspection_cache: None,
         }
     }
 
     pub(super) fn source(&self) -> Source<'_> {
         let root = &self.runtime.paths().repo_root;
         if self.dry_run {
-            Source::read_only(root)
+            match self.inspection_cache {
+                Some(cache) => Source::read_only_with_cache(root, cache),
+                None => Source::read_only(root),
+            }
         } else {
             Source::new(root)
         }

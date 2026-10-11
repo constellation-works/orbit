@@ -26,7 +26,7 @@ mod pagination;
 mod plugins;
 mod reliability;
 mod routes;
-mod routines;
+pub(crate) mod routines;
 mod run_failure;
 mod run_tasks;
 mod runs;

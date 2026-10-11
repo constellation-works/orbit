@@ -25,6 +25,7 @@ struct RegistryRoutineEnvironment {
     /// Registered workspace this pass is restricted to, resolved from the
     /// caller's `--workspace` selector. `None` visits every local workspace.
     workspace_filter: Option<String>,
+    read_only: bool,
 }
 
 impl RegistryRoutineEnvironment {
@@ -41,6 +42,7 @@ impl RegistryRoutineEnvironment {
         Ok(Self {
             identity: load_machine_identity(global_root)?,
             workspace_filter,
+            read_only: false,
         })
     }
 
@@ -54,7 +56,16 @@ impl RegistryRoutineEnvironment {
 
 impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
     fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
-        discover_registered_workspaces(global_root, self.workspace_filter.as_deref())
+        if self.read_only {
+            discover_registered_workspaces_until(
+                global_root,
+                self.workspace_filter.as_deref(),
+                None,
+                true,
+            )
+        } else {
+            discover_registered_workspaces(global_root, self.workspace_filter.as_deref())
+        }
     }
 
     fn discover_workspaces_until(
@@ -66,6 +77,7 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
             global_root,
             self.workspace_filter.as_deref(),
             Some(deadline),
+            self.read_only,
         )
     }
 }
@@ -82,23 +94,36 @@ pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
-    discover_registered_workspaces_until(global_root, workspace_filter, None)
+    discover_registered_workspaces_until(global_root, workspace_filter, None, false)
 }
 
 fn discover_registered_workspaces_until(
     global_root: &Path,
     workspace_filter: Option<&str>,
     deadline: Option<Instant>,
+    read_only: bool,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
-    let registry = workspace_registry::with_registry_lock(&registry_path, || {
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        if workspace_registry::validate_workspaces(&mut registry) {
-            workspace_registry::save_registry_to(&registry, &registry_path)?;
-        }
-        Ok(registry)
-    })?;
+    let registry = if read_only {
+        let mut registry =
+            workspace_registry::load_registry_from_read_only(&registry_path)?.registry;
+        workspace_registry::validate_workspaces(&mut registry);
+        registry
+    } else {
+        workspace_registry::with_registry_lock(&registry_path, || {
+            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+            if workspace_registry::validate_workspaces(&mut registry) {
+                workspace_registry::save_registry_to(&registry, &registry_path)?;
+            }
+            Ok(registry)
+        })?
+    };
 
+    let open = if read_only {
+        RegisteredRuntimeFactory::open_registered_checkout_observational
+    } else {
+        RegisteredRuntimeFactory::open_registered_checkout
+    };
     let mut discovered = DiscoveredWorkspaces::default();
     for (workspace, checkout) in workspace_registry::local_workspaces(&registry) {
         if workspace.status != WorkspaceStatus::Active || !checkout.orbit_dir.exists() {
@@ -114,11 +139,7 @@ fn discover_registered_workspaces_until(
         if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
             // A replica that cannot be opened only defers its settlement
             // delivery and local GC, so it never reads as a broken workspace.
-            match RegisteredRuntimeFactory::open_registered_checkout(
-                global_root,
-                workspace,
-                checkout,
-            ) {
+            match open(global_root, workspace, checkout) {
                 Ok(runtime) => discovered.replicas.push((workspace.clone(), runtime)),
                 Err(error) => tracing::warn!(
                     target: "orbit.cmd.sweep",
@@ -129,7 +150,7 @@ fn discover_registered_workspaces_until(
             }
             continue;
         }
-        match RegisteredRuntimeFactory::open_registered_checkout(global_root, workspace, checkout) {
+        match open(global_root, workspace, checkout) {
             Ok(runtime) => discovered.entries.push((workspace.clone(), runtime)),
             Err(error) => discovered.errors.push(RoutineLoadError {
                 source_workspace: workspace.name.clone(),
@@ -145,6 +166,57 @@ pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, Orbit
     routine_statuses_with_workspace_filter(global_root, None)
 }
 
+/// Files and definition directories whose changes invalidate host routine status.
+/// Includes each resolved SQLite path and its WAL, since committed run changes
+/// need not touch the main database until a checkpoint.
+pub fn routine_status_input_paths(
+    global_root: &Path,
+) -> Result<Vec<std::path::PathBuf>, OrbitError> {
+    let mut paths = vec![workspace_registry::registry_path_for(global_root)];
+    let registry = workspace_registry::load_registry_from_read_only(&paths[0])?.registry;
+    let roots = std::iter::once(global_root.to_path_buf()).chain(
+        workspace_registry::local_workspaces(&registry)
+            .map(|(_, checkout)| checkout.orbit_dir.clone()),
+    );
+    for root in roots {
+        paths.push(root.join("config.toml"));
+        paths.push(root.join("config.yaml"));
+        for directory in [
+            "routines",
+            "resources/jobs",
+            "resources/activities",
+            "auto_tasks",
+        ] {
+            paths.push(root.join(directory));
+        }
+        // A workspace whose config does not load is reported by status as a
+        // load error; its config files above still invalidate once fixed.
+        let Ok(config) =
+            orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(global_root, &root))
+        else {
+            continue;
+        };
+        paths.push(config.persistence.job_dir);
+        paths.push(config.persistence.activity_dir);
+        let database = config.persistence.audit_db;
+        paths.push(database.with_file_name(format!(
+            "{}-wal",
+            database.file_name().unwrap_or_default().to_string_lossy()
+        )));
+        paths.push(database);
+    }
+    let database = orbit_store::maintenance::task_registry::task_registry_path(global_root);
+    paths.push(database.with_file_name(format!(
+        "{}-wal",
+        database.file_name().unwrap_or_default().to_string_lossy()
+    )));
+    paths.push(database);
+    paths.push(global_root.join("clock.toml"));
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// Read host routine status from one registered workspace.
 pub fn routine_statuses_for_workspace(
     global_root: &Path,
@@ -157,7 +229,13 @@ fn routine_statuses_with_workspace_filter(
     global_root: &Path,
     workspace_selector: Option<&str>,
 ) -> Result<RoutineStatusReport, OrbitError> {
-    let environment = RegistryRoutineEnvironment::load(global_root, workspace_selector)?;
+    let started = Instant::now();
+    let mut environment = RegistryRoutineEnvironment::load(global_root, workspace_selector)?;
+    environment.read_only = true;
+    tracing::debug!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "routine status environment loaded"
+    );
     orbit_core::application::routines::routine_statuses_with_providers(
         global_root,
         environment.local_machine(),

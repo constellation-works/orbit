@@ -218,6 +218,28 @@ impl OrbitRuntime {
         )
     }
 
+    /// Open existing state for host routine inspection without migrations,
+    /// legacy imports, task-partition repair or stale-run reconciliation.
+    pub fn from_resolved_roots_observational_with_binding(
+        global_root: &Path,
+        shared_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+    ) -> Result<Self, OrbitError> {
+        ProductProfile::Orbit.validate_roots(&[global_root, shared_root])?;
+        let _generation = pin_executable_generation(global_root, true)?;
+        let layout_report = observe_or_upgrade_layout(shared_root, true)?;
+        let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
+        Self::build_from_resolved_config_write_free(
+            global_root,
+            shared_root,
+            shared_root,
+            Some(binding),
+            &config,
+            layout_report,
+            HostLifetime::ShortLived,
+        )
+    }
+
     pub fn in_memory() -> Result<Self, OrbitError> {
         let temp_dir = tempfile::Builder::new()
             .prefix("orbit-in-memory-")
