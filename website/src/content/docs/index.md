@@ -1,6 +1,6 @@
 ---
 title: What Orbit Is
-description: "Orbit is a local-first runtime for coding agents. Your agent files a task over MCP, Orbit ships it in an isolated worktree, and you review the pull request."
+description: "Orbit is a local-first runtime for coding agents. Your agent files a task over MCP, Orbit ships it in an isolated worktree and lands it, with review after landing."
 template: splash
 prev: false
 next: false
@@ -12,7 +12,7 @@ next: false
   <div class="orbit-hero-copy">
     <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>What shipped in the latest release</span><span aria-hidden="true">→</span></a>
     <h1 id="_top" class="orbit-hero-headline">Agents write. Orbit delivers.</h1>
-    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree, and you get back a pull request with every step on the record.</p>
+    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree and lands it, and review runs after landing so the queue keeps moving. Every step is on the record.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
