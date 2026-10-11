@@ -74,8 +74,8 @@ use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     BaselineRedHold, CommitIdentity, HostCandidateOverride, HostKnownRed,
-    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, REVIEW_BASELINE_ARTIFACT, ReviewBaselineClaim,
-    ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT,
+    ReviewBaselineClaim, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
@@ -106,7 +106,9 @@ impl Judgement {
         let claimed = self
             .validation
             .iter()
-            .filter(|record| record.baseline.is_some())
+            // [ORB-15630] The claim host's own run decided a host-gated
+            // check; there is no reviewer claim left to verify.
+            .filter(|record| record.baseline.is_some() && !self.host_gated(record))
             .cloned()
             .collect::<Vec<_>>();
         if claimed.is_empty() {
@@ -517,13 +519,18 @@ pub(super) fn baseline_red_refusal(holds: &[BaselineRedHold], attempt_id: &str) 
 
 /// Record each known-red check a passed review counted [ORB-15546] on every
 /// reviewed task's history, as delivery validation records its own
-/// [ORB-15375]: the note `pr_open` reads for the pull request.
+/// [ORB-15375]: the note `pr_open` reads for the pull request. [ORB-15630]
+/// A host gate's known red is the claim's own validation verdict, which
+/// `pr_open` and the handoff already carry, so it is not recorded twice.
 pub(super) fn record_known_red(
     runtime: &OrbitRuntime,
     task_ids: &[String],
     known_red: &[HostKnownRed],
 ) -> Result<(), OrbitError> {
-    for known in known_red {
+    for known in known_red
+        .iter()
+        .filter(|known| known.evidence_artifact != REVIEW_GATE_ARTIFACT)
+    {
         let record = &known.validation;
         let note = record.text(&format!(
             "Review settlement reran required check '{}' on candidate {}: it fails only with \

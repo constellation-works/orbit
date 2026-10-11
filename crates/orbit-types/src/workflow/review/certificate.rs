@@ -28,6 +28,18 @@ pub struct ReviewManifest {
     /// each as `not_run` and never attempts it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owed_external_evidence: Vec<super::super::ReviewEvidenceRequirement>,
+    /// [ORB-15630] Linux-only checks this before-landing review's host
+    /// cannot run, owed to the owner and the pull request's hosted CI rather
+    /// than to this review. The reviewer neither attempts nor records them;
+    /// settlement records them, and they do not hold the verdict.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner_owed_evidence: Vec<super::super::ReviewEvidenceRequirement>,
+    /// [ORB-15630] Owner-required commands the claim host already ran on this
+    /// exact candidate, outside the agent sandbox. Settlement decides those
+    /// checks from these results, so the reviewer neither reruns nor judges
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_validation: Vec<HostGateResult>,
     /// Earlier report on this task, retained as advisory continuation context.
     /// A new attempt still needs a report naming its own attempt identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,6 +195,16 @@ pub struct ReviewCertificate {
     /// holds for them rather than blocking or passing unverified.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owed_evidence: Vec<super::super::ReviewEvidenceRequirement>,
+    /// [ORB-15630] Linux-only checks a before-landing review on another OS
+    /// left to the owner and the pull request's hosted CI. Their records are
+    /// `excluded`, and they do not hold the verdict.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner_owed_evidence: Vec<super::super::ReviewEvidenceRequirement>,
+    /// [ORB-15630] The claim host's own runs of owner-required commands,
+    /// outside the agent sandbox, that decided those checks in place of the
+    /// reviewer's records.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_validation: Vec<HostGateResult>,
     /// The held attempt this certificate settles without a new reviewer:
     /// its only gaps were owed evidence, which has since arrived for the
     /// unchanged candidate.
@@ -210,6 +232,30 @@ pub struct HostCandidateOverride {
     pub tests_run: Option<u64>,
     /// The task artifact holding the host run's captured log.
     pub evidence_artifact: String,
+}
+
+/// One owner-required command a claimed leaf's host ran on the reviewed
+/// candidate before its before-landing review, natively and outside the
+/// agent sandbox (`claim_validate`) [ORB-15630]. A reviewer inside that
+/// sandbox cannot run such a gate faithfully, so its result, not the
+/// reviewer's, decides the check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostGateResult {
+    /// The owner-required command, as configured.
+    pub command: String,
+    /// `passed`, or `failed` for a nonzero exit, known red included.
+    pub outcome: ValidationOutcome,
+    /// The command's exit status.
+    pub exit_code: i32,
+    /// The candidate commit the command ran on.
+    pub tested_head: String,
+    /// The run whose validation step ran it.
+    pub run_id: String,
+    /// The validation step that ran it.
+    pub step: String,
+    /// Set when the command failed only tests the base fails too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_red: Option<super::super::KnownRedValidation>,
 }
 
 /// A reviewer's failed required check whose red-base claim the host

@@ -11,17 +11,44 @@
 //! closes them.
 
 use super::claimed_owed_evidence::{
-    artifact, attach_result, ci_fast, codeql_rule, owed, owner_action, owner_checkout,
-    owner_resumes, publish_origin, report,
+    artifact, attach_result, ci_fast, owner_action, owner_checkout, owner_resumes, publish_origin,
+    report,
 };
 use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
 use super::*;
 
 use orbit_types::task::HostOs;
-use orbit_types::workflow::{REVIEW_EVIDENCE_HOLD_ARTIFACT, ReviewEvidenceHold, ReviewVerdict};
+use orbit_types::workflow::{
+    EvidenceHostOs, REVIEW_EVIDENCE_HOLD_ARTIFACT, ReviewEvidenceHold, ReviewEvidenceKind,
+    ReviewEvidenceRequirement, ReviewVerdict,
+};
 
 /// The pull request the leaf opened before its before-landing review.
 const LEAF_PR: &str = "41";
+
+const SWIFT_CODEQL: &str = "scripts/codeql-swift-local.sh";
+const SWIFT_ARTIFACT: &str = "evidence/codeql-swift-macos.json";
+
+/// The owner's rule: any change owes a macOS CodeQL run, which a Linux
+/// leaf cannot produce and which no hosted CI stands in for.
+fn macos_codeql_rule() -> String {
+    format!(
+        "\n[[review.host_evidence]]\nkind = \"codeql\"\nname = \"Swift CodeQL (macOS)\"\n\
+         paths = [\"**/*.rs\"]\nos = \"macos\"\ncommand = \"{SWIFT_CODEQL}\"\n\
+         artifact = \"{SWIFT_ARTIFACT}\"\n"
+    )
+}
+
+/// The requirement the rule owes.
+fn macos_owed() -> ReviewEvidenceRequirement {
+    ReviewEvidenceRequirement {
+        kind: ReviewEvidenceKind::CodeQl,
+        name: "Swift CodeQL (macOS)".into(),
+        command: SWIFT_CODEQL.into(),
+        artifact: SWIFT_ARTIFACT.into(),
+        os: Some(EvidenceHostOs::Macos),
+    }
+}
 
 /// The `gh` surface the provider adapter calls, over the pull requests kept
 /// as `prs/<number>/{head,base,state}` under `__FORGE__`.
@@ -104,8 +131,8 @@ fn open_pull_requests(forge: &Path) -> Vec<String> {
     open
 }
 
-/// A Mac leaf pushed its branch, opened #41 and held in its before-landing
-/// review for the Linux CodeQL run it owes. Its release names #41 on that
+/// A Linux leaf pushed its branch, opened #41 and held in its before-landing
+/// review for the macOS CodeQL run it owes. Its release names #41 on that
 /// branch, and the owner keeps it with the held candidate, which it keeps
 /// from the branch the leaf published it to for evidence. Once the owner's
 /// result arrives, the owner's own run resumes the held candidate, publishes
@@ -121,11 +148,11 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
     let mut leaf = ReviewedLeaf::admit_from(
         &format!(
             "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
-            codeql_rule("**/*.rs")
+            macos_codeql_rule()
         ),
         "",
     );
-    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Linux));
     leaf.gate_input["before_landing"] = json!(true);
     let (root, origin) = publish_origin(&leaf);
 
@@ -158,12 +185,12 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
         ReviewVerdict::Incomplete,
         Vec::new(),
         vec![ci_fast()],
-        Some("Rust CodeQL cannot run on macOS"),
+        Some("Swift CodeQL cannot run on Linux"),
     ));
     let refused = leaf.settle().expect_err("missing evidence cannot land");
     assert!(refused.contains("review_awaiting_evidence"), "{refused}");
     let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
-    assert_eq!(hold.requirements, vec![owed()]);
+    assert_eq!(hold.requirements, vec![macos_owed()]);
     let evidence_branch = format!("orbit-evidence/{branch}");
     assert_eq!(
         hold.published_ref,

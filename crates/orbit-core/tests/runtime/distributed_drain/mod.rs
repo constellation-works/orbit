@@ -66,6 +66,7 @@ mod candidate_carry;
 mod claimed_held_pull_request;
 #[cfg(unix)]
 mod claimed_host_evidence;
+mod claimed_host_gates;
 mod claimed_owed_evidence;
 mod claimed_owner;
 mod claimed_review;

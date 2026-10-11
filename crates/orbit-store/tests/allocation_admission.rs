@@ -2099,6 +2099,8 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         host_evidence: Vec::new(),
         issued_at: Utc::now(),
         owed_evidence: Vec::new(),
+        owner_owed_evidence: Vec::new(),
+        host_validation: Vec::new(),
         resumed_hold_attempt: None,
     }
 }

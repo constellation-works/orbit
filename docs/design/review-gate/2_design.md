@@ -953,6 +953,30 @@ finding or any other gap blocks as before. A reviewer that skipped or claimed
 an owed check cannot ship the candidate unverified. The certificate records
 the requirements in `owed_evidence`.
 
+[ORB-15630] A before-landing review on a claim host of a known OS other than
+Linux does not hold for Linux CodeQL. Its candidate is already published, the
+pull request's hosted CI runs CodeQL on it, and the owner's landing decision
+reads that run. Admission and settlement split such a requirement out as
+owner-owed (`owner_owed_evidence` in the manifest, the admission output and
+the certificate). The reviewer neither attempts nor names it. Settlement
+removes any Linux CodeQL the reviewer named and excludes a CodeQL record that
+did not fail, with a note naming the owner. A failed record still blocks.
+
+The same review decides the owner's required gates from the claim host's own
+runs. `claim_validate` ran them natively, outside the agent sandbox, on the
+published head. Admission reads that step's results for the admitted head
+(`host_validation`), and settlement replaces the reviewer's sandboxed record of
+each gate with the host's outcome:
+
+- a host pass counts as the required pass;
+- a verified known red counts as known red;
+- any other failure rejects (`host_gate_failed`).
+
+A review whose only blockers were those gates and owner-owed CodeQL, with no
+open finding and no pending evidence, settles `accept`. The certificate
+records the results in `host_validation`
+([runbook](../../runbooks/review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)).
+
 When owed evidence arrives, a fresh reviewer is not needed. Receipt moves the
 task to backlog with `review_evidence_received`. The owner's own next run then
 resumes the published held candidate without the implementer (`resumed_held`).

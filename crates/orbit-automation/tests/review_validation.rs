@@ -399,6 +399,8 @@ fn certificate_with(
         host_evidence: Vec::new(),
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
         owed_evidence: Vec::new(),
+        owner_owed_evidence: Vec::new(),
+        host_validation: Vec::new(),
         resumed_hold_attempt: None,
     }
 }

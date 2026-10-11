@@ -57,7 +57,7 @@ fn leaf_on(os: HostOs, paths: &str) -> (ReviewedLeaf, Value) {
     (leaf, admitted)
 }
 
-fn record(id: &str, command: &str, outcome: ValidationOutcome) -> ReviewValidation {
+pub(super) fn record(id: &str, command: &str, outcome: ValidationOutcome) -> ReviewValidation {
     ReviewValidation {
         id: Some(id.into()),
         command: command.into(),
@@ -322,11 +322,13 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
 
 /// A claimed before-landing review must release its lane with an evidence
 /// hold just like a before-PR review, without approving an unverified head.
+/// [ORB-15630] The Linux CodeQL run the Mac reviewer named is the owner's
+/// and the pull request's hosted CI's, so only the hosted job holds it.
 #[test]
-fn a_mac_before_landing_review_holds_named_linux_and_hosted_evidence() {
+fn a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql() {
     if !isolated(
         module_path!(),
-        "a_mac_before_landing_review_holds_named_linux_and_hosted_evidence",
+        "a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql",
     ) {
         return;
     }
@@ -335,16 +337,13 @@ fn a_mac_before_landing_review_holds_named_linux_and_hosted_evidence() {
     leaf.gate_input["before_landing"] = json!(true);
     let admitted = leaf.admit_review();
     assert_eq!(admitted["timing"], "before-landing", "{admitted}");
-    let named = vec![
-        owed(),
-        ReviewEvidenceRequirement {
-            kind: ReviewEvidenceKind::HostedCi,
-            name: "CI".into(),
-            command: CI.into(),
-            artifact: CI_ARTIFACT.into(),
-            os: None,
-        },
-    ];
+    let hosted = ReviewEvidenceRequirement {
+        kind: ReviewEvidenceKind::HostedCi,
+        name: "CI".into(),
+        command: CI.into(),
+        artifact: CI_ARTIFACT.into(),
+        os: None,
+    };
     let mut reviewer_report = report(
         &admitted,
         ReviewVerdict::Incomplete,
@@ -356,7 +355,7 @@ fn a_mac_before_landing_review_holds_named_linux_and_hosted_evidence() {
         ],
         Some("Linux and hosted checks need owner-side evidence"),
     );
-    reviewer_report.external_evidence = named.clone();
+    reviewer_report.external_evidence = vec![owed(), hosted.clone()];
     leaf.put_report(&reviewer_report);
     let refused = leaf.settle().expect_err("missing evidence cannot land");
     assert!(
@@ -365,7 +364,18 @@ fn a_mac_before_landing_review_holds_named_linux_and_hosted_evidence() {
     );
     let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
         .expect("named evidence remains an owner-side follow-up");
-    assert_eq!(hold.requirements, named);
+    assert_eq!(hold.requirements, vec![hosted]);
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(certificate.owner_owed_evidence, vec![owed()]);
+    let codeql = certificate
+        .validation
+        .iter()
+        .find(|record| record.command == CODEQL)
+        .expect("the CodeQL record stays on the certificate");
+    assert_eq!(
+        (codeql.role, codeql.outcome),
+        (ValidationRole::Excluded, ValidationOutcome::NotRun)
+    );
     leaf.leaf_holds(&hold);
     leaf.pair.pass(&leaf.drain);
     assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
@@ -711,21 +721,25 @@ fn fulfil_or_attach(
     attach_result(leaf, owner, hold);
 }
 
-/// An operator's attachment of a passed result, and its log, for the owed
-/// CodeQL check `hold` names: the other writer the hold accepts.
+/// An operator's attachment of a passed result, and its log, for the one
+/// owed check `hold` names: the other writer the hold accepts.
 #[cfg(unix)]
 pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &ReviewEvidenceHold) {
-    let log_artifact = "evidence/codeql-rust-linux.log.json";
+    let [required] = hold.requirements.as_slice() else {
+        panic!("one owed check: {hold:?}");
+    };
+    let log_artifact = format!("{}.log.json", required.artifact.trim_end_matches(".json"));
+    let log_artifact = log_artifact.as_str();
     let result = orbit_types::workflow::ReviewExternalEvidence {
         schema_version: 1,
         attempt_id: hold.attempt_id.clone(),
         candidate: hold.candidate.clone(),
-        kind: ReviewEvidenceKind::CodeQl,
-        name: owed().name,
-        command: CODEQL.into(),
+        kind: required.kind,
+        name: required.name.clone(),
+        command: required.command.clone(),
         outcome: ValidationOutcome::Passed,
         log_artifact: log_artifact.into(),
-        os: Some(EvidenceHostOs::Linux),
+        os: required.os,
     };
     let attach = |path: &str, content: Vec<u8>| TaskArtifact {
         path: path.into(),
@@ -746,7 +760,7 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
                             .to_string()
                             .into_bytes(),
                     ),
-                    attach(ARTIFACT, serde_json::to_vec(&result).unwrap()),
+                    attach(&required.artifact, serde_json::to_vec(&result).unwrap()),
                 ],
                 ..Default::default()
             },

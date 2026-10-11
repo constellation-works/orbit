@@ -389,6 +389,9 @@ spec:
     # ORB-14849: the before-landing review of the published pull request.
     # The gate steps always run and report `applies: false` unless the claim
     # captured `review.before_landing`, and for a no-diff exemption.
+    # ORB-15630: `validate` already ran the owner's required commands on this
+    # head, natively outside the agent sandbox; admission hands those results
+    # to the reviewer and settlement decides the gates from them.
     - id: landing_review_gate_admit
       retry:
         max_attempts: 3
@@ -406,6 +409,7 @@ spec:
         mode: pr
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         before_landing: true
+        host_validation_step: validate
 
     - id: landing_review
       when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
