@@ -115,13 +115,43 @@ pub fn run_bounded_capped_typed(
     deadline: Duration,
     output_limit: usize,
 ) -> Result<CapturedOutput, BoundedRunError> {
+    run_with_completion(command, deadline, output_limit, false)
+}
+
+/// [`run_bounded_capped_typed`] that requires both the child and its captured
+/// streams to finish within `deadline`.
+///
+/// On Unix, a descendant retaining stdout or stderr after the child exits
+/// keeps the run pending. At the deadline the entire process group is killed
+/// and the pipes are closed, with no capture threads left behind. Other
+/// bounded runners tear down descendants immediately after the child exits
+/// and accept its status instead.
+///
+/// # Errors
+///
+/// Same as [`run_bounded_capped_typed`], including a process timeout when
+/// inherited output streams remain open past the deadline.
+pub fn run_bounded_capped_complete_typed(
+    command: &mut Command,
+    deadline: Duration,
+    output_limit: usize,
+) -> Result<CapturedOutput, BoundedRunError> {
+    run_with_completion(command, deadline, output_limit, true)
+}
+
+fn run_with_completion(
+    command: &mut Command,
+    deadline: Duration,
+    output_limit: usize,
+    require_eof: bool,
+) -> Result<CapturedOutput, BoundedRunError> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     isolate_process_group(command);
     let child = command.spawn().map_err(BoundedRunError::Spawn)?;
-    supervise(child, deadline, output_limit).map_err(BoundedRunError::Run)
+    supervise(child, deadline, output_limit, require_eof).map_err(BoundedRunError::Run)
 }
 
 #[cfg(unix)]
@@ -129,6 +159,7 @@ fn supervise(
     mut child: Child,
     deadline: Duration,
     output_limit: usize,
+    require_eof: bool,
 ) -> Result<CapturedOutput, OrbitError> {
     let leader = child.id();
     let mut stdout = child.stdout.take();
@@ -141,13 +172,16 @@ fn supervise(
     let started = Instant::now();
     let mut out = BoundedOutputCapture::new(output_limit);
     let mut err = BoundedOutputCapture::new(output_limit);
+    let mut status = None;
     loop {
         let out_turn = drain_pipe(stdout.as_mut(), &mut out)?;
         let err_turn = drain_pipe(stderr.as_mut(), &mut err)?;
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| OrbitError::Execution(error.to_string()))?
-        {
+        if status.is_none() {
+            status = child
+                .try_wait()
+                .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        }
+        if let Some(status) = status.filter(|_| !require_eof || (out_turn.eof && err_turn.eof)) {
             // The leader is reaped. Signal the group so a descendant that
             // inherited it and is still holding a pipe is torn down with it.
             signal_owned_group(leader, kill_signal());
@@ -164,7 +198,11 @@ fn supervise(
         if started.elapsed() >= deadline {
             // The output is discarded; dropping the pipes on return unblocks
             // any writer the group signal missed.
-            terminate(&mut child, leader)?;
+            if status.is_some() {
+                signal_owned_group(leader, kill_signal());
+            } else {
+                terminate(&mut child, leader)?;
+            }
             return Err(process_timeout(deadline));
         }
         // A turn that stopped on a budget still has a live producer. Keep
@@ -181,6 +219,7 @@ fn supervise(
     mut child: Child,
     deadline: Duration,
     output_limit: usize,
+    _require_eof: bool,
 ) -> Result<CapturedOutput, OrbitError> {
     let leader = child.id();
     let stdout = spawn_reader(child.stdout.take(), output_limit);

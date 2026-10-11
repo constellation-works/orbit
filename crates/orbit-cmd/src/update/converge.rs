@@ -6,17 +6,17 @@
 //! so asking the outgoing process to converge state would apply the version
 //! the operator is leaving.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
+use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
     CompatibilityIdentity, GENERATION_CONTRACT, HandoverCandidate, LEGACY_GENERATION_CONTRACT,
 };
-use orbit_common::process::{BoundedRunError, run_bounded_capped_typed};
+use orbit_common::process::{
+    BoundedRunError, run_bounded_capped_complete_typed, run_bounded_capped_typed,
+};
 use serde::Serialize;
 
 /// How much of a failing step's stderr to carry into the report.
@@ -265,81 +265,41 @@ fn run_process(command: &mut Command) -> std::io::Result<Output> {
     }
 }
 
-/// Run a short probe of `command` to completion within [`probe_timeout`],
-/// retrying while the OS reports the executable as busy (see
-/// [`run_process`]). A probe that does not exit in time is killed and
-/// reported as [`std::io::ErrorKind::TimedOut`].
+/// Run a short probe of `command` and its captured streams to completion
+/// within [`probe_timeout`], retrying while the OS reports the executable as
+/// busy (see [`run_process`]). A probe or inherited pipe that does not finish
+/// in time is torn down with its process group and reported as
+/// [`std::io::ErrorKind::TimedOut`].
 fn run_probe(command: &mut Command) -> std::io::Result<Output> {
     let timeout = probe_timeout();
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
     let busy_until = Instant::now() + EXEC_BUSY_WINDOW;
-    let mut child = loop {
-        match command.spawn() {
-            Err(error)
+    loop {
+        match run_bounded_capped_complete_typed(command, timeout, PROBE_OUTPUT_LIMIT as usize) {
+            Err(BoundedRunError::Spawn(error))
                 if error.kind() == std::io::ErrorKind::ExecutableFileBusy
                     && Instant::now() < busy_until =>
             {
                 std::thread::sleep(Duration::from_millis(25));
             }
-            other => break other?,
-        }
-    };
-    let deadline = Instant::now() + timeout;
-    let stdout = capture(child.stdout.take());
-    let stderr = capture(child.stderr.take());
-    let timed_out = || {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            format!("it did not finish within {}s", timeout.as_secs()),
-        )
-    };
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill(&mut child);
-            return Err(timed_out());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    // A descendant that inherited the pipes can hold them open after the
-    // probe itself exited, so the readers share the probe's deadline.
-    let collect = |pipe: mpsc::Receiver<Vec<u8>>| {
-        pipe.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| timed_out())
-    };
-    Ok(Output {
-        status,
-        stdout: collect(stdout)?,
-        stderr: collect(stderr)?,
-    })
-}
-
-/// Read `pipe` to its end (up to [`PROBE_OUTPUT_LIMIT`]) on its own thread.
-fn capture(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    match pipe {
-        Some(pipe) => {
-            std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let _ = pipe.take(PROBE_OUTPUT_LIMIT).read_to_end(&mut bytes);
-                let _ = sender.send(bytes);
-            });
-        }
-        None => {
-            let _ = sender.send(Vec::new());
+            Ok(captured) => {
+                return Ok(Output {
+                    status: captured.status,
+                    stdout: captured.stdout,
+                    stderr: captured.stderr,
+                });
+            }
+            Err(BoundedRunError::Spawn(error)) => return Err(error),
+            Err(BoundedRunError::Run(OrbitError::ProcessTimeout { .. })) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("it did not finish within {}s", timeout.as_secs()),
+                ));
+            }
+            Err(BoundedRunError::Run(error)) => {
+                return Err(std::io::Error::other(error.to_string()));
+            }
         }
     }
-    receiver
-}
-
-fn kill(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// The first non-empty line of a step's own report.

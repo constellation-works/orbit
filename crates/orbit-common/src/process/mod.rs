@@ -8,7 +8,8 @@ pub mod shell;
 pub mod stopped_descendants;
 
 pub use bounded::{
-    BoundedRunError, CapturedOutput, run_bounded, run_bounded_capped, run_bounded_capped_typed,
+    BoundedRunError, CapturedOutput, run_bounded, run_bounded_capped,
+    run_bounded_capped_complete_typed, run_bounded_capped_typed,
 };
 
 #[cfg(test)]
