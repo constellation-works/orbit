@@ -1,6 +1,6 @@
 //! Pilot prerequisites resolved only within the assessed workspace.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus, is_valid_orb_task_id, validate_task_dependencies_with};
@@ -26,11 +26,28 @@ pub(crate) fn pilot_blocker_task_ids(assessment: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-impl OrbitRuntime {
-    /// Called under the assessed task's write lock and local targets' read locks.
+/// The part of the dependency graph the pilot's cycle check reads: every task
+/// reachable from the assessed task's dependencies and named local blockers.
+///
+/// Pilot persistence locks these tasks in one sorted order before it validates,
+/// so two applications whose graphs overlap queue on their first common task
+/// instead of each holding a task the other's walk needs.
+pub(crate) struct PilotDependencyGraph {
+    tasks: BTreeMap<String, Task>,
+    /// Reached IDs that named no task in this workspace when walked.
+    absent: BTreeSet<String>,
+}
+
+impl PilotDependencyGraph {
+    /// The existing tasks to lock.
+    pub(crate) fn task_ids(&self) -> impl Iterator<Item = &String> {
+        self.tasks.keys()
+    }
+
     /// Existing dependencies remain intact; only unfinished local tasks add
     /// edges, and the resulting graph must pass the ordinary cycle check.
-    pub(crate) fn pilot_blocker_dependencies(
+    /// Reads nothing beyond this snapshot.
+    pub(crate) fn blocker_dependencies(
         &self,
         task: &Task,
         named: &BTreeSet<String>,
@@ -38,7 +55,7 @@ impl OrbitRuntime {
         let mut dependencies = task.dependencies();
         let mut additions = Vec::new();
         for id in named {
-            let Some(target) = self.stores().tasks().get_task(id)? else {
+            let Some(target) = self.tasks.get(id) else {
                 continue;
             };
             if matches!(
@@ -56,18 +73,76 @@ impl OrbitRuntime {
         }
         if !additions.is_empty() {
             validate_task_dependencies_with(Some(&task.id), &dependencies, |id| {
-                if !is_valid_orb_task_id(id) {
-                    return Ok(None);
-                }
-                Ok::<_, OrbitError>(
-                    self.stores()
-                        .tasks()
-                        .get_task(id)?
-                        .map(|task| task.dependencies()),
-                )
+                Ok::<_, OrbitError>(self.tasks.get(id).map(Task::dependencies))
             })?;
         }
         Ok(additions)
+    }
+}
+
+impl OrbitRuntime {
+    /// Discover the graph by reading every reached task. Hold no task lock.
+    pub(crate) fn discover_pilot_dependency_graph(
+        &self,
+        task: &Task,
+        named: &BTreeSet<String>,
+    ) -> Result<PilotDependencyGraph, OrbitError> {
+        let graph = self.walk_pilot_dependency_graph(task, named, None)?;
+        graph.ok_or_else(|| OrbitError::Execution("pilot graph discovery stopped".to_string()))
+    }
+
+    /// Read the graph again while holding the locks of `locked`, reading only
+    /// its tasks. Reaching an ID outside it returns `None`: reading that task
+    /// now would take its lock out of order, so the caller releases its locks
+    /// and discovers again.
+    pub(crate) fn reread_pilot_dependency_graph(
+        &self,
+        task: &Task,
+        named: &BTreeSet<String>,
+        locked: &PilotDependencyGraph,
+    ) -> Result<Option<PilotDependencyGraph>, OrbitError> {
+        self.walk_pilot_dependency_graph(task, named, Some(locked))
+    }
+
+    fn walk_pilot_dependency_graph(
+        &self,
+        task: &Task,
+        named: &BTreeSet<String>,
+        locked: Option<&PilotDependencyGraph>,
+    ) -> Result<Option<PilotDependencyGraph>, OrbitError> {
+        let mut graph = PilotDependencyGraph {
+            tasks: BTreeMap::new(),
+            absent: BTreeSet::new(),
+        };
+        let mut pending = task.dependencies();
+        pending.extend(named.iter().cloned());
+        while let Some(id) = pending.pop() {
+            if !is_valid_orb_task_id(&id)
+                || graph.tasks.contains_key(&id)
+                || graph.absent.contains(&id)
+            {
+                continue;
+            }
+            if let Some(locked) = locked {
+                if locked.absent.contains(&id) {
+                    graph.absent.insert(id);
+                    continue;
+                }
+                if !locked.tasks.contains_key(&id) {
+                    return Ok(None);
+                }
+            }
+            match self.stores().tasks().get_task(&id)? {
+                Some(found) => {
+                    pending.extend(found.dependencies());
+                    graph.tasks.insert(id, found);
+                }
+                None => {
+                    graph.absent.insert(id);
+                }
+            }
+        }
+        Ok(Some(graph))
     }
 
     /// Blocker prose in the latest applied pilot receipt, for operator
