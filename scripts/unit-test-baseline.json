@@ -642,6 +642,7 @@
         "executor/automation/vcs/tests/base_claim.rs::a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached",
         "executor/automation/vcs/tests/base_claim.rs::a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the_base",
         "executor/automation/vcs/tests/base_claim.rs::failure_identities_name_each_failed_test_and_located_error_across_runners",
+        "executor/automation/vcs/tests/base_claim.rs::supervisor_stops_never_classify_partial_failures_as_known_red",
         "executor/automation/vcs/tests/delivery_marker.rs::delivery_markers_preserve_valid_inner_candidates_and_marker_grammar",
         "executor/automation/vcs/tests/git.rs::quiet_git_failures_keep_exit_status_and_signal_diagnostics",
         "executor/automation/vcs/tests/git.rs::stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out",

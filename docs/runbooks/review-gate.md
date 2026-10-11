@@ -257,11 +257,15 @@ host runs get `review.minutes` of wall clock with the last quarter reserved
 for the base; a candidate rerun stopped at the reserve settles `incomplete`
 with a `baseline_cut` escalation naming the cut and the failures the base
 shares. Raise `review.minutes` when the host's affected run needs longer.
+If a signal or the output-capture limit stops the candidate instead, the claim
+stays inconclusive and settles `incomplete` with the supervisor's cause. Its
+partial failures are never replayed on the base or accepted as known red.
 
 A confirmed claim whose candidate failures are all failed tests the base
 fails too is known red, by the rule required validation applies
 ([configuration](../CONFIG.md#a-red-base-is-held-not-blocked)): the candidate
-run did not time out, printed no sandbox deferral notice and names at least
+run completed without a timeout or supervisor stop, printed no sandbox
+deferral notice and names at least
 one failure. The candidate introduced none of them, so the task is not held.
 With every failed required check confirmed this way or overridden, no open
 finding and no pending external evidence, the review settles `accept`

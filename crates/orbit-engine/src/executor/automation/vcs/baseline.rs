@@ -410,13 +410,15 @@ impl BaselineCheck {
 /// same check names. The run must name at least one failure, every one a
 /// failed test (`test …`, as [`super::base_claim::failure_identities`] reads
 /// it) that `base_failures` names too, and must neither have timed out,
-/// which could have cut its failures short, nor deferred a sandbox-confined
+/// or been stopped by the supervisor, which could have cut its failures
+/// short, nor deferred a sandbox-confined
 /// path, which then never ran, or printed any other host coverage refusal
 /// (including `SKIP:` and `skipping` notices) [ORB-15548].
 /// A run that names no failure cannot be
 /// compared; a compiler or lint error says nothing about which tests ran.
 pub(super) fn known_red(run: &RequiredCommandRun, base_failures: &BTreeSet<String>) -> bool {
     !run.timed_out
+        && run.infrastructure_failure.is_none()
         && run.deferred_notice.is_none()
         && run.host_output_refusal.is_none()
         && names_only_failed_tests(&run.failures)
