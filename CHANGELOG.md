@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.2 — 2026-10-11
+
+### Highlights
+
+- **Extend a live drain**: `orbit run extend <run-id> --for <duration>` moves a running drain's deadline later without restarting it, so in-flight tasks, claims and authority carry over. `--concurrency` retunes it in the same call. It never shortens a window and refuses stopped or windowless drains. ([ORB-15383])
+- **Review crew pools**: `operation.review_crew` accepts a pool such as `["sol", "grok"]` (or weighted entries) as well as one crew. Each before-PR, before-landing or after-landing review draws one crew, preferring one that did not implement the work and skipping disabled or provider-limited crews. ([ORB-15195])
+- **Red base gets an owner**: a baseline-red hold names the tests failing on the base in its hold text, verdicts and `orbit run readiness`. The owner's clock tick files one deduplicated `baseline-red-repair` bug per failure set, and reviewer red-base claims replay only those tests. ([ORB-15374])
+- **One incident per failure**: a gate or auto run that failed only because a child failed records that leaf as its `root_cause`, and `orbit run history --incidents` and the dashboard fold them into one row. Red-base holds now end `held`, and parents whose unsuccessful children were all cancelled end `cancelled`. ([ORB-15202])
+- **Dashboard redesign and codebase analytics**: tasks show as status cards whose readiness dot says why backlog work waits, and drain status and controls get their own cards. Audit › Codebase replaces Audit › Policy and ranks files, directories or crates by regression rate, lock contention, footprint misses and blocked runs. ([ORB-15355])
+- **Linux worker containment**: `machine.worker_cpu_quota` caps contained worker scopes with systemd `CPUQuota=`, and `orbit doctor` reports the limit. Pass-listed credentials reach workers through their environment instead of `systemd-run` arguments, so a process listing no longer shows provider tokens. ([ORB-15196])
+
 ## 0.28.1 — 2026-10-10
 
 ### Highlights
