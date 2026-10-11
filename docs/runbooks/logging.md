@@ -64,6 +64,13 @@ records wait for a newline; unfinished bytes from an archive or truncated
 contents are discarded when switching to the new contents. Writes to an
 archive after the follower has switched to the replacement are not followed.
 
+`orbit log tail` admits at most 1 MiB per JSONL record, excluding the newline,
+in both history and follow mode (including `--lines 0`). Larger records are
+silently skipped through their next newline, as malformed JSON is. An
+oversized incomplete record stays in discard mode across EOF polls without
+retaining more bytes; rotation or truncation resets that state. Subsequent
+ordinary records still pass through the selected filters and output mode.
+
 The dashboard log snapshot (`/api/log`) and Errors tab
 (`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
 to show valid records on either side. File access and read errors still fail the
