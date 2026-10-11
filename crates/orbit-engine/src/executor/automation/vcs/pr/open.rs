@@ -199,8 +199,9 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
 
 /// [ORB-15308] Close the pull request an earlier claim opened for the
 /// candidate this run resumed (`candidate_resume`'s `prior_pull_request`, on
-/// its `source_branch`) when this run published through another one, with a
-/// comment naming it, so the task never has two open pull requests. A pull request that is no longer
+/// its `prior_pull_request_head` [ORB-15570], else its `source_branch`) when
+/// this run published through another one, with a comment naming it, so the
+/// task never has two open pull requests. A pull request that is no longer
 /// open, or whose head is not that branch, is left alone. The PR this run
 /// opened stands either way: a failed close is reported in the output and
 /// logged, never a step failure. `Null` when there was no earlier pull
@@ -220,7 +221,9 @@ fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
         return Value::Null;
     }
     let outcome = |decision: &str, detail: String| json!({"number": prior, "decision": decision, "detail": detail});
-    let prior_branch = input_string_field(resumed, "source_branch").unwrap_or_default();
+    let prior_branch = input_string_field(resumed, "prior_pull_request_head")
+        .or_else(|| input_string_field(resumed, "source_branch"))
+        .unwrap_or_default();
     let status = match host.run_private_vcs_operation(
         operations::PR_STATUS,
         json!({"pr": prior, "workspace_path": workspace_path}),

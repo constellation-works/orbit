@@ -63,6 +63,8 @@ mod before_pr;
 mod cancel;
 mod candidate_carry;
 #[cfg(unix)]
+mod claimed_held_pull_request;
+#[cfg(unix)]
 mod claimed_host_evidence;
 mod claimed_owed_evidence;
 mod claimed_owner;

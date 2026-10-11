@@ -3,7 +3,7 @@
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery, ClaimMutation,
-    LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
+    ClaimPullRequest, LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
@@ -71,7 +71,7 @@ pub(crate) fn leaf_failure_settlement(
     if run.state == JobRunState::Held
         && let Some(hold) = held_evidence(state)
     {
-        return evidence_hold_release(record, run, hold);
+        return evidence_hold_release(record, run, hold, held_pull_request(state));
     }
     let final_recovery = state
         .and_then(|state| state.final_recovery.as_ref())
@@ -146,13 +146,33 @@ fn held_evidence(state: Option<&PipelineState>) -> Option<ReviewEvidenceHold> {
         })
 }
 
+/// [ORB-15570] The pull request a leaf held in its before-landing review
+/// opened at `pr_open`, which stays open under the hold.
+fn held_pull_request(state: Option<&PipelineState>) -> Option<ClaimPullRequest> {
+    let opened = state?.pipeline.get("pr_open")?;
+    let text = |field: &str| {
+        opened
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    Some(ClaimPullRequest {
+        number: text("pr_number")?,
+        head: text("head")?,
+    })
+}
+
 /// A `held` leaf whose review settled into an evidence hold did not fail: its
 /// claim is released with the typed hold, which the owner records as the
-/// task's latest decision.
+/// task's latest decision, and the pull request a before-landing hold left
+/// open, which the owner keeps with the held candidate.
 fn evidence_hold_release(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
     hold: ReviewEvidenceHold,
+    pull_request: Option<ClaimPullRequest>,
 ) -> ClaimMutation {
     let drain = &record.request.run_context.run_id;
     let machine = &record.destination.execution_machine_id;
@@ -166,14 +186,24 @@ fn evidence_hold_release(
         "leaf {} held its reviewed candidate {} for named external evidence ({names})",
         run.run_id, hold.candidate.commit
     );
+    let opened = pull_request
+        .as_ref()
+        .map_or_else(String::new, |pull_request| {
+            format!(
+                " Its pull request #{} on `{}` stays open until the run that resumes the held \
+             candidate opens its own and closes it as superseded.",
+                pull_request.number, pull_request.head
+            )
+        });
     ClaimMutation::Release(ClaimEvidence {
         summary: Some(format!("released by follower drain {drain}: {why}")),
         comment: Some(format!(
             "Follower drain {drain} on {machine} released this claim: {why}. The task stays in \
              progress under the evidence hold; attaching every named result queues a fresh \
-             review. Delivery remains gated until the named evidence arrives."
+             review. Delivery remains gated until the named evidence arrives.{opened}"
         )),
         evidence_hold: Some(hold),
+        held_pull_request: pull_request,
         ..Default::default()
     })
 }

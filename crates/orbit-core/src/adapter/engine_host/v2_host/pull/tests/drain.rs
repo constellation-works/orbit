@@ -483,6 +483,7 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
         branch: "orbit/task-earlier".into(),
         head_sha: "a".repeat(40),
         pull_request: None,
+        pull_request_head: None,
         source_run_id: Some("jrun-earlier".into()),
         failed_step_id: Some("validate".into()),
         published: false,

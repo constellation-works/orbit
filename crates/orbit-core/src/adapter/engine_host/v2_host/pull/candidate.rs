@@ -107,6 +107,7 @@ pub(super) fn preserved_candidate(
         branch: String::new(),
         head_sha: String::new(),
         pull_request: text(step("pr_open"), "pr_number").or(continued),
+        pull_request_head: None,
         source_run_id: Some(run.run_id.clone()),
         failed_step_id: first_incomplete_step(run, state).map(str::to_string),
         published: false,

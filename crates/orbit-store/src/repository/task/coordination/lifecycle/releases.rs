@@ -46,7 +46,9 @@ impl TaskCommitBoundary {
     /// The candidate a claim's failure or release preserved, with the spec
     /// it answered to; `None` when the leaf ended without one. A release for
     /// an evidence hold keeps the held candidate from the branch its leaf
-    /// published it to, so the run after the evidence arrives resumes it.
+    /// published it to, so the run after the evidence arrives resumes it,
+    /// with the pull request a before-landing hold left open [ORB-15570], so
+    /// that run closes it once its own is open.
     pub(super) fn preserve_candidate(
         &self,
         task_id: &str,
@@ -57,7 +59,14 @@ impl TaskCommitBoundary {
             Some(ClaimCandidateRef {
                 branch: branch.to_string(),
                 head_sha: hold.candidate.commit.clone(),
-                pull_request: None,
+                pull_request: evidence
+                    .held_pull_request
+                    .as_ref()
+                    .map(|pull_request| pull_request.number.clone()),
+                pull_request_head: evidence
+                    .held_pull_request
+                    .as_ref()
+                    .map(|pull_request| pull_request.head.clone()),
                 source_run_id: Some(hold.run_id.clone()),
                 // Complete: its review held only for evidence, so a claim
                 // that resumes it continues rather than repairs a verdict.
@@ -364,6 +373,7 @@ fn held_candidate_offer(
             branch: held.branch,
             head_sha: held.head_sha,
             pull_request: None,
+            pull_request_head: None,
             source_run_id: Some(held.run_id),
             // None of these holds judged the candidate on its merits, so a
             // claim continues it rather than repairs a review verdict.

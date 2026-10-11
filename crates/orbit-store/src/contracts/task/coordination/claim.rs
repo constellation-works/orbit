@@ -172,13 +172,20 @@ pub struct ClaimEvidence {
     /// releases any other within its per-task release budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<ClaimFailure>,
-    /// Set on a release whose leaf's before-PR review settled into an
-    /// evidence hold. The owner keeps the task in progress with
-    /// `review_awaiting_evidence` as its latest decision, so receipt of the
-    /// named evidence queues a fresh review. An owner that predates the field
-    /// releases the task unheld.
+    /// Set on a release whose leaf's before-PR or before-landing review
+    /// settled into an evidence hold. The owner keeps the task in progress
+    /// with `review_awaiting_evidence` as its latest decision, so receipt of
+    /// the named evidence queues a fresh review. An owner that predates the
+    /// field releases the task unheld.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
+    /// [ORB-15570] Set with `evidence_hold` when the leaf held in its
+    /// before-landing review, after its `pr_open`: the pull request it opened,
+    /// which stays open. The owner keeps it on the held candidate, so the run
+    /// that resumes that candidate closes it once its own is open. An owner
+    /// that predates the field leaves it open until the task ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_pull_request: Option<ClaimPullRequest>,
     /// [ORB-14634] Set on a `transient` release whose leaf held its claim
     /// while the forge refused its push, and released it once its retry
     /// window closed. The forge, not the host or the crew, refused it, so the
@@ -186,6 +193,14 @@ pub struct ClaimEvidence {
     /// predates the field keeps the task from that drain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
+}
+
+/// [ORB-15570] A pull request a claimed leaf opened, by number and head
+/// branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimPullRequest {
+    pub number: String,
+    pub head: String,
 }
 
 /// Why a launched claimed leaf ended without its typed handoff [ORB-14257].
@@ -245,6 +260,11 @@ pub struct ClaimCandidateRef {
     /// The pull request the leaf opened for it, when it got that far.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<String>,
+    /// [ORB-15570] The head branch of `pull_request` when it is not
+    /// `branch`: a held candidate is kept from the branch its leaf published
+    /// it to for evidence, while its pull request stays on the leaf's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_head: Option<String>,
     /// The leaf run that produced it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_run_id: Option<String>,

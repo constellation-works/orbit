@@ -1721,6 +1721,7 @@ fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
                     branch: preserved.branch.clone(),
                     head_sha: preserved.candidate.clone(),
                     pull_request: None,
+                    pull_request_head: None,
                     source_run_id: Some(source_run_id.to_string()),
                     failed_step_id: Some("sync_base".to_string()),
                     published: false,

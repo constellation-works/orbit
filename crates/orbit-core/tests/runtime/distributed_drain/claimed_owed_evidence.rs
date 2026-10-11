@@ -30,7 +30,7 @@ const CI: &str = "make ci";
 const CI_ARTIFACT: &str = "evidence/ci.json";
 
 /// The owner's rule: a change matching `paths` owes a Linux CodeQL run.
-fn codeql_rule(paths: &str) -> String {
+pub(super) fn codeql_rule(paths: &str) -> String {
     format!(
         "\n[[review.host_evidence]]\nkind = \"codeql\"\nname = \"Rust CodeQL (Linux)\"\n\
          paths = [\"{paths}\"]\nos = \"linux\"\ncommand = \"{CODEQL}\"\nartifact = \"{ARTIFACT}\"\n"
@@ -38,7 +38,7 @@ fn codeql_rule(paths: &str) -> String {
 }
 
 /// The requirement the rule owes.
-fn owed() -> ReviewEvidenceRequirement {
+pub(super) fn owed() -> ReviewEvidenceRequirement {
     ReviewEvidenceRequirement {
         kind: ReviewEvidenceKind::CodeQl,
         name: "Rust CodeQL (Linux)".into(),
@@ -74,7 +74,7 @@ fn record(id: &str, command: &str, outcome: ValidationOutcome) -> ReviewValidati
 }
 
 /// A report naming no external evidence: everything else checked.
-fn report(
+pub(super) fn report(
     admitted: &Value,
     verdict: ReviewVerdict,
     findings: Vec<ReviewFinding>,
@@ -94,11 +94,14 @@ fn report(
     }
 }
 
-fn ci_fast() -> ReviewValidation {
+pub(super) fn ci_fast() -> ReviewValidation {
     record("V1", "make ci-fast", ValidationOutcome::Passed)
 }
 
-fn artifact<T: serde::de::DeserializeOwned>(leaf: &ReviewedLeaf, path: &str) -> Option<T> {
+pub(super) fn artifact<T: serde::de::DeserializeOwned>(
+    leaf: &ReviewedLeaf,
+    path: &str,
+) -> Option<T> {
     leaf.owner_artifact(path)
         .map(|bytes| serde_json::from_slice(&bytes).unwrap())
 }
@@ -426,15 +429,8 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
 
     let mut leaf = ReviewedLeaf::admit_with_configs(&codeql_rule("**/*.rs"), "");
     leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
-    let root = leaf.pair._root.path().to_path_buf();
-    let origin = root.join("origin.git");
-    git(&root, &["init", "--bare", "-q", origin.to_str().unwrap()]);
+    let (root, origin) = publish_origin(&leaf);
     let follower_repo = leaf.pair.follower_repo.clone();
-    git(
-        &follower_repo,
-        &["remote", "set-url", "origin", origin.to_str().unwrap()],
-    );
-    git(&follower_repo, &["push", "-q", "origin", "main"]);
     let script = follower_repo.join("scripts/codeql-rust-local.sh");
     std::fs::create_dir_all(script.parent().unwrap()).unwrap();
     std::fs::write(
@@ -472,16 +468,8 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
     leaf.pair.pass(&leaf.drain);
     assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
 
-    // The owner: a Linux checkout of the same `origin`, on the same base.
     let owner = leaf.pair.wire.owner.clone();
-    let owner_repo = leaf.pair.owner_repo.clone();
-    git(&owner_repo, &["init", "-q", "-b", "main"]);
-    git(
-        &owner_repo,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    git(&owner_repo, &["fetch", "-q", "origin", "main"]);
-    git(&owner_repo, &["reset", "-q", "--hard", "origin/main"]);
+    owner_checkout(&leaf, &origin);
     fulfil_or_attach(&leaf, &owner, &hold, &root);
     assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
     let receipt = owner.get_task_history(&leaf.task).unwrap();
@@ -491,96 +479,23 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
         "{receipt:?}"
     );
 
-    // The owner's own `task_pr_pipeline` run of the task, as dispatch
-    // starts it with the workspace's captured before-PR admission.
-    let jobs = orbit_store::compose::workspace_job_run_store(
-        owner.sqlite_store().unwrap(),
-        owner.workspace_id().unwrap(),
-    );
-    let admission = orbit_types::workflow::ReviewAdmission {
-        contract_version: orbit_types::workflow::REVIEW_CONTRACT_VERSION,
-        policy_version: orbit_config::OPERATION_POLICY_VERSION,
-        timing: ReviewTiming::BeforePr,
-        timing_source: "workspace".into(),
-        crew: Some("sol".into()),
-        crew_source: "workspace".into(),
-        crew_pool: Vec::new(),
-        budget: orbit_types::workflow::ReviewBudget::default(),
-        required_validation_commands: Some(Vec::new()),
-        baseline_commands: Vec::new(),
-        host_evidence: Vec::new(),
-        captured_at: Utc::now(),
-    };
-    let run = jobs
-        .insert_job_run(
-            "task_pr_pipeline",
-            1,
-            Utc::now(),
-            Some(json!({ orbit_types::workflow::REVIEW_ADMISSION_KEY: admission })),
-            None,
-        )
-        .unwrap()
-        .run_id;
-    let action = |name: &str, input: &Value| {
-        orbit_engine::execute_deterministic_action(
-            &owner,
-            name,
-            &json!({}),
-            input,
-            false,
-            &Default::default(),
-            None,
-        )
-        .unwrap_or_else(|error| panic!("{name}: {error}"))
-    };
-    let setup = action(
-        "worktree_setup",
-        &json!({
-            "job_run_id": run, "run_id": run, "task_ids": [leaf.task],
-            "base": "main", "base_sync": "local", "dependency_delivery": "ignore",
-        }),
-    );
-    let resumed = action(
-        "candidate_resume",
-        &json!({
-            "job_run_id": run, "task_ids": [leaf.task],
-            "workspace_path": setup["workspace_path"], "base_sha": setup["base_sha"],
-            "prior_job_run_id": setup["prior_job_run_id"],
-            "prior_foreign_run": setup["prior_foreign_run"],
-        }),
-    );
-    assert_eq!(resumed["outcome"], "resumed_held", "{resumed}");
+    let resumed = owner_resumes(&leaf, ReviewTiming::BeforePr);
     assert_eq!(
-        resumed["implement"], false,
-        "no re-implementation: {resumed}"
+        resumed.output["outcome"], "resumed_held",
+        "{}",
+        resumed.output
     );
-    assert_eq!(resumed["source_sha"], hold.candidate.commit.as_str());
-
-    // Dispatch links the task to the run; the commit step commits the
-    // resumed candidate.
-    owner
-        .update_task_with_identity(
-            &leaf.task,
-            orbit_core::application::task::TaskUpdateParams {
-                status: Some(orbit_types::task::TaskStatus::InProgress),
-                job_run_id: Some(Some(run.clone())),
-                ..Default::default()
-            },
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    let worktree = PathBuf::from(setup["workspace_path"].as_str().unwrap());
-    git(&worktree, &["add", "-A"]);
-    git(
-        &worktree,
-        &["commit", "-q", "-m", "Resume the held candidate"],
+    assert_eq!(
+        resumed.output["implement"], false,
+        "no re-implementation: {}",
+        resumed.output
     );
+    assert_eq!(resumed.output["source_sha"], hold.candidate.commit.as_str());
 
     let mut gate_input = json!({
-        "run_id": run, "job_run_id": run, "completed_task_ids": [leaf.task],
-        "workspace_path": worktree, "base": "main", "base_sync": "local",
-        "base_sha": setup["base_sha"], "mode": "pr", "skipped_no_diff_expected": false,
+        "run_id": resumed.run, "job_run_id": resumed.run, "completed_task_ids": [leaf.task],
+        "workspace_path": resumed.worktree, "base": "main", "base_sync": "local",
+        "base_sha": resumed.base_sha, "mode": "pr", "skipped_no_diff_expected": false,
     });
     let admitted = owner
         .run_deterministic(
@@ -603,7 +518,7 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
         .expect("the held review settles once its owed check arrived");
     assert_eq!(settled["gate"], "passed", "{settled}");
     assert_eq!(settled["verdict"], "accept", "{settled}");
-    let head = git(&worktree, &["rev-parse", "HEAD"]);
+    let head = git(&resumed.worktree, &["rev-parse", "HEAD"]);
     assert_eq!(settled["reviewed_head_sha"], head.trim(), "pr_open's head");
     let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(
@@ -612,6 +527,141 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
         "settled without a reviewer"
     );
     assert_eq!(certificate.final_candidate.tree, hold.candidate.tree);
+}
+
+/// A bare `origin` beside the pair, which the leaf's follower checkout
+/// pushes its base to; returns the pair's root and that remote.
+#[cfg(unix)]
+pub(super) fn publish_origin(leaf: &ReviewedLeaf) -> (PathBuf, PathBuf) {
+    let root = leaf.pair._root.path().to_path_buf();
+    let origin = root.join("origin.git");
+    git(&root, &["init", "--bare", "-q", origin.to_str().unwrap()]);
+    let follower_repo = &leaf.pair.follower_repo;
+    git(
+        follower_repo,
+        &["remote", "set-url", "origin", origin.to_str().unwrap()],
+    );
+    git(follower_repo, &["push", "-q", "origin", "main"]);
+    (root, origin)
+}
+
+/// The owner: a Linux checkout of the same `origin`, on the same base.
+#[cfg(unix)]
+pub(super) fn owner_checkout(leaf: &ReviewedLeaf, origin: &Path) {
+    let owner_repo = &leaf.pair.owner_repo;
+    git(owner_repo, &["init", "-q", "-b", "main"]);
+    git(
+        owner_repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(owner_repo, &["fetch", "-q", "origin", "main"]);
+    git(owner_repo, &["reset", "-q", "--hard", "origin/main"]);
+}
+
+/// The owner's own `task_pr_pipeline` run of the task after its evidence
+/// arrived, through `candidate_resume` and the commit of what it resumed.
+#[cfg(unix)]
+pub(super) struct ResumedRun {
+    pub(super) run: String,
+    pub(super) worktree: PathBuf,
+    pub(super) base_sha: Value,
+    /// `candidate_resume`'s output.
+    pub(super) output: Value,
+}
+
+/// Start the owner's `task_pr_pipeline` run of the task as dispatch does,
+/// with the workspace's captured review `timing`, set up its worktree and
+/// resume the task's kept candidate; dispatch links the task to the run and
+/// the commit step commits the resumed candidate.
+#[cfg(unix)]
+pub(super) fn owner_resumes(leaf: &ReviewedLeaf, timing: ReviewTiming) -> ResumedRun {
+    let owner = &leaf.pair.wire.owner;
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    let admission = orbit_types::workflow::ReviewAdmission {
+        contract_version: orbit_types::workflow::REVIEW_CONTRACT_VERSION,
+        policy_version: orbit_config::OPERATION_POLICY_VERSION,
+        timing,
+        timing_source: "workspace".into(),
+        crew: Some("sol".into()),
+        crew_source: "workspace".into(),
+        crew_pool: Vec::new(),
+        budget: orbit_types::workflow::ReviewBudget::default(),
+        required_validation_commands: Some(Vec::new()),
+        baseline_commands: Vec::new(),
+        host_evidence: Vec::new(),
+        captured_at: Utc::now(),
+    };
+    let run = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ orbit_types::workflow::REVIEW_ADMISSION_KEY: admission })),
+            None,
+        )
+        .unwrap()
+        .run_id;
+    let setup = owner_action(
+        owner,
+        "worktree_setup",
+        &json!({
+            "job_run_id": run, "run_id": run, "task_ids": [leaf.task],
+            "base": "main", "base_sync": "local", "dependency_delivery": "ignore",
+        }),
+    );
+    let output = owner_action(
+        owner,
+        "candidate_resume",
+        &json!({
+            "job_run_id": run, "task_ids": [leaf.task],
+            "workspace_path": setup["workspace_path"], "base_sha": setup["base_sha"],
+            "prior_job_run_id": setup["prior_job_run_id"],
+            "prior_foreign_run": setup["prior_foreign_run"],
+        }),
+    );
+    owner
+        .update_task_with_identity(
+            &leaf.task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::InProgress),
+                job_run_id: Some(Some(run.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let worktree = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    git(&worktree, &["add", "-A"]);
+    git(
+        &worktree,
+        &["commit", "-q", "-m", "Resume the held candidate"],
+    );
+    ResumedRun {
+        run,
+        worktree,
+        base_sha: setup["base_sha"].clone(),
+        output,
+    }
+}
+
+/// The owner's run of the deterministic action `name`, as its executor
+/// dispatches it.
+#[cfg(unix)]
+pub(super) fn owner_action(owner: &OrbitRuntime, name: &str, input: &Value) -> Value {
+    orbit_engine::execute_deterministic_action(
+        owner,
+        name,
+        &json!({}),
+        input,
+        false,
+        &Default::default(),
+        None,
+    )
+    .unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
 /// The owner's fulfilment of `hold`, or an operator's attachment of the same
@@ -658,6 +708,14 @@ fn fulfil_or_attach(
         "owner CodeQL fulfilment (an operator attaches the result instead)",
         &probe.detail,
     );
+    attach_result(leaf, owner, hold);
+}
+
+/// An operator's attachment of a passed result, and its log, for the owed
+/// CodeQL check `hold` names: the other writer the hold accepts.
+#[cfg(unix)]
+pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &ReviewEvidenceHold) {
+    let log_artifact = "evidence/codeql-rust-linux.log.json";
     let result = orbit_types::workflow::ReviewExternalEvidence {
         schema_version: 1,
         attempt_id: hold.attempt_id.clone(),
