@@ -228,6 +228,11 @@ fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
 
 #[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
+    if crate::isolated_test::run_in_child(
+        "doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data",
+    ) {
+        return;
+    }
     let fixture = WorkCheckout::new();
     let initial = rows(&doctor(&fixture, &[]));
     assert_eq!(row(&initial, "database")["status"], "ok");
@@ -263,6 +268,11 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
 
 #[test]
 fn doctor_with_a_failing_check_records_the_check_on_its_audit_row() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_with_a_failing_check_records_the_check_on_its_audit_row",
+    ) {
+        return;
+    }
     let fixture = WorkCheckout::new();
     assert_eq!(
         row(&rows(&doctor(&fixture, &[])), "database")["status"],
@@ -416,6 +426,11 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
 #[test]
 #[ignore = "large doctor performance fixture; run with --ignored --nocapture"]
 fn default_doctor_large_store_and_worktrees_under_five_seconds() {
+    if crate::isolated_test::run_in_child(
+        "doctor::default_doctor_large_store_and_worktrees_under_five_seconds",
+    ) {
+        return;
+    }
     let fixture = WorkCheckout::new();
     assert_eq!(
         row(&rows(&doctor(&fixture, &[])), "database")["status"],
@@ -723,16 +738,9 @@ fn findings_leave_plain_and_json_documents_unchanged() {
 
 #[test]
 fn doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values() {
-    const TEST: &str =
-        "doctor::doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values";
-    if std::env::var_os("ORBIT_DOCTOR_CLI_CHILD").is_none() {
-        let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
-        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
-        command
-            .args(["--exact", TEST, "--nocapture"])
-            .env("ORBIT_DOCTOR_CLI_CHILD", "1");
-        let output = test_env::run_child_test(&mut command, TEST, logs.path());
-        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values",
+    ) {
         return;
     }
     let fixture = WorkCheckout::new();
