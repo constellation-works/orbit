@@ -128,11 +128,11 @@ fn in_child(test: &str) -> bool {
     test_env::clear_inherited_authority(|name| {
         child.env_remove(name);
     });
-    let output = child
+    child
         .env(CHILD, test)
-        .args(["--exact", test, "--nocapture"])
-        .output()
-        .unwrap();
+        .args(["--exact", test, "--nocapture"]);
+    let output_dir = tempfile::tempdir().unwrap();
+    let output = test_env::run_child_test(&mut child, test, output_dir.path());
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }

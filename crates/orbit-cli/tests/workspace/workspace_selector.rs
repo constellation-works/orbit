@@ -17,18 +17,18 @@ fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
     const CHILD: &str = "ORBIT_TEST_TEARDOWN_PARTITION_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let home = tempdir().expect("isolated child home");
+        let output_dir = tempdir().expect("child output directory");
         let mut command = StdCommand::new(std::env::current_exe().expect("test binary"));
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
-        let output = command
+        command
             .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
             .env(CHILD, "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
-            .current_dir(home.path())
-            .output()
-            .expect("isolated teardown fixture");
+            .current_dir(home.path());
+        let output = test_env::run_child_test(&mut command, TEST, output_dir.path());
         test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
         return;
     }
