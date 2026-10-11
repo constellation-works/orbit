@@ -199,7 +199,7 @@ fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {
 }
 /// `crew_field_path` names the file that supplied `[crews.<name>].<field>`,
 /// which a layered load can only know per field after the merge.
-pub(super) fn crews_from_raw(
+pub(crate) fn crews_from_raw(
     raw: Option<&BTreeMap<String, RawCrewEntry>>,
     config_path: &Path,
     crew_field_path: &dyn Fn(&str, &str) -> PathBuf,

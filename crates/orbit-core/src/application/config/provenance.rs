@@ -22,7 +22,7 @@ pub(super) fn built_in_json(value: &JsonValue) -> JsonValue {
 }
 
 /// The layer and value the key reaches if its own layer stops setting it, or
-/// null for a row with nothing to remove.
+/// null when there is nothing to remove or no admitted fallback prediction.
 pub(super) fn fallback_json(fallback: Option<&ConfigFallback>) -> JsonValue {
     let Some(fallback) = fallback else {
         return JsonValue::Null;
