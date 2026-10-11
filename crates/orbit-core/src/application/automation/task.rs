@@ -12,7 +12,7 @@ use orbit_automation::{
     },
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskStatus};
+use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
@@ -106,10 +106,7 @@ fn task_outcome(
         }
         Err(error) => return Err(error.into()),
     };
-    let stopped = matches!(
-        task.status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    );
+    let stopped = task.status.is_terminal();
     let artifact = runtime.get_task_artifact(id, COVERAGE_ARTIFACT)?;
 
     if let Some(artifact) = artifact {

@@ -81,7 +81,6 @@ pub use crate::contracts::{
 };
 pub(crate) use allocator::parse_orb_task_number;
 pub use store::TaskRegistryStore;
-pub(crate) use util::is_terminal_status;
 
 #[cfg(test)]
 mod tests;

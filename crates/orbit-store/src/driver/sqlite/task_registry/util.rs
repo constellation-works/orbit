@@ -11,17 +11,15 @@ pub(super) fn now_string() -> String {
     Utc::now().to_rfc3339()
 }
 
-/// Lifecycle statuses the index treats as terminal: they carry a
-/// `terminal_month` and sort last in a status-aware listing.
+/// The statuses `TaskStatus::is_terminal` defines as terminal, in the order
+/// the index's SQL binds them as parameters.
 pub(super) const TERMINAL_STATUSES: [TaskStatus; 3] =
     [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected];
 
-pub(crate) fn is_terminal_status(status: TaskStatus) -> bool {
-    TERMINAL_STATUSES.contains(&status)
-}
-
 pub(super) fn terminal_month(status: TaskStatus, updated_at: DateTime<Utc>) -> Option<String> {
-    is_terminal_status(status).then(|| updated_at.format("%Y-%m").to_string())
+    status
+        .is_terminal()
+        .then(|| updated_at.format("%Y-%m").to_string())
 }
 
 pub(super) fn relation_type_name(relation_type: TaskRelationType) -> &'static str {

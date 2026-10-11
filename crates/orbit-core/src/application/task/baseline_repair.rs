@@ -111,7 +111,7 @@ impl OrbitRuntime {
         Ok(self
             .list_tasks_filtered(None, None, None, None, Some(&reference), None)?
             .into_iter()
-            .filter(|task| open(task.status))
+            .filter(|task| !task.status.is_terminal())
             .min_by(|left, right| left.created_at.cmp(&right.created_at))
             .map(|task| task.id))
     }
@@ -129,7 +129,7 @@ impl OrbitRuntime {
             .tasks()
             .with_task_write_lock(repair_id, &mut || {
                 let repair = self.get_task(repair_id)?;
-                if !open(repair.status)
+                if repair.status.is_terminal()
                     || repair.relations.iter().any(|relation| {
                         relation.relation_type == TaskRelationType::RelatedTo
                             && relation.target == held.id
@@ -164,15 +164,6 @@ impl OrbitRuntime {
             })?;
         Ok(linked)
     }
-}
-
-/// Whether a repair task in `status` still tracks its failure: not done,
-/// rejected or archived.
-fn open(status: TaskStatus) -> bool {
-    !matches!(
-        status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    )
 }
 
 /// The digest keying `hold`'s command and failure set, or `None` when the

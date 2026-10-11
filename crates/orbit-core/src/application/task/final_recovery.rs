@@ -640,10 +640,7 @@ fn refusal(
     current: &FinalRecoveryTaskRevision,
     request: &FinalRecoveryRequest,
 ) -> Option<String> {
-    if matches!(
-        task.status,
-        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-    ) {
+    if task.status.is_terminal() {
         return Some(format!(
             "task is already {}; final recovery never reopens settled work",
             task.status

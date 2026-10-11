@@ -184,6 +184,15 @@ impl TaskStatus {
         }
     }
 
+    /// Returns true for the statuses that settle a task: `done`, `archived`
+    /// and `rejected`.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
+        )
+    }
+
     /// Returns true when the status satisfies a task dependency.
     ///
     /// Orbit's lifecycle has no standalone terminal `approved` status for
