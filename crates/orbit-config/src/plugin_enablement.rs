@@ -24,7 +24,7 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
-use crate::store::validated_config_store_path;
+use crate::store::{read_config_file, validated_config_store_path};
 
 /// The reserved workspace table that holds per-plugin toggles.
 pub const PLUGIN_ENABLEMENT_TABLE: &str = "plugin_enablement";
@@ -38,6 +38,7 @@ pub fn plugin_enablement_key(namespace: &str) -> String {
 /// config. Cheap enough for a long-lived host to poll: the dashboard and the
 /// MCP server compare it against the toggles a cached runtime was built with.
 /// No distinct workspace layer means no toggles.
+/// Missing files mean no toggles; symlink and non-regular leaves are refused.
 pub fn load_workspace_plugin_enablement(
     roots: &ConfigRoots,
 ) -> Result<BTreeMap<String, bool>, OrbitError> {
@@ -45,17 +46,8 @@ pub fn load_workspace_plugin_enablement(
         return Ok(BTreeMap::new());
     }
     let path = roots.workspace().join("config.toml");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(BTreeMap::new());
-        }
-        Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "failed to read runtime config '{}': {error}",
-                redact_home_dir(&path.display().to_string())
-            )));
-        }
+    let Some(raw) = read_config_file(&path)? else {
+        return Ok(BTreeMap::new());
     };
     let document = toml::from_str::<toml::Value>(&raw).map_err(|error| {
         OrbitError::InvalidInput(format!(

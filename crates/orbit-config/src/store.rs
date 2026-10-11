@@ -643,8 +643,15 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
 }
 
 fn read_optional(path: &Path) -> Result<String, OrbitError> {
+    read_config_file(path).map(Option::unwrap_or_default)
+}
+
+/// Read an admitted config leaf, preserving the distinction between an absent
+/// file and an empty document. Validate before opening, then check the opened
+/// descriptor; the no-follow, nonblocking open also guards a replaced leaf.
+pub(crate) fn read_config_file(path: &Path) -> Result<Option<String>, OrbitError> {
     let Some(path) = validated_config_store_path(path)? else {
-        return Ok(String::new());
+        return Ok(None);
     };
     match open_read_only_no_follow(&path) {
         Ok(mut file) => {
@@ -667,9 +674,9 @@ fn read_optional(path: &Path) -> Result<String, OrbitError> {
                     redact_home_dir(&path.display().to_string())
                 ))
             })?;
-            Ok(content)
+            Ok(Some(content))
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(OrbitError::Io(format!(
             "failed to read config '{}': {err}",
             redact_home_dir(&path.display().to_string())
