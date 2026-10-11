@@ -80,7 +80,7 @@ The public API exposes these as first-class task documents.
 
 ### 2.4 Authority-scoped task ID
 
-The canonical ID format is `<prefix>-<digits>` (using `ORB-00000` as the standard example): `<prefix>` is the machine's configured allocation prefix (2–5 uppercase ASCII letters, excluding reserved artifact namespaces `ADR`, `L`, and `F`), and the decimal suffix is formatted with a five-digit minimum width. A local installation allocates from `~/.orbit/tasks/index.sqlite` under its configured prefix (e.g. `ORB`, `DANI`, `SHR`). Under the multi-host model, each host mints under its own disjoint prefix, making the host that minted a task its sole writing authority. Tasks and relations referencing foreign host prefixes (such as `DANI-00001`) are valid and portable across registries.
+The canonical ID format is `<prefix>-<digits>` (using `ORB-00000` as the standard example): `<prefix>` is the machine's configured allocation prefix (2–5 uppercase ASCII letters, excluding reserved artifact namespaces `ADR`, `L`, and `F`), and the suffix is a non-empty sequence of ASCII decimal digits. Minting uses a five-digit minimum width; validation also accepts shorter and wider suffixes. A local installation allocates from `~/.orbit/tasks/index.sqlite` under its configured prefix (e.g. `ORB`, `DANI`, `SHR`). `ORB` remains valid for migrated machines but is reserved for new machine identities. Under the multi-host model, each host mints under its own disjoint prefix, making the host that minted a task its sole writing authority. Tasks and relations referencing foreign host prefixes (such as `DANI-00001`) are valid and portable across registries.
 
 V2 bundles do not carry `legacy_ids` and lookup surfaces do not resolve old `T<YYYYMMDD>-<N>` values.
 
