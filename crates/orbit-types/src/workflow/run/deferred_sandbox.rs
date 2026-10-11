@@ -155,12 +155,13 @@ pub fn deferred_sandbox_validation(
     else {
         return Ok(None);
     };
-    let record = DeferredSandboxValidation::deserialize(value).map_err(|error| {
-        format!(
-            "is not a `{{command, exit_code, tests_run, base, notices, probe: {{command, \
-             exit_code, output}}}}` record: {error}"
-        )
-    })?;
+    let record: DeferredSandboxValidation =
+        serde_path_to_error::deserialize(value).map_err(|error| {
+            format!(
+                "is not a `{{command, exit_code, tests_run, base, notices, probe: {{command, \
+                 exit_code, output}}}}` record: {error}"
+            )
+        })?;
     match record.refusal(gates, pinned_base) {
         Some(reason) => Err(reason),
         None => Ok(Some(record)),
