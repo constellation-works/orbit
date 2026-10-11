@@ -18,6 +18,8 @@ pub struct TaskAutomationUpdate {
     pub context_files: Option<Vec<String>>,
     pub external_refs: Vec<ExternalRef>,
     pub execution_summary: Option<String>,
+    /// Implementing crew recorded when automation persists a returned summary.
+    pub implemented_by: Option<String>,
     pub status_event: Option<String>,
     pub status_note: Option<String>,
     pub append_comments: Vec<TaskComment>,

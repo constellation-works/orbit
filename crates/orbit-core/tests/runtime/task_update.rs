@@ -188,3 +188,56 @@ fn rejected_artifacts_leave_status_document_and_history_unchanged() {
         b"accepted artifact",
     );
 }
+
+#[test]
+fn automation_persists_returned_summary_crew_and_run_history_without_status_change() {
+    if !super::dispatch_admission::isolated(
+        "task_update::automation_persists_returned_summary_crew_and_run_history_without_status_change",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Returned summary persistence".into(),
+            plan: "Validate the unchanged tree.".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    orbit_engine::RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &task.id,
+        orbit_engine::TaskAutomationUpdate {
+            expected_status: Some(TaskStatus::Backlog),
+            execution_summary: Some("Outcome: success\nValidated the unchanged tree.".into()),
+            implemented_by: Some("fixture-crew".into()),
+            status_event: Some("execution_summary_persisted".into()),
+            status_note: Some("persisted returned summary from run fixture-run".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let updated = persisted.get_task(&task.id).unwrap();
+    assert_eq!(updated.status, TaskStatus::Backlog);
+    assert_eq!(
+        updated.execution_summary,
+        "Outcome: success\nValidated the unchanged tree."
+    );
+    assert_eq!(updated.implemented_by.as_deref(), Some("fixture-crew"));
+    assert!(
+        persisted
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|event| event.event == "execution_summary_persisted"
+                && event.note.as_deref()
+                    == Some("persisted returned summary from run fixture-run"))
+    );
+}

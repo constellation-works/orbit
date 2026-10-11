@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-10
+last_updated: 2026-10-11
 last_validated: 2026-10-10
 status: Draft
 feature: activity-job
@@ -967,13 +967,26 @@ this check simply means a stalled implementer no longer reaches it.
 After [ORB-10603] / [Derive the delivery execution summary from the change, not from the agent](./4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent), the gate is also no longer reachable in the
 ordinary case, because the commit step fills the field it reads. When — and only
 when — durable state carries no meaningful summary, `commit_batch_changes`
-derives one from `git status` in the delivery worktree (the same file set
-`git_commit` will validate), persists it to the task record with an
-`execution_summary_derived` event, and then meets the unchanged gate. The
-derivation reads durable, re-checkable state and never the agent's advisory
-response envelope ([L-0115]); an agent-authored summary is always preserved; and
-a worktree with nothing to describe still yields no summary and is still
-refused.
+fills it before the unchanged gate, in this order
+([ORB-15584] / [Persist the implementer's returned execution summary before deriving one](./4_decisions.md#persist-the-implementers-returned-execution-summary-before-deriving-one)):
+
+1. The account the implementer returned without writing it: its output's
+   `execution_summary`, else its `summary`, the precedence a claimed handoff
+   uses. The step reads the `implementation` input a claimed pipeline passes,
+   else the `implement_one` output the run checkpointed. Orbit writes it with
+   `implemented_by` set to the run's resolved crew and an
+   `execution_summary_persisted` history event naming the run. A placeholder
+   does not count.
+2. A summary derived from `git status` in the delivery worktree (the same file
+   set `git_commit` will validate), recorded with an `execution_summary_derived`
+   event.
+3. For a clean delivery automation review, a summary restating its accepted
+   coverage evidence, under the same derived event.
+
+An agent-authored summary already on the task is always preserved, including
+one that reports `Outcome: failed`. A task whose implementer returned nothing
+meaningful, whose worktree has nothing to describe and that has no accepted
+coverage evidence still yields no summary and is still refused.
 
 **Agent-changed paths.** Implementers, recovery agents and the before-PR
 reviewer may change any path the work requires ([ORB-13990]); a task's
@@ -1586,5 +1599,6 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-14152]** — Gate step recovery's single post-recovery attempt on a host-allocated, nonce-bound decision file the recovery activity writes, verified without following links; the final response's `recovered` field stays diagnostic.
 - **[ORB-14268]** — An absent step-recovery decision admits the post-recovery attempt only on an engine-observed worktree, base or validation-environment change, and an `external_blocker` decision fails the step as a typed agent blocker that final recovery skips.
 - **[ORB-14822]** — Commit a step recovery's working-tree repair on the host before the post-recovery attempt of a step after `commit`, refusing protected, non-regular, no-diff-route and post-review repairs with a typed `recovery_commit_refused` reason; recovery agents stay read-only on Git metadata.
+- **[ORB-15584]** — Persist the execution summary an implementer returned but did not write, attributed to the run's crew, before deriving one at commit ([Persist the implementer's returned execution summary before deriving one](./4_decisions.md#persist-the-implementers-returned-execution-summary-before-deriving-one)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

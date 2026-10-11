@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-10-10
+last_updated: 2026-10-11
 last_validated: 2026-10-10
 status: Draft
 feature: activity-job
@@ -1492,6 +1492,7 @@ Retrying setup while the stale leftover remains keeps refusing. Recovery is oper
 
 **Recorded:** 2026-08-08 19:39:31.685834Z · [ORB-10603]
 **Paths:** `crates/orbit-engine/src/executor/automation/vcs/commit/**`
+**Amended by:** [Persist the implementer's returned execution summary before deriving one](#persist-the-implementers-returned-execution-summary-before-deriving-one). Its first rejected alternative is now the first source tried; derivation remains the fallback.
 
 ### Context
 
@@ -1659,6 +1660,34 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 - `agent_implement` still refuses to launch when its own disallow list covers a requirement.
 - `Cost:` a non-implementer that should have failed because the task cannot be recovered without a disallowed tool now starts and must notice the missing tool itself. The note names the tool and the activity.
 
+## Persist the implementer's returned execution summary before deriving one
+
+**Recorded:** 2026-10-11 · [ORB-15584]
+**Amends:** the first rejected alternative of [Derive the delivery execution summary from the change, not from the agent](#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent)
+**Paths:** `crates/orbit-engine/src/executor/automation/vcs/commit/summary.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/task_automation.rs`
+
+### Context
+
+A QA auto-task tagged `no-diff-expected` finished its sweep, returned a full account of it in its response's `summary`, and never wrote `execution_summary` (F2026-10-267). Its worktree was clean and it had no accepted coverage evidence, so nothing could be derived, and `git_commit` refused delivery. Step and final recovery correctly would not retry, and the task was blocked although the work was done. A claimed leaf does not stop here: since [ORB-13755] its commit gate judges, and its handoff composes the owner's summary from, that same implementer output.
+
+### Decision
+
+1. When the task carries no meaningful summary, `ensure_durable_execution_summary` first takes the implementer's returned account: its output's `execution_summary`, else its `summary`, in the precedence the claimed handoff uses. It reads the `implementation` input a claimed pipeline passes, else the `implement_one` output the run checkpointed before commit.
+2. Orbit writes that text to the task through `apply_task_automation_update`, with `implemented_by` set to the run's resolved crew and an `execution_summary_persisted` history event naming the run, before the delivery gate reads it. The update expects the task's current status, so a concurrent transition refuses it.
+3. A placeholder is not an account and falls through to the derivations, which are unchanged. A summary already on the task wins, including one that reports `Outcome: failed`; a returned `Outcome: failed` is persisted and then refused by the unchanged gate.
+
+### Rejected alternatives
+
+- *Keep refusing and rely on the instruction to persist.* The work is done and only the bookkeeping write is missing. Blocking it costs a human or a re-run for nothing.
+- *Treat the returned text as a derived summary.* It is the agent's own words, not Orbit's restatement. Prefixing or labelling it as derived would make [ORB-15186] settlement count an automation review that did write an account as a stamp.
+
+### Consequences
+
+- An implementer that returns its account without writing it no longer blocks delivery, and the task record shows which run supplied the text.
+- A delivery automation review whose agent returned a summary settles its batch as if the agent had written it.
+- `Cost:` the durable summary can now be text the agent produced but never committed to the task itself. The gate's contract is unchanged: it still reads only the task record, and the history event marks where the text came from.
+- `Cost:` local and PR pipelines depend on the `implement_one` step id and on the step checkpoint landing before commit. A custom job with another step id, or a failed checkpoint write, falls back to derivation as before.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1754,6 +1783,7 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 - [ORB-10464] — refuse workflow admission when a done dependency's work is not in the base the worktree would be cut from.
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
 - [ORB-14837] — derive a clean review batch's `execution_summary` from its accepted coverage evidence.
+- [ORB-15584] — persist the execution summary an implementer returned but did not write, attributed to the run's crew, before deriving one.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
