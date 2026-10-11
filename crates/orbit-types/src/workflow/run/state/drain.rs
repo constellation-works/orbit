@@ -339,6 +339,14 @@ pub struct DrainAdmissionPass {
     /// Host resource pressure that held this pass's admissions [ORB-13901].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_throttle: Option<ResourceThrottle>,
+    /// [ORB-15637] Why this pull pass requested no new claim although its
+    /// window was open: the owner's probe refusal, a refused settlement
+    /// (`settlement_refused`), the failure breaker (`circuit_open`) or no
+    /// runnable crew (`no_runnable_crew`, `host_suppressed`). Set afresh each
+    /// pass, never carried. Host pressure and degradation have their own
+    /// fields. Pull drains only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_refusal: Option<String>,
     /// The latest failed pull pass; cleared by success before degradation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pass_error: Option<String>,

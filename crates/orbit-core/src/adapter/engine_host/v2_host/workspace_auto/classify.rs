@@ -298,6 +298,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
             waiting_by_reason: BTreeMap::new(),
             consecutive_idle_passes: 0,
             resource_throttle: resource.throttle.clone(),
+            admission_refusal: None,
             last_pass_error_code: None,
             last_pass_error: None,
             consecutive_pass_failures: 0,

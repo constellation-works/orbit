@@ -792,6 +792,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 last_pass_error_code: Some("protocol_skew".into()),
                 last_pass_error: run.steps[0].error_message.clone(),
                 consecutive_pass_failures: 1,
+                admission_refusal: None,
                 degraded: true,
             });
             fixture

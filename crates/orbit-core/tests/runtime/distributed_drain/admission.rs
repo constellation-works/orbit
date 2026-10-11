@@ -1,5 +1,6 @@
 //! Pull admission: cancel-state reads, owner negotiation, the failure breaker, the crew window, `os:` tag routing, host throttling and local/claim exclusion.
 
+use orbit_core::application::distributed::{DrainEntryPoint, RESOURCE_THROTTLED};
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
@@ -878,6 +879,38 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         "{opened}"
     );
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 3);
+    // [ORB-15637] The open breaker is recorded on the pass, so run show and
+    // readiness name it instead of reading like an idle owner.
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("the pass is recorded");
+    assert!(
+        recorded
+            .admission_refusal
+            .as_deref()
+            .is_some_and(|refusal| refusal.starts_with("circuit_open")),
+        "{recorded:?}"
+    );
+    assert_eq!(recorded.resource_throttle, None, "{recorded:?}");
+    pair.follower_jobs
+        .mark_job_run_running(&drain, Utc::now(), std::process::id())
+        .expect("running drain");
+    let readiness = pair
+        .follower
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .expect("follower readiness");
+    assert_eq!(readiness["capacity"]["pull_drain_run_id"], drain.as_str());
+    assert!(
+        readiness["capacity"]["pull_drain_refusal"]
+            .as_str()
+            .is_some_and(|refusal| refusal.starts_with("circuit_open")),
+        "{}",
+        readiness["capacity"]
+    );
     let backlog = |pair: &Pair| {
         pair.tasks
             .iter()
@@ -893,6 +926,14 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         reset["consecutive_failures"], 0,
         "launch failures release instead of counting toward the breaker: {reset}"
     );
+    let cleared = pair
+        .follower
+        .read_run_state(&restarted)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("the pass is recorded");
+    assert_eq!(cleared.admission_refusal, None, "{cleared:?}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
     assert_eq!(backlog(&pair), 1);
     assert_eq!(pair.owner_claims().len(), 4);
@@ -1485,6 +1526,100 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
     assert!(launch_refused(&resumed), "{resumed}");
     assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 2);
+}
+
+/// [ORB-15637] A pull claim runs on the follower, so only the follower's own
+/// host pressure gates it. With the owner held on CPU, the owner's own
+/// unattended discovery stands down, yet a calm follower still claims. With
+/// the follower held on CPU and the owner calm, the follower requests nothing
+/// and reports its own throttle, not an admission refusal.
+#[test]
+fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
+    if !isolated(
+        module_path!(),
+        "a_pull_claim_is_gated_by_the_follower_host_never_the_owner",
+    ) {
+        return;
+    }
+    let owner_probe = crate::dispatch_admission::PressureProbe::calm();
+    let mut pair = Pair::with_owner(2, |owner| {
+        owner.with_host_resource_probe(owner_probe.clone())
+    });
+    let follower_probe = crate::dispatch_admission::PressureProbe::calm();
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_resource_probe(follower_probe.clone());
+    let drain = pair.start_drain();
+
+    owner_probe.sustain(&pair.wire.owner, |probe| probe.cpu(Some(231.0)));
+    let owner_hold = pair
+        .wire
+        .owner
+        .resource_admission()
+        .throttle
+        .expect("the owner is throttled on CPU");
+    assert_eq!(owner_hold.resources[0].resource, "cpu", "{owner_hold:?}");
+    let sweep = pair
+        .wire
+        .owner
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .unwrap();
+    assert_eq!(
+        sweep.refusal.map(|refusal| refusal.code()),
+        Some(RESOURCE_THROTTLED),
+        "the owner's own unattended discovery stands down"
+    );
+
+    // The fixture cannot launch the claimed leaf, so the pass ends at that
+    // launch: the claim itself is what the owner's throttle never stopped.
+    let claimed = pair.pass(&drain);
+    assert!(launch_refused(&claimed), "{claimed}");
+    assert_eq!(claimed["resource_throttle"], Value::Null, "{claimed}");
+    assert!(
+        !claimed.to_string().contains(RESOURCE_THROTTLED),
+        "no throttle held the claim: {claimed}"
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        1,
+        "the calm follower requests a claim while the owner is throttled"
+    );
+    assert_eq!(pair.owner_claims().len(), 1, "the owner admitted it");
+
+    // The owner calms; the follower is now the one under pressure. A new
+    // drain, because the refused launch suppressed this host for the first
+    // drain's window.
+    owner_probe.cpu(Some(10.0));
+    owner_probe.memory(10.0, Utc::now());
+    assert!(pair.wire.owner.resource_admission().throttle.is_none());
+    let drain = pair.start_drain();
+    follower_probe.sustain(&pair.follower, |probe| probe.cpu(Some(195.0)));
+    let held = pair.pass(&drain);
+    assert_eq!(held["admitting"], false, "{held}");
+    assert_eq!(held["admitted"], 0, "{held}");
+    assert_eq!(
+        held["resource_throttle"]["resources"][0]["resource"], "cpu",
+        "{held}"
+    );
+    assert_eq!(held["refusal"], Value::Null, "{held}");
+    assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1, "no new claim");
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("the pass is recorded");
+    assert_eq!(
+        recorded
+            .resource_throttle
+            .as_ref()
+            .map(|throttle| throttle.resources[0].resource.as_str()),
+        Some("cpu"),
+        "the follower's own throttle is what held it: {recorded:?}"
+    );
+    assert_eq!(recorded.admission_refusal, None, "{recorded:?}");
 }
 
 /// A local drain's admission of `task` on the owner, as its gate leaves it

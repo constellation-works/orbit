@@ -647,6 +647,13 @@ pub fn explain_workspace_auto_readiness(
             "pull_drain_admissions_stop": pull_drain
                 .as_ref()
                 .and_then(|drain| drain.stop.clone()),
+            // [ORB-15637] Why the pull drain's last pass requested no claim
+            // although its window was open (`circuit_open`, ...). This host's
+            // own `resource_throttle` is reported apart; the owner's never
+            // holds a pull claim.
+            "pull_drain_refusal": pull_drain
+                .as_ref()
+                .and_then(|drain| drain.refusal.clone()),
             // [ORB-12968] A pending host shutdown or reboot; while present no
             // drain, sweep, or routine starts new work.
             "host_shutdown": host_shutdown,

@@ -56,7 +56,15 @@
 //!
 //! Sustained host resource pressure holds requests the same way a pending
 //! host shutdown does [ORB-13901]: the pass requests nothing, keeps settling,
-//! records the throttle on the drain's last pass and polls for recovery.
+//! records the throttle on the drain's last pass and polls for recovery. The
+//! pressure is this follower's own, because a claimed leaf runs here; the
+//! owner's throttle gates only the owner's own drain and discovery, and its
+//! pull admission never reads it [ORB-15637].
+//!
+//! Every other reason a pass requests nothing although its window is open —
+//! an owner probe refusal, a refused settlement, the failure breaker, no
+//! runnable crew — is recorded on the drain's last pass as
+//! `admission_refusal`, so `orbit run show` and readiness name it [ORB-15637].
 //!
 //! A graceful `orbit run cancel` puts the drain into its cancelling mode:
 //! each pass then requests nothing, releases every admission that never
@@ -477,10 +485,14 @@ pub(crate) fn pull_refill(
         None if admitted > 0 => OwnerAnswer::Claimed,
         None => OwnerAnswer::None,
     };
+    // [ORB-15637] The refusal is recorded on the pass, so `orbit run show`
+    // and readiness name it: an open breaker otherwise looks like an idle
+    // owner.
     let health = runtime
         .record_pull_pass(
             &run_id,
             resource.throttle.clone(),
+            refusal.as_deref(),
             error.as_deref(),
             None,
             owner_answer,
@@ -530,6 +542,7 @@ fn protocol_skew_failure(
     match runtime.record_pull_pass(
         run_id,
         throttle,
+        None,
         Some(&format!("protocol_skew: {message}")),
         Some("protocol_skew"),
         OwnerAnswer::None,
@@ -623,8 +636,14 @@ fn cancelling_pass(
             "cancelling pull drain pass did not complete; retrying next iteration",
         );
     }
-    let health =
-        runtime.record_pull_pass(run_id, None, error.as_deref(), None, OwnerAnswer::None)?;
+    let health = runtime.record_pull_pass(
+        run_id,
+        None,
+        None,
+        error.as_deref(),
+        None,
+        OwnerAnswer::None,
+    )?;
     Ok(json!({
         "admitted": 0,
         "unsettled": unsettled,

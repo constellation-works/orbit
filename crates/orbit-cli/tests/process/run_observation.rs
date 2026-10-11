@@ -1833,6 +1833,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         last_pass_error_code: None,
         last_pass_error: None,
         consecutive_pass_failures: 0,
+        admission_refusal: None,
         degraded: false,
         resource_throttle: Some(orbit_types::workflow::ResourceThrottle {
             resources: vec![
@@ -1937,6 +1938,7 @@ fn run_show_counts_local_deferred_tasks_once() {
         last_pass_error_code: None,
         last_pass_error: None,
         consecutive_pass_failures: 0,
+        admission_refusal: None,
         degraded: false,
     });
     runtime.write_run_state(id, &state).unwrap();
@@ -2057,6 +2059,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
         last_pass_error_code: None,
         last_pass_error: None,
         consecutive_pass_failures: 0,
+        admission_refusal: None,
         degraded: false,
     });
     runtime.write_run_state(id, &state).unwrap();
@@ -2160,6 +2163,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
         last_pass_error_code: None,
         last_pass_error: None,
         consecutive_pass_failures: 0,
+        admission_refusal: None,
         degraded: false,
     });
     runtime.write_run_state(id, &state).unwrap();
@@ -2225,6 +2229,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         last_pass_error_code: None,
         last_pass_error: Some("protocol_mismatch: caller revision 2; owner revision 1".into()),
         consecutive_pass_failures: 3,
+        admission_refusal: None,
         degraded: true,
     });
     runtime.write_run_state(id, &state).unwrap();
