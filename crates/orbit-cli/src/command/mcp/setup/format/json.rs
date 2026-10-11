@@ -5,7 +5,7 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use super::target::resolve_config_target;
+use super::target::{is_config_symlink, resolve_config_target};
 
 pub(in crate::command::mcp::setup) fn merge_unique_strings(
     existing: &mut Vec<JsonValue>,
@@ -78,17 +78,23 @@ pub(in crate::command::mcp::setup) fn write_json_object(
     })
 }
 
+/// Like [`write_json_object`], but delete the file once it would hold no
+/// entries. A symlinked config is kept, and its target is emptied instead; a
+/// dangling link is left as it is.
 pub(in crate::command::mcp::setup) fn write_or_remove_json_object(
     path: &Path,
     root: &JsonMap<String, JsonValue>,
 ) -> Result<(), OrbitError> {
     if root.is_empty() {
-        if path.exists() {
-            fs::remove_file(path).map_err(|err| {
-                OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
-            })?;
+        if !path.exists() {
+            return Ok(());
         }
-        return Ok(());
+        if is_config_symlink(path) {
+            return write_json_object(path, root);
+        }
+        return fs::remove_file(path).map_err(|err| {
+            OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
+        });
     }
     write_json_object(path, root)
 }

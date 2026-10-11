@@ -19,6 +19,7 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
+use toml_edit::DocumentMut;
 
 /// One machine with an external Orbit root and a single checkout registered
 /// against it.
@@ -852,6 +853,49 @@ fn an_unregistered_root_reports_the_root_and_registered_candidates() {
     );
 }
 
+/// Symlink the home-scope client config at `config_relative` to a dotfiles
+/// file seeded with `seed`. Returns the link and the file it points at.
+#[cfg(unix)]
+fn link_home_config_to_dotfiles(
+    fixture: &ExternalRootFixture,
+    config_relative: &str,
+    seed: &str,
+) -> (PathBuf, PathBuf) {
+    let config = fixture.home.join(config_relative);
+    let config_dir = config.parent().expect("config parent");
+    let dotfiles = fixture.home.join("dotfiles");
+    let dotfile = dotfiles.join("client-config");
+    fs::create_dir_all(&dotfiles).expect("create dotfiles directory");
+    fs::create_dir_all(config_dir).expect("create client directory");
+    fs::write(&dotfile, seed).expect("seed dotfiles config");
+    std::os::unix::fs::symlink(&dotfile, &config).expect("link client config into dotfiles");
+    (config, dotfile)
+}
+
+/// Assert `config` is still the symlink to `dotfile`, and that neither its
+/// directory nor the dotfiles directory holds a staging file.
+#[cfg(unix)]
+fn assert_config_still_linked(config: &Path, dotfile: &Path, step: &str) {
+    let metadata = fs::symlink_metadata(config).expect("inspect client config");
+    assert!(
+        metadata.file_type().is_symlink(),
+        "{step} replaced the symlinked config with a regular file"
+    );
+    assert_eq!(
+        fs::read_link(config).expect("read config link"),
+        dotfile,
+        "{step} retargeted the config symlink"
+    );
+    for directory in [config.parent(), dotfile.parent()].into_iter().flatten() {
+        assert_eq!(
+            fs::read_dir(directory).expect("read directory").count(),
+            1,
+            "{step} left staging files in {}",
+            directory.display()
+        );
+    }
+}
+
 /// A home-scope client config symlinked from a dotfiles repository keeps its
 /// link: init and remove update the file the link points at.
 #[cfg(unix)]
@@ -862,34 +906,7 @@ fn assert_home_scope_config_symlink_survives(
     other_entry: &str,
 ) {
     let fixture = ExternalRootFixture::init();
-    let config = fixture.home.join(config_relative);
-    let config_dir = config.parent().expect("config parent");
-    let dotfiles = fixture.home.join("dotfiles");
-    let dotfile = dotfiles.join("client-config");
-    fs::create_dir_all(&dotfiles).expect("create dotfiles directory");
-    fs::create_dir_all(config_dir).expect("create client directory");
-    fs::write(&dotfile, seed).expect("seed dotfiles config");
-    std::os::unix::fs::symlink(&dotfile, &config).expect("link client config into dotfiles");
-    let assert_still_linked = |step: &str| {
-        let metadata = fs::symlink_metadata(&config).expect("inspect client config");
-        assert!(
-            metadata.file_type().is_symlink(),
-            "{step} replaced the symlinked config with a regular file"
-        );
-        assert_eq!(
-            fs::read_link(&config).expect("read config link"),
-            dotfile,
-            "{step} retargeted the config symlink"
-        );
-        for directory in [config_dir, dotfiles.as_path()] {
-            assert_eq!(
-                fs::read_dir(directory).expect("read directory").count(),
-                1,
-                "{step} left staging files in {}",
-                directory.display()
-            );
-        }
-    };
+    let (config, dotfile) = link_home_config_to_dotfiles(&fixture, config_relative, seed);
 
     fixture
         .orbit(
@@ -897,7 +914,7 @@ fn assert_home_scope_config_symlink_survives(
             &fixture.rooted(&["mcp", "init", client_flag, "--scope", "home"]),
         )
         .success();
-    assert_still_linked("init");
+    assert_config_still_linked(&config, &dotfile, "init");
     let initialized = fs::read_to_string(&dotfile).expect("read dotfiles config");
     assert!(
         initialized.contains("orbit") && initialized.contains(other_entry),
@@ -910,12 +927,41 @@ fn assert_home_scope_config_symlink_survives(
             &fixture.rooted(&["mcp", "remove", client_flag, "--scope", "home"]),
         )
         .success();
-    assert_still_linked("remove");
+    assert_config_still_linked(&config, &dotfile, "remove");
     let removed = fs::read_to_string(&dotfile).expect("read dotfiles config");
     assert!(
         removed.contains(other_entry) && !removed.contains("orbit"),
         "remove must drop Orbit's entry from the link target and keep the user's: {removed}"
     );
+}
+
+/// Init, then remove, Orbit's home-scope entry through a link to an empty
+/// dotfile, so the removal leaves the target with nothing in it. Returns the
+/// target's content after removal.
+#[cfg(unix)]
+fn remove_last_entry_through_home_config_symlink(
+    client_flag: &str,
+    config_relative: &str,
+) -> String {
+    let fixture = ExternalRootFixture::init();
+    let (config, dotfile) = link_home_config_to_dotfiles(&fixture, config_relative, "");
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", client_flag, "--scope", "home"]),
+        )
+        .success();
+    assert_config_still_linked(&config, &dotfile, "init");
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "remove", client_flag, "--scope", "home"]),
+        )
+        .success();
+    assert_config_still_linked(&config, &dotfile, "remove");
+    fs::read_to_string(&dotfile).expect("read dotfiles config")
 }
 
 #[cfg(unix)]
@@ -937,6 +983,53 @@ fn toml_client_home_config_symlink_survives_init_and_remove() {
         ".codex/config.toml",
         "model = \"keep-me\"\n\n[mcp_servers.other]\ncommand = \"other-client\"\n",
         "other-client",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn json_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries() {
+    let removed = remove_last_entry_through_home_config_symlink("--cursor", ".cursor/mcp.json");
+    assert_eq!(
+        serde_json::from_str::<Value>(&removed).expect("removed config is valid JSON"),
+        serde_json::json!({}),
+        "removing the last Orbit entry must leave the link target an empty object"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn toml_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries() {
+    let removed = remove_last_entry_through_home_config_symlink("--codex", ".codex/config.toml");
+    let document: DocumentMut = removed.parse().expect("removed config is valid TOML");
+    assert!(
+        document.as_table().is_empty(),
+        "removing the last Orbit entry must leave the link target an empty document: {removed}"
+    );
+}
+
+#[test]
+fn toml_client_home_config_without_other_entries_is_deleted_when_removal_empties_it() {
+    let fixture = ExternalRootFixture::init();
+    let config = fixture.home.join(".codex").join("config.toml");
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--codex", "--scope", "home"]),
+        )
+        .success();
+    assert!(config.is_file(), "init must create the Codex config");
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "remove", "--codex", "--scope", "home"]),
+        )
+        .success();
+    assert!(
+        !config.exists(),
+        "a regular config that removal empties is deleted"
     );
 }
 

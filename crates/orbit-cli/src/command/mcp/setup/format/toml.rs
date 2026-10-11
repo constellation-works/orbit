@@ -9,7 +9,7 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
-use super::target::resolve_config_target;
+use super::target::{is_config_symlink, resolve_config_target};
 
 pub(in crate::command::mcp::setup) fn load_toml_document(
     path: &Path,
@@ -41,18 +41,22 @@ pub(in crate::command::mcp::setup) fn write_toml_document(
 }
 
 /// Like [`write_toml_document`], but delete the file once nothing but
-/// whitespace would remain.
+/// whitespace would remain. A symlinked config is kept, and its target is
+/// emptied instead; a dangling link is left as it is.
 pub(in crate::command::mcp::setup) fn write_or_remove_toml_document(
     path: &Path,
     doc: &DocumentMut,
 ) -> Result<(), OrbitError> {
     if doc.to_string().trim().is_empty() {
-        if path.exists() {
-            fs::remove_file(path).map_err(|err| {
-                OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
-            })?;
+        if !path.exists() {
+            return Ok(());
         }
-        return Ok(());
+        if is_config_symlink(path) {
+            return write_toml_document(path, doc);
+        }
+        return fs::remove_file(path).map_err(|err| {
+            OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
+        });
     }
     write_toml_document(path, doc)
 }
