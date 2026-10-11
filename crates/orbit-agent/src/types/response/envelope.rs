@@ -14,11 +14,6 @@ pub struct DeclaredResponseFailure {
     pub error: Option<AgentRunError>,
 }
 
-struct SelectedResponse {
-    status: String,
-    failure: Option<DeclaredResponseFailure>,
-}
-
 /// JSON documents from one stdout capture.
 ///
 /// CLI post-run handling peeks status, checks the completion envelope, and
@@ -50,16 +45,15 @@ impl<'a> ParsedStdout<'a> {
     }
 
     pub fn peek_response_status(&self) -> Option<String> {
-        match self.discover(selected_response) {
-            Ok(Some(selected)) => Some(selected.status),
-            Ok(None) | Err(_) => None,
-        }
+        self.discover(response_candidate)
+            .unwrap_or_default()
+            .and_then(|candidate| candidate.get("status")?.as_str().map(str::to_owned))
     }
 
     pub fn peek_declared_response_failure(&self) -> Option<DeclaredResponseFailure> {
-        self.discover(selected_response)
+        self.discover(response_candidate)
             .unwrap_or_default()
-            .and_then(|selected| selected.failure)
+            .and_then(|candidate| declared_response_failure(&candidate))
     }
 
     fn discover<T>(&self, inspect: impl Fn(&Value) -> Option<T>) -> Result<Option<T>, OrbitError> {
@@ -80,22 +74,12 @@ impl<'a> ParsedStdout<'a> {
     }
 
     pub fn response_envelope_protocol_check(&self) -> Result<(), OrbitError> {
-        let envelope = self
-            .discover(deserialize_envelope)?
-            .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(self)))?;
-        if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
-            return Err(OrbitError::AgentProtocolViolation(format!(
-                "unsupported schemaVersion: {}",
-                envelope.schema_version
-            )));
-        }
-        if !RESPONSE_ENVELOPE_STATUSES.contains(&envelope.status.as_str()) {
-            return Err(OrbitError::AgentProtocolViolation(format!(
-                "unknown status: {}",
-                envelope.status
-            )));
-        }
-        Ok(())
+        validate_envelope_frame(&self.response_candidate()?)
+    }
+
+    fn response_candidate(&self) -> Result<Value, OrbitError> {
+        self.discover(response_candidate)?
+            .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(self)))
     }
 
     pub fn parse_and_validate(&self, exec_result: &ExecutionResult) -> ResponseParseResult {
@@ -219,17 +203,10 @@ fn parse_json_envelope(
     exec_result: &ExecutionResult,
     parsed: &ParsedStdout<'_>,
 ) -> ResponseParseResult {
-    let envelope = parsed
-        .discover(deserialize_envelope)?
-        .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(parsed)))?;
+    let candidate = parsed.response_candidate()?;
+    validate_envelope_frame(&candidate)?;
+    let envelope = deserialize_envelope(candidate)?;
     let trace = synthesize_trace_from_parsed(exec_result, parsed);
-
-    if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
-        return Err(OrbitError::AgentProtocolViolation(format!(
-            "unsupported schemaVersion: {}",
-            envelope.schema_version
-        )));
-    }
 
     let state = match envelope.status.as_str() {
         "success" => AgentResponseStatus::Success,
@@ -356,11 +333,7 @@ fn exit_zero_terminal_failure(
         return None;
     }
     let documents = parsed.json_documents().ok()?;
-    match discover_in_values(
-        documents.iter(),
-        &mut Budget::production(),
-        &deserialize_envelope,
-    ) {
+    match parsed.discover(response_candidate) {
         Ok(None) => {}
         Ok(Some(_)) | Err(_) => return None,
     }
@@ -613,20 +586,38 @@ where
     discover_in_values(documents.iter().rev(), budget, inspect)
 }
 
-fn selected_response(value: &Value) -> Option<SelectedResponse> {
-    if let Some(envelope) = deserialize_envelope(value) {
-        return Some(SelectedResponse {
-            failure: declared_response_failure(value),
-            status: envelope.status,
-        });
-    }
+fn response_candidate(value: &Value) -> Option<Value> {
+    let object = value.as_object()?;
+    // Selection depends only on the frame keys. Invalid field types must be
+    // rejected on this candidate, never make discovery return an older answer
+    // or descend into a quoted envelope in its result/error payload.
+    (object.contains_key("schemaVersion") && object.contains_key("status")).then(|| value.clone())
+}
 
-    // A malformed error object makes full deserialization fail. A selected
-    // failure still controls the invocation outcome and must stop the walk.
-    declared_response_failure(value).map(|failure| SelectedResponse {
-        status: failure.status.clone(),
-        failure: Some(failure),
-    })
+fn validate_envelope_frame(candidate: &Value) -> Result<(), OrbitError> {
+    let schema_version = candidate
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            OrbitError::AgentProtocolViolation(
+                "schemaVersion must be a non-negative integer".to_string(),
+            )
+        })?;
+    if schema_version != u64::from(RESPONSE_ENVELOPE_SCHEMA_VERSION) {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "unsupported schemaVersion: {schema_version}"
+        )));
+    }
+    let status = candidate
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OrbitError::AgentProtocolViolation("status must be a string".to_string()))?;
+    if !RESPONSE_ENVELOPE_STATUSES.contains(&status) {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "unknown status: {status}"
+        )));
+    }
+    Ok(())
 }
 
 fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
@@ -660,11 +651,7 @@ fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
     })
 }
 
-fn deserialize_envelope(value: &Value) -> Option<AgentResponseEnvelope> {
-    let object = value.as_object()?;
-    if !object.contains_key("schemaVersion") || !object.contains_key("status") {
-        return None;
-    }
+fn deserialize_envelope(mut candidate: Value) -> Result<AgentResponseEnvelope, OrbitError> {
     // [ORB-10770] Claude's constrained decoder, given an untyped `error` and a
     // description that said "null when status is success", emits the JSON
     // *string* `"null"` (`jrun-20260813-0451-3`). `Option<AgentRunError>`
@@ -672,14 +659,17 @@ fn deserialize_envelope(value: &Value) -> Option<AgentResponseEnvelope> {
     // envelope. Treat `"null"` / `""` as absent; JSON null is already `None`
     // via `#[serde(default)]`. This only makes a recognizable frame parse —
     // it does not infer success from wrapper signals.
-    match object.get("error") {
-        Some(Value::String(token)) if is_absent_error_string(token) => {
-            let mut object = object.clone();
-            object.remove("error");
-            serde_json::from_value(Value::Object(object)).ok()
-        }
-        _ => serde_json::from_value(value.clone()).ok(),
+    if candidate
+        .get("error")
+        .and_then(Value::as_str)
+        .is_some_and(is_absent_error_string)
+        && let Some(object) = candidate.as_object_mut()
+    {
+        object.remove("error");
     }
+    serde_json::from_value(candidate).map_err(|error| {
+        OrbitError::AgentProtocolViolation(format!("invalid Orbit response envelope: {error}"))
+    })
 }
 
 fn is_absent_error_string(token: &str) -> bool {

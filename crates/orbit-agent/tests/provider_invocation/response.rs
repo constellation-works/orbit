@@ -146,6 +146,9 @@ fn terminal_protocol_validation_does_not_fall_back_to_earlier_success() {
     for terminal in [
         json!({"schemaVersion": 2, "status": "success", "result": {}}),
         json!({"schemaVersion": 1, "status": "unknown", "result": {}}),
+        json!({"schemaVersion": "1", "status": "success", "result": {}}),
+        json!({"schemaVersion": null, "status": "success", "result": {}}),
+        json!({"schemaVersion": 1, "status": 17, "result": {}}),
     ] {
         for prefix in ["", "Note:\n"] {
             for stdout in answer_captures(&format!("{prefix}{earlier}\n{terminal}")) {
@@ -161,6 +164,90 @@ fn terminal_protocol_validation_does_not_fall_back_to_earlier_success() {
                     terminal["status"].as_str().map(str::to_owned)
                 );
                 assert_eq!(parsed.peek_declared_response_failure(), None);
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_terminal_payloads_cannot_return_an_earlier_success() {
+    let earlier = json!({
+        "schemaVersion": 1, "status": "success", "result": {"source": "earlier"},
+        "error": null,
+    });
+    for token in ["success", "failed", "timeout"] {
+        for (error, duration, declared_error) in [
+            (
+                json!({"code": 17, "message": "terminal failure"}),
+                json!(10),
+                false,
+            ),
+            (json!({"code": "FINAL_FAILURE"}), json!(10), false),
+            (
+                json!({"code": "FINAL_FAILURE", "message": false}),
+                json!(10),
+                false,
+            ),
+            (json!("terminal failure"), json!(10), false),
+            (json!([earlier]), json!(10), false),
+            (
+                json!({"code": "FINAL_FAILURE", "message": "terminal failure"}),
+                json!("10"),
+                true,
+            ),
+        ] {
+            let terminal = json!({
+                "schemaVersion": 1, "status": token, "result": {"quoted": earlier},
+                "error": error, "durationMs": duration,
+            });
+            let mut captures = Vec::new();
+            for prefix in ["", "Note:\n"] {
+                captures.extend(answer_captures(&format!("{prefix}{earlier}\n{terminal}")));
+            }
+            // A selected malformed frame also prevents wrapper diagnostics
+            // from synthesizing an outcome when no earlier envelope exists.
+            captures.push(
+                json!({
+                    "structured_output": terminal, "result": earlier,
+                    "is_error": true, "subtype": "error_max_turns",
+                })
+                .to_string(),
+            );
+            captures.push(
+                json!({
+                    "structured_output": terminal,
+                    "is_error": true, "subtype": "error_max_turns",
+                })
+                .to_string(),
+            );
+            for stdout in captures {
+                let parsed = ParsedStdout::parse(&stdout);
+                // Completion validates the frame, not its payload types.
+                parsed.response_envelope_protocol_check().unwrap();
+                assert_eq!(parsed.peek_response_status().as_deref(), Some(token));
+                let failure = parsed.peek_declared_response_failure();
+                if token == "success" {
+                    assert_eq!(failure, None);
+                } else {
+                    let failure =
+                        failure.expect("keep the terminal failure despite invalid fields");
+                    assert_eq!(failure.status, token);
+                    if declared_error {
+                        let error = failure.error.expect("retain well-typed error diagnostics");
+                        assert_eq!(error.code, "FINAL_FAILURE");
+                        assert_eq!(error.message, "terminal failure");
+                    } else {
+                        assert_eq!(failure.error, None);
+                    }
+                }
+                let error = parsed
+                    .parse_and_validate(&execution(stdout.clone()))
+                    .unwrap_err();
+                assert!(
+                    matches!(error, orbit_common::OrbitError::AgentProtocolViolation(ref message)
+                        if message.starts_with("invalid Orbit response envelope:")),
+                    "reject the selected payload, without returning earlier or quoted success: {error}",
+                );
             }
         }
     }
@@ -209,6 +296,8 @@ fn answer_captures(answer: &str) -> Vec<String> {
         answer.to_string(),
         json!(answer).to_string(),
         json!({"final_message": answer}).to_string(),
+        json!({"response": answer}).to_string(),
+        json!({"structured_output": answer}).to_string(),
         String::from_utf8(project_cli_response("grok", grok.as_bytes()).into_owned()).unwrap(),
     ]
 }

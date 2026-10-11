@@ -16,6 +16,15 @@ make an earlier success override a terminal failure or timeout. Within provider
 wrapper objects, preferred answer fields (starting with `structured_output`)
 retain priority over other fields.
 
+Selection recognizes a complete object with `schemaVersion` and `status` keys
+before validating their types or any payload fields. A malformed terminal
+candidate cannot be skipped in favor of an earlier or nested response. The
+completion-protocol check validates only the schema version and status token;
+result parsing also deserializes the selected payload and rejects invalid error
+or duration fields. Status and failure peeks retain the terminal declaration
+when readable, even if its other fields are invalid. An explicit candidate also
+prevents an abnormal provider wrapper from synthesizing a replacement failure.
+
 Discovery caps JSON parse attempts and visited nodes. Exhausting either budget
 returns a protocol error, with no peeked status or failure, rather than returning
 an earlier envelope or synthesizing an outcome. Surrounding prose never supplies
