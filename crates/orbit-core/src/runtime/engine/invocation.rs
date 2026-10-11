@@ -5,10 +5,9 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::model::pricing::normalize_token_usage;
 use orbit_store::contracts::{
-    ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
-    InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationStoreBackend, ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter,
-    ToolInvocationMetrics,
+    ActivityInvocationMetrics, InvocationAccountingFact, InvocationAccountingQuery,
+    InvocationInsertParams, InvocationQuery, InvocationRecord, InvocationStoreBackend,
+    ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
 use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
 use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
@@ -235,10 +234,6 @@ impl OrbitRuntime {
         &self,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError> {
         open_invocation_store(self)?.list_activity_invocation_metrics()
-    }
-
-    pub fn agent_invocation_metrics(&self) -> Result<Vec<AgentInvocationMetrics>, OrbitError> {
-        open_invocation_store(self)?.list_agent_invocation_metrics()
     }
 
     pub fn task_invocation_metrics(

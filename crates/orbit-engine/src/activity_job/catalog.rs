@@ -290,20 +290,6 @@ impl V2JobCatalog {
         Self::default()
     }
 
-    /// Load one job directory as a lower-precedence layer. Duplicate names
-    /// inside the directory are rejected, while existing names remain first.
-    /// Job parse failures are always hard errors.
-    pub fn load_dir_prefer_existing(&mut self, dir: &Path) -> Result<(), CatalogError> {
-        self.inner
-            .load_dir(
-                dir,
-                &JobCatalogAdapter,
-                ExistingNamePolicy::PreferExisting,
-                |_| true,
-            )
-            .map(|_| ())
-    }
-
     /// Load one job directory while retaining valid siblings when a file has
     /// an invalid schema or document. Non-parse failures and duplicate names
     /// remain hard errors. The returned diagnostics are the parse failures

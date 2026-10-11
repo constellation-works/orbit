@@ -12,7 +12,6 @@ pub mod crew;
 pub mod dispatcher;
 pub mod job_executor;
 pub mod sqlite_sink;
-pub mod tool_enforcement;
 pub mod workspace;
 
 #[cfg(test)]
@@ -30,7 +29,6 @@ pub use job_executor::{
     validate_job_deterministic_actions,
 };
 pub use sqlite_sink::V2SqliteSink;
-pub use tool_enforcement::EnforcedAuditSink;
 
 pub use asset_loader::{
     ActivityAsset, AssetLoadError, JobAsset, load_activity_asset, load_job_asset,

@@ -48,7 +48,6 @@ fn dispatch_error_retryability_classification_table() {
 
     let transient: Vec<DispatchError> = vec![
         DispatchError::CliInvocationFailed("spawn claude: EAGAIN".into()),
-        DispatchError::AgentLoopFailed("overloaded".into()),
         DispatchError::DeterministicActionFailed {
             action: "a".into(),
             message: "flaky".into(),
