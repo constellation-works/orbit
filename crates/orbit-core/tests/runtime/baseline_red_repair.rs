@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{RuntimeHost, baseline_red_hold_update};
-use orbit_types::task::{Task, TaskPriority, TaskRelationType};
+use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskRelationType};
 use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold};
 use serde_json::Value;
 
@@ -276,4 +276,179 @@ fn a_command_that_names_no_test_files_one_repair_from_its_output_tail() {
         "the verdict names the output's tail: {}",
         latest_verdict(&fixture, &first)
     );
+}
+
+#[test]
+fn complete_failure_sets_key_repairs_before_display_truncation() {
+    if !super::dispatch_admission::isolated(
+        "baseline_red_repair::complete_failure_sets_key_repairs_before_display_truncation",
+    ) {
+        return;
+    }
+    let (fixture, legacy) = held_on_red_base();
+    let common = (0..20)
+        .map(|i| format!("test runtime suite::a_{i:02}"))
+        .collect::<Vec<_>>();
+    let mut left = common.clone();
+    left.push("test runtime suite::z_left".into());
+    let mut right = common;
+    right.push("test runtime suite::z_right".into());
+    // Both records have 20 entries and one omitted identity. The long-name
+    // pair instead differs beyond a UTF-8 display cut in its only entry.
+    let prefix = format!("test suite::long_{}", "é".repeat(130));
+    let cases = [
+        (left.clone(), right),
+        (
+            vec![format!("{prefix}left")],
+            vec![format!("{prefix}right")],
+        ),
+    ];
+    let hold = |identities: Vec<String>| BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: legacy.base_sha.clone(),
+        command: CHECK.into(),
+        run_id: "jrun-truncated".into(),
+        selection: None,
+        failures: BaselineRedFailures::new(identities, ""),
+    };
+    let left_hold = hold(left.clone());
+    let mut first = String::new();
+    for (i, (left, right)) in cases.into_iter().enumerate() {
+        let left = hold(left);
+        let right = hold(right);
+        assert_eq!(left.failures.identities, right.failures.identities);
+        assert_eq!(left.failures.omitted, right.failures.omitted);
+        assert_eq!(left.failures.tail, right.failures.tail);
+        assert_eq!(left.failures.describe(), right.failures.describe());
+        assert_ne!(
+            left.failures.identity_digest,
+            right.failures.identity_digest
+        );
+        for failures in [&left.failures, &right.failures] {
+            assert!(failures.identities.len() <= 20);
+            assert!(failures.identities.iter().all(|name| name.len() <= 243));
+            assert!(serde_json::to_vec(failures).unwrap().len() < 6000);
+        }
+        let left_id = held_task(&fixture, &format!("Left collision case {i}"), &left);
+        let right_id = held_task(&fixture, &format!("Right collision case {i}"), &right);
+        if i == 0 {
+            first = left_id.clone();
+        }
+        let refresh = tick(&fixture.runtime);
+        assert_eq!(refresh.repairs_filed.len(), 2, "{refresh:?}");
+        let filed = repairs(&fixture);
+        assert_eq!(filed.len(), (i + 1) * 2, "{filed:?}");
+        for held_id in [left_id, right_id] {
+            assert_eq!(
+                filed
+                    .iter()
+                    .filter(|repair| related(repair) == vec![held_id.clone()])
+                    .count(),
+                1,
+                "each complete set gets its own repair: {filed:?}"
+            );
+        }
+    }
+    let filed = repairs(&fixture);
+    let keys = filed
+        .iter()
+        .flat_map(|repair| repair.external_refs.iter())
+        .map(|reference| (&reference.system, &reference.id))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 4, "the exact repair references are distinct");
+
+    // Reordering, whitespace, duplicate names and the bare libtest echo of
+    // a qualified nextest name leave the complete normalized set unchanged.
+    let reordered = left
+        .iter()
+        .rev()
+        .map(|name| format!("  {name}  "))
+        .chain([left[0].clone(), "test suite::z_left".into(), " ".into()])
+        .collect();
+    let second_hold = hold(reordered);
+    assert_eq!(second_hold.failures, left_hold.failures);
+    let second = held_task(&fixture, "Reordered held task", &second_hold);
+    let refresh = tick(&fixture.runtime);
+    assert!(refresh.repairs_filed.is_empty(), "{refresh:?}");
+    assert_eq!(refresh.repairs_linked, vec![second.clone()], "{refresh:?}");
+
+    let moved = move_base_still_red(&fixture);
+    fixture.runtime.refresh_baseline_holds(None).unwrap();
+    let third = held_task(
+        &fixture,
+        "Same complete set on a new base",
+        &BaselineRedHold {
+            base_sha: moved,
+            run_id: "jrun-truncated-later".into(),
+            ..left_hold
+        },
+    );
+    let refresh = tick(&fixture.runtime);
+    assert!(refresh.repairs_filed.is_empty(), "{refresh:?}");
+    assert_eq!(refresh.repairs_linked, vec![third.clone()], "{refresh:?}");
+    let filed = repairs(&fixture);
+    assert_eq!(filed.len(), 4);
+    let repair = filed
+        .iter()
+        .find(|repair| related(repair).contains(&first))
+        .unwrap();
+    assert_eq!(related(repair), vec![first, second, third]);
+}
+
+#[test]
+fn persisted_holds_without_a_digest_find_their_existing_repair() {
+    if !super::dispatch_admission::isolated(
+        "baseline_red_repair::persisted_holds_without_a_digest_find_their_existing_repair",
+    ) {
+        return;
+    }
+    let (fixture, legacy) = held_on_red_base();
+    // A persisted hold from before the digest field existed, rather than a
+    // new constructor whose identity could change alongside the key code.
+    let text = format!(
+        "[baseline_red] {} old hold",
+        serde_json::json!({
+            "base_ref": "main", "base_sha": legacy.base_sha, "command": CHECK,
+            "run_id": "jrun-legacy", "failures": {"identities": ["test suite::legacy"]}
+        })
+    );
+    let hold = BaselineRedHold::from_text(&text).expect("older holds stay readable");
+    assert!(hold.failures.identity_digest.is_none());
+    // Frozen pre-digest key for (sh check.sh, test suite::legacy, 0, empty tail).
+    let repair = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Existing legacy repair".into(),
+            description: "An open repair filed before failure digests.".into(),
+            acceptance_criteria: vec!["The check passes.".into()],
+            status: Some(TaskStatus::Backlog),
+            external_refs: vec![
+                ExternalRef::try_new(
+                    REPAIR_REF_SYSTEM.into(),
+                    "20b0aef7dc300e9deecff765".into(),
+                    None,
+                )
+                .unwrap(),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    let first = held_task(&fixture, "Legacy held task", &hold);
+    let second = held_task(
+        &fixture,
+        "Another legacy held task",
+        &BaselineRedHold {
+            run_id: "jrun-legacy-later".into(),
+            ..hold
+        },
+    );
+    let refresh = tick(&fixture.runtime);
+    assert!(refresh.repairs_filed.is_empty(), "{refresh:?}");
+    let filed = repairs(&fixture);
+    assert_eq!(filed.len(), 1, "legacy repair is reused: {filed:?}");
+    assert_eq!(filed[0].id, repair.id);
+    let related = related(&filed[0])
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(related, [first, second].into_iter().collect());
 }

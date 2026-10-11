@@ -181,13 +181,18 @@ fn repair_key(hold: &BaselineRedHold) -> Option<String> {
     if failures.is_empty() {
         return None;
     }
-    let identity = format!(
-        "{}\0{}\0{}\0{}",
-        hold.command.trim(),
-        failures.identities.join("\n"),
-        failures.omitted,
-        failures.tail.join("\n")
-    );
+    let identity = match &failures.identity_digest {
+        Some(digest) => format!("{}\0identity-digest-v1\0{digest}", hold.command.trim()),
+        // Keep the exact persisted key for older holds and output-only
+        // failures, whose complete identity set cannot be recovered.
+        None => format!(
+            "{}\0{}\0{}\0{}",
+            hold.command.trim(),
+            failures.identities.join("\n"),
+            failures.omitted,
+            failures.tail.join("\n")
+        ),
+    };
     Some(sha256_hex(identity.as_bytes())[..KEY_DIGITS].to_string())
 }
 

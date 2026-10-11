@@ -177,10 +177,7 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
             command: CHECK.into(),
             run_id: run_id.clone(),
             selection: None,
-            failures: BaselineRedFailures {
-                identities: vec!["test suite::broken".into()],
-                ..Default::default()
-            },
+            failures: BaselineRedFailures::new(["test suite::broken".into()], ""),
         }
     );
     assert!(
