@@ -268,9 +268,10 @@ The same holds earlier, for the implementer [ORB-15287]. An affected-test
 gate that exits 0 with only `DEFERRED: bubblewrap unavailable:` notices does
 not fail the implementation step. The implementer returns a
 `deferred_sandbox_validation` record (the gate's command, exit code, executed
-tests, pinned base, notices and a failing
-`bwrap --unshare-user --ro-bind / / -- /bin/true` probe), and the implement
-step refuses any record that is not exactly that case before commit. The gate
+tests, pinned base, notices and a probe with `probe.command` exactly
+`bwrap --unshare-user --ro-bind / / -- /bin/true`, `probe.exit_code` nonzero,
+and `probe.output` showing the namespace refusal), and the implement step refuses any record
+that is not exactly that case before commit. The gate
 must be one of the owner's `workflow.required_validation_commands` or
 `review.baseline_commands`. The owner's `candidate_validate` (and a claim's
 `claim_validate`) then runs the gate after the required commands, outside the

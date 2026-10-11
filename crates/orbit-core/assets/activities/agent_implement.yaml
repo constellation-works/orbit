@@ -319,11 +319,17 @@ spec:
        names it, without the base pin), `exit_code` (0), `tests_run` (the
        tests the gate executed, at least 1), `base` (`input.base_sha`, which
        you pin as the comparison base), `notices` (every skip or deferral
-       line the gate printed, each a Bubblewrap `DEFERRED:` line), and
-       `probe` (`bwrap --unshare-user --ro-bind / / -- /bin/true` run in
-       this lane: its exit code and output, which must show
-       `No permissions to create a new namespace`). Orbit refuses any other
-       record and fails the step. Record the same facts in the execution
+       line the gate printed, each a Bubblewrap `DEFERRED:` line), and a
+       `probe` object with all three required fields: `probe.command` (the
+       exact string `bwrap --unshare-user --ro-bind / / -- /bin/true`),
+       `probe.exit_code` (nonzero), and `probe.output` (the probe output, which must show
+       `No permissions to create a new namespace`). Return the complete
+       record in this shape, replacing the gate-command and base placeholders
+       with this run's values (never return the placeholders literally):
+       `{"deferred_sandbox_validation":{"command":"<exact gate command>","exit_code":0,"tests_run":1,"base":"<input.base_sha>","notices":["DEFERRED: bubblewrap unavailable: spawn_under_linux_bwrap: ..."],"probe":{"command":"bwrap --unshare-user --ro-bind / / -- /bin/true","exit_code":1,"output":"bwrap: No permissions to create a new namespace"}}}`.
+       The step boundary accepts this record only when those substituted
+       values match this run and every other condition above holds. Orbit
+       refuses any other record and fails the step. Record the same facts in the execution
        summary and mark that coverage `not_run`, never a completed pass.
        Nothing else is deferrable: a nonzero exit, a `SKIP:` or `skipping`
        notice, a gate that ran no tests or selected nothing, a notice with
