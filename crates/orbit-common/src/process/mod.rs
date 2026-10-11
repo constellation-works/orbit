@@ -5,6 +5,8 @@ pub mod identity;
 pub mod jitter;
 pub mod output_capture;
 pub mod shell;
+#[cfg(unix)]
+pub mod signal;
 pub mod stopped_descendants;
 
 pub use bounded::{
