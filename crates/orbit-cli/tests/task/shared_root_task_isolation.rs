@@ -68,6 +68,10 @@ fn shared_explicit_root_keeps_task_bundles_isolated_by_selected_workspace() {
         ],
     );
     let alpha_id = alpha["id"].as_str().expect("alpha task id");
+    assert!(
+        alpha_id.starts_with("SHR-"),
+        "task id must use configured non-ORB prefix 'SHR-': {alpha_id}"
+    );
     let beta_from_cwd = run_orbit_json(
         &beta_repo,
         &home,
@@ -187,6 +191,155 @@ fn shared_explicit_root_keeps_task_bundles_isolated_by_selected_workspace() {
         )
         .failure();
     }
+}
+
+#[test]
+fn non_orb_task_accepts_valid_foreign_prefix_relation() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let root = temp.path().join("shared-root");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&home).expect("fixture home");
+    init_git_repo(&repo);
+    let root_arg = root.to_str().expect("utf8 root");
+
+    run_orbit(
+        &repo,
+        &home,
+        &[
+            "--root",
+            root_arg,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "shared-root-host",
+            "--task-prefix",
+            "SHR",
+        ],
+    )
+    .success();
+    run_orbit(
+        &repo,
+        &home,
+        &["--root", root_arg, "workspace", "init", "--name", "primary"],
+    )
+    .success();
+
+    // 1. Create a non-ORB task under configured SHR prefix with a foreign-prefix dependency (DANI-00001)
+    let created = run_orbit_json(
+        &repo,
+        &home,
+        &[
+            "--root",
+            root_arg,
+            "task",
+            "add",
+            "--title",
+            "Task with foreign prefix dependency",
+            "--complexity",
+            "low",
+            "--dependency",
+            "DANI-00001",
+            "--json",
+        ],
+    );
+    let task_id = created["id"].as_str().expect("created task id");
+    assert!(
+        task_id.starts_with("SHR-"),
+        "task id must use configured prefix SHR: {task_id}"
+    );
+
+    // 2. Add an explicit foreign-prefix relation (related_to: DANI-00042) via orbit.task.update tool
+    let update_input = serde_json::to_string(&serde_json::json!({
+        "id": task_id,
+        "relations": [
+            {"type": "blocked_by", "target": "DANI-00001"},
+            {"type": "related_to", "target": "DANI-00042"},
+        ],
+    }))
+    .expect("serialize update input");
+    run_orbit(
+        &repo,
+        &home,
+        &[
+            "--root",
+            root_arg,
+            "tool",
+            "run",
+            "orbit.task.update",
+            "--input",
+            &update_input,
+        ],
+    )
+    .success();
+
+    // 3. Inspect task via show --json: verify both foreign-prefix relations are preserved and marked not_verifiable_here
+    let shown = run_orbit_json(
+        &repo,
+        &home,
+        &["--root", root_arg, "task", "show", task_id, "--json"],
+    );
+    let relations = shown["relations"].as_array().expect("relations array");
+    assert_eq!(relations.len(), 2, "must have 2 relations: {relations:?}");
+
+    let blocked_by_rel = relations
+        .iter()
+        .find(|r| r["type"] == "blocked_by")
+        .expect("blocked_by relation");
+    assert_eq!(blocked_by_rel["target"], "DANI-00001");
+    assert_eq!(
+        blocked_by_rel["verification"], "not verifiable here",
+        "foreign prefix dependency must be marked not verifiable here"
+    );
+
+    let related_to_rel = relations
+        .iter()
+        .find(|r| r["type"] == "related_to")
+        .expect("related_to relation");
+    assert_eq!(related_to_rel["target"], "DANI-00042");
+    assert_eq!(
+        related_to_rel["verification"], "not verifiable here",
+        "foreign prefix relation must be marked not verifiable here"
+    );
+
+    // 4. Verify on-disk task.yaml bundle persists foreign-prefix targets
+    let bundle_yaml = fs::read_to_string(
+        root.join("tasks/workspaces/ws_primary")
+            .join(task_id)
+            .join("task.yaml"),
+    )
+    .expect("read task.yaml");
+    assert!(
+        bundle_yaml.contains("target: DANI-00001"),
+        "bundle must persist foreign-prefix target DANI-00001: {bundle_yaml}"
+    );
+    assert!(
+        bundle_yaml.contains("target: DANI-00042"),
+        "bundle must persist foreign-prefix target DANI-00042: {bundle_yaml}"
+    );
+
+    // 5. Verify that task-only relation types reject non-task prefixes (e.g. ADR-00001)
+    let invalid_relation_input = serde_json::to_string(&serde_json::json!({
+        "id": task_id,
+        "relations": [
+            {"type": "blocked_by", "target": "ADR-00001"},
+        ],
+    }))
+    .expect("serialize invalid update");
+    run_orbit(
+        &repo,
+        &home,
+        &[
+            "--root",
+            root_arg,
+            "tool",
+            "run",
+            "orbit.task.update",
+            "--input",
+            &invalid_relation_input,
+        ],
+    )
+    .failure();
 }
 
 fn task_ids(value: &Value) -> Vec<String> {

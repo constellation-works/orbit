@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-10-09
+last_validated: 2026-10-11
 ---
 
 # Spec: Task Bundle V2
@@ -25,7 +25,7 @@ Every canonical task bundle lives at:
 ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/
 ```
 
-`<task-id>` must be the canonical ID inside the current allocation authority. The canonical v2 format is `ORB-` plus a decimal suffix formatted with at least five digits (for example, `ORB-00000`); parsers accept wider decimal suffixes and the allocator is bounded by `u32::MAX`. `<workspace-id>` is assigned once per workspace as `<slug>-<6char>` and stored in `.orbit/config.yaml`. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
+`<task-id>` must be the canonical ID inside the current allocation authority. The canonical task ID grammar is `<prefix>-<digits>`: `<prefix>` is 2 to 5 uppercase ASCII letters (excluding reserved artifact namespaces `ADR`, `L`, and `F`) configured for the allocating authority (such as `ORB`, `DANI`, or `SHR`), and `<digits>` is a decimal suffix formatted with at least five digits (for example, `ORB-00000` or `DANI-00001`). Five digits is a formatting minimum for minting; parsers accept wider decimal suffixes and the allocator is bounded by `u32::MAX`. `<workspace-id>` is assigned once per workspace as `<slug>-<6char>` and stored in `.orbit/config.yaml`. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
 
 Required files:
 
@@ -112,7 +112,7 @@ updated_at: 2026-05-11T00:00:00Z
 The envelope must not contain `description`, `acceptance_criteria`, `plan`, `execution_summary`, `history`, `comments`, or `review_threads`.
 The envelope must not contain local-only `workspace_path` or `repo_root`; those live in the local registry workspace binding.
 The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
-Task-only relation types must target `ORB-` IDs. `produces` and `resolves` may additionally target friction and ADR IDs.
+Task-only relation types must target valid task IDs matching the configured-prefix grammar (including non-ORB task IDs, such as `DANI-00001` or `SHR-00001`). `produces` and `resolves` may target task IDs or friction (`FYYYY-MM-NNN`) and ADR (`ADR-NNNN+`) IDs. `covered_by` targets a task ID or GitHub PR external key.
 
 ## Documents
 
@@ -305,7 +305,7 @@ A *live* writer is a different case, and readers must not be exposed to its inte
 Cutover from the current pre-reset task schema must:
 
 1. Create or reuse `.orbit/config.yaml` with a stable `workspace_id`.
-2. Allocate a canonical `ORB-00000` ID.
+2. Allocate a canonical task ID under the configured allocation authority (for example, `ORB-00000`).
 3. Record allocation and workspace binding metadata in `~/.orbit/tasks/index.sqlite`.
 4. Materialize the canonical bundle under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`.
 5. Move YAML `description` to `description.md`.

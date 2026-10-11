@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-05-17
-last_validated: 2026-10-09
+last_validated: 2026-10-11
 status: Draft
 feature: task-artifacts
 doc_role: overview
@@ -13,7 +13,7 @@ tags: ["task-artifacts"]
 
 # Task Artifacts — Overview
 
-Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. The v2 task artifact store keeps prose in Markdown sidecars, narrows `task.yaml` to a metadata envelope, allocates authority-scoped `ORB-00000` IDs from `~/.orbit/tasks/index.sqlite`, and makes `~/.orbit/tasks/workspaces/<partition-id>/` the canonical local bundle home.
+Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. The v2 task artifact store keeps prose in Markdown sidecars, narrows `task.yaml` to a metadata envelope, allocates authority-scoped task IDs (such as `ORB-00000`) from `~/.orbit/tasks/index.sqlite` under the machine's configured task prefix, and makes `~/.orbit/tasks/workspaces/<partition-id>/` the canonical local bundle home.
 
 This document is the entry point. [2_design.md](./2_design.md) describes the live v2 store; [3_vision.md](./3_vision.md) names open questions and prior work; [4_decisions.md](./4_decisions.md) captures the design decisions that constrain implementation.
 
@@ -33,7 +33,7 @@ The v2 artifact matches the work to its readers:
 - `task.yaml` is a small, mergeable envelope of metadata.
 - Markdown sidecars (`description.md`, `acceptance.md`, `plan.md`, `execution-summary.md`) hold prose and long-form human/agent reasoning.
 - Append-only logs (`events.jsonl`, `comments.jsonl`) carry events and comments without rewriting the envelope.
-- The default `ORB-00000` format uses a five-digit minimum width inside the configured allocation authority and explicitly scopes tasks when they cross registries; bare task IDs remain local search keys, in line with the graph-attribution removal in [T20260506-11].
+- The canonical `<prefix>-<digits>` format (with `ORB-00000` as the standard example) uses a five-digit formatting minimum inside the configured allocation authority and explicitly scopes tasks by machine owner prefix; bare task IDs remain local search keys, in line with the graph-attribution removal in [T20260506-11].
 - Workspace task bundles live in one canonical local store under `~/.orbit/tasks/workspaces/<partition-id>/`; task tools resolve them through the registry rather than a checkout-local filesystem view.
 - Local execution bindings stay in `~/.orbit/tasks/index.sqlite` rather than leaking into synced task identity.
 
@@ -80,7 +80,7 @@ The public API exposes these as first-class task documents.
 
 ### 2.4 Authority-scoped task ID
 
-The canonical ID format is `ORB-00000`: `ORB` identifies Orbit and the five-digit decimal suffix is unique within the configured allocation authority. A local-only installation uses one machine-local allocator in `~/.orbit/tasks/index.sqlite` across all local workspaces; synced or hosted workspaces must allocate against their shared registry before a task is visible. Two unrelated machines may both allocate `ORB-00042`, so cross-machine references still need registry, hosted-tenant, or external-reference context.
+The canonical ID format is `<prefix>-<digits>` (using `ORB-00000` as the standard example): `<prefix>` is the machine's configured allocation prefix (2–5 uppercase ASCII letters, excluding reserved artifact namespaces `ADR`, `L`, and `F`), and the decimal suffix is formatted with a five-digit minimum width. A local installation allocates from `~/.orbit/tasks/index.sqlite` under its configured prefix (e.g. `ORB`, `DANI`, `SHR`). Under the multi-host model, each host mints under its own disjoint prefix, making the host that minted a task its sole writing authority. Tasks and relations referencing foreign host prefixes (such as `DANI-00001`) are valid and portable across registries.
 
 V2 bundles do not carry `legacy_ids` and lookup surfaces do not resolve old `T<YYYYMMDD>-<N>` values.
 
