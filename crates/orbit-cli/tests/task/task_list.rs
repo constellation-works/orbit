@@ -2,148 +2,24 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::fs;
-use std::path::Path;
-use std::process::Output;
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::Value;
-use tempfile::{TempDir, tempdir};
 
-struct TestWorkspace {
-    _temp: TempDir,
-    home: std::path::PathBuf,
-    work: std::path::PathBuf,
-}
+use crate::task_workspace::{TaskSeed, TestWorkspace};
+use orbit_types::task::TaskStatus;
 
-impl TestWorkspace {
-    fn new() -> Self {
-        let temp = tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        let work = home.join("work");
-        fs::create_dir_all(&home).expect("create home");
-        crate::git_repo::init(&work);
-
-        let workspace = Self {
-            _temp: temp,
-            home,
-            work,
-        };
-        workspace.run(
-            &["workspace", "init", "--name", "task-list-test"],
-            "initialize workspace",
-        );
-        workspace
-    }
-
-    fn add_task(&self, title: &str) -> String {
-        let output = self.run(
-            &[
-                "task",
-                "add",
-                "--title",
-                title,
-                "--description",
-                "Task list test item.",
-                "--complexity",
-                "low",
-                "--json",
-            ],
-            "add task",
-        );
-        let val: Value = serde_json::from_slice(&output.stdout).expect("task add JSON");
-        val["id"].as_str().expect("task id").to_string()
-    }
-
-    fn add_task_with_tag(&self, title: &str, tag: &str) -> String {
-        let output = self.run(
-            &[
-                "task",
-                "add",
-                "--title",
-                title,
-                "--description",
-                "Task list test item with tag.",
-                "--tag",
-                tag,
-                "--complexity",
-                "low",
-                "--json",
-            ],
-            "add tagged task",
-        );
-        let val: Value = serde_json::from_slice(&output.stdout).expect("task add JSON");
-        val["id"].as_str().expect("task id").to_string()
-    }
-
-    /// Park a fixture task in an arbitrary status. `--force` is the human
-    /// override for the lifecycle table (ORB-12245); listing behaviour, not
-    /// the route a task took to its status, is what these tests measure.
-    fn update_status(&self, id: &str, status: &str) {
-        self.run(
-            &[
-                "task", "update", id, "--status", status, "--force", "--json",
-            ],
-            "update task status",
-        );
-    }
-
-    fn run(&self, args: &[&str], label: &str) -> Output {
-        let output = run_orbit(&self.work, &self.home, args);
-        assert!(
-            output.status.success(),
-            "{label} failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    }
-
-    fn run_merged(&self, args: &[&str], label: &str) -> String {
-        let temp_file = tempfile::NamedTempFile::new().expect("temp file for merged output");
-        let stdout_file = temp_file
-            .as_file()
-            .try_clone()
-            .expect("clone file for stdout");
-        let stderr_file = temp_file
-            .as_file()
-            .try_clone()
-            .expect("clone file for stderr");
-        let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .current_dir(&self.work)
-            .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home)
-            .stdout(stdout_file)
-            .stderr(stderr_file)
-            .args(args);
-        let status = command.status().expect("run orbit");
-        assert!(status.success(), "{label} failed with status {status:?}");
-        fs::read_to_string(temp_file.path()).expect("read merged output")
-    }
-}
-
-fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
-    let mut command = cargo_bin_cmd!("orbit");
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .args(args);
-    command.output().expect("run orbit")
+fn workspace() -> TestWorkspace {
+    let mut template = TaskSeed::new("");
+    template.description = "Task list test item.".into();
+    TestWorkspace::new("task-list-test", template)
 }
 
 #[test]
 fn completed_add_and_update_leave_the_next_write_free_list_indexed() {
-    let workspace = TestWorkspace::new();
-    let id = workspace.add_task_with_tag("Fresh index", "initial");
+    let workspace = workspace();
+    let added = workspace.add_task_cli_with_tags("Fresh index", &["initial"]);
+    let id = added["id"].as_str().unwrap().to_string();
     for (tag, expected_title) in [("initial", "Fresh index"), ("updated", "Updated index")] {
         if tag == "updated" {
             workspace.run(
@@ -202,10 +78,12 @@ fn completed_add_and_update_leave_the_next_write_free_list_indexed() {
 
 #[test]
 fn task_list_truncation_notice_and_bare_json_array_with_60_tasks() {
-    let workspace = TestWorkspace::new();
-    for i in 0..60 {
-        workspace.add_task(&format!("Task {i:02}"));
-    }
+    let workspace = workspace();
+    workspace.seed_tasks(
+        &(0..60)
+            .map(|i| workspace.task_seed(&format!("Task {i:02}")))
+            .collect::<Vec<_>>(),
+    );
 
     // Default limit (50) on 60 tasks emits a truncation notice to stderr. All
     // 60 tasks are non-terminal (`proposed`), so the default status-aware
@@ -254,14 +132,16 @@ fn task_list_truncation_notice_and_bare_json_array_with_60_tasks() {
 /// notice mixed in.
 #[test]
 fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
-    let workspace = TestWorkspace::new();
-    for i in 0..60 {
-        workspace.add_task(&format!("Task {i:02}"));
-    }
-    let truncation_notice = "showing 50 of 60 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more";
+    let workspace = workspace();
+    workspace.seed_tasks(
+        &(0..3)
+            .map(|i| workspace.task_seed(&format!("Task {i:02}")))
+            .collect::<Vec<_>>(),
+    );
+    let truncation_notice = "showing 2 of 3 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more";
 
     let json = workspace.run(
-        &["task", "list", "--format", "json"],
+        &["task", "list", "--limit", "2", "--format", "json"],
         "task list --format json",
     );
     let json_stdout = String::from_utf8_lossy(&json.stdout);
@@ -273,7 +153,7 @@ fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
     let tasks: Value = serde_json::from_slice(&json.stdout).expect("bare json array");
     assert_eq!(
         tasks.as_array().expect("tasks array").len(),
-        50,
+        2,
         "--format json stdout must stay the bare array, untouched by the notice"
     );
     assert!(
@@ -282,7 +162,7 @@ fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
     );
 
     let ndjson = workspace.run(
-        &["task", "list", "--format", "ndjson"],
+        &["task", "list", "--limit", "2", "--format", "ndjson"],
         "task list --format ndjson",
     );
     let ndjson_stdout = String::from_utf8_lossy(&ndjson.stdout);
@@ -294,7 +174,7 @@ fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
     let lines: Vec<&str> = ndjson_stdout.lines().collect();
     assert_eq!(
         lines.len(),
-        50,
+        2,
         "--format ndjson stdout must stay one record per line, untouched by the notice:\n{ndjson_stdout}"
     );
     for line in &lines {
@@ -304,21 +184,22 @@ fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
 }
 
 #[test]
-fn older_someday_task_discoverable_ahead_of_50_newer_done_tasks() {
-    let workspace = TestWorkspace::new();
+fn older_someday_task_discoverable_ahead_of_newer_done_tasks() {
+    let workspace = workspace();
 
-    // Create an older task and place it in someday
-    let someday_id = workspace.add_task("Older someday priority task");
-    workspace.update_status(&someday_id, "someday");
-
-    // Create 50 newer tasks and mark them done
-    for i in 0..50 {
-        let id = workspace.add_task(&format!("Done task {i:02}"));
-        workspace.update_status(&id, "done");
+    let mut someday = workspace.task_seed("Older someday priority task");
+    someday.status = TaskStatus::Someday;
+    let mut seeds = vec![someday];
+    for i in 0..3 {
+        let mut done = workspace.task_seed(&format!("Done task {i:02}"));
+        done.status = TaskStatus::Done;
+        seeds.push(done);
     }
+    let seeded = workspace.seed_tasks(&seeds);
+    let someday_id = seeded[0]["id"].as_str().unwrap();
 
-    // Default listing with limit 50 must still discover the older someday task
-    let output = workspace.run(&["task", "list"], "task list with someday");
+    // Status-neutral listing with explicit limit 3 must still discover the older someday task
+    let output = workspace.run(&["task", "list", "--limit", "3"], "task list with someday");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Older someday priority task"),
@@ -331,22 +212,25 @@ fn older_someday_task_discoverable_ahead_of_50_newer_done_tasks() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(
-            "showing 50 of 51 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more"
+            "showing 3 of 4 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more"
         ),
         "stderr must contain truncation notice:\n{stderr}"
     );
 
     // In JSON output, the someday task is listed first ahead of done tasks
-    let json_output = workspace.run(&["task", "list", "--json"], "task list JSON");
+    let json_output = workspace.run(
+        &["task", "list", "--limit", "3", "--json"],
+        "task list JSON",
+    );
     let payload: Value =
         serde_json::from_slice(&json_output.stdout).expect("task list json payload");
     let tasks = payload.as_array().expect("tasks array");
-    assert_eq!(tasks.len(), 50);
+    assert_eq!(tasks.len(), 3);
     assert_eq!(tasks[0]["id"], someday_id);
     assert_eq!(tasks[0]["status"], "someday");
     assert_eq!(tasks[0]["title"], "Older someday priority task");
 
-    // The remaining 49 items are the newest done tasks
+    // The remaining 2 items are the newest done tasks
     for task in &tasks[1..] {
         assert_eq!(task["status"], "done");
     }
@@ -354,7 +238,7 @@ fn older_someday_task_discoverable_ahead_of_50_newer_done_tasks() {
 
 #[test]
 fn task_list_help_documents_rule() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let output = workspace.run(&["task", "list", "--help"], "task list --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -369,11 +253,16 @@ fn task_list_help_documents_rule() {
 
 #[test]
 fn existing_filters_keep_behaviour() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
 
-    let id1 = workspace.add_task_with_tag("Task with tag alpha", "alpha");
-    let id2 = workspace.add_task_with_tag("Task with tag beta", "beta");
-    workspace.update_status(&id2, "done");
+    let mut alpha = workspace.task_seed("Task with tag alpha");
+    alpha.tags = vec!["alpha".into()];
+    let mut beta = workspace.task_seed("Task with tag beta");
+    beta.tags = vec!["beta".into()];
+    beta.status = TaskStatus::Done;
+    let seeded = workspace.seed_tasks(&[alpha, beta]);
+    let id1 = seeded[0]["id"].as_str().unwrap();
+    let id2 = seeded[1]["id"].as_str().unwrap();
 
     // --status filter
     let status_filter = workspace.run(
@@ -409,10 +298,12 @@ fn existing_filters_keep_behaviour() {
 /// must be emitted after the table body, not before it.
 #[test]
 fn task_list_truncation_notice_emitted_after_table_body_in_human_modes() {
-    let workspace = TestWorkspace::new();
-    for i in 0..5 {
-        workspace.add_task(&format!("Task {i:02}"));
-    }
+    let workspace = workspace();
+    workspace.seed_tasks(
+        &(0..5)
+            .map(|i| workspace.task_seed(&format!("Task {i:02}")))
+            .collect::<Vec<_>>(),
+    );
     let truncation_notice = "showing 2 of 5 tasks";
 
     // 1. Table mode: merged streams must have header and rows before the trailing notice.

@@ -16,6 +16,8 @@ mod git_authority;
 mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
 mod isolated_cli_fixture;
+#[path = "../support/task_workspace.rs"]
+mod task_workspace;
 
 mod audit_cli;
 mod auto_task_lifecycle_cli;

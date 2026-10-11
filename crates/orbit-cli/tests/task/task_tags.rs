@@ -3,26 +3,22 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
-use std::path::Path;
 use std::process::Output;
 
-use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::test_env;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir};
 
 #[test]
 fn task_cli_roundtrips_filters_and_replaces_tags() {
-    let workspace = TestWorkspace::new();
-    let perf = workspace.add_task("Perf task", &["perf"]);
-    workspace.add_task("Bench task", &["bench"]);
-    let both = workspace.add_task("Perf bench task", &["  Perf ", "BENCH"]);
+    let workspace = workspace();
+    let perf = workspace.add_task_cli_with_tags("Perf task", &["perf"]);
+    workspace.add_task_with_tags("Bench task", &["bench"]);
+    let both = workspace.add_task_cli_with_tags("Perf bench task", &["  Perf ", "BENCH"]);
 
     assert_eq!(both["tags"], json!(["perf", "bench"]));
 
     // ORB-10310: freshly-added tasks are `proposed`; status-neutral listing must
     // surface them without `--all` or `--status proposed`.
-    let perf_list = workspace.run(
+    let perf_list = workspace.run_with_stdin(
         &["task", "list", "--tag", "perf", "--json"],
         None,
         "list perf tasks",
@@ -32,7 +28,7 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
     // ORB-00202: `orbit task search` was deleted; the substring+tag case
     // migrates to `orbit search --kind task --tag <...>`. Results land
     // under `output["results"]` rather than at the top level.
-    let both_search = workspace.run(
+    let both_search = workspace.run_with_stdin(
         &[
             "search",
             "tag-search",
@@ -50,7 +46,7 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
     assert_orbit_search_titles(&both_search, &["Perf bench task"]);
 
     let perf_id = perf["id"].as_str().expect("perf task id");
-    let updated = workspace.run(
+    let updated = workspace.run_with_stdin(
         &["task", "update", perf_id, "--tag", "docs", "--json"],
         None,
         "replace tags",
@@ -61,8 +57,8 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
 
 #[test]
 fn search_status_modes_include_blocked_and_deferred_tasks() {
-    let workspace = TestWorkspace::new();
-    let routing = workspace.run(
+    let workspace = workspace();
+    let routing = workspace.run_with_stdin(
         &["workspace", "show", "--format", "json"],
         None,
         "verify fixture routing",
@@ -77,38 +73,20 @@ fn search_status_modes_include_blocked_and_deferred_tasks() {
             .to_string()
     );
 
-    workspace.add_task("Proposed task", &[]);
-    let blocked = workspace.add_task("Blocked task", &[]);
-    let blocked_id = blocked["id"].as_str().expect("blocked task id");
-    for status in ["backlog", "in-progress", "blocked"] {
-        workspace.run(
-            &[
-                "task",
-                "update",
-                blocked_id,
-                "--plan",
-                "Exercise search status visibility",
-                "--status",
-                status,
-            ],
-            None,
-            "prepare blocked task",
-        );
-    }
-    for (title, status) in [("Someday task", "someday"), ("Rejected task", "rejected")] {
-        let task = workspace.add_task(title, &[]);
-        workspace.run(
-            &[
-                "task",
-                "update",
-                task["id"].as_str().expect("task id"),
-                "--status",
-                status,
-            ],
-            None,
-            "prepare hidden task",
-        );
-    }
+    let seeds = [
+        ("Proposed task", orbit_types::task::TaskStatus::Proposed),
+        ("Blocked task", orbit_types::task::TaskStatus::Blocked),
+        ("Someday task", orbit_types::task::TaskStatus::Someday),
+        ("Rejected task", orbit_types::task::TaskStatus::Rejected),
+    ]
+    .into_iter()
+    .map(|(title, status)| {
+        let mut seed = workspace.task_seed(title);
+        seed.status = status;
+        seed
+    })
+    .collect::<Vec<_>>();
+    workspace.seed_tasks(&seeds);
 
     // Exercise both public entry points. Explicit statuses must keep their
     // precedence over all, including the open alias and comma-separated sets.
@@ -145,11 +123,11 @@ fn search_status_modes_include_blocked_and_deferred_tasks() {
             args.extend(["--status", status]);
             input["status"] = json!([status]);
         }
-        let cli = workspace.run(&args, None, "CLI search status mode");
+        let cli = workspace.run_with_stdin(&args, None, "CLI search status mode");
         assert_orbit_search_titles(&cli, &expected);
 
         let input = input.to_string();
-        let tool = workspace.run(
+        let tool = workspace.run_with_stdin(
             &["tool", "run", "orbit.search", "--input", &input],
             None,
             "tool search status mode",
@@ -161,14 +139,16 @@ fn search_status_modes_include_blocked_and_deferred_tasks() {
 /// ORB-10310: `orbit task list` is status-neutral and bounded by `--limit`.
 #[test]
 fn task_list_is_status_neutral_and_bounded_by_limit() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     // Every task starts in `proposed`; the default listing must include them
     // all with no `--status`/`--all`.
-    for index in 0..3 {
-        workspace.add_task(&format!("Task {index}"), &[]);
-    }
+    workspace.seed_tasks(
+        &(0..3)
+            .map(|i| workspace.task_seed(&format!("Task {i}")))
+            .collect::<Vec<_>>(),
+    );
 
-    let default_list = workspace.run(&["task", "list", "--json"], None, "default list");
+    let default_list = workspace.run_with_stdin(&["task", "list", "--json"], None, "default list");
     let default_tasks: Value = serde_json::from_slice(&default_list.stdout).expect("list JSON");
     let default_items = default_tasks.as_array().expect("array");
     assert_eq!(
@@ -178,7 +158,7 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
     );
 
     // `--limit` bounds the response.
-    let limited = workspace.run(
+    let limited = workspace.run_with_stdin(
         &["task", "list", "--limit", "2", "--json"],
         None,
         "limited list",
@@ -188,11 +168,12 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
     assert_eq!(limited_items.len(), 2);
 
     // A zero limit is a clear input error, not an empty success.
-    let rejected = run_orbit(
+    let rejected = crate::task_workspace::run_orbit(
         &workspace.work,
         &workspace.home,
         &["task", "list", "--limit", "0"],
         None,
+        false,
     );
     assert!(
         !rejected.status.success(),
@@ -208,8 +189,8 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
 
 #[test]
 fn task_update_refuses_dropping_system_identity_tag_without_override() {
-    let workspace = TestWorkspace::new();
-    let task = workspace.add_task(
+    let workspace = workspace();
+    let task = workspace.add_task_with_tags(
         "CI failure task",
         &["ci-failure:8002487a4e972736", "ci-failure-sweep"],
     );
@@ -262,7 +243,7 @@ fn task_update_refuses_dropping_system_identity_tag_without_override() {
     );
 
     // 3. Success with --allow-drop-system-tags
-    let allowed = workspace.run(
+    let allowed = workspace.run_with_stdin(
         &[
             "task",
             "update",
@@ -284,7 +265,7 @@ fn task_update_refuses_dropping_system_identity_tag_without_override() {
     );
 
     // 4. Keeping the system identity tag does not require the flag
-    let kept = workspace.run(
+    let kept = workspace.run_with_stdin(
         &[
             "task",
             "update",
@@ -307,8 +288,9 @@ fn task_update_refuses_dropping_system_identity_tag_without_override() {
 
 #[test]
 fn task_update_tool_refuses_dropping_system_identity_tag_without_override() {
-    let workspace = TestWorkspace::new();
-    let task = workspace.add_task("Tool CI failure task", &["ci-failure:testkey123", "docs"]);
+    let workspace = workspace();
+    let task =
+        workspace.add_task_with_tags("Tool CI failure task", &["ci-failure:testkey123", "docs"]);
     let task_id = task["id"].as_str().expect("task id");
 
     // 1. Tool update dropping system tag without override fails
@@ -336,7 +318,7 @@ fn task_update_tool_refuses_dropping_system_identity_tag_without_override() {
         "allow_drop_system_tags": true
     })
     .to_string();
-    let allowed = workspace.run(
+    let allowed = workspace.run_with_stdin(
         &["tool", "run", "orbit.task.update", "--input", &tool_allow],
         None,
         "tool run dropping ci-failure tag with override",
@@ -382,84 +364,10 @@ fn assert_orbit_search_titles(output: &Output, expected: &[&str]) {
     assert_eq!(titles, expected);
 }
 
-struct TestWorkspace {
-    _temp: TempDir,
-    home: std::path::PathBuf,
-    work: std::path::PathBuf,
-}
+use crate::task_workspace::{TaskSeed, TestWorkspace};
 
-impl TestWorkspace {
-    fn new() -> Self {
-        let temp = tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        let work = home.join("work");
-        fs::create_dir_all(&home).expect("create home");
-        crate::git_repo::init(&work);
-
-        let workspace = Self {
-            _temp: temp,
-            home,
-            work,
-        };
-        workspace.run(
-            &["workspace", "init", "--name", "task-tags-test"],
-            None,
-            "initialize workspace",
-        );
-        workspace
-    }
-
-    fn add_task(&self, title: &str, tags: &[&str]) -> Value {
-        let mut args = vec![
-            "task",
-            "add",
-            "--title",
-            title,
-            "--description",
-            "Shared tag-search marker.",
-            "--complexity",
-            "low",
-            "--json",
-        ];
-        for tag in tags {
-            args.push("--tag");
-            args.push(tag);
-        }
-        let output = self.run(&args, None, "add tagged task");
-        serde_json::from_slice(&output.stdout).expect("task add JSON")
-    }
-
-    fn run(&self, args: &[&str], stdin: Option<&str>, label: &str) -> Output {
-        let output = run_orbit(&self.work, &self.home, args, stdin);
-        assert!(
-            output.status.success(),
-            "{label} failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    }
-
-    fn run_raw(&self, args: &[&str]) -> Output {
-        run_orbit(&self.work, &self.home, args, None)
-    }
-}
-
-fn run_orbit(cwd: &Path, home: &Path, args: &[&str], stdin: Option<&str>) -> Output {
-    let mut command = cargo_bin_cmd!("orbit");
-    // ORB-11300: resetting HOME is not isolation. `ORBIT_REGISTRY_ROOT` and
-    // `ORBIT_WORKSPACE` outrank it, so a suite launched from inside a managed
-    // Orbit run used to add these fixture tasks to the live workspace.
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .args(args);
-    if let Some(input) = stdin {
-        command.write_stdin(input);
-    }
-    command.output().expect("run orbit")
+fn workspace() -> TestWorkspace {
+    let mut template = TaskSeed::new("");
+    template.description = "Shared tag-search marker.".into();
+    TestWorkspace::new("task-tags-test", template)
 }

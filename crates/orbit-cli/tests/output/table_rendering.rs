@@ -18,14 +18,9 @@
 //! `--format table`, which is the only way to reach the table rendering from a
 //! pipe — and the one-line-per-record invariant is the same in both.
 
-use std::fs;
-use std::path::Path;
 use std::process::Output;
 
-use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::test_env;
 use serde_json::Value;
-use tempfile::{TempDir, tempdir};
 
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
 
@@ -33,7 +28,7 @@ const LONG_TITLE: &str = "Terminal tables are borderless with a one-line row inv
 
 #[test]
 fn tool_list_renders_one_line_per_tool() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
 
     let json = workspace.run(&["tool", "list", "--all", "--json"], "tool list JSON");
     let tools: Value = serde_json::from_slice(&json.stdout).expect("tool list JSON");
@@ -50,10 +45,12 @@ fn tool_list_renders_one_line_per_tool() {
 
 #[test]
 fn task_list_renders_one_line_per_task() {
-    let workspace = TestWorkspace::new();
-    for index in 0..3 {
-        workspace.add_task(&format!("{LONG_TITLE} ({index})"));
-    }
+    let workspace = workspace();
+    workspace.seed_tasks(
+        &(0..3)
+            .map(|i| workspace.task_seed(&format!("{LONG_TITLE} ({i})")))
+            .collect::<Vec<_>>(),
+    );
 
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
 }
@@ -66,9 +63,11 @@ fn task_list_plain_escapes_embedded_separators_and_json_keeps_them() {
     const RAW_TITLE: &str = "first line\nsecond\tfield\r\nthird";
     const ESCAPED_TITLE: &str = "first line\\nsecond\\tfield\\r\\nthird";
     const ORDINARY_TITLE: &str = "An ordinary single-line title";
-    let workspace = TestWorkspace::new();
-    workspace.add_task(RAW_TITLE);
-    workspace.add_task(ORDINARY_TITLE);
+    let workspace = workspace();
+    workspace.seed_tasks(&[
+        workspace.task_seed(RAW_TITLE),
+        workspace.task_seed(ORDINARY_TITLE),
+    ]);
 
     let plain = workspace.run(&["task", "list"], "plain task list");
     let stdout = String::from_utf8(plain.stdout).expect("utf-8 stdout");
@@ -131,7 +130,7 @@ fn task_list_plain_escapes_embedded_separators_and_json_keeps_them() {
 
 #[test]
 fn job_show_json_contains_no_human_step_rows() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
 
     let json = workspace.run(
         &["job", "show", "task_pr_pipeline", "--format", "json"],
@@ -156,7 +155,7 @@ fn job_show_json_contains_no_human_step_rows() {
 
 #[test]
 fn skill_list_renders_one_line_per_skill() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
 
     let json = workspace.run(&["skill", "list", "--json"], "skill list JSON");
     let skills: Value = serde_json::from_slice(&json.stdout).expect("skill list JSON");
@@ -174,7 +173,7 @@ fn skill_list_renders_one_line_per_skill() {
 
 #[test]
 fn a_list_with_no_matches_leaves_stdout_empty_and_explains_itself_on_stderr() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     workspace.add_task(LONG_TITLE);
 
     // Every task starts in `proposed`, so a `done` filter matches nothing.
@@ -230,75 +229,10 @@ fn assert_record_lines(output: &Output, records: usize, header: bool, label: &st
     }
 }
 
-struct TestWorkspace {
-    _temp: TempDir,
-    home: std::path::PathBuf,
-    work: std::path::PathBuf,
-}
+use crate::task_workspace::{TaskSeed, TestWorkspace};
 
-impl TestWorkspace {
-    fn new() -> Self {
-        let temp = tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        let work = home.join("work");
-        fs::create_dir_all(&home).expect("create home");
-        crate::git_repo::init(&work);
-
-        let workspace = Self {
-            _temp: temp,
-            home,
-            work,
-        };
-        workspace.run(
-            &["workspace", "init", "--name", "table-rendering-test"],
-            "initialize workspace",
-        );
-        workspace
-    }
-
-    fn add_task(&self, title: &str) {
-        self.run(
-            &[
-                "task",
-                "add",
-                "--title",
-                title,
-                "--description",
-                "A record whose rendered row must stay on one line.",
-                "--complexity",
-                "low",
-                "--json",
-            ],
-            "add task",
-        );
-    }
-
-    fn run(&self, args: &[&str], label: &str) -> Output {
-        let output = run_orbit(&self.work, &self.home, args);
-        assert!(
-            output.status.success(),
-            "{label} failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    }
-}
-
-fn run_orbit(work: &Path, home: &Path, args: &[&str]) -> Output {
-    let mut command = cargo_bin_cmd!("orbit");
-    // ORB-11300: shared with every other fixture that spawns `orbit`.
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(work)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        // Pin the geometry: width resolution is only consulted for a terminal
-        // sink, and these assertions must not depend on the runner's terminal.
-        .env("COLUMNS", "120")
-        .args(args)
-        .output()
-        .expect("run orbit")
+fn workspace() -> TestWorkspace {
+    let mut template = TaskSeed::new("");
+    template.description = "A record whose rendered row must stay on one line.".into();
+    TestWorkspace::new("table-rendering-test", template)
 }

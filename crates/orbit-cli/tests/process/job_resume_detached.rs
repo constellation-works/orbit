@@ -15,10 +15,11 @@ mod unix {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
+    use crate::workflow_gate::WorkflowGate;
     use assert_cmd::assert::OutputAssertExt;
     use assert_cmd::cargo::cargo_bin_cmd;
     use orbit_common::test_env;
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use tempfile::{TempDir, tempdir};
 
     use super::fixture_crew;
@@ -41,12 +42,16 @@ mod unix {
 
     pub(super) struct Fixture {
         _temp: TempDir,
+        pub(super) gate: WorkflowGate,
         pub(super) home: PathBuf,
         pub(super) repo: PathBuf,
     }
 
     impl Fixture {
         pub(super) fn new() -> Self {
+            if crate::workflow_gate::wait_if_requested() {
+                std::process::exit(0);
+            }
             let temp = tempdir().expect("temporary fixture");
             let home = temp.path().join("home");
             let repo = temp.path().join("repo");
@@ -55,6 +60,7 @@ mod unix {
             crate::git_repo::init(&repo);
             let fixture = Self {
                 _temp: temp,
+                gate: WorkflowGate::new(),
                 home,
                 repo,
             };
@@ -78,11 +84,9 @@ mod unix {
             fixture_crew::configure_sol(&fixture.home.join(".orbit"));
             let jobs = fixture.home.join(".orbit/resources/jobs");
             fs::create_dir_all(&jobs).expect("job catalog");
-            fs::write(
-                jobs.join("resume_cli_fixture.yaml"),
-                "schemaVersion: 2\nkind: Job\nmetadata:\n  name: resume_cli_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 6\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
-            )
-            .expect("fixture job");
+            let job = json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "resume_cli_fixture"},
+                "spec": {"state": "enabled", "kind": "workflow", "steps": [fixture.gate.step("nap")]}});
+            fs::write(jobs.join("resume_cli_fixture.yaml"), job.to_string()).expect("fixture job");
             fixture
         }
 
@@ -139,6 +143,7 @@ mod unix {
                 "--json",
             ]);
             let run_id = source["run_id"].as_str().expect("source run id").to_owned();
+            self.gate.wait_ready();
             let running = self.poll_run(&run_id, "running", Duration::from_secs(10));
             let pid = running["run"]["pid"].as_u64().expect("worker pid") as i32;
             assert_ne!(
@@ -149,6 +154,7 @@ mod unix {
             // The worker is deliberately interrupted after it has claimed the
             // run. Its catalog job can then be resumed through the public CLI.
             assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+            self.gate.release();
             self.poll_run(&run_id, "interrupted", Duration::from_secs(10));
             run_id
         }
@@ -169,12 +175,15 @@ mod unix {
         }
 
         fn write_pipeline_job(&self, name: &str) {
-            let jobs = self.home.join(".orbit/resources/jobs");
+            let job = json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": name},
+                "spec": {"state": "enabled", "kind": "workflow", "steps": [{"id": "finish",
+                    "default_input": {"result": {"run_id": "fixture", "status": "success"}},
+                    "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}}]}});
             fs::write(
-                jobs.join(format!("{name}.yaml")),
-                format!(
-                    "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 1\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"
-                ),
+                self.home
+                    .join(".orbit/resources/jobs")
+                    .join(format!("{name}.yaml")),
+                job.to_string(),
             )
             .expect("write workflow job");
         }
@@ -530,12 +539,10 @@ spec:
     fn resume_returns_while_detached_worker_continues_after_cli_exit() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
-        let started = Instant::now();
         let submitted = fixture.json(&["job", "resume", &source, "--json"]);
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "resume blocked on the job"
-        );
+        // The CLI has returned while execution is held at an explicit gate.
+        // This proves detachment without a five-second timing proxy.
+        fixture.gate.wait_ready();
         assert_eq!(submitted["waited"], false);
         let run_id = submitted["run_id"].as_str().expect("resumed run id");
         let running = fixture.poll_run(run_id, "running", Duration::from_secs(10));
@@ -550,6 +557,7 @@ spec:
             0,
             "worker survives CLI exit"
         );
+        fixture.gate.release();
         fixture.poll_run(run_id, "success", Duration::from_secs(20));
     }
 
@@ -557,14 +565,31 @@ spec:
     fn resume_wait_joins_detached_run_and_reports_success() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
-        let started = Instant::now();
-        let waited = fixture.json(&["job", "resume", &source, "--wait", "--json"]);
-        assert_eq!(waited["waited"], true);
-        assert_eq!(waited["state"], "success");
+        let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let mut child = crate::child_guard::ChildGuard::new(
+            command
+                .current_dir(&fixture.repo)
+                .env("HOME", &fixture.home)
+                .env("USERPROFILE", &fixture.home)
+                .args(["job", "resume", &source, "--wait", "--json"])
+                .stdout(output_file.as_file().try_clone().unwrap())
+                .spawn()
+                .unwrap(),
+        );
+        fixture.gate.wait_ready();
         assert!(
-            started.elapsed() >= Duration::from_secs(5),
+            child.try_wait().unwrap().is_none(),
             "--wait returned before execution"
         );
+        fixture.gate.release();
+        assert!(child.wait().unwrap().success());
+        let waited: Value = serde_json::from_slice(&fs::read(output_file.path()).unwrap()).unwrap();
+        assert_eq!(waited["waited"], true);
+        assert_eq!(waited["state"], "success");
         let run_id = waited["run_id"].as_str().expect("resumed run id");
         let shown = fixture.json(&["run", "show", run_id, "--json"]);
         assert_eq!(shown["run"]["state"], "success");
@@ -581,12 +606,10 @@ spec:
         let path = fixture
             .home
             .join(".orbit/resources/jobs/resume_cli_fixture.yaml");
-        let job = fs::read_to_string(&path).expect("fixture job");
-        fs::write(
-            &path,
-            job.replace("action: sleep", "action: missing_action"),
-        )
-        .expect("change resumed job definition");
+        let mut job: Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).expect("fixture job");
+        job["spec"]["steps"][0]["spec"]["action"] = json!("missing_action");
+        fs::write(&path, job.to_string()).expect("change resumed job definition");
 
         let output = fixture
             .command()

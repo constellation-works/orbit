@@ -20,6 +20,9 @@ mod generation_fixture;
 mod git_authority;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
+#[cfg(unix)]
+#[path = "../support/workflow_gate.rs"]
+mod workflow_gate;
 
 mod env_pass_warning;
 mod job_resume_detached;

@@ -15,14 +15,13 @@ use std::process::Output;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir};
 
 /// [ORB-12245] `done` and `archived` are terminal on the governed surface.
 /// A human on the bare CLI can still override the table with `--force`, and
 /// the override is named in the task's history.
 #[test]
 fn update_status_reopens_terminal_tasks_only_with_an_explicit_force() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Terminal task");
     workspace.drive_to_done(&id);
 
@@ -60,7 +59,7 @@ fn update_status_reopens_terminal_tasks_only_with_an_explicit_force() {
 /// same human override as reopening a completed one.
 #[test]
 fn update_status_restores_an_archived_task_with_force() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Restore me");
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
     workspace.run(&["task", "archive", &id], "archive");
@@ -81,7 +80,7 @@ fn update_status_restores_an_archived_task_with_force() {
 /// more able to mint a `done` task out of a proposal than an agent is.
 #[test]
 fn update_status_refuses_completion_without_review_and_evidence() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Fabricated completion");
 
     let skipped = workspace.run_raw(&["task", "update", &id, "--status", "done"]);
@@ -128,16 +127,16 @@ fn update_status_refuses_completion_without_review_and_evidence() {
 
 #[test]
 fn update_status_performs_approve_and_reject_transitions() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
+
+    let [approve, reject] = workspace.add_tasks(["Approve via update", "Reject via update"]);
 
     // proposed -> backlog (former `approve`).
-    let id = workspace.add_task("Approve via update");
-    let task = workspace.task_json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    let task = workspace.task_json(&["task", "update", &approve, "--status", "backlog", "--json"]);
     assert_eq!(task["status"], json!("backlog"));
 
     // proposed -> rejected (former `reject`).
-    let id = workspace.add_task("Reject via update");
-    let task = workspace.task_json(&["task", "update", &id, "--status", "rejected", "--json"]);
+    let task = workspace.task_json(&["task", "update", &reject, "--status", "rejected", "--json"]);
     assert_eq!(task["status"], json!("rejected"));
 }
 
@@ -146,7 +145,7 @@ fn update_status_performs_approve_and_reject_transitions() {
 /// refused while a run is still working on the task.
 #[test]
 fn update_discard_candidate_records_the_discard_unless_a_run_is_active() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Discard a candidate");
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
     workspace.run(
@@ -196,7 +195,7 @@ fn update_discard_candidate_records_the_discard_unless_a_run_is_active() {
 
 #[test]
 fn task_update_complexity_roundtrips_through_a_real_task_record() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Complexity update");
 
     let updated = workspace.task_json(&["task", "update", &id, "--complexity", "medium", "--json"]);
@@ -208,10 +207,9 @@ fn task_update_complexity_roundtrips_through_a_real_task_record() {
 
 #[test]
 fn task_update_repeats_dependencies_and_clears_context() {
-    let workspace = TestWorkspace::new();
-    let dependency_a = workspace.add_task("First dependency");
-    let dependency_b = workspace.add_task("Second dependency");
-    let id = workspace.add_task("List update");
+    let workspace = workspace();
+    let [dependency_a, dependency_b, id] =
+        workspace.add_tasks(["First dependency", "Second dependency", "List update"]);
     fs::write(workspace.work.join("one.rs"), "// one\n").expect("write one file");
 
     workspace.run(
@@ -241,7 +239,7 @@ fn task_update_repeats_dependencies_and_clears_context() {
 
 #[test]
 fn task_update_rejects_missing_context_file_and_leaves_task_unchanged() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Target task");
     let before = workspace.task_json(&["task", "show", &id, "--json"]);
 
@@ -262,7 +260,7 @@ fn task_update_rejects_missing_context_file_and_leaves_task_unchanged() {
 
 #[test]
 fn task_add_rejects_missing_context_file() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let output = workspace.run_raw(&[
         "task",
         "add",
@@ -283,7 +281,7 @@ fn task_add_rejects_missing_context_file() {
 
 #[test]
 fn task_update_and_add_accept_valid_context_selectors() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(
         workspace.work.join("existing.rs"),
         "pub fn my_symbol() {}\n",
@@ -327,7 +325,7 @@ fn task_update_and_add_accept_valid_context_selectors() {
 /// only additions previously dropped the task's original selectors.
 #[test]
 fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let routing = workspace.task_json(&["workspace", "show", "--format", "json"]);
     let work = fs::canonicalize(&workspace.work).expect("canonical fixture work");
     assert_eq!(routing["registered"], json!(true));
@@ -411,7 +409,7 @@ fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
 /// `orbit task show` prints them as a `Readiness:` line.
 #[test]
 fn task_show_and_write_tools_report_readiness_gaps() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
     let codes = |readiness: &Value| -> Vec<(String, String)> {
         readiness["gaps"]
@@ -476,7 +474,7 @@ fn task_show_and_write_tools_report_readiness_gaps() {
 /// wording. A task with selectors or tagged `no-diff-expected` gets none.
 #[test]
 fn backlog_writes_without_context_warn_about_the_missing_file_lock() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
     let expected = |task: &Value| -> Value {
         let gaps = task["readiness"]["gaps"]
@@ -538,7 +536,7 @@ fn backlog_writes_without_context_warn_about_the_missing_file_lock() {
 /// target, a traversal and a wrong-kind target are refused.
 #[test]
 fn allow_missing_context_records_durable_exact_creation_intent() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
 
     let added = workspace.task_json(&[
@@ -641,7 +639,7 @@ fn allow_missing_context_records_durable_exact_creation_intent() {
 
 #[test]
 fn locks_list_projects_files_held_by_active_tasks() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(workspace.work.join("held.rs"), "// held\n").expect("write held file");
 
     let id = workspace.add_task("Holds a lock");
@@ -682,7 +680,7 @@ fn locks_list_projects_files_held_by_active_tasks() {
 /// task owns, and the lint now reports it without touching it.
 #[test]
 fn lint_sweep_keeps_declared_context_when_its_target_disappears() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(workspace.work.join("real.rs"), "// real\n").expect("write real file");
     fs::write(workspace.work.join("ghost.rs"), "// ghost\n").expect("write ghost file");
 
@@ -737,7 +735,7 @@ fn lint_sweep_keeps_declared_context_when_its_target_disappears() {
 /// restores only what task history recorded.
 #[test]
 fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let id = workspace.add_task("Never declared anything");
 
     let dry = workspace.run(&["task", "lint", "--json"], "lint sweep dry run");
@@ -779,7 +777,7 @@ fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
 /// (`(see src/cited.rs).`) is the existing file, not `src/cited.rs)`.
 #[test]
 fn lint_reads_a_path_closed_by_a_parenthesis_and_full_stop_as_the_file() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::create_dir_all(workspace.work.join("src")).expect("create src");
     fs::write(workspace.work.join("src/cited.rs"), "// cited\n").expect("write cited file");
     let id = workspace.add_task("Cites a path inside parentheses");
@@ -806,8 +804,8 @@ fn lint_reads_a_path_closed_by_a_parenthesis_and_full_stop_as_the_file() {
 
 #[test]
 fn task_add_attributes_from_model_flag_and_managed_identity_env() {
-    let ambient = TestWorkspace::new();
-    let workspace = TestWorkspace::new();
+    let ambient = workspace();
+    let workspace = workspace();
 
     let explicit = workspace.task_json(&[
         "task",
@@ -888,7 +886,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
 
 #[test]
 fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     // ORB-10651: reservation ids must have the `reservation-<id>` form or
     // `release` now rejects them before reaching the "no matching row" path
     // this test otherwise exercises.
@@ -939,7 +937,7 @@ fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability() {
 
 #[test]
 fn locks_reserve_requires_the_same_operator_capability_as_release() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     fs::write(workspace.work.join("reserve_me.rs"), "// reserve\n").expect("write fixture file");
     const RESERVE: &[&str] = &[
         "task",
@@ -977,7 +975,7 @@ fn locks_reserve_requires_the_same_operator_capability_as_release() {
 
 #[test]
 fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     workspace.add_task("Create an audit event");
     let before = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
     assert!(!before.as_array().expect("audit rows").is_empty());
@@ -999,7 +997,7 @@ fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed() {
 
 #[test]
 fn run_cancel_confirmation_precedes_run_lookup() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
 
     let refused = workspace.run_raw(&["run", "cancel", "jrun-does-not-exist"]);
     assert!(!refused.status.success());
@@ -1014,7 +1012,7 @@ fn run_cancel_confirmation_precedes_run_lookup() {
 
 #[test]
 fn migrate_bare_invocation_inspects_and_confirm_applies() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
     let marker = workspace.work.join(".orbit/state/layout.version");
     fs::write(&marker, "1\n").expect("restore prior layout version");
 
@@ -1041,7 +1039,7 @@ fn migrate_bare_invocation_inspects_and_confirm_applies() {
 
 #[test]
 fn workspace_remove_is_recoverable_by_reinitializing_the_checkout() {
-    let workspace = TestWorkspace::new();
+    let workspace = workspace();
 
     workspace.run_as_operator(
         &["workspace", "remove", "trimmed-surface-test"],
@@ -1061,54 +1059,17 @@ fn workspace_remove_is_recoverable_by_reinitializing_the_checkout() {
     assert!(String::from_utf8_lossy(&restored.stdout).contains("trimmed-surface-test"));
 }
 
-struct TestWorkspace {
-    _temp: TempDir,
-    home: std::path::PathBuf,
-    work: std::path::PathBuf,
+use crate::task_workspace::{TaskSeed, TestWorkspace};
+
+fn workspace() -> TestWorkspace {
+    let mut template = TaskSeed::new("");
+    template.description = "Created by the trimmed-surface integration test.".into();
+    template.acceptance_criteria = vec!["status lands where the update says".into()];
+    template.complexity = orbit_types::task::TaskComplexity::Medium;
+    TestWorkspace::new("trimmed-surface-test", template)
 }
 
 impl TestWorkspace {
-    fn new() -> Self {
-        let temp = tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        let work = home.join("work");
-        fs::create_dir_all(&home).expect("create home");
-        crate::git_repo::init(&work);
-
-        let workspace = Self {
-            _temp: temp,
-            home,
-            work,
-        };
-        workspace.run(
-            &["workspace", "init", "--name", "trimmed-surface-test"],
-            "initialize workspace",
-        );
-        workspace
-    }
-
-    fn add_task(&self, title: &str) -> String {
-        let output = self.run(
-            &[
-                "task",
-                "add",
-                "--title",
-                title,
-                "--description",
-                "Created by the trimmed-surface integration test.",
-                "--acceptance-criteria",
-                "status lands where the update says",
-                "--complexity",
-                "medium",
-                "--json",
-            ],
-            "add task",
-        );
-        let task: Value = serde_json::from_slice(&output.stdout).expect("task add JSON");
-        assert_eq!(task["status"], json!("proposed"));
-        task["id"].as_str().expect("task id").to_string()
-    }
-
     fn drive_to_done(&self, id: &str) {
         self.run(&["task", "update", id, "--approve"], "approve");
         self.run(
@@ -1159,64 +1120,6 @@ impl TestWorkspace {
         let output = self.run(args, "task JSON command");
         serde_json::from_slice(&output.stdout).expect("task JSON output")
     }
-
-    fn run(&self, args: &[&str], label: &str) -> Output {
-        let output = self.run_raw(args);
-        assert!(
-            output.status.success(),
-            "{label} failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    }
-
-    fn run_raw(&self, args: &[&str]) -> Output {
-        run_orbit(&self.work, &self.home, args)
-    }
-
-    /// Run a governed command as an explicit operator [ORB-10453].
-    ///
-    /// A test binary is not a terminal, so the capability chokepoint resolves
-    /// it as an unidentified caller; claiming the capability is the same
-    /// deliberate act the denial message asks for.
-    fn run_as_operator(&self, args: &[&str], label: &str) -> Output {
-        let output = run_orbit_as_operator(&self.work, &self.home, args);
-        assert!(
-            output.status.success(),
-            "{label} failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    }
-}
-
-fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
-    let mut command = cargo_bin_cmd!("orbit");
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .args(args);
-    command.output().expect("run orbit")
-}
-
-fn run_orbit_as_operator(cwd: &Path, home: &Path, args: &[&str]) -> Output {
-    let mut command = cargo_bin_cmd!("orbit");
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("ORBIT_OPERATOR", "1")
-        .args(args);
-    command.output().expect("run orbit as operator")
 }
 
 fn run_orbit_with_identity(
