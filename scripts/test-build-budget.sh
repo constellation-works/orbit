@@ -15,6 +15,7 @@ COMMAND_TIMEOUT=30
 # Fixtures manage their own slots, lock directory, and admission hermetically [ORB-12350].
 unset ORBIT_BUILD_BUDGET ORBIT_BUILD_BUDGET_DIR ORBIT_BUILD_BUDGET_HELD \
   ORBIT_BUILD_BUDGET_SLOT ORBIT_BUILD_SLOTS ORBIT_CARGO_JOBS CARGO_BUILD_JOBS \
+  ORBIT_TEST_THREADS NEXTEST_TEST_THREADS RUST_TEST_THREADS \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS
 unset ORBIT_ACTIVITY_BUILD_BUDGET_DIR
 for var in $(compgen -v ORBIT_BUILD_ 2>/dev/null || true); do
@@ -520,6 +521,60 @@ for setting in 'ORBIT_BUILD_SLOTS=0' 'ORBIT_BUILD_SLOTS=banana' \
   set -e
   [[ "$status" == "64" ]] || fail "$setting returned $status instead of 64"
   grep -Fq 'build-budget:' "$TMP/invalid.err" || fail "$setting did not explain the invalid value"
+done
+
+# The wrapped command must see the test-thread variables it would see unwrapped.
+# Bash 3.2 rejects an empty "$@" under nounset, so caller settings expand only when present.
+TEST_THREAD_PROBE='printf "%s %s\n" "${NEXTEST_TEST_THREADS-unset}" "${RUST_TEST_THREADS-unset}"'
+
+# expect_test_threads LABEL EXPECTED HOST_FILE_VALUE [VAR=value ...]
+# A non-empty HOST_FILE_VALUE is written to the budget directory's test-threads file.
+expect_test_threads() {
+  local label="$1" expected="$2" host_value="$3"
+  local budget="$TMP/test-threads-$label"
+  local actual
+  shift 3
+  mkdir -p "$budget"
+  if [[ -n "$host_value" ]]; then
+    printf '%s\n' "$host_value" >"$budget/test-threads"
+  fi
+  actual="$(env -i HOME="$TMP/probe-home" PATH="$PATH" \
+    ORBIT_BUILD_BUDGET_DIR="$budget" ORBIT_BUILD_SLOTS=1 ${1+"$@"} \
+    "$WRAPPER" -- sh -c "$TEST_THREAD_PROBE")" || fail "$label: wrapper failed"
+  [[ "$actual" == "$expected" ]] || fail "$label: expected '$expected', got '$actual'"
+}
+
+expect_test_threads host-file "5 5" 5
+expect_test_threads env-over-file "3 3" 5 ORBIT_TEST_THREADS=3
+expect_test_threads caller-per-variable "2 5" 5 NEXTEST_TEST_THREADS=2
+expect_test_threads caller-both "2 7" 5 NEXTEST_TEST_THREADS=2 RUST_TEST_THREADS=7 ORBIT_TEST_THREADS=3
+expect_test_threads unset-unchanged "unset unset" ""
+expect_test_threads caller-only-unchanged "2 unset" "" NEXTEST_TEST_THREADS=2
+expect_test_threads bypass-exports "3 3" "" ORBIT_BUILD_BUDGET=0 ORBIT_TEST_THREADS=3
+expect_test_threads reentry-exports "3 3" "" ORBIT_BUILD_BUDGET_HELD=1 ORBIT_TEST_THREADS=3
+
+# Invalid test-thread settings exit 64 before admission, as cargo-jobs does.
+for invalid in 0 banana 1025; do
+  set +e
+  env -i HOME="$TMP/probe-home" PATH="$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/test-threads-invalid-env" \
+    ORBIT_TEST_THREADS="$invalid" "$WRAPPER" -- true >/dev/null 2>"$TMP/invalid-test-threads.err"
+  status=$?
+  set -e
+  [[ "$status" == "64" ]] || fail "ORBIT_TEST_THREADS=$invalid returned $status instead of 64"
+  grep -Fq 'build-budget:' "$TMP/invalid-test-threads.err" \
+    || fail "ORBIT_TEST_THREADS=$invalid did not explain the invalid value"
+done
+for invalid in 0 banana 1025; do
+  mkdir -p "$TMP/test-threads-invalid-file"
+  printf '%s\n' "$invalid" >"$TMP/test-threads-invalid-file/test-threads"
+  set +e
+  env -i HOME="$TMP/probe-home" PATH="$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/test-threads-invalid-file" \
+    "$WRAPPER" -- true >/dev/null 2>"$TMP/invalid-test-threads.err"
+  status=$?
+  set -e
+  [[ "$status" == "64" ]] || fail "test-threads file value $invalid returned $status instead of 64"
+  grep -Fq 'build-budget:' "$TMP/invalid-test-threads.err" \
+    || fail "test-threads file value $invalid did not explain the invalid value"
 done
 
 # Explicit bypass avoids admission but retains the resolved Cargo job setting.
