@@ -26,6 +26,16 @@ pub(super) fn shell_quote(path: &Path) -> String {
 // Supply the stub directory on the child command so parallel libtest fixtures
 // always resolve the real tools (F2026-10-275, F2026-10-276).
 pub(super) fn with_stub_path(test: &str, run: impl FnOnce(&Path)) {
+    with_stub_root(None, test, run);
+}
+
+// Like `with_stub_path`, but the root's name starts with `prefix`. A prefix with
+// spaces or apostrophes exercises stubs that interpolate their paths into shell.
+pub(super) fn with_named_stub_path(prefix: &str, test: &str, run: impl FnOnce(&Path)) {
+    with_stub_root(Some(prefix), test, run);
+}
+
+fn with_stub_root(prefix: Option<&str>, test: &str, run: impl FnOnce(&Path)) {
     const MARKER: &str = "ORBIT_TEST_VCS_STUB_CHILD";
     const ROOT: &str = "ORBIT_TEST_VCS_STUB_ROOT";
     let test = test.split_once("::").expect("test has crate prefix").1;
@@ -35,7 +45,12 @@ pub(super) fn with_stub_path(test: &str, run: impl FnOnce(&Path)) {
         return;
     }
 
-    let root = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir())
+    let mut builder = tempfile::Builder::new();
+    if let Some(prefix) = prefix {
+        builder.prefix(prefix);
+    }
+    let root = builder
+        .tempdir_in(orbit_common::test_env::canonical_temp_dir())
         .expect("temporary VCS fixture");
     let bin = root.path().join("bin");
     fs::create_dir(&bin).expect("create executable directory");

@@ -3,11 +3,14 @@ use std::fs;
 use serde_json::json;
 
 use super::super::super::run_private_operation;
-use super::test_support::{read_count, shell_quote, with_stub_path, write_executable};
+use super::test_support::{read_count, shell_quote, with_named_stub_path, write_executable};
 
+// The root's name carries a space and an apostrophe, both valid in a TMPDIR, so
+// each path the stub interpolates must survive shell word splitting and quoting.
 #[test]
 fn pr_status_retries_the_landed_run_graphql_failure_and_stops_on_permanent_errors() {
-    with_stub_path(
+    with_named_stub_path(
+        "pr stub spaced's",
         concat!(
             module_path!(),
             "::pr_status_retries_the_landed_run_graphql_failure_and_stops_on_permanent_errors"
@@ -22,10 +25,10 @@ fn pr_status_retries_the_landed_run_graphql_failure_and_stops_on_permanent_error
                 &format!(
                     "#!/bin/sh\n\
                  count=0\n\
-                 if [ -f '{}' ]; then count=$(cat '{}'); fi\n\
+                 if [ -f {} ]; then count=$(cat {}); fi\n\
                  count=$((count + 1))\n\
-                 printf '%s\\n' \"$count\" > '{}'\n\
-                 if [ -f '{}' ]; then cat '{}' >&2; exit 1; fi\n\
+                 printf '%s\\n' \"$count\" > {}\n\
+                 if [ -f {} ]; then cat {} >&2; exit 1; fi\n\
                  if [ \"$count\" -eq 1 ]; then\n\
                    printf '%s\\n' 'GraphQL: Something went wrong while executing your query on 2026-10-06T19:28:45Z. Please include D10C when reporting this issue.' >&2\n\
                    exit 1\n\
