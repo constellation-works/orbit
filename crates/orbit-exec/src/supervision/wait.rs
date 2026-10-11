@@ -10,13 +10,14 @@ use orbit_common::process::stopped_descendants::{
 };
 use wait_timeout::ChildExt;
 
+use super::ProcessStopCause;
 #[cfg(unix)]
 use super::cleanup::terminate_orphaned_process_group;
 use super::cleanup::{
     kill_and_reap_process_group, kill_process_group, terminate_process_group, termination_signal,
 };
 #[cfg(unix)]
-use super::signal::{SignalHandlerGuard, signal_message};
+use super::signal::SignalHandlerGuard;
 use super::tee::{
     DRAIN_BUDGET, DrainStop, StopWatch, output_capture_limit, spawn_relay_drain,
     spawn_stderr_drain, spawn_stdin_write, spawn_stdout_drain,
@@ -209,6 +210,8 @@ pub(crate) struct WaitResult {
     /// the child's process group. Callers that must distinguish a timeout from
     /// an ordinary nonzero exit read this instead of matching stderr text.
     pub(crate) timed_out: bool,
+    /// Trusted stop metadata; child stdout/stderr cannot supply this cause.
+    pub(crate) stop_cause: Option<ProcessStopCause>,
     /// Whether a pipe was still held open [`DRAIN_BUDGET`] after the child
     /// was reaped — by a descendant outside its process group — so the pipe
     /// workers were stopped instead of reaching EOF. Callers see this as a
@@ -547,6 +550,7 @@ fn wait_cancellable(
         )));
     }
 
+    let mut stop_cause = None;
     if timed_out {
         if !stderr.is_empty() {
             stderr.push(b'\n');
@@ -557,10 +561,12 @@ fn wait_cancellable(
     // Unix). Otherwise even an empty-stderr SIGKILL is just an unexplained
     // failure to callers of the public execution result.
     if let Some(status) = termination_status {
+        let cause = ProcessStopCause::TerminationStatus { status };
+        stop_cause = Some(cause);
         if !stderr.is_empty() {
             stderr.push(b'\n');
         }
-        stderr.extend_from_slice(format!("{}{status}", super::TERMINATION_STATUS_NOTE).as_bytes());
+        stderr.extend_from_slice(cause.to_string().as_bytes());
     }
     // A capture-limit stop looks like a bare failure otherwise (exit code
     // `None`, often an empty stderr), and a tool such as `github.run.logs`
@@ -573,18 +579,21 @@ fn wait_cancellable(
         .chain(output_limit_rx.try_iter())
     {
         exit_success = false;
+        let cause = ProcessStopCause::OutputCaptureLimit { stream };
+        stop_cause.get_or_insert(cause);
         if !stderr.is_empty() {
             stderr.push(b'\n');
         }
-        stderr
-            .extend_from_slice(format!("{}{stream}", super::OUTPUT_CAPTURE_LIMIT_NOTE).as_bytes());
+        stderr.extend_from_slice(cause.to_string().as_bytes());
     }
     #[cfg(unix)]
     if !timed_out && let Some(signal) = interrupted_signal {
+        let cause = ProcessStopCause::InterruptedSignal { signal };
+        stop_cause.get_or_insert(cause);
         if !stderr.is_empty() {
             stderr.push(b'\n');
         }
-        stderr.extend_from_slice(signal_message(signal).as_bytes());
+        stderr.extend_from_slice(cause.to_string().as_bytes());
     }
 
     #[cfg(not(unix))]
@@ -617,6 +626,7 @@ fn wait_cancellable(
         stdout,
         stderr,
         timed_out,
+        stop_cause,
         drain_stopped,
     })
 }

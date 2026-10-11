@@ -239,6 +239,16 @@ A command that fails for lack of a tool says nothing about the candidate. Orbit 
 
 The step fails with the `[validation_environment]` marker and error code `validation_environment`, naming the tool, PATH and source; the log records `failure_kind: "environment"` and `missing_tool`. No step, final or blocked-task recovery runs, and no review, rework or recovery budget is spent. The handoff pushes nothing, opens no `[BLOCKED]` PR, and blocks the task under `validation_environment_blocked` with the candidate kept in its worktree. Fix the environment, check `orbit doctor`, then `orbit job resume <run>`. A claimed leaf skips repair the same way: its claim settles as a failure carrying the diagnostic and is not released for another follower to implement again.
 
+#### Supervisor stops are inconclusive
+
+Output-capture stops, incoming signal interruptions and children terminated
+without an exit code are validation-environment failures. The shared runner
+uses structured metadata from the process supervisor for candidate and claim
+validation, base comparisons and hold refresh, review checks and resumed
+candidates. A stopped base is inconclusive and is never cached. Printing a
+supervisor diagnostic on stdout or stderr cannot establish a stop: a normal
+nonzero exit still gets compared with the synchronized base.
+
 #### Network flakes are rerun
 
 Network-inconclusive output (HTTP status `000`; a curl connect, resolve, timeout, TLS or receive error such as `curl: (6)`, `(7)`, `(28)`, `(35)`, `(56)`; a DNS resolution failure; a TLS handshake timeout) reruns the command up to twice, after 2 s and 6 s. Only the last attempt counts; the log records `network_retries`.

@@ -2636,6 +2636,80 @@ fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
 /// The command a red-base fixture requires; its base's `Makefile` fails it.
 const RED_LINT: &str = "make ci-lint";
 
+/// Normal child output cannot impersonate a supervisor stop [ORB-15507].
+/// The synchronized base prints the same note but passes the command.
+#[test]
+fn printed_supervisor_notes_remain_candidate_failures_on_both_streams() {
+    isolated(
+        "printed_supervisor_notes_remain_candidate_failures_on_both_streams",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            for note in [
+                "process output capture limit exceeded on stderr",
+                "process interrupted by signal SIGTERM",
+                "process terminated with signal: 9 (SIGKILL)",
+            ] {
+                for redirect in ["", " >&2"] {
+                    let command = format!(
+                        "printf '%s\\n' '{note}'{redirect}; \
+                         if test -f src/feature.txt; then exit 1; else exit 0; fi"
+                    );
+                    host.require_commands(&[&command]);
+                    let message = action(&host, "candidate_validate", &fx.validate_input())
+                        .expect_err("a normal exit-1 command fails the candidate")
+                        .to_string();
+                    assert!(
+                        !message.contains("[validation_environment]")
+                            && !is_baseline_red_failure(None, Some(&message)),
+                        "[ORB-15507] child output cannot supply stop metadata: {message}"
+                    );
+                    let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                    assert_eq!(log["exit_code"], 1, "{command}: {log}");
+                    assert_eq!(log["timed_out"], false, "{command}: {log}");
+                    assert_eq!(log["failure_kind"], "candidate", "{command}: {log}");
+                    assert_eq!(log["baseline"]["decision"], "passed", "{command}: {log}");
+                    let base = host
+                        .validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.baseline.json"));
+                    assert_eq!(base["exit_code"], 0, "the healthy base ran: {base}");
+                    assert_eq!(base["base_sha"], fx.base_sha, "{base}");
+
+                    let claim_input = json!({
+                        "workspace_path": fx.repo,
+                        "base_sync": "local",
+                        "base_sha": fx.base_sha,
+                    });
+                    let message = action(&host, "claim_validate", &claim_input)
+                        .expect_err("the claim must also reject the candidate's normal exit")
+                        .to_string();
+                    assert!(
+                        !message.contains("[validation_environment]")
+                            && !is_baseline_red_failure(None, Some(&message)),
+                        "[ORB-15507] claimed validation uses the same stop metadata: {message}"
+                    );
+                    let logs = host.claim_log_contents.lock().unwrap();
+                    let claim: Value = serde_json::from_slice(
+                        logs.get("validation/claim-landing/0.failed.json").unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(claim["exit_code"], 1, "{command}: {claim}");
+                    assert_eq!(claim["timed_out"], false, "{command}: {claim}");
+                    assert_eq!(claim["failure_kind"], "candidate", "{command}: {claim}");
+                    assert_eq!(
+                        claim["baseline"]["decision"], "passed",
+                        "{command}: {claim}"
+                    );
+                }
+            }
+            assert_eq!(
+                fx.head(),
+                fx.candidate,
+                "validation preserves the candidate"
+            );
+        },
+    );
+}
+
 #[test]
 fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
     isolated(
@@ -2659,10 +2733,10 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
             );
             // Pin the supervisor, not just the command's environment: the drain
             // may have raised this ceiling as an operational mitigation.
-            unsafe { std::env::set_var("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", "1048576") };
+            unsafe { std::env::set_var("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", "4096") };
             for (index, (stop, cause)) in [
                 (
-                    "head -c 2097152 /dev/zero >&2",
+                    "printf '%8192s' '' >&2",
                     "process output capture limit exceeded on stderr",
                 ),
                 ("kill -KILL $$", "process terminated with"),

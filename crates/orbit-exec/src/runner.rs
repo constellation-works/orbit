@@ -75,6 +75,16 @@ pub fn run_process(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
 ) -> Result<ExecutionResult, OrbitError> {
+    Ok(run_process_supervised(req, sandbox)?.result)
+}
+
+/// Run a process like [`run_process`], retaining the supervisor's structured
+/// stop cause alongside the captured result. Use this when classifying an
+/// inconclusive run: child output may contain any supervision diagnostic.
+pub fn run_process_supervised(
+    req: &ExecRequest,
+    sandbox: &dyn Sandbox,
+) -> Result<SupervisedOutcome, OrbitError> {
     run_supervised(req, sandbox, false)
 }
 
@@ -90,14 +100,14 @@ pub(crate) fn run_probe_process(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
 ) -> Result<ExecutionResult, OrbitError> {
-    run_supervised(req, sandbox, true)
+    Ok(run_supervised(req, sandbox, true)?.result)
 }
 
 fn run_supervised(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
     kill_on_deadline: bool,
-) -> Result<ExecutionResult, OrbitError> {
+) -> Result<SupervisedOutcome, OrbitError> {
     sandbox.validate(req)?;
 
     let started = Instant::now();
@@ -116,18 +126,10 @@ fn run_supervised(
         stdin_payload,
     )?;
 
-    Ok(ExecutionResult {
-        success: result.exit_success,
-        timed_out: result.timed_out,
-        stdout: String::from_utf8_lossy(&result.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&result.stderr).to_string(),
-        exit_code: result.exit_code,
-        duration_ms: started.elapsed().as_millis() as u64,
-        output: None,
-    })
+    Ok(supervised_outcome(result, started))
 }
 
-/// Outcome of supervising a child Orbit did not spawn itself.
+/// Outcome of supervising a process, including trusted stop metadata.
 ///
 /// The deadline verdict is retained separately for callers that need it
 /// alongside the complete process result.
@@ -137,6 +139,9 @@ pub struct SupervisedOutcome {
     /// The wall-clock deadline elapsed and the supervisor terminated the
     /// child's process group.
     pub timed_out: bool,
+    /// A capture stop, incoming signal, or child termination without an exit
+    /// code observed by supervision, never inferred from child output.
+    pub stop_cause: Option<crate::ProcessStopCause>,
 }
 
 /// Supervise a child that the caller already spawned.
@@ -224,6 +229,7 @@ fn supervised_outcome(
             output: None,
         },
         timed_out: result.timed_out,
+        stop_cause: result.stop_cause,
     }
 }
 
