@@ -9,6 +9,7 @@ related_artifacts:
   - ORB-14777
   - ORB-15156
   - ORB-15400
+  - ORB-15406
 ---
 
 # Run failure log
@@ -32,6 +33,30 @@ Newest entries go first. When you rescue a blocked task, add its cause here
 before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
+
+## 2026-10-11: A finished candidate is refused because its deferral record has no `probe.command`
+
+- **Where:** owner, `implement_one`, at the step boundary that checks the
+  implementer's output, before commit.
+- **Symptom:** `implementer output rejected before delivery:
+  deferred_sandbox_validation is not a {command, exit_code, tests_run, base,
+  notices, probe: {command, exit_code, output}} record: missing field
+  command`. Step recovery returns `not_recovered`. Final recovery resumes the
+  implementer, which repeats the record, and the run ends in a failure-handoff
+  PR.
+- **Cause:** the schema in `agent_implement.yaml` requires `probe.command`,
+  but the instruction prose describes `probe` as the bwrap probe's "exit code
+  and output" and never names the field. Implementers return `probe:
+  {exit_code, output}`. Everything else in the record is valid: the gate
+  passed, and every notice is a Bubblewrap `DEFERRED:` line.
+- **Fix:** ORB-15406 (open). Until it lands, rescue by hand. Replay the gate on
+  the owner host in the run's worktree (`CI_TEST_BASE=<record base> make
+  ci-test-affected`), then land the handoff PR once the replay and hosted CI
+  are green.
+- **Tasks:** ORB-15206 (sol; replay 2763/2763, PR #4248), ORB-15403 (luna,
+  PR #4254).
+- **Final recovery:** `resume` from `implement_bundle`; it failed the same way
+  (`jrun-20261011-0323-c8`).
 
 ## 2026-10-11: A full-workspace affected-test gate is killed at the capture limit and held as baseline red
 
