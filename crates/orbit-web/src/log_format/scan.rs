@@ -52,6 +52,9 @@ pub(crate) struct SegmentedEvents {
 ///
 /// Coverage is bounded by retention (the oldest retained segment starts after
 /// `since`) or by `limit` (the scan stopped at the oldest event it kept).
+/// Records after an inclusive upper bound are skipped, so only matching
+/// records in the requested window consume the cap; newer segments are still
+/// traversed to reach that window.
 pub(crate) fn read_recent_matching_events_across_segments(
     active: &Path,
     filters: &Filters,

@@ -1,4 +1,4 @@
-// A Health › Errors refresh must read only the log bytes inside its window.
+// A Health › Errors refresh bounds matches to its requested window.
 use std::cell::Cell;
 use std::fs;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
@@ -208,6 +208,72 @@ fn segments_last_written_before_the_window_are_not_opened() {
     assert_eq!(scanned.coverage_since, None);
 }
 
+/// Combinatorial scan budgets: post-window errors never consume matches,
+/// while coverage still distinguishes complete, capped and retained windows.
+#[test]
+fn post_window_errors_do_not_consume_the_match_budget_or_advance_coverage() {
+    let since: DateTime<Utc> = "2026-09-01T00:00:00Z".parse().unwrap();
+    let until: DateTime<Utc> = "2026-09-30T23:59:59.999999999Z".parse().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let active = dir.path().join("process.log");
+    let archive = dir.path().join(rotated_name("process.log", until));
+    // The active segment contains only post-window errors, more than either
+    // budget. The archive holds both inclusive endpoints of the month.
+    let newer = (1..=4)
+        .map(|seconds| record(until + Duration::seconds(seconds), "ERROR", "later", "boom"))
+        .collect::<String>();
+    fs::write(&active, &newer).unwrap();
+    let endpoints = [
+        record(since, "ERROR", "start", "boom"),
+        record(until, "ERROR", "end", "boom"),
+    ]
+    .concat();
+    for (has_older, limit, expected_ids, expected_coverage) in [
+        (true, 3, vec!["start", "end"], None),
+        (true, 1, vec!["end"], Some(until)),
+        (
+            false,
+            3,
+            vec!["retained", "end"],
+            Some(since + Duration::hours(1)),
+        ),
+    ] {
+        let older = if has_older {
+            record(since - Duration::minutes(2), "ERROR", "old", "boom")
+        } else {
+            String::new()
+        };
+        let retained = if has_older {
+            endpoints.clone()
+        } else {
+            [
+                record(since + Duration::hours(1), "ERROR", "retained", "boom"),
+                record(until, "ERROR", "end", "boom"),
+            ]
+            .concat()
+        };
+        fs::write(&archive, format!("{older}{retained}")).unwrap();
+        let scanned = read_recent_matching_events_across_segments_with(
+            &active,
+            &error_filters(since).with_until(until),
+            limit,
+            64,
+            &mut |path| fs::File::open(path).map(Some),
+        )
+        .unwrap();
+        assert_eq!(
+            event_ids(&scanned.events),
+            expected_ids,
+            "budget {limit}, older {has_older}"
+        );
+        assert_eq!(
+            scanned.coverage_since, expected_coverage,
+            "coverage must describe the requested population"
+        );
+        assert!(scanned.events.len() <= limit);
+    }
+}
+
 /// Lines that are outside the window or below ERROR are rejected from their
 /// header: no `Value` is built for them, even when they mention "error".
 #[test]
@@ -264,6 +330,8 @@ fn line_verdicts_equal_a_full_parse() {
         .with_timezone(&Utc);
     let lines = [
         r#"{"timestamp":"2026-10-07T13:00:00Z","level":"ERROR","target":"a::b","fields":{}}"#,
+        r#"{"timestamp":"2026-10-07T13:00:00.000000001Z","level":"ERROR","target":"a::b"}"#,
+        r#"{"timestamp":"2026-10-07T13:00:00.000000001Z","level":"ERROR","target":17}"#,
         r#"{"timestamp":"2026-10-07T13:00:00Z","level":"error","target":"a::b"}"#,
         r#"{"timestamp":"2026-10-07T13:00:00Z","level":"WARN","target":"a::b"}"#,
         r#"{"timestamp":"2026-10-07T11:00:00Z","level":"ERROR","target":"a::b"}"#,
@@ -287,6 +355,8 @@ fn line_verdicts_equal_a_full_parse() {
         Filters::new(None, Some(LevelFilter::Error), None),
         Filters::new(None, Some(LevelFilter::Error), Some(since)),
         Filters::new(None, None, Some(since)),
+        Filters::new(None, None, None).with_until(since),
+        error_filters(since).with_until(since + Duration::hours(1)),
         Filters::new(Some("a::".into()), Some(LevelFilter::Warn), Some(since)),
     ] {
         for line in lines {

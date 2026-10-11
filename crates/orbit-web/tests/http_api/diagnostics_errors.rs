@@ -375,3 +375,69 @@ fn long_step_errors_are_bounded_in_errors_and_friction_and_the_run_keeps_them() 
         },
     );
 }
+
+#[test]
+fn historical_month_errors_share_inclusive_endpoints_across_sources() {
+    isolated(
+        "diagnostics_errors::historical_month_errors_share_inclusive_endpoints_across_sources",
+        || {
+            use orbit_common::storage::blob_store::BlobStore;
+
+            let fixture = Fixture::new();
+            let since: DateTime<Utc> = "2026-09-01T00:00:00Z".parse().unwrap();
+            let until: DateTime<Utc> = "2026-09-30T23:59:59.999999999Z".parse().unwrap();
+            let instants = [
+                ("before", since - Duration::nanoseconds(1)),
+                ("start", since),
+                ("end", until),
+                ("after", until + Duration::nanoseconds(1)),
+            ];
+            write_process_rows(&fixture, &instants.map(|(id, ts)| process(None, id, ts)));
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            // One invocation at the endpoint also carries lines outside the
+            // month, exercising line filtering as well as invocation filtering.
+            let stderr = instants
+                .iter()
+                .map(|(id, ts)| format!("{} ERROR fixture: {id}\n", ts.to_rfc3339()))
+                .collect::<String>();
+            let blob = blobs.write(stderr.as_bytes()).unwrap();
+            for (id, ts) in instants {
+                insert(
+                    &fixture,
+                    &format!("stderr-{id}"),
+                    "fixture",
+                    ts,
+                    json!({"body_kind":"cli_invocation_finished", "stderr_blob_ref":blob}),
+                );
+            }
+            let server = fixture.server(false);
+            let response = json_ok(
+                server.get("/api/diagnostics/errors?month=2026-09&workspace=ws_http_fixture"),
+            );
+            let rows = response["items"].as_array().unwrap();
+            for source in ["process", "agent-stderr"] {
+                let timestamps = rows
+                    .iter()
+                    .filter(|row| row["source"] == source)
+                    .map(|row| {
+                        row["ts"]
+                            .as_str()
+                            .unwrap()
+                            .parse::<DateTime<Utc>>()
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                if source == "process" {
+                    assert_eq!(timestamps, [until, since]);
+                } else {
+                    assert_eq!(timestamps, [until, until]);
+                    for row in rows.iter().filter(|row| row["source"] == source) {
+                        assert_eq!(row["message"], "start\nend");
+                    }
+                }
+            }
+            assert_eq!(response["since"], since.to_rfc3339());
+            assert_eq!(response["coverage_since"], response["since"]);
+        },
+    );
+}

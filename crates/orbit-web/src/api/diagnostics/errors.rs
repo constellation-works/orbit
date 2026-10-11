@@ -213,7 +213,8 @@ fn global_error_rows_in_range(
         None,
         Some(crate::log_format::LevelFilter::Error),
         range.since,
-    );
+    )
+    .with_until(range.until);
     let scanned =
         read_recent_matching_events_across_segments(&path, &filters, limit).map_err(|error| {
             orbit_core::OrbitError::Io(format!("read log {}: {error}", path.display()))
