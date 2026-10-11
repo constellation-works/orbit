@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010]
-last_validated: 2026-10-05
+last_validated: 2026-10-10
 ---
 
 # Full pre-release QA sweep
