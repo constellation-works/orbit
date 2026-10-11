@@ -315,15 +315,15 @@ spec:
        `SKIP: sandbox-exec cannot apply a profile:` notices on macOS. Do not
        fail the step for it; return `deferred_sandbox_validation` instead,
        which Orbit checks before commit and replays outside the agent
-       sandbox before delivery. It
-       holds `command` (the gate exactly as the owner's
-       `workflow.required_validation_commands` or `review.baseline_commands`
-       names it, without the base pin), `exit_code` (0), `tests_run` (the
-       tests the gate executed, at least 1), `base` (`input.base_sha`, which
-       you pin as the comparison base), `notices` (every skip or deferral
-       line the gate printed, all of that one OS's shape), and a
-       `probe` object with all three required fields: `probe.command`,
-       `probe.exit_code` and `probe.output`. On Linux the probe is the
+       sandbox before delivery. It holds exactly `command` (the gate
+       exactly as the owner's `workflow.required_validation_commands` or
+       `review.baseline_commands` names it, without the base pin),
+       `exit_code` (0), `tests_run` (the tests the gate executed, at
+       least 1), `base` (`input.base_sha`, which you pin as the
+       comparison base), `notices` (every skip or deferral line the gate
+       printed, all of that one OS's shape), and `probe` with
+       `probe.command`, `probe.exit_code`, and `probe.output`; any other
+       key is refused. On Linux the probe is the
        exact string `bwrap --unshare-user --ro-bind / / -- /bin/true`, which
        must exit nonzero with `No permissions to create a new namespace`. On
        macOS it is the exact string
@@ -337,8 +337,10 @@ spec:
        `{"deferred_sandbox_validation":{"command":"<exact gate command>","exit_code":0,"tests_run":1,"base":"<input.base_sha>","notices":["SKIP: sandbox-exec cannot apply a profile: cli_ctrl_c_during_proc_spawn_reports_interrupt: ..."],"probe":{"command":"/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true","exit_code":71,"output":"sandbox-exec: sandbox_apply: Operation not permitted"}}}`.
        The step boundary accepts this record only when those substituted
        values match this run and every other condition above holds. Orbit
-       refuses any other record and fails the step. Record the same facts in the execution
-       summary and mark that coverage `not_run`, never a completed pass.
+       refuses any other record (including any extra key) and fails the step.
+       In the execution summary (never as a key in
+       `deferred_sandbox_validation`), record the same facts and mark that
+       coverage `not_run`, never a completed pass.
        Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
        `skipping` notice, a gate that ran no tests or selected nothing, a
        notice with no failing probe, notices of both sandboxes in one record,

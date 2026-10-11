@@ -78,3 +78,85 @@ fn a_record_missing_the_top_level_command_names_the_command() {
     );
     assert!(!reason.contains("record: probe"), "{reason}");
 }
+
+#[test]
+fn a_record_with_unknown_coverage_field_is_refused_naming_the_field() {
+    let mut record = sanctioned_record();
+    record["coverage"] = json!("not_run");
+
+    let reason = refusal(record);
+
+    assert!(
+        reason.contains("unknown field `coverage`"),
+        "guards the step boundary's fail-closed extra-key refusal (F2026-10-261): {reason}"
+    );
+}
+
+#[test]
+fn a_record_with_unknown_probe_field_is_refused_naming_the_field() {
+    let mut record = sanctioned_record();
+    record["probe"]
+        .as_object_mut()
+        .expect("probe is an object")
+        .insert("unexpected".to_string(), json!("extra"));
+
+    let reason = refusal(record);
+
+    assert!(
+        reason.contains("unknown field `unexpected`"),
+        "guards the step boundary's fail-closed extra-key refusal inside probe: {reason}"
+    );
+    assert!(reason.contains("probe"), "{reason}");
+}
+
+#[test]
+fn a_record_with_nonzero_exit_code_is_refused() {
+    let mut record = sanctioned_record();
+    record["exit_code"] = json!(1);
+
+    let reason = refusal(record);
+
+    assert!(
+        reason.contains("exited 1; a failing gate is not deferrable"),
+        "guards fail-closed rejection of nonzero exit code: {reason}"
+    );
+}
+
+#[test]
+fn a_record_with_zero_tests_run_is_refused() {
+    let mut record = sanctioned_record();
+    record["tests_run"] = json!(0);
+
+    let reason = refusal(record);
+
+    assert!(
+        reason.contains("executed no tests"),
+        "guards fail-closed rejection of zero tests run: {reason}"
+    );
+}
+
+#[test]
+fn a_record_with_non_deferred_notice_is_refused() {
+    let mut record = sanctioned_record();
+    record["notices"] = json!(["SKIP: sandbox denying ps"]);
+
+    let reason = refusal(record);
+
+    assert!(
+        reason.contains("neither a Bubblewrap nor a Seatbelt deferral"),
+        "guards fail-closed rejection of non-deferral notices: {reason}"
+    );
+}
+
+#[test]
+fn a_record_without_namespace_denial_probe_output_is_refused() {
+    let mut record = sanctioned_record();
+    record["probe"]["output"] = json!("other failure");
+
+    let reason = refusal(record);
+
+    assert!(
+        reason.contains("has no failing namespace probe"),
+        "guards fail-closed rejection of missing namespace denial output: {reason}"
+    );
+}
