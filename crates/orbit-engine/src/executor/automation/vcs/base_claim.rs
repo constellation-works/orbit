@@ -29,8 +29,8 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::baseline::{
-    FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until, compare_with_base_until,
-    hold_failures, known_red, run_validation_command_until,
+    BaseCommandResult, FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until,
+    compare_with_base_until, hold_failures, known_red, run_validation_command_until,
 };
 use super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
 use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
@@ -463,9 +463,34 @@ pub struct ClaimedKnownRed<'a> {
     pub failures: &'a BTreeSet<String>,
 }
 
+/// [ORB-15566] Why the owner did not confirm a claimed leaf's known-red
+/// report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KnownRedUnconfirmed {
+    /// The owner's own comparable, completed base run contradicts the report:
+    /// it passes the reported tests, fails without one of them, or fails a
+    /// whole run with another exit status. Asking again reads the same base
+    /// result, so the report can never be confirmed.
+    Contradicted(String),
+    /// The owner could not establish it either way: no base run in time, a
+    /// run it could not compare, or a report it does not judge.
+    Inconclusive(String),
+}
+
+impl KnownRedUnconfirmed {
+    /// Why, in prose.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Contradicted(reason) | Self::Inconclusive(reason) => reason,
+        }
+    }
+}
+
 /// [ORB-15427] The owner's check of a claimed leaf's known-red `report`.
 /// Returns the reported failures when this host's own run of the base fails
-/// them all, or why it could not establish that.
+/// them all, or why it could not establish that, typed by whether its own
+/// base run contradicts the report [ORB-15566].
 ///
 /// The leaf's base run is never taken on trust, and neither is its choice of
 /// base: the base must be in the history of this owner's own base branch,
@@ -491,7 +516,8 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
     report: &ClaimedKnownRed<'_>,
     deadline: Instant,
-) -> Result<BTreeSet<String>, String> {
+) -> Result<BTreeSet<String>, KnownRedUnconfirmed> {
+    use KnownRedUnconfirmed::{Contradicted, Inconclusive};
     let ClaimedKnownRed {
         base_branch,
         base_sync,
@@ -502,12 +528,16 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
         failures,
     } = *report;
     if failures.is_empty() {
-        return Err("the report names no failure to compare".to_string());
+        return Err(Inconclusive(
+            "the report names no failure to compare".to_string(),
+        ));
     }
     if Instant::now() >= deadline {
-        return Err("the owner settlement base comparison deadline expired".into());
+        return Err(Inconclusive(
+            "the owner settlement base comparison deadline expired".into(),
+        ));
     }
-    on_owner_base(workspace_path, base_branch, base_sync, base_sha)?;
+    on_owner_base(workspace_path, base_branch, base_sync, base_sha).map_err(Inconclusive)?;
     let cached = cached_base_check(workspace_path, base_sha, command, selection)
         .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
@@ -539,26 +569,34 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
         return Ok(failures.clone());
     }
     let ran = if whole { "it" } else { "the failing tests" };
+    let missing = |base: &BaseCommandResult| {
+        failures
+            .difference(&base.failures)
+            .map(|failure| format!("`{failure}`"))
+            .collect::<Vec<_>>()
+    };
     Err(match &check.result {
-        Err(reason) => format!("base {base_sha} could not be judged: {reason}"),
-        Ok(_) if check.not_comparable.is_some() => format!(
+        Err(reason) => Inconclusive(format!("base {base_sha} could not be judged: {reason}")),
+        Ok(_) if check.not_comparable.is_some() => Inconclusive(format!(
             "the base run of {ran} is not comparable with the candidate's: {}",
             check.not_comparable.as_deref().unwrap_or_default()
-        ),
-        Ok(base) if base.passed => format!("base {base_sha} passes {ran}"),
-        Ok(base) if base.timed_out => format!("the base run of {ran} timed out"),
-        Ok(base) if whole && base.exit_code != exit_code => format!(
+        )),
+        Ok(base) if base.timed_out => Inconclusive(format!("the base run of {ran} timed out")),
+        Ok(base) if base.passed => Contradicted(format!("base {base_sha} passes {ran}")),
+        Ok(base) if whole && base.exit_code != exit_code => Contradicted(format!(
             "base {base_sha} fails with exit {} where the candidate failed with exit {exit_code}",
             base.exit_code
-        ),
-        Ok(base) => format!(
+        )),
+        Ok(base) if !missing(base).is_empty() => Contradicted(format!(
             "base {base_sha} does not fail {}",
-            failures
-                .difference(&base.failures)
-                .map(|failure| format!("`{failure}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+            missing(base).join(", ")
+        )),
+        // The base fails every reported failure, so the report itself is
+        // what falls short: it names something other than failed tests.
+        Ok(_) => Inconclusive(format!(
+            "the report names failures other than failed tests, which base {base_sha} cannot \
+             be shown to share"
+        )),
     })
 }
 

@@ -1622,9 +1622,8 @@ fn a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates() {
 /// releasing the claim, and the owner takes none of it on the leaf's word:
 /// settling the handoff runs the command on the base on the owner itself.
 /// When that run fails the same test, the handoff is accepted and the
-/// owner's task history names the test. When it passes, the settlement is
-/// refused as `known_red_unverified` and the task stays in progress with
-/// nothing recorded.
+/// owner's task history names the test. When it passes, the owner releases
+/// the claim instead [ORB-15566], with nothing recorded as known red.
 #[test]
 fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
     use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
@@ -1697,14 +1696,162 @@ fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
                 .expect_err("the owner's base run passes the reported test")
                 .to_string();
             assert!(
-                error.contains("known_red_unverified")
+                error.contains("known_red_contradicted")
                     && error.contains(&format!("base {} passes it", fixture.base)),
                 "{error}"
             );
-            assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+            assert_eq!(fixture.pair.owner_status(&fixture.task), "backlog");
             assert!(known_red.is_empty(), "{known_red:?}");
             assert!(owner.accepted_task_handoff(&handoff.claim_id).is_err());
         }
+        fixture.assert_no_blocked();
+    }
+}
+
+impl RedCheck {
+    /// From now on the command runs `body` wherever it runs, still counted.
+    fn runs_as(&self, body: &str) {
+        std::fs::write(
+            &self.script,
+            format!("echo ran >> '{}'\n{body}\n", self.runs.display()),
+        )
+        .unwrap();
+    }
+}
+
+/// [ORB-15566] A known-red handoff the owner's own base run contradicts can
+/// never be accepted, so the owner ends the claim rather than refusing the
+/// settlement while holding it: the base passing the reported test, or
+/// failing without it, releases the claim as a `transient` failure naming
+/// the owner's verdict, and the task returns to the backlog to be pulled
+/// again. The follower reconciles the refusal against the ended claim and
+/// closes its pending settlement obsolete, freeing its slot. An inconclusive
+/// owner check (here, a tool the base run lacks) still refuses while the
+/// owner holds the claim, and the follower retries it after its backoff.
+#[test]
+fn a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim() {
+    if !isolated(
+        module_path!(),
+        "a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim",
+    ) {
+        return;
+    }
+    let cases = [
+        (
+            "passes",
+            "echo 'test suite::broken ... ok'\nexit 0",
+            Some("passes it"),
+        ),
+        (
+            "fails without it",
+            "echo 'test suite::broken ... ok'\necho 'test suite::other ... FAILED'\nexit 3",
+            Some("does not fail `test suite::broken`"),
+        ),
+        (
+            "lacks a tool",
+            "echo 'sh: 1: frobnicate: not found' >&2\nexit 127",
+            None,
+        ),
+    ];
+    for (case, base, contradiction) in cases {
+        let red = RedCheck::new();
+        let fixture = CleanLeaf::red(&red);
+        fixture.attach("automation-coverage.json", json!({"findings": []}));
+        let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+        let pair = &fixture.pair;
+        assert_eq!(
+            pair.admission(&fixture.leaf).phase,
+            LocalPullPhase::Settling,
+            "{case}: the handoff waits for delivery"
+        );
+        let leaf_runs = red.runs();
+        red.runs_as(base);
+
+        pair.follower.deliver_recorded_pull_settlements();
+        assert_eq!(
+            pair.wire.calls("orbit.drain.claim.settle").len(),
+            1,
+            "{case}"
+        );
+        assert_eq!(
+            red.runs(),
+            leaf_runs + 1,
+            "{case}: the owner ran the base itself"
+        );
+        let claim = pair.owner_claim(&handoff.claim_id);
+        let follower = pair
+            .follower
+            .pull_leaf_claim(&fixture.leaf)
+            .unwrap()
+            .unwrap();
+        assert!(
+            pair.wire
+                .owner
+                .accepted_task_handoff(&handoff.claim_id)
+                .is_err(),
+            "{case}: the leaf's log is never accepted"
+        );
+        let Some(verdict) = contradiction else {
+            assert_eq!(claim["claim"]["phase"], "running", "{case}: {claim:#}");
+            assert_eq!(pair.owner_status(&fixture.task), "in-progress", "{case}");
+            assert_eq!(follower.settlement_phase, "settling", "{case}");
+            let refused = follower.settlement_refusal.expect("a recorded refusal");
+            assert!(
+                refused.reason.contains("known_red_unverified")
+                    && refused.reason.contains("lacked a tool"),
+                "{case}: {refused:?}"
+            );
+            assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+
+            // The follower delivers the same settlement again once its
+            // backoff elapses, and the owner answers the same.
+            pair.elapse_settlement_backoff(&fixture.leaf);
+            pair.follower.deliver_recorded_pull_settlements();
+            assert_eq!(
+                pair.wire.calls("orbit.drain.claim.settle").len(),
+                2,
+                "{case}"
+            );
+            let follower = pair
+                .follower
+                .pull_leaf_claim(&fixture.leaf)
+                .unwrap()
+                .unwrap();
+            assert_eq!(follower.settlement_phase, "settling", "{case}");
+            assert_eq!(
+                follower.settlement_refusal.map(|refused| refused.refusals),
+                Some(2),
+                "{case}"
+            );
+            assert_eq!(pair.owner_status(&fixture.task), "in-progress", "{case}");
+            continue;
+        };
+        assert_eq!(claim["claim"]["phase"], "revoked", "{case}: {claim:#}");
+        let task = pair.owner_task(&fixture.task);
+        assert_eq!(task["status"], "backlog", "{case}: {task:#}");
+        let note = task["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|event| event["event"] == "claim_released")
+            .and_then(|event| event["note"].as_str())
+            .unwrap_or_default();
+        assert!(
+            note.contains("known_red_contradicted")
+                && note.contains(&format!("base {} {verdict}", fixture.base)),
+            "{case}: the owner's verdict is the release reason: {task:#}"
+        );
+        assert_eq!(follower.settlement_phase, "settled", "{case}");
+        let refusal = follower.refusal.expect("closed as obsolete");
+        assert!(
+            refusal.contains("known_red_contradicted") && refusal.contains("already ended"),
+            "{case}: {refusal}"
+        );
+        assert_eq!(
+            pair.follower.pending_pull_settlements().unwrap().count,
+            0,
+            "{case}: the slot is free"
+        );
         fixture.assert_no_blocked();
     }
 }
