@@ -331,6 +331,31 @@ fn a_failing_or_hanging_login_shell_falls_back_to_the_launcher() {
     );
 }
 
+/// Interactive bash ignores SIGTERM until it execs, so a probe whose deadline
+/// fires while the shell is still starting must not wait out a termination
+/// grace period: both probes stay within their budget.
+#[test]
+fn a_login_shell_ignoring_sigterm_is_still_bounded_by_the_probe_timeout() {
+    let host = Host::new();
+    let stubborn = host.fake_login_shell("sigterm-ignoring-login-sh", "trap '' TERM; sleep 30");
+
+    let started = Instant::now();
+    let resolved = ValidationEnvironment::resolve(
+        host.launcher_env(),
+        &ValidationEnvPolicy::default(),
+        &LoginShell::new(&stubborn, Duration::from_millis(300)),
+    );
+    let elapsed = started.elapsed();
+
+    assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+    assert_eq!(resolved.source, ValidationEnvSource::LauncherFallback);
+    let error = resolved.login_shell_error.as_deref().unwrap();
+    assert!(
+        error.contains("did not finish within 300ms") && error.contains("login fallback failed"),
+        "{error}"
+    );
+}
+
 /// With resolution disabled the login shell is never started; the launcher
 /// PATH is used and the preflight says so.
 #[test]

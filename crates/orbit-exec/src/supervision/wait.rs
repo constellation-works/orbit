@@ -12,7 +12,9 @@ use wait_timeout::ChildExt;
 
 #[cfg(unix)]
 use super::cleanup::terminate_orphaned_process_group;
-use super::cleanup::{kill_process_group, terminate_process_group, termination_signal};
+use super::cleanup::{
+    kill_and_reap_process_group, kill_process_group, terminate_process_group, termination_signal,
+};
 #[cfg(unix)]
 use super::signal::{SignalHandlerGuard, signal_message};
 use super::tee::{
@@ -30,6 +32,9 @@ type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
 pub(crate) struct SupervisedChild {
     process: Child,
     reaped: bool,
+    /// Stop the process group with SIGKILL at the deadline instead of the
+    /// termination signal and its grace period.
+    kill_on_deadline: bool,
     #[cfg(unix)]
     signal_guard: Option<SignalHandlerGuard>,
 }
@@ -58,9 +63,21 @@ impl SupervisedChild {
         Self {
             process,
             reaped: false,
+            kill_on_deadline: false,
             #[cfg(unix)]
             signal_guard: None,
         }
+    }
+
+    /// Kill the child's process group outright when its deadline elapses.
+    ///
+    /// For a child whose captured output is all the caller wants and that has
+    /// no cleanup worth protecting. A child that ignores the termination
+    /// signal — an interactive shell still starting up — cannot then stretch
+    /// the deadline by the termination grace period.
+    pub(crate) fn kill_on_deadline(mut self) -> Self {
+        self.kill_on_deadline = true;
+        self
     }
 
     pub(crate) fn process_mut(&mut self) -> &mut Child {
@@ -95,9 +112,7 @@ impl Drop for SupervisedChild {
         if self.reaped {
             return;
         }
-        kill_process_group(self.process.id());
-        let _ = self.process.kill();
-        let _ = self.process.wait();
+        kill_and_reap_process_group(&mut self.process);
         // Release the slot before dropping the signal guard: its last drop
         // can re-raise a pending signal and terminate the supervisor itself.
         self.mark_reaped();
@@ -474,7 +489,15 @@ fn wait_cancellable(
         }
 
         if deadline.is_some_and(|end| Instant::now() >= end) {
-            terminate_process_group(&mut child.process, termination_signal(), WAIT_POLL_INTERVAL)?;
+            if child.kill_on_deadline {
+                kill_and_reap_process_group(&mut child.process);
+            } else {
+                terminate_process_group(
+                    &mut child.process,
+                    termination_signal(),
+                    WAIT_POLL_INTERVAL,
+                )?;
+            }
             break (true, None, false, None);
         }
     };
