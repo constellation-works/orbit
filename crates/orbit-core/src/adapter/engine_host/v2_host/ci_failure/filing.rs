@@ -45,7 +45,7 @@ use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
     DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
-use crate::adapter::engine_host::v2_host::admission::sweep_filing::bounded_u64;
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::{bounded_error, bounded_u64};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::branch_observation::{note_branch_retention, retain_branch_observations};
@@ -54,9 +54,9 @@ use super::cancellation::{
 };
 use super::cluster::FailureCluster;
 use super::evidence::{
-    audit_summary, bounded_error, deferral_audit, deferral_is_bounded, deferred_errors,
-    exclude_already_repaired, filing_audit, normalize_retryable_error, partition_retryable_errors,
-    pending_audit, repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
+    audit_summary, deferral_audit, deferral_is_bounded, deferred_errors, exclude_already_repaired,
+    filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
+    repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
 };
 use super::fields::value_string;
 use super::grouping::cluster_failures;

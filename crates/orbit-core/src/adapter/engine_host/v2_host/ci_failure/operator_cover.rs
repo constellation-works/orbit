@@ -6,13 +6,15 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskRelationType, TaskStatus, is_valid_orb_task_id};
-use orbit_types::workflow::LandingObservationStatus;
 use serde_json::{Value, json};
 
 use super::cluster::{FailureCluster, task_open_compiler_identity};
 use super::filing::{CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_TAG};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::DuplicateTaskLookup;
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
+    full_revision, landed_task_commit,
+};
 use crate::application::automation::source::Source;
 
 pub(super) struct OperatorAssessment {
@@ -181,13 +183,7 @@ impl<'a> OperatorCovers<'a> {
                 return CoverState::Unavailable;
             };
             return match task.status {
-                TaskStatus::Done => self
-                    .runtime
-                    .observe_task_delivery(target, None)
-                    .ok()
-                    .filter(|delivery| delivery.landing.status == LandingObservationStatus::Merged)
-                    .and_then(|delivery| delivery.landing.landed_commit)
-                    .filter(|commit| full_revision(commit))
+                TaskStatus::Done => landed_task_commit(self.runtime, target)
                     .map(CoverState::Landed)
                     .unwrap_or(CoverState::Unavailable),
                 TaskStatus::Archived | TaskStatus::Rejected => CoverState::Closed,
@@ -211,8 +207,4 @@ impl<'a> OperatorCovers<'a> {
             _ => CoverState::Unavailable,
         }
     }
-}
-
-fn full_revision(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

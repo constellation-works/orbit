@@ -15,10 +15,12 @@ use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::DuplicateTaskLookup;
-use crate::adapter::engine_host::v2_host::admission::sweep_filing::digest;
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
+    bounded_error, digest, is_open_ci_owner_status,
+};
 use crate::application::task::TaskAddParams;
 
-use super::evidence::{bounded_error, retryable_pipeline_error};
+use super::evidence::retryable_pipeline_error;
 use super::fields::{truncate_bytes, value_string};
 use super::filing::{
     CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, CI_FAILURE_TAG,
@@ -86,14 +88,8 @@ where
             "run_urls": failures.iter().filter_map(|failure| failure.get("url")).collect::<Vec<_>>(),
         });
         let existing = tasks.iter().find(|task| {
-            matches!(
-                task.status,
-                TaskStatus::Proposed
-                    | TaskStatus::Backlog
-                    | TaskStatus::InProgress
-                    | TaskStatus::Review
-                    | TaskStatus::Blocked
-            ) && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+            is_open_ci_owner_status(task.status)
+                && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
                 && task.tags.iter().any(|tag| tag == &key_tag)
         });
         if let Some(task) = existing {

@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::Task;
 use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
@@ -21,7 +21,7 @@ use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
     DuplicateTaskMatch, find_covering_task,
 };
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
-    digest, display, truncate_chars,
+    digest, display, is_open_ci_owner_status, truncate_chars,
 };
 
 /// Description line naming a compiler-cause identity. Completed repairs are
@@ -79,14 +79,8 @@ impl FailureCluster {
             if let Some(owner) = tasks
                 .iter()
                 .filter(|task| {
-                    matches!(
-                        task.status,
-                        TaskStatus::Proposed
-                            | TaskStatus::Backlog
-                            | TaskStatus::InProgress
-                            | TaskStatus::Review
-                            | TaskStatus::Blocked
-                    ) && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                    is_open_ci_owner_status(task.status)
+                        && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
                         && task_open_compiler_identity(task).as_ref() == Some(&identity)
                 })
                 .min_by(|left, right| left.id.cmp(&right.id))

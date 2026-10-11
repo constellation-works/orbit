@@ -1,12 +1,12 @@
 //! High-confidence coverage fingerprints for security-alert task candidates.
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate,
 };
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::bounded_error;
 
 use super::filing::{
     CODE_KEY_PREFIX, DEPENDABOT_KEY_PREFIX, SECRET_KEY_PREFIX, alert_number, field, line_suffix,
@@ -120,8 +120,4 @@ pub(super) fn duplicate_lookup_error(family: &str, key: &str, error: &OrbitError
             }],
         })
     ))
-}
-
-fn bounded_error(message: &str) -> String {
-    redact_all(message).chars().take(500).collect()
 }

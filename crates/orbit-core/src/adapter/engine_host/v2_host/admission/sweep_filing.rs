@@ -2,9 +2,14 @@
 //! (`file_ci_failure_tasks`, `file_dependabot_alert_tasks`).
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::lower_hex;
+use orbit_types::task::TaskStatus;
+use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+use crate::OrbitRuntime;
 
 /// Hex characters of a signature digest kept in a tag. Full-width digests
 /// make a tag unreadable in a task list; this is a dedupe key, not a security
@@ -58,4 +63,40 @@ pub(in crate::adapter::engine_host::v2_host) fn truncate_chars(
         return value.to_string();
     }
     value.chars().take(max_chars).collect::<String>() + "…"
+}
+
+/// Redact and bound an error message included in a sweep result.
+pub(in crate::adapter::engine_host::v2_host) fn bounded_error(message: &str) -> String {
+    redact_all(message).chars().take(500).collect()
+}
+
+/// Whether `value` is a full 40-character hexadecimal revision.
+pub(in crate::adapter::engine_host::v2_host) fn full_revision(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Read the merged landed commit for `task_id`, if delivery evidence is valid.
+pub(in crate::adapter::engine_host::v2_host) fn landed_task_commit(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Option<String> {
+    let observation = runtime.observe_task_delivery(task_id, None).ok()?;
+    (observation.landing.status == LandingObservationStatus::Merged)
+        .then_some(observation.landing.landed_commit)
+        .flatten()
+        .filter(|commit| full_revision(commit))
+}
+
+/// Whether a task status can still own an open CI-failure sweep finding.
+pub(in crate::adapter::engine_host::v2_host) fn is_open_ci_owner_status(
+    status: TaskStatus,
+) -> bool {
+    matches!(
+        status,
+        TaskStatus::Proposed
+            | TaskStatus::Backlog
+            | TaskStatus::InProgress
+            | TaskStatus::Review
+            | TaskStatus::Blocked
+    )
 }

@@ -13,6 +13,7 @@ use super::evidence::selected_diagnostic;
 use super::fields::value_string;
 use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
 use crate::OrbitRuntime;
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::full_revision;
 use crate::application::automation::source::Source;
 use crate::application::task::{TaskListFilter, TaskUpdateParams};
 
@@ -332,10 +333,6 @@ impl<'a> Assessor<'a> {
 
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> AssessmentResult<T> {
     serde_json::from_slice(bytes).map_err(|_| "malformed_evidence".into())
-}
-
-fn full_revision(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn diagnostic(run: &Value) -> Option<&str> {
