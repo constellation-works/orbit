@@ -106,6 +106,46 @@ pub struct PropagationLink {
     pub sample_events: Vec<IncidentEventRef>,
 }
 
+/// The evidence an [`IncidentCause`] was derived from [ORB-15434].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CauseBasis {
+    /// A named step or action and the structured code it failed with.
+    StepCode,
+    /// A named step or action and the normalized message after it.
+    StepMessage,
+    /// A structured code, with no named step or action.
+    Code,
+    /// No structured evidence: the incident's own signature.
+    Signature,
+}
+
+impl CauseBasis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CauseBasis::StepCode => "step_code",
+            CauseBasis::StepMessage => "step_message",
+            CauseBasis::Code => "code",
+            CauseBasis::Signature => "signature",
+        }
+    }
+}
+
+/// The deterministic cause an incident shares with incidents reported at
+/// other surfaces or by other actors [ORB-15434]. Incidents with the same
+/// `key` are one problem seen several times; each keeps its own signature,
+/// counts and evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentCause {
+    /// Stable hash of the class and the evidence named by `basis`. Equal
+    /// keys mean a shared cause; the value carries no other meaning.
+    pub key: String,
+    /// The evidence in readable form, such as ``action `validate` · kind=x``,
+    /// so an operator can see why incidents were grouped.
+    pub label: String,
+    pub basis: CauseBasis,
+}
+
 /// A grouped failure incident: one root cause, its raw event population, and
 /// the propagation chain it triggered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +181,9 @@ pub struct FailureIncident {
     pub has_tool_identity: bool,
     /// Downstream failures collapsed beneath the root, in occurrence order.
     pub propagation: Vec<PropagationLink>,
+    /// The cause derived from the root's structured evidence; incidents at
+    /// other surfaces with the same key are the same problem.
+    pub cause: IncidentCause,
 }
 
 impl FailureIncident {

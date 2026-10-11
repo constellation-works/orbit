@@ -2,6 +2,7 @@
 //! in-run cascades, then fold cited-run cascades; and the report built on
 //! top.
 
+use super::cause::{CauseInput, cause_for};
 use super::classify::{classify, has_tool_identity, surface_of};
 use super::signature::{incident_id, signature_for};
 use super::types::{
@@ -304,6 +305,13 @@ fn incident_from(run_scope: &str, root: Cluster, chain: Vec<Cluster>) -> Failure
             .then_with(|| a.signature.cmp(&b.signature))
     });
     sort_samples(&mut events);
+    let cause = cause_for(&CauseInput {
+        class: root.class,
+        signature: &root.signature,
+        surface: &root.surface,
+        activity_id: root.activity_id.as_deref(),
+        message: root.message.as_deref(),
+    });
 
     FailureIncident {
         incident_id: incident_id(run_scope, &root.signature, root.first_ts),
@@ -323,6 +331,7 @@ fn incident_from(run_scope: &str, root: Cluster, chain: Vec<Cluster>) -> Failure
         events,
         has_tool_identity,
         propagation,
+        cause,
     }
 }
 

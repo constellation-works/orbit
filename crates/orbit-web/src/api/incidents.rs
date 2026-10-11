@@ -258,6 +258,13 @@ fn incident_to_json(incident: &FailureIncident) -> Value {
             .iter()
             .map(propagation_to_json)
             .collect::<Vec<_>>(),
+        // [ORB-15434] Incidents sharing `cause.key` are one problem seen at
+        // several surfaces; `basis` names the evidence that grouped them.
+        "cause": {
+            "key": incident.cause.key,
+            "label": redact_all(&incident.cause.label),
+            "basis": incident.cause.basis.as_str(),
+        },
     })
 }
 

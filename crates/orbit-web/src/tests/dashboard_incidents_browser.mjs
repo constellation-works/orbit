@@ -8,7 +8,11 @@
 // a single-burst signature, the detail panel (full message and its copy, the
 // truncation note and its audit drill-down, related signatures, runs), the
 // last-hour and no-message filters, the local 6h window, the sticky panel and
-// a 375px phone with no horizontal page scroll. No Orbit store is contacted.
+// a 375px phone with no horizontal page scroll. It also checks grouping by
+// cause [ORB-15434]: cause headers over signatures that share one, a
+// single-signature cause as one row, the By signature toggle, and the
+// detail panel's same-cause list and grouping basis. No Orbit store is
+// contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -40,22 +44,29 @@ const LONG_MESSAGE = [
   'error: test run failed, to rerun pass `-p orbit-core --lib`',
 ].join('\n');
 const CUT_MESSAGE = 'workspace sync failed: git fetch origin refs/heads/agent-main exited 128: fatal: unable to access the remote: Could not resolve host: github.com; retrying with the mirror at…';
+const VALIDATE_MESSAGE = "execution failed: action `fixture_validate` failed: required check 'make check' did not pass on candidate 9f8e7d6c";
+const VALIDATE_CAUSE = { key: 'cause-validate', label: 'action `fixture_validate`', basis: 'step_message' };
+const SANDBOX_MESSAGE = '[blocked_by_agent] kind=sandbox_refused\nThe host refuses unprivileged user namespaces.';
+const SANDBOX_CAUSE = { key: 'cause-sandbox', label: 'kind=sandbox_refused', basis: 'code' };
 
 // One incident per (run, signature), as the store keys them.
 function incident(id, fields) {
-  const { cls = 'unexpected', role = 'codex', surface, message, runId, taskId, firstAgo, lastAgo = firstAgo, events = 1, now } = fields;
+  const { cls = 'unexpected', role = 'codex', surface, message, runId, taskId, firstAgo, lastAgo = firstAgo, events = 1, cause, now } = fields;
   const msg = (message || '').toLowerCase().replace(/\d+/g, 'N');
+  const signature = `${cls}|role=${role}|surface=${surface}|msg=${msg}`;
   const ts = (ago) => new Date(now - ago).toISOString();
   const eventRows = Array.from({ length: events }, (_, index) => ({
     id: id * 100 + index + 1, execution_id: `exec-${id}-${index}`, ts: ts(firstAgo - (firstAgo - lastAgo) * index / Math.max(1, events - 1)),
     status: 'failure', actor: role, surface, tool: surface, run_id: runId, task_id: taskId, message, workspace_id: 'ws_orbit',
   }));
   return {
-    incident_id: `inc-${id}`, signature: `${cls}|role=${role}|surface=${surface}|msg=${msg}`,
+    incident_id: `inc-${id}`, signature,
     class: cls, class_label: null, actor: role, surface, activity_id: 'implement', message,
     event_count: events, root_event_count: events, propagated_event_count: 0,
     first_ts: ts(firstAgo), last_ts: ts(lastAgo), run_ids: runId ? [runId] : [], task_ids: taskId ? [taskId] : [],
     has_tool_identity: true, sample_events: eventRows.slice(0, 3), events: eventRows, propagation: [],
+    // With no structured evidence the server falls back to the signature.
+    cause: cause || { key: `cause-of-${signature}`, label: surface, basis: 'signature' },
   };
 }
 
@@ -74,6 +85,13 @@ function allIncidents(now) {
   rows.push(incident(22, { role: 'claude', surface: 'orbit.task.claim', message: LOCK_MESSAGE, runId: 'run-claim-1', firstAgo: 7 * HOUR, now }));
   // E: a multi-line failure 40 min ago.
   rows.push(incident(23, { surface: 'orbit.validation.run', message: LONG_MESSAGE, runId: 'run-tests-1', taskId: 'ORB-7003', firstAgo: 40 * MINUTE, events: 2, now }));
+  // F: one failed action reported by a parent's wait and by the worker, two
+  //    signatures with one cause; the worker's recurs in two runs.
+  rows.push(incident(24, { role: 'admin', surface: 'fixture.wait', message: VALIDATE_MESSAGE, runId: 'run-val-wait', firstAgo: 9 * HOUR, cause: VALIDATE_CAUSE, now }));
+  rows.push(incident(25, { role: 'human', surface: 'job worker', message: VALIDATE_MESSAGE, runId: 'run-val-1', firstAgo: 11 * HOUR, cause: VALIDATE_CAUSE, now }));
+  rows.push(incident(26, { role: 'human', surface: 'job worker', message: VALIDATE_MESSAGE, runId: 'run-val-2', firstAgo: 10 * HOUR, cause: VALIDATE_CAUSE, now }));
+  // G: a structured code only one signature carries.
+  rows.push(incident(27, { role: 'admin', surface: 'fixture.wait', message: SANDBOX_MESSAGE, runId: 'run-sandbox', firstAgo: 12 * HOUR, cause: SANDBOX_CAUSE, now }));
   rows.push(incident(30, { cls: 'expected', surface: 'orbit.task.transition', message: 'transition refused: task is not in review', firstAgo: 2 * HOUR, now }));
   // Enough policy denials to make the list taller than the viewport.
   for (let index = 0; index < 30; index += 1) {
@@ -179,6 +197,7 @@ const tiles = () => page.locator('#diag-body .incident-tile').evaluateAll((nodes
   sub: node.querySelector('.incident-tile-sub').textContent,
 })));
 const rows = () => page.locator('#diag-body .incident-row').evaluateAll((nodes) => nodes.map((node) => {
+  const code = node.querySelector('.incident-code');
   const track = node.querySelector('.incident-track').getBoundingClientRect();
   const markNode = node.querySelector('.incident-mark');
   const mark = markNode.getBoundingClientRect();
@@ -189,6 +208,8 @@ const rows = () => page.locator('#diag-body .incident-row').evaluateAll((nodes) 
     count: node.querySelector('.incident-count').textContent,
     live: node.querySelector('.incident-last').classList.contains('live'),
     pressed: node.getAttribute('aria-pressed'),
+    child: node.classList.contains('child'),
+    code: code ? code.textContent : null,
     dot: markNode.classList.contains('dot'),
     markLive: markNode.classList.contains('live'),
     leftPct: (mark.left - track.left) / track.width * 100,
@@ -204,10 +225,27 @@ const detail = () => page.locator('#diag-body .incident-detail').evaluate((node)
   messageClipped: node.querySelector('.incident-full-message').scrollWidth > node.querySelector('.incident-full-message').clientWidth + 1,
   note: node.querySelector('.incident-message-note')?.textContent || null,
   related: [...node.querySelectorAll('.incident-related-item')].map((item) => item.textContent),
+  sameCause: [...node.querySelectorAll('.incident-same-cause .incident-related-item')].map((item) => item.textContent),
+  basis: node.querySelector('.incident-cause-basis')?.textContent || null,
   facts: Object.fromEntries([...node.querySelectorAll('.incident-facts > div')].map((fact) => [fact.querySelector('dt').textContent, fact.querySelector('dd').textContent])),
   actions: [...node.querySelectorAll('.incident-actions button')].map((button) => button.textContent),
 }));
 const rowNamed = (text) => page.locator('#diag-body .incident-row', { hasText: text });
+// The list in display order: cause headers and signature rows.
+const listing = () => page.locator('#diag-body .incident-rows > *').evaluateAll((nodes) => nodes.map((node) => {
+  if (node.classList.contains('incident-cause-head')) {
+    return {
+      head: true,
+      headline: node.querySelector('.incident-headline').textContent,
+      code: node.querySelector('.incident-code').textContent,
+      sub: node.querySelector('.incident-sub').textContent,
+      count: node.querySelector('.incident-count').textContent,
+      marks: node.querySelectorAll('.incident-track .incident-mark').length,
+      interactive: node.matches('button, [role="button"], [tabindex]'),
+    };
+  }
+  return { head: false, sub: node.querySelector('.incident-sub')?.textContent || '', child: node.classList.contains('child') };
+}));
 const lastRequest = () => incidentRequests.at(-1);
 const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 
@@ -226,19 +264,19 @@ try {
   const tileState = await tiles();
   evidenceLog.tiles = tileState;
   assert(tileState.map((tile) => tile.cls).join() === 'unexpected,expected,denied,diagnostic,deferred', `five class tiles: ${JSON.stringify(tileState)}`);
-  assert(JSON.stringify(tileState[0]) === JSON.stringify({ cls: 'unexpected', pressed: 'true', number: '10', sub: '14 events · 10 runs' }), `the Unexpected tile counts incidents, events and runs: ${JSON.stringify(tileState[0])}`);
+  assert(JSON.stringify(tileState[0]) === JSON.stringify({ cls: 'unexpected', pressed: 'true', number: '14', sub: '18 events · 14 runs' }), `the Unexpected tile counts incidents, events and runs: ${JSON.stringify(tileState[0])}`);
   assert(tileState.slice(1).every((tile) => tile.pressed === 'false'), 'only the selected tile is pressed');
   assert(tileState[3].number === '0', 'an empty class still has its tile');
   const denominator = await page.locator('#diag-body .incident-denominator').textContent();
-  assert(denominator === '41 incidents in 24h: 45 failed events across 40 runs, out of 4,000 audited events (1.1%).', `one denominator line: ${denominator}`);
+  assert(denominator === '45 incidents in 24h: 49 failed events across 44 runs, out of 4,000 audited events (1.2%).', `one denominator line: ${denominator}`);
 
   // 2. Rows: one per signature, newest last seen first; the recurring one is
   //    a bar over its lifespan, the single burst a dot, and neither repeats
   //    the class or shows the grouping signature.
   const initial = await rows();
   evidenceLog.rows = initial;
-  assert(initial.length === 5, `six runs of one signature roll up into one row: ${initial.length}`);
-  assert(initial.map((row) => row.headline).join('|') === [
+  assert(initial.length === 8, `six runs of one signature roll up into one row: ${initial.length}`);
+  assert(initial.slice(0, 5).map((row) => row.headline).join('|') === [
     LOCK_MESSAGE, LONG_MESSAGE.split('\n')[0], CUT_MESSAGE, 'orbit.run.start failed; no message recorded', LOCK_MESSAGE,
   ].join('|'), `rows sort by last seen and title with the message: ${JSON.stringify(initial.map((row) => row.headline))}`);
   assert(initial.every((row) => !row.headline.includes('|msg=') && !row.sub.includes('Unexpected')), 'no row shows its signature or repeats its class');
@@ -261,7 +299,7 @@ try {
   await until('a dashboard poll', () => incidentRequests.length > polled);
   await page.waitForTimeout(300);
   const kept = await page.locator('#diag-body .incident-row').evaluateAll((nodes) => nodes.map((node) => node.dataset.probe));
-  assert(kept.join() === '0,1,2,3,4', `a poll keeps unchanged rows: ${JSON.stringify(kept)}`);
+  assert(kept.join() === '0,1,2,3,4,5,6,7', `a poll keeps unchanged rows: ${JSON.stringify(kept)}`);
 
   // 3. The detail panel: the newest signature is selected on load.
   assert(recurring.pressed === 'true', 'the newest signature starts selected');
@@ -271,6 +309,8 @@ try {
   assert(/^6 runs since 10h( \d+m)? ago, every 2 h\. Last seen 20m ago\.$/.test(panel.sentence), `one summary sentence: ${panel.sentence}`);
   assert(panel.related.length === 1 && panel.related[0].startsWith('orbit.task.claim · claude'), `the same message from another surface is a related signature: ${panel.related}`);
   assert(panel.actions.join() === 'View runs (6),Audit events', `drill-down actions: ${panel.actions}`);
+  assert(panel.facts['Cause code'] === 'none recorded' && panel.sameCause.length === 0 && panel.basis === null,
+    `a signature with no structured cause names none and lists no cause siblings: ${JSON.stringify(panel)}`);
   evidenceLog.recurringDetail = panel;
   await page.locator('#diag-body .incident-actions button', { hasText: 'View runs' }).click();
   const runLinks = await page.locator('#diag-body .incident-runs[open] .incident-run-links a').allTextContents();
@@ -305,7 +345,7 @@ try {
   assert(await lastHourChip.getAttribute('aria-pressed') === 'true', 'the chip shows it is on');
   assert(await page.locator('#diag-body .incident-toggle').getAttribute('aria-pressed') === 'true', 'the list toggle agrees');
   await page.locator('#diag-body .incident-toggle').click();
-  assert((await rows()).length === 5, 'the list toggle turns the filter off');
+  assert((await rows()).length === 8, 'the list toggle turns the filter off');
 
   // No-message chip: only the silent signature, selected.
   await page.locator('#diag-body .incident-insight[data-insight="no-message"]').click();
@@ -327,7 +367,68 @@ try {
   const auditHash = await page.evaluate(() => decodeURIComponent(location.hash));
   assert(auditHash.includes('ids=2001,2002,2003,2004'), `the drill-down names every event: ${auditHash}`);
 
-  // 6. A class tile asks the server for that class and filters the list.
+  // 6. By cause, the default: signatures sharing a cause sit under one
+  //    header that counts signatures, a cause with one signature is one row
+  //    carrying its code, and By signature restores the flat list.
+  await page.goto(`${origin}/?workspace=ws_orbit#diagnostics/incidents?window=24h`);
+  await page.locator('#diag-body .incident-row').first().waitFor({ state: 'visible' });
+  const modes = () => page.locator('#diag-body .incident-modes .incident-seg').evaluateAll((nodes) => nodes.map((node) => `${node.textContent}:${node.getAttribute('aria-pressed')}`));
+  const listTitle = () => page.locator('#diag-body .incident-list-title').textContent();
+  assert((await modes()).join() === 'By cause:true,By signature:false', `the list starts grouped by cause: ${await modes()}`);
+  assert(/8 signatures in 7 causes$/.test(await listTitle()), `the heading counts signatures and causes: ${await listTitle()}`);
+  const grouped = await listing();
+  evidenceLog.byCause = grouped;
+  const heads = grouped.filter((item) => item.head);
+  assert(heads.length === 1 && grouped.length === 9, `one header over the shared cause, every signature still listed: ${JSON.stringify(grouped)}`);
+  const headAt = grouped.indexOf(heads[0]);
+  assert(headAt === 5, `the cause sorts by its newest signature: ${headAt}`);
+  assert(heads[0].headline === VALIDATE_MESSAGE && heads[0].code === 'action `fixture_validate`', `the header names the cause: ${JSON.stringify(heads[0])}`);
+  assert(heads[0].count === '2 sigs' && heads[0].marks === 2 && /^2 signatures · first 11h( \d+m)? ago$/.test(heads[0].sub),
+    `the header counts signatures and draws each one's lifespan: ${JSON.stringify(heads[0])}`);
+  assert(!heads[0].interactive, 'the header is a label, not a control');
+  const [waitItem, workerItem, sandboxItem] = grouped.slice(headAt + 1);
+  assert(waitItem.child && workerItem.child && waitItem.sub === 'fixture.wait · admin' && workerItem.sub.startsWith('job worker · human'),
+    `the cause's signatures are indented beneath it, newest first: ${JSON.stringify([waitItem, workerItem])}`);
+  assert(!sandboxItem.child && !sandboxItem.head, 'a single-signature cause is one row');
+  let causeRows = await rows();
+  const sandboxRow = causeRows.find((row) => row.headline === '[blocked_by_agent] kind=sandbox_refused');
+  assert(sandboxRow && sandboxRow.code === 'kind=sandbox_refused', `the single row carries its cause code: ${JSON.stringify(sandboxRow)}`);
+  assert(causeRows.filter((row) => row.code !== null).length === 1, 'rows grouped by their own signature show no cause code');
+  const [waitRow, workerRow] = causeRows.filter((row) => row.child);
+  assert(waitRow.count === '1 event' && workerRow.count === '2 runs', `counts stay per signature: ${waitRow.count} / ${workerRow.count}`);
+
+  // The detail panel lists the other signature with this cause and says why.
+  await page.locator('#diag-body .incident-row.child').first().click();
+  panel = await detail();
+  evidenceLog.sameCauseDetail = panel;
+  assert(panel.facts.Surface === 'fixture.wait' && panel.facts['Cause code'] === 'action `fixture_validate`', `the facts name the cause: ${JSON.stringify(panel.facts)}`);
+  assert(panel.basis === 'Grouped by the same step and message: action `fixture_validate`', `the grouping basis is shown: ${panel.basis}`);
+  assert(panel.sameCause.length === 1 && panel.sameCause[0].startsWith('job worker · human') && panel.sameCause[0].includes('2 runs'),
+    `the same-cause list names the other signature with its own count: ${panel.sameCause}`);
+  assert(panel.related.length === 1, `a same-cause sibling is not listed again as a same-message one: ${panel.related}`);
+  await page.locator('#diag-body .incident-same-cause .incident-related-item').click();
+  panel = await detail();
+  assert(panel.facts.Surface === 'job worker' && panel.actions.join() === 'View runs (2),Audit events', `the sibling opens with its own drill-downs: ${JSON.stringify(panel)}`);
+  assert((await rows()).find((row) => row.pressed === 'true').sub.startsWith('job worker'), 'the sibling row is selected');
+
+  // By signature: no headers or indentation, the cause code after surface
+  // and actor, and the selection kept.
+  await page.locator('#diag-body .incident-modes .incident-seg[data-mode="signature"]').click();
+  assert((await modes()).join() === 'By cause:false,By signature:true', 'the toggle shows the flat list is on');
+  const flat = await listing();
+  evidenceLog.bySignature = flat;
+  assert(flat.length === 8 && flat.every((item) => !item.head && !item.child), `the flat list has one row per signature: ${JSON.stringify(flat)}`);
+  assert(flat[5].sub === 'fixture.wait · admin · action `fixture_validate`' && flat[7].sub === 'fixture.wait · admin · kind=sandbox_refused',
+    `flat rows name their cause: ${JSON.stringify(flat.map((item) => item.sub))}`);
+  assert(/8 signatures$/.test(await listTitle()), `the flat heading counts signatures only: ${await listTitle()}`);
+  assert((await rows()).find((row) => row.pressed === 'true').sub.startsWith('job worker'), 'the selection survives the toggle');
+  await page.screenshot({ path: path.join(evidence, 'incidents-by-signature-1440.png'), fullPage: true });
+  await page.locator('#diag-body .incident-modes .incident-seg[data-mode="cause"]').click();
+  assert((await listing()).filter((item) => item.head).length === 1, 'By cause restores the headers');
+  await page.locator('#diag-body .incident-cause-head').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'incidents-by-cause-1440.png'), fullPage: true });
+
+  // 7. A class tile asks the server for that class and filters the list.
   await page.goto(`${origin}/?workspace=ws_orbit#diagnostics/incidents?window=24h`);
   await page.locator('#diag-body .incident-row').first().waitFor({ state: 'visible' });
   await page.locator('#diag-body .incident-tile[data-class="expected"]').click();
@@ -336,7 +437,7 @@ try {
   assert((await tiles()).find((tile) => tile.cls === 'expected').pressed === 'true', 'the chosen tile is pressed');
   assert((await rows())[0].headline === 'transition refused: task is not in review', 'only the chosen class is listed');
 
-  // 7. A long list keeps the detail panel in view while it scrolls.
+  // 8. A long list keeps the detail panel in view while it scrolls.
   await page.locator('#diag-body .incident-tile[data-class="denied"]').click();
   await until('denied rows', async () => (await rows()).length === 30);
   const related = await detail();
@@ -362,10 +463,10 @@ try {
   await page.evaluate(() => { document.querySelector('#diag-body .incident-detail-panel').closest('.tab-pane').scrollTop = 0; });
   await page.screenshot({ path: path.join(evidence, 'incidents-denied-1440.png'), fullPage: true });
 
-  // 8. 6h is this page's own window: the request narrows, the shared window
+  // 9. 6h is this page's own window: the request narrows, the shared window
   //    does not move, and the axis is relabelled.
   await page.locator('#diag-body .incident-tile[data-class="unexpected"]').click();
-  await until('unexpected rows', async () => (await rows()).length === 5);
+  await until('unexpected rows', async () => (await rows()).length === 8);
   await page.locator('#diag-body .incident-seg[data-window="6h"]').click();
   await until('the 6h answer', async () => lastRequest().since === '6h' && (await rows()).length === 4);
   assert(await page.locator('#diag-body .incident-seg[data-window="6h"]').getAttribute('aria-pressed') === 'true', 'the 6h segment is pressed');
@@ -376,7 +477,7 @@ try {
   near(sixHour.leftPct, (6 * HOUR - (4 * HOUR + 20 * MINUTE)) / (6 * HOUR) * 100, 1, 'the bar is placed on the 6h axis');
   assert(new URL(page.url()).hash.includes('window=24h'), `the shared window stays 24h: ${page.url()}`);
 
-  // 9. A phone: tiles, rows and the panel stack with no horizontal scroll.
+  // 10. A phone: tiles, rows and the panel stack with no horizontal scroll.
   for (const width of [768, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await page.waitForTimeout(150);
@@ -416,11 +517,14 @@ try {
       'browser-incidents-local-6h-window',
       'browser-incidents-sticky-detail-panel',
       'browser-incidents-phone-no-horizontal-scroll',
+      'browser-incidents-cause-headers-group-signatures',
+      'browser-incidents-by-signature-toggle',
+      'browser-incidents-same-cause-signatures-and-basis',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard incidents browser checks passed at 1440px, 768px and 375px: tiles, lifespan bars, detail panel, truncation note, filters, 6h window and sticky panel.');
+  console.log('Dashboard incidents browser checks passed at 1440px, 768px and 375px: tiles, lifespan bars, detail panel, truncation note, filters, cause grouping and its toggle, 6h window and sticky panel.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   await page?.screenshot({ path: path.join(evidence, 'incidents-failure.png'), fullPage: true }).catch(() => {});

@@ -143,14 +143,19 @@ pub fn signature_for(event: &AuditEvent) -> String {
 /// only as a stable client-side handle for an incident — never persisted, and
 /// never a security boundary.
 pub(super) fn incident_id(run_scope: &str, signature: &str, first_ts: DateTime<Utc>) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let key = format!(
         "{run_scope}\u{1f}{signature}\u{1f}{}",
         first_ts.to_rfc3339()
     );
+    format!("inc-{:016x}", fnv1a(&key))
+}
+
+/// 64-bit FNV-1a. Stable across builds and platforms, unlike `std`'s hasher.
+pub(super) fn fnv1a(key: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in key.as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    format!("inc-{hash:016x}")
+    hash
 }

@@ -374,6 +374,44 @@ fn incident_audit_ids_return_all_requested_rows_with_workspace_scope() {
 }
 
 #[test]
+fn incidents_carry_the_cause_one_failure_shares_across_surfaces() {
+    isolated(
+        "audit::incidents_carry_the_cause_one_failure_shares_across_surfaces",
+        || {
+            let fixture = Fixture::new();
+            let message = "execution failed: action `fixture_validate` failed: check exited 2";
+            for (id, tool, role, run) in [
+                ("wait", Some("fixture.wait"), "admin", "run-wait"),
+                ("worker", None, "human", "run-worker"),
+            ] {
+                let mut event = row(id, tool, AuditEventStatus::Failure);
+                event.role = role.into();
+                event.job_run_id = Some(run.into());
+                event.error_message = Some(message.into());
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+
+            let payload = json_ok(
+                fixture
+                    .server(false)
+                    .get("/api/audit/incidents?since=24h&workspace=ws_http_fixture"),
+            );
+            let incidents = payload["incidents"].as_array().unwrap();
+            assert_eq!(incidents.len(), 2, "{payload}");
+            assert_ne!(incidents[0]["signature"], incidents[1]["signature"]);
+            assert_eq!(
+                incidents[0]["cause"], incidents[1]["cause"],
+                "one action failure reported at two surfaces shares a cause"
+            );
+            let cause = &incidents[0]["cause"];
+            assert_eq!(cause["basis"], "step_message");
+            assert_eq!(cause["label"], "action `fixture_validate`");
+            assert!(cause["key"].as_str().unwrap().starts_with("cause-"));
+        },
+    );
+}
+
+#[test]
 fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
     isolated(
         "audit::failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard",
