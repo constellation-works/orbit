@@ -451,17 +451,16 @@ fn add_worktree(repo: &Path, path: &Path, branch: &str) {
 }
 
 fn git(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(current_dir)
+    let mut command = Command::new("git");
+    command.args(args).current_dir(current_dir);
+    let output = command
         .output()
-        .unwrap();
+        .unwrap_or_else(|error| panic!("spawn {command:?}: {error}"));
     assert!(
         output.status.success(),
-        "git {} failed in {} ({}):\n{}",
-        args.join(" "),
-        current_dir.display(),
+        "{command:?} failed ({}):\nstdout:\n{}\nstderr:\n{}",
         output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()

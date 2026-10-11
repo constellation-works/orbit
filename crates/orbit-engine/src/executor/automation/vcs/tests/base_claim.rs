@@ -177,7 +177,8 @@ fn supervisor_stops_never_classify_partial_failures_as_known_red() {
 
 #[cfg(unix)]
 fn git_ok(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args([
             "-c",
             "user.name=Fixture",
@@ -191,12 +192,15 @@ fn git_ok(repo: &Path, args: &[&str]) {
             "core.hooksPath=/dev/null",
         ])
         .args(args)
-        .current_dir(repo)
+        .current_dir(repo);
+    let output = command
         .output()
-        .expect("git setup");
+        .unwrap_or_else(|error| panic!("spawn {command:?}: {error}"));
     assert!(
         output.status.success(),
-        "git {args:?}: {}",
+        "{command:?} failed ({}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
