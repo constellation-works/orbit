@@ -1,6 +1,6 @@
 // Execute the shipped Settings modules against a small DOM and fixture API:
 // review health, read-only and global-only keys in Effective, crew table
-// rendering, sub-view chrome, plus the System
+// rendering (and a file view's crew tables), sub-view chrome, plus the System
 // view's provenance, override marker, edit round-trip, and refused write.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -141,7 +141,9 @@ const globalFile = () => ({
   sections: [{ token: 'delivery', title: 'Delivery', keys: [
     { key: 'workflow.base_branch', label: 'base_branch', value: 'main', value_type: 'string', state: 'default', source: { layer: 'built-in' }, shadowed_by: [] },
     ...Object.keys(defaults).map(name => row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')),
-  ] }],
+  ] }, { token: 'crews', title: 'Crews', blurb: 'named crews', key_prefix: 'crews', kind: 'crews', keys: [] }],
+  // A file view cannot build crew rows; it names the file's crew tables.
+  crews: [], crews_enumerated: false, crew_tables: ['astra'],
 });
 const effective = () => ({
   scope: 'effective', config_set: configSet, layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
@@ -368,6 +370,8 @@ setConfigSubtab('global-file');
 await fetchAndRenderConfig();
 let keyRows = named(body, 'config-row');
 assert.ok(keyRows.length > 0, 'the global file renders key rows');
+assert.equal(textOf(body, 'config-empty').find(text => /crew/.test(text)), 'This file defines one crew table: astra. Crews shows them with the other layers.',
+  'a file view names its crew tables instead of claiming no crew is defined');
 assert.ok(named(body, 'config-pencil').length > 0, 'an authorized payload renders key edit controls');
 named(body, 'config-pencil')[0].click();
 assert.equal(named(body, 'config-editor').length, 1, 'an authorized key row opens an editor');
