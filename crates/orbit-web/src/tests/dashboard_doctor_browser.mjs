@@ -7,8 +7,10 @@
 // with copyable commands), the cached report's age, that Refresh runs doctor
 // again while the dashboard's own poll never does, the busy state of a first
 // run and of a refresh while the server holds its response (and the controls
-// restored after a success or a failure), the Health rail count, and that no
-// request carries anything but the read-only parameters. No Orbit
+// restored after a success or a failure), the Health rail count, that a
+// cached read delayed in transit past a newer refresh or a host switch never
+// replaces what the panel shows, and that no request carries anything but
+// the read-only parameters. No Orbit
 // store, dashboard, SSH session or host is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
@@ -59,8 +61,13 @@ const ROWS = (host) => [
   { check: 'mcp-registration', duration_ms: 1, status: 'ok', message: 'Orbit MCP server registered for this workspace in: claude (workspace)', remediation: null },
   { check: 'hosts', duration_ms: 0, status: 'ok', message: `3 hosts registered; ${host} answers`, remediation: null },
 ];
+// The same checks once every problem is repaired.
+const HEALTHY_ROWS = (host) => ROWS(host).map((row) => (
+  row.status === 'skipped' ? row : { ...row, status: 'ok', remediation: null }
+));
 
-// Per host: the latest report and how many times doctor actually ran.
+// Per host: the latest report, how many times doctor actually ran, and
+// whether the next run finds nothing wrong.
 const doctor = {};
 let routeLog = [];
 const FOUR_MINUTES = 4 * 60 * 1000;
@@ -68,7 +75,7 @@ const FOUR_MINUTES = 4 * 60 * 1000;
 function doctorState(host) {
   if (!doctor[host]) {
     // The serving host already holds a report another tab ran four minutes ago.
-    doctor[host] = { runs: 0, finished: host === SERVING ? Date.now() - FOUR_MINUTES : null };
+    doctor[host] = { runs: 0, finished: host === SERVING ? Date.now() - FOUR_MINUTES : null, healthy: false, nextHealthy: false };
   }
   return doctor[host];
 }
@@ -77,7 +84,7 @@ function doctorBody(host, state) {
   if (state.finished == null) {
     return { ran_at: null, age_ms: null, duration_ms: null, failures: null, warnings: null, checks: null };
   }
-  const checks = ROWS(host);
+  const checks = state.healthy ? HEALTHY_ROWS(host) : ROWS(host);
   return {
     ran_at: new Date(state.finished - 6100).toISOString(),
     age_ms: Date.now() - state.finished,
@@ -91,15 +98,19 @@ function doctorBody(host, state) {
 
 // A held doctor run: while armed, every run (not a cached peek) for `host`
 // waits until the test settles the hold, so the panel's pending state is
-// checked while a response is outstanding rather than after a delay.
+// checked while a response is outstanding rather than after a delay. With
+// `cached`, the hold takes the cached peeks instead: each is answered when it
+// arrives, with the report cached then, and its response is held in transit
+// until the test settles the hold.
 let hold = null;
-function holdDoctor(host) {
+function holdDoctor(host, { cached = false } = {}) {
   let settle;
   const settled = new Promise((resolve) => { settle = resolve; });
-  hold = { host, requests: [], settled };
+  hold = { host, cached, requests: [], delivered: 0, settled };
   const armed = hold;
   return {
     requests: armed.requests,
+    delivered: () => armed.delivered === armed.requests.length,
     settle: (outcome = {}) => {
       if (hold === armed) hold = null;
       settle(outcome);
@@ -120,12 +131,20 @@ function doctorApi(host, url, json) {
     if (!cached && (refresh || !recent)) {
       state.runs += 1;
       state.finished = Date.now();
+      state.healthy = state.nextHealthy;
     }
     return json(doctorBody(host, state));
   };
-  if (hold && hold.host === host && !cached) {
-    hold.requests.push(url.searchParams);
-    hold.settled.then((outcome) => (outcome.error ? json({ error: outcome.error }, 500) : answer()));
+  if (hold && hold.host === host && hold.cached === cached) {
+    const armed = hold;
+    armed.requests.push(url.searchParams);
+    const peeked = cached ? doctorBody(host, state) : null;
+    armed.settled.then((outcome) => {
+      if (outcome.error) json({ error: outcome.error }, 500);
+      else if (peeked) json(peeked);
+      else answer();
+      armed.delivered += 1;
+    });
     return undefined;
   }
   return answer();
@@ -243,6 +262,7 @@ const panelState = () => page.evaluate(() => {
     busy: body.getAttribute('aria-busy'),
     body: body.textContent,
     rows: body.querySelectorAll('.doctor-row').length,
+    problems: body.querySelectorAll('.doctor-row.error, .doctor-row.warning').length,
   };
 });
 const assertIdle = (state, label) => {
@@ -342,6 +362,39 @@ try {
   await page.locator('#doctor-body details.doctor-passing summary').click();
   await capture('refreshed');
 
+  // A poll's cached read that the network delays until after a newer refresh
+  // was shown never replaces the refreshed report or its rail count.
+  const late = holdDoctor(SERVING, { cached: true });
+  await page.locator('#refresh-btn').click();
+  await until('the held cached read', () => late.requests.length > 0);
+  doctorState(SERVING).nextHealthy = true;
+  await page.locator('#doctor-refresh').click();
+  await until('the healthy refresh', async () => (await panelState()).body.includes('All 8 checks passed or were skipped.'));
+  assert(doctorState(SERVING).runs === 2 && (await railCount()).text === '', 'the healthy refresh clears the rail count');
+  late.settle();
+  await until('the late cached response', () => late.delivered());
+  // The response is on the wire; give the page time to act on it.
+  await page.waitForTimeout(300);
+  const afterLate = await panelState();
+  const lateRail = await railCount();
+  evidenceLog.afterLateCachedRead = { panel: afterLate, rail: lateRail };
+  assert(afterLate.body.includes('All 8 checks passed or were skipped.') && afterLate.problems === 0,
+    `a late cached read keeps the refreshed report: ${JSON.stringify(afterLate)}`);
+  assert(/^Ran (0s|just now|\ds) ago/.test(afterLate.meta), `a late cached read keeps the refreshed age: ${afterLate.meta}`);
+  assert(lateRail.text === '' && !lateRail.alert, `a late cached read keeps the rail count: ${JSON.stringify(lateRail)}`);
+
+  // A newer report cached by another tab's run still reaches the panel on
+  // the next poll, with its counts and age.
+  const other = doctorState(SERVING);
+  other.nextHealthy = false;
+  other.healthy = false;
+  other.finished = Date.now();
+  await page.locator('#refresh-btn').click();
+  await until('the newer cached report', async () => (await railCount()).text === '1 err · 2 warn');
+  const newer = await panelState();
+  assert(newer.problems === 3 && /^Ran (0s|just now|\ds) ago/.test(newer.meta), `a newer cached report replaces the panel: ${JSON.stringify(newer)}`);
+  assert(doctorState(SERVING).runs === 2, 'reading another tab\'s report never runs doctor');
+
   // 4. The panel follows the selected host through the forward. A remote
   //    with no report shows doctor running, with Refresh disabled, until its
   //    first run answers.
@@ -359,9 +412,17 @@ try {
   assert(doctorState('hostb').runs === 1, 'a remote with no report runs doctor on first open');
   assert(/^Ran /.test(await meta()), 'the remote report shows its age');
 
-  // 5. A host whose dashboard predates the panel.
+  // 5. A host whose dashboard predates the panel. A cached read of the
+  //    previous host that lands after the switch is discarded.
+  const retired = holdDoctor('hostb', { cached: true });
+  await page.locator('#refresh-btn').click();
+  await until('the held hostb cached read', () => retired.requests.length > 0);
   await page.locator('#host-select').selectOption('oldhost');
   await until('the unavailable state', async () => (await page.locator('#doctor-body').textContent()).includes('Doctor is not available on this host'));
+  retired.settle();
+  await until('the retired host response', () => retired.delivered());
+  await page.waitForTimeout(300);
+  assert((await page.locator('#doctor-body').textContent()).includes('Doctor is not available on this host'), 'a retired host\'s late response is discarded');
   assert(await meta() === 'Not available on this host', `the meta line names the state: ${await meta()}`);
   const oldRail = await railCount();
   assert(oldRail.text === '', 'an unavailable host shows no rail count');
@@ -387,6 +448,9 @@ try {
       'browser-doctor-refresh-shows-busy-state-until-settled',
       'browser-doctor-poll-never-runs-doctor',
       'browser-doctor-health-rail-count',
+      'browser-doctor-late-cached-read-never-replaces-refresh',
+      'browser-doctor-newer-cached-report-updates-panel',
+      'browser-doctor-retired-host-response-discarded',
       'browser-doctor-follows-selected-host',
       'browser-doctor-unavailable-on-older-host',
       'browser-doctor-requests-are-read-only',

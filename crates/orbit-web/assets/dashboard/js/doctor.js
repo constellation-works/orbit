@@ -36,12 +36,15 @@ const DOCTOR_TIMEOUT_MS = 75_000;
 const STATUS_ORDER = ["error", "warning", "ok", "info", "skipped"];
 const QUIET_STATUSES = new Set(["ok", "info", "skipped"]);
 
-// The report shown, for the host and workspace visit it was read in.
+// The report shown, for the host and workspace visit it was read in, with the
+// request that read it (see `supersedes`).
 let current = null;
 // The unavailable or failed state of the last request, for the same visit.
 let failure = null;
 let running = null;
 let detailsOpen = false;
+// How many doctor requests this tab has sent: each request's sequence number.
+let issued = 0;
 
 onWorkspaceChange(() => {
   current = null;
@@ -90,8 +93,20 @@ async function requestDoctor(visit, mode) {
   }
 }
 
-function adopt(visit, body) {
-  current = { visit, body, receivedAt: Date.now() };
+/// Whether the response to request `seq`, read in `mode`, may replace the
+/// report `shown`. The server's cache only moves forward, so a request sent
+/// after the shown report arrived answers with that report or a newer one.
+/// A request that overlapped it may carry an older report however late it
+/// arrives: of those, only a refresh, whose run starts after the request
+/// reached the server, replaces a report that no later refresh produced.
+/// A newer report that loses here is shown by the next poll.
+function supersedes(seq, mode, shown) {
+  if (seq > shown.after) return true;
+  return mode === "refresh" && (shown.mode !== "refresh" || seq > shown.seq);
+}
+
+function adopt(visit, seq, mode, body) {
+  current = { visit, body, seq, mode, after: issued, receivedAt: Date.now() };
 }
 
 /// Run (or reuse) the report for the selected workspace and render it.
@@ -102,21 +117,25 @@ async function load(mode) {
     return running.promise;
   }
   const entry = { visit, mode };
+  const seq = ++issued;
+  // A response that a report shown since has superseded changes nothing,
+  // whether it carries a report or a failure.
+  const settles = () => visit.isCurrent() && (!visitIsCurrent(current) || supersedes(seq, mode, current));
   entry.promise = (async () => {
     try {
       const result = await requestDoctor(visit, mode);
-      if (!visit.isCurrent()) return;
+      if (!settles()) return;
       if (result.unavailable) {
         current = null;
         failure = { visit, unavailable: true };
       } else if (result.body && Array.isArray(result.body.checks)) {
-        adopt(visit, result.body);
+        adopt(visit, seq, mode, result.body);
         failure = null;
       } else {
         failure = { visit, message: "the server returned no report" };
       }
     } catch (error) {
-      if (!visit.isCurrent()) return;
+      if (!settles()) return;
       failure = { visit, message: error.message || String(error) };
     } finally {
       if (running === entry) running = null;
@@ -159,6 +178,7 @@ export async function peekDoctor() {
     return;
   }
   const visit = captureWorkspaceVisit();
+  const seq = ++issued;
   let result;
   try {
     result = await requestDoctor(visit, "cached");
@@ -177,8 +197,8 @@ export async function peekDoctor() {
     if (!visitIsCurrent(current)) setHealthRailCount(null);
     return;
   }
-  // The server keeps only its latest run, so this is never older than ours.
-  adopt(visit, body);
+  if (visitIsCurrent(current) && !supersedes(seq, "cached", current)) return;
+  adopt(visit, seq, "cached", body);
   renderDoctor();
 }
 
