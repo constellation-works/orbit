@@ -21,6 +21,7 @@ mod auto_task_update;
 mod baseline_hold_tick;
 mod baseline_red_repair;
 mod cascade_outcomes;
+mod child_wait_audit;
 mod config_settings;
 mod dispatch_admission;
 mod distributed_drain;
