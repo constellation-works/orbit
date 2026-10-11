@@ -14,8 +14,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::friction::{
-    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
-    FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
+    FrictionAddParams, FrictionLandingOutcome, FrictionListFilter, FrictionRehomeOutcome,
+    FrictionRehomeParams, FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
 };
 use super::invocation::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
@@ -511,6 +511,16 @@ pub trait FrictionStoreBackend: Send + Sync {
         task_id: &str,
         resolved_at: DateTime<Utc>,
     ) -> Result<Option<StoredFrictionRecord>, OrbitError>;
+    /// Resolve and append verified landing evidence atomically, preserving
+    /// already-resolved records and concurrent body edits.
+    fn auto_resolve_by_landing(
+        &self,
+        id: &str,
+        task_id: &str,
+        commit: &str,
+        pr_number: Option<u64>,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<FrictionLandingOutcome, OrbitError>;
     fn tags(&self) -> Result<Vec<String>, OrbitError>;
     fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError>;
     fn reported_by_model(

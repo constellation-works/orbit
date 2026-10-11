@@ -4,6 +4,8 @@ use orbit_common::OrbitError;
 use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate};
 use orbit_store::contracts::{ClaimMutation, HandoffObservation};
 use orbit_types::workflow::handoff::AcceptedHandoff;
+use orbit_types::workflow::handoff::HandoffDelivery;
+use serde_json::{Value, json};
 
 use super::attempts::missing_attempt;
 use crate::OrbitRuntime;
@@ -54,6 +56,39 @@ impl OrbitRuntime {
             .landing_attempt(&update.handoff_id)?
             .ok_or_else(|| missing_attempt(&update.handoff_id))?
             .attempt;
+        let completing = matches!(update.step, HandoffLandingStep::Complete);
+        let previous_task = completing
+            .then(|| self.get_task(&accepted.handoff.task_id))
+            .transpose()?;
+        // Retain the exact delivery identity in the durable completion note,
+        // including paths with no external merge, so failed friction writes
+        // can retry later without consulting mutable refs or the provider.
+        let mut evidence = update.evidence.clone();
+        if completing
+            && let Ok(mut value @ Value::Object(_)) = serde_json::from_str::<Value>(&evidence)
+        {
+            let candidate = &accepted.handoff.candidate;
+            let (commit, pr) = match &candidate.delivery {
+                HandoffDelivery::PullRequest { number } => (
+                    value
+                        .pointer("/delivery/merge_commit")
+                        .and_then(Value::as_str),
+                    Some(*number),
+                ),
+                HandoffDelivery::LocalCandidate => {
+                    (Some(candidate.candidate.commit.as_str()), None)
+                }
+                HandoffDelivery::AlreadyLanded {
+                    covering_commit, ..
+                } => (Some(covering_commit.as_str()), None),
+                HandoffDelivery::NoDiff { .. } => (Some(candidate.base.commit.as_str()), None),
+            };
+            if let Some(commit) = commit {
+                let resolution = json!({"commit": commit, "pr_number": pr});
+                value["friction_resolution"] = resolution;
+                evidence = value.to_string();
+            }
+        }
         // Every landing mutation id is scoped to the attempt that performs it.
         // The store refuses a replayed unresolved merge intent outright — a
         // persisted send intent is uncertainty, never permission to send again —
@@ -82,7 +117,7 @@ impl OrbitRuntime {
                 format!("landing-complete:{}:{attempt}", update.handoff_id),
                 ClaimMutation::CompleteLanding {
                     handoff_id: update.handoff_id.clone(),
-                    evidence: update.evidence.clone(),
+                    evidence,
                 },
             ),
             HandoffLandingStep::Stop { repairable } => (
@@ -97,6 +132,10 @@ impl OrbitRuntime {
         self.stores()
             .tasks()
             .mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
+        if let Some(previous_task) = previous_task {
+            let task = self.get_task(&previous_task.id)?;
+            self.record_resolves_side_effects(previous_task.status, &task);
+        }
         Ok(())
     }
 

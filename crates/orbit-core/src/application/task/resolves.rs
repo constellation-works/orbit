@@ -13,9 +13,11 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_store::contracts::FrictionLandingOutcome;
 use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
+use serde_json::Value;
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
@@ -28,6 +30,14 @@ pub(crate) const RESOLVES_SIDE_EFFECT_FAILED_EVENT: &str = "resolves_side_effect
 /// [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] left pending. Same note shape.
 pub(crate) const RESOLVES_SIDE_EFFECT_RECOVERED_EVENT: &str = "resolves_side_effect_recovered";
 const TARGET_NOTE_PREFIX: &str = "target=";
+const RESOLVES_LANDING_EVENT: &str = "friction_resolved_on_landing";
+
+/// Evidence retained on the transition that delivered the task. Later retry
+/// writes use this same commit and PR, never a freshly observed branch head.
+struct LandingResolution {
+    commit: String,
+    pr_number: Option<u64>,
+}
 
 impl OrbitRuntime {
     /// Run the `resolves` side effects of a task write that has committed.
@@ -41,30 +51,45 @@ impl OrbitRuntime {
         if task.status != TaskStatus::Done {
             return;
         }
-        let targets: Vec<&str> = resolves_targets(task).collect();
+        let targets = named_friction_targets(task);
         if targets.is_empty() {
             return;
         }
-        let pending = match self.get_task_history(&task.id) {
-            Ok(history) => pending_resolves_retries(&history),
+        let task_history = match self.get_task_history(&task.id) {
+            Ok(history) => history,
             Err(error) => {
                 tracing::warn!(
                     task_id = %task.id,
                     %error,
                     "reading pending resolves retries failed"
                 );
-                BTreeSet::new()
+                Vec::new()
             }
         };
+        let pending = pending_resolves_retries(&task_history);
+        let landing = landing_resolution(&task_history);
+        let relations: BTreeSet<&str> = resolves_targets(task).collect();
         let targets: Vec<&str> = targets
-            .into_iter()
+            .iter()
+            .map(String::as_str)
+            .filter(|target| landing.is_some() || relations.contains(target))
             .filter(|target| previous_status != TaskStatus::Done || pending.contains(*target))
             .collect();
         if targets.is_empty() {
             return;
         }
         let mut history = Vec::new();
-        for (target, event) in self.apply_resolves_side_effects(task, &targets) {
+        for (target, event) in self.apply_resolves_side_effects(task, &targets, landing.as_ref()) {
+            let Some(event) = event else {
+                if pending.contains(target) {
+                    history.push(resolves_history_entry(
+                        RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
+                        target,
+                        None,
+                    ));
+                }
+                continue;
+            };
             match &event {
                 // A target that is still pending keeps its earlier entry;
                 // repeating it on every write would only grow the history.
@@ -85,6 +110,19 @@ impl OrbitRuntime {
                 )),
                 _ => {}
             }
+            if matches!(event, OrbitEvent::FrictionAutoResolved { .. })
+                && let Some(landing) = &landing
+            {
+                let mut entry = resolves_history_entry(RESOLVES_LANDING_EVENT, target, None);
+                entry.note = Some(format!(
+                    "{TARGET_NOTE_PREFIX}{target}\ncommit={}\npr={}",
+                    landing.commit,
+                    landing
+                        .pr_number
+                        .map_or_else(|| "none".to_string(), |number| format!("#{number}")),
+                ));
+                history.push(entry);
+            }
             if let Err(error) = self.record_event(event) {
                 tracing::warn!(task_id = %task.id, %error, "recording a resolves side-effect event failed");
             }
@@ -104,7 +142,8 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         targets: &[&'a str],
-    ) -> Vec<(&'a str, OrbitEvent)> {
+        landing: Option<&LandingResolution>,
+    ) -> Vec<(&'a str, Option<OrbitEvent>)> {
         let failed = |target: &str, reason: String| OrbitEvent::TaskRelationSideEffectFailed {
             task_id: task.id.clone(),
             target: target.to_string(),
@@ -118,26 +157,45 @@ impl OrbitRuntime {
             Err(error) => {
                 return targets
                     .iter()
-                    .map(|target| (*target, failed(target, error.to_string())))
+                    .map(|target| (*target, Some(failed(target, error.to_string()))))
                     .collect();
             }
         };
         targets
             .iter()
             .map(|target| {
-                let event = match frictions.auto_resolve_by_task(target, &task.id, Utc::now()) {
-                    Ok(Some(_)) => OrbitEvent::FrictionAutoResolved {
+                let result = match landing {
+                    Some(landing) => frictions.auto_resolve_by_landing(
+                        target,
+                        &task.id,
+                        &landing.commit,
+                        landing.pr_number,
+                        Utc::now(),
+                    ),
+                    None => frictions
+                        .auto_resolve_by_task(target, &task.id, Utc::now())
+                        .map(|record| {
+                            if record.is_some() {
+                                FrictionLandingOutcome::Resolved
+                            } else {
+                                FrictionLandingOutcome::Missing
+                            }
+                        }),
+                };
+                let event = match result {
+                    Ok(FrictionLandingOutcome::AlreadyResolved) => return (*target, None),
+                    Ok(FrictionLandingOutcome::Resolved) => OrbitEvent::FrictionAutoResolved {
                         task_id: task.id.clone(),
                         friction_id: target.to_string(),
                     },
-                    Ok(None) => OrbitEvent::TaskRelationDangling {
+                    Ok(FrictionLandingOutcome::Missing) => OrbitEvent::TaskRelationDangling {
                         task_id: task.id.clone(),
                         target: target.to_string(),
                         relation: RELATION_RESOLVES.to_string(),
                     },
                     Err(error) => failed(target, error.to_string()),
                 };
-                (*target, event)
+                (*target, Some(event))
             })
             .collect()
     }
@@ -178,6 +236,52 @@ fn resolves_targets(task: &Task) -> impl Iterator<Item = &str> {
         .filter(|relation| relation.relation_type == TaskRelationType::Resolves)
         .map(|relation| relation.target.as_str())
         .filter(|target| is_valid_friction_id(target))
+}
+
+/// Landing closes every explicitly named local friction. Scan description and
+/// criteria only, not titles, comments, plans or summaries; delimiters keep a
+/// prefix of an unrelated identifier from being interpreted as a target.
+fn named_friction_targets(task: &Task) -> BTreeSet<String> {
+    let mut targets: BTreeSet<String> = resolves_targets(task).map(str::to_string).collect();
+    for text in std::iter::once(task.description.as_str())
+        .chain(task.acceptance_criteria.iter().map(String::as_str))
+    {
+        for token in text.split(|ch: char| ch != '-' && ch != '_' && !ch.is_alphanumeric()) {
+            if is_valid_friction_id(token) {
+                targets.insert(token.to_string());
+            }
+        }
+    }
+    targets
+}
+
+fn landing_resolution(history: &[TaskHistoryEntry]) -> Option<LandingResolution> {
+    // Only the latest transition into done counts: an older delivery cannot
+    // authorize resolution after a task was reopened and completed again.
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Done))?;
+    let note = entry.note.as_deref()?;
+    if entry.event == "landing_completed" {
+        let value: Value = serde_json::from_str(note).ok()?;
+        let resolution = value.get("friction_resolution")?;
+        return Some(LandingResolution {
+            commit: resolution.get("commit")?.as_str()?.to_string(),
+            pr_number: resolution.get("pr_number").and_then(Value::as_u64),
+        });
+    }
+    // The ordinary owner PR completion path already retains this verified
+    // provider evidence in its durable authorization note.
+    let (_, delivery) = note.rsplit_once("; delivered by pull request #")?;
+    let (pr, commit) = delivery.split_once(" merged as ")?;
+    if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(LandingResolution {
+        commit: commit.to_string(),
+        pr_number: Some(pr.parse().ok()?),
+    })
 }
 
 /// Targets whose latest side-effect history entry records a failure.

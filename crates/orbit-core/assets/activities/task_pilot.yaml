@@ -273,6 +273,12 @@ spec:
        variable to make a criterion reachable. A criterion that expects a
        refusal is a correct negative test, and a tool name inside a quoted
        example is not a requirement; report neither.
+       Friction criteria such as "resolved with the merge sha" are owner-side
+       landing obligations, automatically fulfilled after verified delivery.
+       Do not flag them as infeasible worker writes or require the implementer
+       to supply a future merge SHA. Check that the friction is named in the
+       description, criteria or a workspace-local `resolves` relation; the
+       worker proves the repair, and landing appends the delivery evidence.
        Also check whether a criterion requires execution or evidence on a
        specific native operating system, such as a real macOS launch or
        sandbox-exec result, a Linux Bubblewrap result, a native Windows
