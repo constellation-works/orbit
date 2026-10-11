@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-10-05
-last_validated: 2026-10-05
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -80,7 +80,7 @@ created_at: 2026-05-11T00:00:00Z
 updated_at: 2026-05-11T00:00:00Z
 ```
 
-The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (`ORB-`, `F`, `L`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Legacy task relation types remain task-only. `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
+The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (`ORB-`, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Legacy task relation types remain task-only. `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
 
 ## 3. Prose Documents
 
@@ -322,7 +322,7 @@ The public `Task` DTO should not embed legacy relation fields (`parent_id`, `dep
 
 Task search is lexical-only. The optional workspace lexical index stores task chunks for `title`, `description`, `plan`, `execution_summary`, and `acceptance`; FTS5/BM25 ranks those chunks. The bundle matcher supplements indexed hits with `comments`, `external_refs`, artifact manifest paths, and tasks without indexed chunks. Without task chunks, the bundle matcher is the only source. Neither search path opens artifact payloads. `OrbitRuntime::search_reindex` rebuilds task chunks from the task collection. The MCP search tool rejects the retired semantic and embedding-model parameters.
 
-Relations need their own generated index. The bundle stores directed relation entries; local indexes materialize `(source_task_id, relation_type, target_task_id)` and optional inverse views for efficient lineage queries. The initial relation type set is `blocked_by`, `child_of`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`. Types are source-implied: a task that depends on another stores `blocked_by -> dependency`, and a subtask stores `child_of -> parent`. Writers validate relation types, reject self-edges and duplicates, and reject cycles for hierarchy and blocking relation families.
+Relations need their own generated index. The bundle stores directed relation entries; local indexes materialize `(source_task_id, relation_type, target_task_id)` and optional inverse views for efficient lineage queries. The current relation type set is `blocked_by`, `child_of`, `spawned_from`, `regression_from`, `supersedes`, `related_to`, `covered_by`, `produces`, and `resolves`. `covered_by` can point to a task or GitHub PR reference; `produces` and `resolves` can point to task, friction, or ADR IDs. The remaining relation types target tasks. Types are source-implied: a task that depends on another stores `blocked_by -> dependency`, and a subtask stores `child_of -> parent`. Writers validate relation types, reject self-edges and duplicates, and reject cycles for hierarchy and blocking relation families.
 
 Status and retention views are generated indexes. CLI/list surfaces can group terminal tasks by month using status-transition events. Compaction is out of scope for the reset, but the index must preserve the old ergonomic affordance of listing active tasks and closed tasks separately.
 

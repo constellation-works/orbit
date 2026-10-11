@@ -4,7 +4,7 @@ type: design
 title: "MCP Session Context — Design"
 owner: codex
 last_updated: 2026-10-05
-last_validated: 2026-10-05
+last_validated: 2026-10-10
 status: Accepted
 feature: mcp-session-context
 doc_role: design

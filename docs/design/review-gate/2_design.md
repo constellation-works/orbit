@@ -1,8 +1,8 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-09
-last_validated: 2026-10-05
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Accepted
 feature: review-gate
 doc_role: design
@@ -31,8 +31,9 @@ recorded. Unknown keys and out-of-range values fail config load.
 | --- | --- |
 | `review.before_pr` | bool (`false`) |
 | `review.before_landing` | bool (`false`) |
+| `review.before_landing_hosts` | machine ids (`[]` by default; entries are `hm_…`; owner policy for claimed leaves) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
-| `operation.review_crew` | crew name (before-PR or before-landing reviewer; crew of after-landing review tasks) |
+| `operation.review_crew` | crew name or weighted pool |
 
 `review.before_pr` holds PR creation for a fresh reviewer (§3).
 `review.before_landing` opens the PR first and reviews it while hosted CI
@@ -47,6 +48,14 @@ There is one review layer before landing. A resolution with both
 error naming both keys and the layer that set each, and `orbit config set`
 refuses an edit that would turn both on in one file. After-landing review is
 independent of either and may run beside them.
+
+An owner can use `review.before_landing_hosts` to turn before-landing review
+on for claimed leaves from selected machines while leaving the owner's own
+deliveries and unlisted machines unaffected. It is owner-side delivery
+policy, not machine authentication; it is redundant when
+`review.before_landing` is already on and cannot be combined with
+`review.before_pr`. The [configuration reference](../../CONFIG.md) documents
+the list's validation and claim behavior.
 
 After-landing review is carried out by the workspace's shipped
 `delivery-code-review` delivery auto-task [ORB-13896], switched with
@@ -99,10 +108,10 @@ Review timing is captured once per delivery run and never re-read. Every
 submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
 `task_local_pipeline`) carries a versioned `review`
-snapshot in its immutable input: timing and its source, the configured
-reviewer crew and its source, the lineage budget, the policy version, the
-owner's `workflow.required_validation_commands` list, and its
-`review.baseline_commands` list (§4). A
+snapshot in its immutable input: timing and its source, the reviewer crew
+selected from `operation.review_crew` and its source, the lineage budget,
+the policy version, the owner's `workflow.required_validation_commands`
+list, and its `review.baseline_commands` list (§4). A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
 workspace preferences at that moment. A distributed drain
 (`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
@@ -322,8 +331,10 @@ not held in progress (§4): it ends like any other `incomplete`. Final
 recovery still gets one look, as for a failed re-review.
 
 **Claimed leaves: the review runs on the leaf.** A claim from an owner with
-`review.before_landing` on captures `before_landing` and the owner's review
-contract in its ship contract, and the owner admits only an executor whose
+`review.before_landing` on, or a caller matching
+`review.before_landing_hosts`, captures `before_landing` and the owner's
+review contract in its ship contract. A host-list-only match leaves
+`before_pr` off. The owner admits only an executor whose
 leaf declares the review gate on the PR route (`before_pr_unsupported`
 otherwise). `task_claimed_pr_pipeline` runs the same three gate steps after
 `pr_open`, under the same crew, budget and host-evidence rules as a claimed
