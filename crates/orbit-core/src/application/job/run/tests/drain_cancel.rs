@@ -469,6 +469,7 @@ fn admission(
     let claim_id = format!("claim-{id}");
     let receipt = AdmissionReceipt {
         schema_version: 1,
+        gates: None,
         request: record.request.clone(),
         machine_id: destination.execution_machine_id.clone(),
         claim: Some(ExecutionClaim {

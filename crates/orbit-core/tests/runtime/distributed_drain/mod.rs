@@ -80,6 +80,7 @@ mod landing_attribution;
 mod landing_repair;
 mod no_diff;
 mod ordering;
+mod owner_gates;
 mod partial_candidate;
 mod pilot;
 mod provider_limit;
@@ -160,6 +161,9 @@ struct Wire {
     /// An older owner fixture: revision 1 rejects the new crews field.
     protocol: Mutex<Option<u32>>,
     fingerprint: Mutex<Option<Value>>,
+    /// An older owner fixture: its probe reports, and its admission
+    /// receipts capture, no validation gates [ORB-15622].
+    gateless: Mutex<bool>,
     /// When set, the owner refuses every settlement with this policy denial
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
@@ -342,6 +346,17 @@ impl DrainOwnerTransport for Wire {
             && let Some(fingerprint) = self.fingerprint.lock().unwrap().clone()
         {
             answer["protocol_fingerprint"] = fingerprint;
+        }
+        if *self.gateless.lock().unwrap() {
+            match name {
+                "orbit.drain.probe" => {
+                    answer.as_object_mut().unwrap().remove("validation_gates");
+                }
+                "orbit.task.pull" => {
+                    answer["receipt"].as_object_mut().unwrap().remove("gates");
+                }
+                _ => {}
+            }
         }
         let mut lose = self.lose.lock().unwrap();
         if let Some(at) = lose.iter().position(|tool| *tool == name) {
@@ -586,6 +601,7 @@ impl Pair {
             unreachable: Mutex::default(),
             protocol: Mutex::default(),
             fingerprint: Mutex::default(),
+            gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),

@@ -6,13 +6,17 @@ use super::{ClaimCandidateRef, ExecutionClaim};
 
 pub use orbit_types::task::ExecutionLocation;
 
-/// Owner-side ordering facts, separate from the executor's wire request.
+/// Owner-side facts admission reads, separate from the executor's wire
+/// request: how it orders candidates, and what its receipt captures.
 #[derive(Debug, Default)]
 pub struct AdmissionOrdering {
     /// The owner's OS. Outside the namespace, it runs only unrestricted tasks.
     pub owner_os: Option<orbit_types::task::HostOs>,
     /// Tasks whose admitted frozen delivery batch nears its deadline.
     pub expiring_tasks: std::collections::BTreeSet<String>,
+    /// The owner's validation gates, captured in the receipt
+    /// ([`AdmissionReceipt::gates`]) [ORB-15622].
+    pub gates: Option<orbit_types::workflow::ValidationGates>,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
@@ -401,6 +405,15 @@ pub struct AdmissionReceipt {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub os_unavailable: Vec<AdmissionDiagnostic>,
     pub queue_depth: usize,
+    /// The owner's `workflow.required_validation_commands` and
+    /// `review.baseline_commands` when it admitted this request
+    /// [ORB-15622]. The claimed leaf validates, accepts sandbox deferrals and
+    /// replays them against these, never its own configuration. A response
+    /// field outside the pull request's fingerprint: an older follower
+    /// ignores it, and a receipt from an older owner carries none, so its
+    /// leaf falls back to the replica's configuration with a warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gates: Option<orbit_types::workflow::ValidationGates>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

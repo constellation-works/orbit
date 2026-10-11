@@ -46,6 +46,12 @@ pub struct DrainProbeReport {
     /// review (the `delivery-code-review` auto-task) is reported for context
     /// and never refuses a pull [ORB-13992].
     pub review: ReviewSwitches,
+    /// The owner's `workflow.required_validation_commands` and
+    /// `review.baseline_commands` [ORB-15622]. Admission captures the same
+    /// lists in each receipt; a follower compares them with its own when its
+    /// drain starts and warns on a difference. Response-only, so it leaves
+    /// the pull fingerprint unchanged.
+    pub validation_gates: orbit_types::workflow::ValidationGates,
     /// `true` when the caller would pass the admission ladder now.
     /// Undeclared optional caller fields are unknown and skip only the legs
     /// that compare those fields; owner-resolved ship mode and the owner's
@@ -127,6 +133,7 @@ impl crate::OrbitRuntime {
             owner_machine_id: self.distributed_owner_machine_id(),
             session: probe_session(session),
             review: review_switches(self, Utc::now())?,
+            validation_gates: self.owner_validation_gates(),
             ship,
             admits: refusal.is_none(),
             refusal: refusal.map(|refusal| refusal.as_str().to_string()),

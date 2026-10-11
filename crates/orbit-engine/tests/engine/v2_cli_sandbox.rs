@@ -682,12 +682,13 @@ fn the_deferral_probe_records_what_the_lane_answers() {
         "notices": ["DEFERRED: bubblewrap unavailable: fixture"],
     }))
     .unwrap();
+    let gates =
+        orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
+            required_validation_commands: vec!["make ci-test-affected".to_string()],
+            baseline_commands: Vec::new(),
+        });
     let pending = handoff
-        .derive(
-            &summary,
-            &["make ci-test-affected".to_string()],
-            Some("pinned-base"),
-        )
+        .derive(&summary, &gates, Some("pinned-base"))
         .unwrap();
     pending.clone().complete(refused).unwrap();
     let refusal = pending.complete(unresolved).expect_err(

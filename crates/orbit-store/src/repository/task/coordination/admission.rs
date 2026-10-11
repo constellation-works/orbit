@@ -254,7 +254,8 @@ impl TaskCommitBoundary {
     /// the base fails the same way; it is deferred until the held command
     /// passes on a new base tip, as it would be on the owner's own drain.
     ///
-    /// `ordering` supplies the owner's OS and expiring frozen-batch tasks.
+    /// `ordering` supplies the owner's OS, expiring frozen-batch tasks and the
+    /// validation gates every receipt captures [ORB-15622].
     /// Candidates share local dispatch's band, priority and expiry order,
     /// then prefer work this executor can run but the owner cannot.
     #[allow(clippy::too_many_arguments)]
@@ -284,6 +285,7 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
+                ordering.gates.as_ref(),
                 reach,
             )
         };
@@ -305,6 +307,7 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
+        gates: Option<&orbit_types::workflow::ValidationGates>,
         reach: DependencyReach,
     ) -> Result<Option<AdmissionLookup>, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
@@ -356,6 +359,7 @@ impl TaskCommitBoundary {
                 .iter()
                 .filter(|task| screen.queued(task, &snapshot.statuses))
                 .count(),
+            gates: gates.cloned(),
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so

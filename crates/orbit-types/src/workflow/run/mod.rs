@@ -9,6 +9,7 @@ mod implementer_findings;
 mod provider_hold;
 mod root_cause;
 mod state;
+mod validation_gates;
 
 pub use agent_blocker::{
     AgentBlocker, AgentBlockerClass, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
@@ -63,3 +64,4 @@ pub use state::{
     is_provider_limit, is_provider_refusal, is_provider_unavailable,
     is_validation_environment_failure,
 };
+pub use validation_gates::{HostValidationGates, ValidationGateSource, ValidationGates};

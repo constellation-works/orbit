@@ -82,6 +82,7 @@ impl PullPeer for Peer {
             .entry(request.request_id.clone())
             .or_insert_with(|| AdmissionReceipt {
                 schema_version: 1,
+                gates: None,
                 request: request.clone(),
                 machine_id: destination.execution_machine_id.clone(),
                 claim: (!self.idle.get()).then(|| ExecutionClaim {

@@ -16,7 +16,9 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ExecutionClaim, LocalPullAdmission, LocalPullPhase};
 use orbit_types::tool::WorkerInvocation;
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{
+    HostValidationGates, JobRunState, ValidationGateSource, ValidationGates,
+};
 
 use crate::OrbitRuntime;
 
@@ -37,7 +39,79 @@ pub(crate) struct ClaimedLeaf {
 pub(crate) const CLAIMED_LEAF_JOBS: &[&str] =
     &["task_claimed_local_pipeline", "task_claimed_pr_pipeline"];
 
+impl ClaimedLeaf {
+    /// The owner's gates this claim was admitted under [ORB-15622]: the
+    /// receipt's capture, or else the lists the ship contract's review
+    /// captured. `None` for a claim an older owner admitted with neither.
+    pub(crate) fn owner_gates(&self) -> Option<ValidationGates> {
+        if let Some(gates) = self
+            .admission
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.gates.clone())
+        {
+            return Some(gates);
+        }
+        let review = self.admission.request.ship.review.as_ref()?;
+        Some(ValidationGates {
+            required_validation_commands: review.required_validation_commands.clone()?,
+            baseline_commands: review.baseline_commands.clone(),
+        })
+    }
+}
+
 impl OrbitRuntime {
+    /// This host's own `workflow.required_validation_commands` and
+    /// `review.baseline_commands`.
+    pub(crate) fn local_validation_gates(&self) -> ValidationGates {
+        ValidationGates {
+            required_validation_commands: self.workflow_required_validation_commands().to_vec(),
+            baseline_commands: self.review_baseline_commands().to_vec(),
+        }
+    }
+
+    /// The gates this process holds a candidate to [ORB-15622]. A claimed
+    /// leaf applies the owner's gates its claim captured. One whose claim
+    /// captured none, from an older owner, falls back to this replica's
+    /// configuration and warns, since that copy may have drifted from the
+    /// owner's. Every other run applies this host's configuration.
+    pub(crate) fn host_validation_gates(&self) -> HostValidationGates {
+        if self.worker_invocation().is_none() {
+            return HostValidationGates::local(self.local_validation_gates());
+        }
+        let owner = self.current_claimed_leaf().map(|leaf| leaf.owner_gates());
+        self.claim_validation_gates(owner)
+    }
+
+    /// [`Self::host_validation_gates`] for a claimed leaf, given what its
+    /// claim captured.
+    pub(crate) fn claim_validation_gates(
+        &self,
+        owner: Result<Option<ValidationGates>, OrbitError>,
+    ) -> HostValidationGates {
+        match owner {
+            Ok(Some(gates)) => HostValidationGates {
+                gates,
+                source: ValidationGateSource::OwnerContract,
+            },
+            missing => {
+                let reason = match missing {
+                    Err(error) => format!("its admission could not be read: {error}"),
+                    _ => "its admission captured no owner gates (an older owner)".to_string(),
+                };
+                tracing::warn!(
+                    "claimed leaf validates against this replica's \
+                     `workflow.required_validation_commands` and `review.baseline_commands`, \
+                     which may differ from the owner's: {reason}"
+                );
+                HostValidationGates {
+                    gates: self.local_validation_gates(),
+                    source: ValidationGateSource::ReplicaConfig,
+                }
+            }
+        }
+    }
+
     /// The durable admission for a leaf run, if that run is a claimed leaf.
     pub(crate) fn claimed_leaf_admission(
         &self,

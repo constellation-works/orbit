@@ -371,11 +371,14 @@ impl RuntimeHost for OrbitRuntime {
             ship_mode: ship.mode.clone(),
             base_branch: ship.base_branch.clone(),
             landing_branch: ship.landing_branch.clone(),
-            // The owner re-derives its own requirements when it accepts the
-            // handoff, so this copy only decides what the executor runs. A
-            // follower reading a different list produces evidence the owner
-            // refuses, which is the fail-closed direction.
-            required_commands: self.workflow_required_validation_commands().to_vec(),
+            // The owner's list its admission captured [ORB-15622]. The owner
+            // still re-derives its own requirements when it accepts the
+            // handoff, so a list changed since admission produces evidence
+            // the owner refuses, which is the fail-closed direction.
+            required_commands: self
+                .claim_validation_gates(Ok(leaf.owner_gates()))
+                .gates
+                .required_validation_commands,
         })
     }
 
@@ -512,11 +515,17 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
-        self.workflow_required_validation_commands().to_vec()
+        self.host_validation_gates()
+            .gates
+            .required_validation_commands
     }
 
     fn review_baseline_commands(&self) -> Vec<String> {
-        OrbitRuntime::review_baseline_commands(self).to_vec()
+        self.host_validation_gates().gates.baseline_commands
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        self.host_validation_gates()
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {

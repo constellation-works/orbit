@@ -266,6 +266,7 @@ impl OwnerLocal {
             unreachable: Mutex::default(),
             protocol: Mutex::default(),
             fingerprint: Mutex::default(),
+            gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::new(true),
