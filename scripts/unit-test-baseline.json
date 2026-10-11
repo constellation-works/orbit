@@ -982,6 +982,7 @@
         "log_format/tests/render.rs::rendered_log_redacts_secret_tokens_in_lines_and_fields",
         "log_format/tests/scan.rs::a_segment_straddling_the_window_is_read_only_back_to_its_start",
         "log_format/tests/scan.rs::line_verdicts_equal_a_full_parse",
+        "log_format/tests/scan.rs::post_window_errors_do_not_consume_the_match_budget_or_advance_coverage",
         "log_format/tests/scan.rs::rejected_lines_build_no_value",
         "log_format/tests/scan.rs::segments_last_written_before_the_window_are_not_opened",
         "tests/dashboard_assets.rs::codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge",

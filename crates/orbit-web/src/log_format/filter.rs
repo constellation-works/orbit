@@ -57,6 +57,7 @@ pub(crate) struct Filters {
     target_prefix: Option<String>,
     pub(super) min_level: Option<LevelFilter>,
     pub(super) since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
 }
 
 impl Filters {
@@ -69,7 +70,14 @@ impl Filters {
             target_prefix,
             min_level,
             since,
+            until: None,
         }
+    }
+
+    /// Exclude records after this inclusive upper bound before counting scan matches.
+    pub(crate) fn with_until(mut self, until: DateTime<Utc>) -> Self {
+        self.until = Some(until);
+        self
     }
 
     pub(crate) fn from_query_parts(
@@ -115,6 +123,11 @@ impl Filters {
         }
         if let Some(since) = self.since
             && ts.is_some_and(|ts| ts < since)
+        {
+            return false;
+        }
+        if let Some(until) = self.until
+            && ts.is_some_and(|ts| ts > until)
         {
             return false;
         }
