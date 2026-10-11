@@ -6,6 +6,7 @@
 //! agents fell back to the desktop login. A warning is the contract: starting
 //! still succeeds, the names (never values) are on stderr and the run record.
 
+use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
@@ -28,10 +29,14 @@ const NOT_PASSED: &str = "FIXTURE_NOT_PASS_LISTED";
 const EMPTY: &str = "FIXTURE_EMPTY_TOKEN";
 const JOB: &str = "env_pass_fixture";
 
+mod cleanup;
+
 struct Fixture {
-    _temp: TempDir,
+    _temp: Option<TempDir>,
     home: PathBuf,
     repo: PathBuf,
+    submitted: Cell<bool>,
+    terminal_worker_observed: Option<std::sync::mpsc::SyncSender<()>>,
 }
 
 impl Fixture {
@@ -51,9 +56,11 @@ impl Fixture {
         fs::create_dir_all(&home).expect("home");
         git_repo::init(&repo);
         let fixture = Self {
-            _temp: temp,
+            _temp: Some(temp),
             home,
             repo,
+            submitted: Cell::new(false),
+            terminal_worker_observed: None,
         };
         fixture
             .command(&[])
@@ -127,6 +134,8 @@ impl Fixture {
     }
 
     fn start(&self, set: &[(&str, &str)], args: &[&str]) -> (Value, String) {
+        // Arm cleanup before spawning, including a failed CLI or malformed JSON.
+        self.submitted.set(true);
         let output = self.command(set).args(args).output().expect("spawn orbit");
         assert!(output.status.success(), "{args:?} failed: {output:?}");
         let stderr = String::from_utf8(output.stderr.clone()).expect("stderr");
@@ -308,6 +317,9 @@ impl Fixture {
     }
 
     fn tick_with(&self, set: &[(&str, &str)], dry_run: bool) -> (Value, String) {
+        if !dry_run {
+            self.submitted.set(true);
+        }
         let mut command = self.command(set);
         command.args(["clock", "tick", "--json"]);
         if dry_run {
@@ -666,7 +678,8 @@ fn clock_credential_loader_preserves_the_process_environment_with_a_background_r
         .env(SET, AMBIENT_SECRET)
         .env(EMPTY, "")
         .env_remove(UNSET);
-    let output = test_env::run_child_test(&mut command, CHILD, fixture._temp.path());
+    let output =
+        test_env::run_child_test(&mut command, CHILD, fixture._temp.as_ref().unwrap().path());
     test_env::assert_child_test_passed(CHILD, output.status, &output.stdout, &output.stderr);
 }
 
