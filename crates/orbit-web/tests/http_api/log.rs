@@ -31,6 +31,39 @@ fn stream(response: Response) -> BufReader<Response> {
     BufReader::new(response)
 }
 
+#[test]
+#[allow(clippy::print_stdout)] // First-frame timing is evidence, not a flaky threshold.
+fn gzip_requests_deliver_sse_frames_before_the_stream_ends() {
+    isolated(
+        "log::gzip_requests_deliver_sse_frames_before_the_stream_ends",
+        || {
+            let fixture = Fixture::new();
+            let path = fixture.path("process.log");
+            fs::write(&path, line("first-frame")).unwrap();
+            let server = fixture.server(false);
+            let started = std::time::Instant::now();
+            let response = server
+                .request("GET", "/api/log/stream?from=0")
+                .header("accept-encoding", "gzip")
+                .send()
+                .unwrap();
+            assert!(response.headers().get("content-encoding").is_none());
+            let mut reader = stream(response);
+            let (_, first) = event(&mut reader);
+            assert_step(&first, "first-frame");
+            println!(
+                "SSE first frame with gzip negotiation: {:?}",
+                started.elapsed()
+            );
+            // The next frame is produced only after the first was received:
+            // buffering until end-of-stream would never reach this append.
+            append(&path, &line("second-frame"));
+            let (_, second) = event(&mut reader);
+            assert_step(&second, "second-frame");
+        },
+    );
+}
+
 /// The HTTP client's total request timeout bounds even a missing SSE delimiter/event.
 fn event(reader: &mut impl BufRead) -> (u64, Value) {
     let (id, value) = feed_event(reader);

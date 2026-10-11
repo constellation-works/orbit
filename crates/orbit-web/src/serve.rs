@@ -15,6 +15,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
+use tower_http::compression::CompressionLayer;
 
 use crate::{api, assets, health, heap, state};
 
@@ -240,6 +241,18 @@ pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitErr
     Ok(assets::dashboard_file_router()?
         .merge(health_router())
         .nest("/api", api::router())
+        // Stream JSON through gzip when negotiated. SSE and other media stay
+        // untouched; tower-http also preserves already-encoded remote bodies
+        // and static assets rather than compressing them a second time.
+        .layer(CompressionLayer::new().compress_when(
+            |_, _, headers: &axum::http::HeaderMap, _: &axum::http::Extensions| {
+                headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.split(';').next())
+                    .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+            },
+        ))
         // Outermost, so every response (assets, API, health, 403s, 404s)
         // carries the baseline headers.
         .layer(middleware::map_response(security_headers))

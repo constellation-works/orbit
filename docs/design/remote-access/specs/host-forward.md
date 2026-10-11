@@ -32,10 +32,20 @@ Each step runs before the next, and every refusal happens before any SSH process
 ## Forwarding
 
 - The method, the still-encoded path, the query string (verbatim) and the body are passed through.
-- Request headers sent: `Accept`, `Content-Type`, `Last-Event-ID`. `Host` and `Origin` are set to the remote's own loopback authority (`localhost:<remote-port>`), so the remote's origin guard admits the request as same-origin. Cookies and other headers are not sent.
-- Response headers returned: `Content-Type`, `Content-Disposition`, `Content-Security-Policy`, `Cache-Control`. An artifact therefore keeps its sandbox CSP and attachment disposition. Hop-by-hop headers are dropped, and the serving dashboard's own security and `nosniff` headers still apply.
-- The remote status and body come back unchanged. Bodies are streamed, never buffered.
+- Request headers sent: `Accept`, `Accept-Encoding`, `Content-Type`, `Last-Event-ID`. `Host` and `Origin` are set to the remote's own loopback authority (`localhost:<remote-port>`), so the remote's origin guard admits the request as same-origin. Cookies and other headers are not sent.
+- Response headers returned: `Content-Type`, `Content-Encoding`, `Vary`, `Content-Disposition`, `Content-Security-Policy`, `Cache-Control`. An artifact therefore keeps its sandbox CSP and attachment disposition. Hop-by-hop headers are dropped, and the serving dashboard's own security and `nosniff` headers still apply.
+- The remote status and decoded payload are preserved. Already-encoded bodies pass through unchanged; identity JSON may be gzip-encoded on the browser leg. Bodies are streamed, never buffered.
 - One loopback HTTP/1.1 connection per request, to the tunnel's local port.
+
+Dashboard JSON responses (`application/json`, including media-type parameters)
+use streaming gzip when the client accepts it, with `Vary: Accept-Encoding`.
+Negotiation reaches the remote, so JSON can be compressed before crossing the
+SSH tunnel. An already-encoded remote response passes through without a second
+encoding. An older remote returning identity JSON can still be compressed by
+the serving dashboard. Clients that do not accept gzip receive identity JSON.
+Event streams (`text/event-stream`) bypass compression and deliver frames while
+the stream remains open. Static assets retain their existing encoding and ETag
+behavior.
 
 ## Tunnels
 

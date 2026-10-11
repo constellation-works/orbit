@@ -298,6 +298,13 @@ The golden only approximates a live run's profile, so use a real worker run as t
 
 ### Dashboard browser fixtures
 
+The gzip forward check uses two real dashboards and the stub SSH tunnel.
+Set `ORBIT_PLAYWRIGHT_MODULE` and `ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR`,
+then run the ignored HTTP test
+`host_forward::gzip_forward_returns_json_to_the_browser`. Chromium fetch must
+decode the forwarded routines and job-runs JSON; `result.json` records both
+responses in the evidence directory.
+
 Each runs as `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/<evidence-dir>` and saves screenshots and any JSON named below. The dashboard is dark-only, so there is no light-theme pass. The loading and distributed scenarios also run in the QA sweep.
 
 | Script | Evidence dir | Covers |

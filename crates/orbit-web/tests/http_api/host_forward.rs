@@ -219,6 +219,148 @@ fn comments(server: &Server, id: &str) -> usize {
         .len()
 }
 
+/// Browser fetch must decode the gzip that crosses both dashboard servers.
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR"]
+fn gzip_forward_returns_json_to_the_browser() {
+    isolated(
+        "host_forward::gzip_forward_returns_json_to_the_browser",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            b.seed_run("jrun-browser-compression", "fixture", JobRunState::Success);
+            let b_server = b.server(false);
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+            let output = std::process::Command::new("node")
+                .arg(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/http_api/compression_browser.mjs"),
+                )
+                .arg(
+                    std::env::var_os("ORBIT_PLAYWRIGHT_MODULE")
+                        .expect("prepared Playwright module"),
+                )
+                .arg(
+                    std::env::var_os("ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR")
+                        .expect("browser evidence directory"),
+                )
+                .arg(&a_server.origin)
+                .output()
+                .expect("launch compression browser fixture");
+            assert!(
+                output.status.success(),
+                "browser gzip forwarding failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        },
+    );
+}
+
+#[test]
+fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
+    isolated(
+        "host_forward::gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            let b_server = b.server(false);
+            let identity = json_ok(b_server.get("/api/hosts?probe=false")).to_string();
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let remote_port = listener.local_addr().unwrap().port();
+            // A remote stub exposes the received negotiation in its JSON.
+            // One route is pre-encoded; the other models an older dashboard.
+            thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let mut stream = stream.unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut first = String::new();
+                    reader.read_line(&mut first).unwrap();
+                    let mut encoding = String::new();
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" || line.is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':')
+                            && name.eq_ignore_ascii_case("accept-encoding")
+                        {
+                            encoding = value.trim().to_string();
+                        }
+                    }
+                    let mut extra_headers = String::new();
+                    let body = if first.starts_with("GET /healthz ") {
+                        Vec::new()
+                    } else if first.starts_with("GET /api/hosts?") {
+                        identity.as_bytes().to_vec()
+                    } else {
+                        let json = serde_json::to_vec(&json!({
+                            "accept_encoding": encoding,
+                            "message": "remote JSON payload".repeat(100),
+                        }))
+                        .unwrap();
+                        extra_headers.push_str("Vary: Accept\r\nVary: Accept-Encoding\r\n");
+                        if first.starts_with("GET /api/encoded?") {
+                            extra_headers.push_str("Content-Encoding: gzip\r\n");
+                            let mut gzip = flate2::write::GzEncoder::new(
+                                Vec::new(),
+                                flate2::Compression::default(),
+                            );
+                            gzip.write_all(&json).unwrap();
+                            gzip.finish().unwrap()
+                        } else {
+                            json
+                        }
+                    };
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                    stream.write_all(&body).unwrap();
+                }
+            });
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub = StubSsh::new(json!({"hostb-ssh": {"attach": remote_port, "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+            for route in ["encoded", "legacy"] {
+                let response = a_server
+                    .request("GET", &format!("/api/on/hostb/{route}{WS}"))
+                    .header("accept-encoding", "gzip")
+                    .send()
+                    .unwrap();
+                assert_eq!(response.status(), 200);
+                assert_eq!(response.headers()["content-encoding"], "gzip");
+                let vary: Vec<_> = response
+                    .headers()
+                    .get_all("vary")
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect();
+                assert_eq!(vary, ["Accept", "Accept-Encoding"]);
+                let bytes = response.bytes().unwrap();
+                let mut decoded = Vec::new();
+                flate2::read::GzDecoder::new(bytes.as_ref())
+                    .read_to_end(&mut decoded)
+                    .unwrap();
+                let value: Value =
+                    serde_json::from_slice(&decoded).expect("one gzip decoding yields JSON");
+                assert_eq!(
+                    value["accept_encoding"], "gzip",
+                    "negotiation crosses the SSH hop"
+                );
+                assert_eq!(value["message"], "remote JSON payload".repeat(100));
+            }
+            let response = a_server.get(&format!("/api/on/hostb/legacy{WS}"));
+            assert!(response.headers().get("content-encoding").is_none());
+            assert_eq!(json_ok(response)["accept_encoding"], "");
+        },
+    );
+}
+
 #[test]
 fn reads_through_the_forward_match_the_remote_dashboard() {
     isolated(
@@ -276,11 +418,13 @@ fn reads_through_the_forward_match_the_remote_dashboard() {
 
             let stream = a_server
                 .request("GET", "/api/on/hostb/log/stream?from=0")
+                .header("accept-encoding", "gzip")
                 .timeout(Duration::from_secs(20))
                 .send()
                 .unwrap();
             assert_eq!(stream.status(), 200);
             assert_eq!(stream.headers()["content-type"], "text/event-stream");
+            assert!(stream.headers().get("content-encoding").is_none());
             let mut stream = BufReader::new(stream);
             let mut log = OpenOptions::new()
                 .create(true)
