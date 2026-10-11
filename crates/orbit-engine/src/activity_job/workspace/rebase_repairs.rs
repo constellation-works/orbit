@@ -9,6 +9,9 @@
 //! tracked repairs made before the invocation join the continued commit as
 //! companions; untracked payloads that predate it and host-owned `.orbit/`
 //! state never do.
+//! Built-in text merges are recognizable by their markers; binary ancestors
+//! can instead leave a side untouched. Custom drivers can leave arbitrary
+//! output, so their earlier repairs require Git's original `AUTO_MERGE` tree.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -61,10 +64,12 @@ pub(super) fn earlier_companion_paths(
 /// Whether an unmerged `path` no longer holds what Git left at the stop.
 ///
 /// Git leaves conflict markers where it merged text. Where it could not (a
-/// side is missing, as in modify/delete, or a side is binary or merges as
+/// side is missing, as in modify/delete, or any stage is binary or merges as
 /// binary) it leaves one side's content instead, so content equal to a side
-/// is still the untouched stop there. A path Git would have written but that
-/// is now absent was deleted as its resolution. Anything else (a symlink or
+/// is still the untouched stop there. Custom drivers may leave arbitrary
+/// content: only a difference from Git's recorded stopped output proves a
+/// repair. A path Git would have written but that is now absent was deleted
+/// as its resolution. Anything else (a symlink or
 /// directory in the way) is not adopted; the invocation must repair it.
 fn repaired_before_invocation(root: &Path, path: &str) -> Result<bool, DispatchError> {
     let stages = conflict_stages(root, path)?;
@@ -84,11 +89,44 @@ fn repaired_before_invocation(root: &Path, path: &str) -> Result<bool, DispatchE
     if has_conflict_markers(&content) {
         return Ok(false);
     }
-    if textual_merge(root, path, &sides)? {
+    let blob = git_stdout(root, &["hash-object", "--", path])?;
+    if let Some(tree) = auto_merge_tree(root)? {
+        let stopped = git_output_raw(root, &["rev-parse", "--verify", &format!("{tree}:{path}")])?;
+        return Ok(stopped.success && String::from_utf8_lossy(&stopped.stdout).trim() != blob);
+    }
+    let driver = merge_driver(root, path)?;
+    if driver == "text" && textual_merge(root, &stages)? {
         return Ok(true);
     }
-    let blob = git_stdout(root, &["hash-object", "--", path])?;
+    // Without the original output, custom drivers' arbitrary writes cannot
+    // be distinguished from an earlier repair, even by comparing both sides.
+    if !matches!(driver.as_str(), "text" | "binary") {
+        return Ok(false);
+    }
     Ok(!sides.iter().flatten().any(|side| side.oid == blob))
+}
+
+/// The stopped merge's original worktree tree, when the Git strategy records it.
+pub(super) fn auto_merge_tree(root: &Path) -> Result<Option<String>, DispatchError> {
+    let output = git_output_raw(root, &["rev-parse", "--verify", "AUTO_MERGE^{tree}"])?;
+    Ok(output
+        .success
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()))
+}
+
+/// Respect both the path attribute and the driver selected for unspecified paths.
+fn merge_driver(root: &Path, path: &str) -> Result<String, DispatchError> {
+    let merge = git_stdout(root, &["check-attr", "merge", "--", path])?;
+    match merge.rsplit(": ").next() {
+        Some("set") => Ok("text".to_string()),
+        Some("unset") => Ok("binary".to_string()),
+        Some("unspecified") => git_stdout(
+            root,
+            &["config", "--default", "text", "--get", "merge.default"],
+        ),
+        Some(driver) => Ok(driver.to_string()),
+        None => Ok(String::new()),
+    }
 }
 
 struct StageEntry {
@@ -125,27 +163,19 @@ fn conflict_stages(root: &Path, path: &str) -> Result<BTreeMap<u8, StageEntry>, 
     Ok(stages)
 }
 
-/// Whether Git merged this path's sides as text, writing conflict markers:
-/// both sides are regular files with text content and the path's `merge`
-/// attribute does not make it binary.
-fn textual_merge(
-    root: &Path,
-    path: &str,
-    sides: &[Option<&StageEntry>; 2],
-) -> Result<bool, DispatchError> {
-    let [Some(ours), Some(theirs)] = sides else {
+/// Whether a built-in text merge writes markers: both sides must exist and
+/// every present stage, including the ancestor, must be a regular text file.
+fn textual_merge(root: &Path, stages: &BTreeMap<u8, StageEntry>) -> Result<bool, DispatchError> {
+    if !stages.contains_key(&2) || !stages.contains_key(&3) {
         return Ok(false);
-    };
-    for side in [ours, theirs] {
-        if !matches!(side.mode.as_str(), "100644" | "100755") || blob_is_binary(root, &side.oid)? {
+    }
+    for stage in stages.values() {
+        if !matches!(stage.mode.as_str(), "100644" | "100755") || blob_is_binary(root, &stage.oid)?
+        {
             return Ok(false);
         }
     }
-    let merge = git_stdout(root, &["check-attr", "merge", "--", path])?;
-    Ok(!matches!(
-        merge.rsplit(": ").next(),
-        Some("unset" | "binary")
-    ))
+    Ok(true)
 }
 
 fn blob_is_binary(root: &Path, oid: &str) -> Result<bool, DispatchError> {

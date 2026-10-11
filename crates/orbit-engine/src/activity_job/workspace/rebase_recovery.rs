@@ -18,7 +18,7 @@ use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
     git_stdout, git_stdout_bytes, nul_paths,
 };
-use super::rebase_repairs::{earlier_companion_paths, unrepaired_conflict_paths};
+use super::rebase_repairs::{auto_merge_tree, earlier_companion_paths, unrepaired_conflict_paths};
 use super::recovery::safe_relative_path;
 use super::{DispatchError, WorktreeBoundaryGuard};
 
@@ -705,6 +705,7 @@ struct RecoveryMetadata {
     directories: Vec<(PathBuf, fs::File)>,
     rebase_root: PathBuf,
     rebase_files: BTreeMap<PathBuf, Vec<u8>>,
+    auto_merge_tree: Option<String>,
 }
 
 impl RecoveryMetadata {
@@ -722,6 +723,7 @@ impl RecoveryMetadata {
             directories,
             rebase_root: rebase_root.to_path_buf(),
             rebase_files: recovery_metadata_files(rebase_root)?,
+            auto_merge_tree: auto_merge_tree(root)?,
         })
     }
 
@@ -751,7 +753,9 @@ impl RecoveryMetadata {
                 return Err(invalid());
             }
         }
-        if recovery_metadata_files(&self.rebase_root)? != self.rebase_files {
+        if recovery_metadata_files(&self.rebase_root)? != self.rebase_files
+            || auto_merge_tree(root)? != self.auto_merge_tree
+        {
             return Err(invalid());
         }
         Ok(())
