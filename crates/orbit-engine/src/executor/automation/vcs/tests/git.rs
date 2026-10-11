@@ -73,14 +73,16 @@ fn quiet_git_failures_keep_exit_status_and_signal_diagnostics() {
 }
 
 fn git_ok(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo)
+    let mut command = Command::new("git");
+    command.args(args).current_dir(repo);
+    let output = command
         .output()
-        .expect("git setup");
+        .unwrap_or_else(|error| panic!("spawn {command:?}: {error}"));
     assert!(
         output.status.success(),
-        "git {args:?}: {}",
+        "{command:?} failed ({}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
