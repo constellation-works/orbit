@@ -1,0 +1,38 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: await_approval_pilot
+spec:
+  type: deterministic
+  description: >
+    Wait for the `--approve-proposed` task-pilot child of this drain to
+    finish. Returns as soon as no `task_pilot_pipeline` run the drain
+    dispatched is pending or running, or once `timeout_seconds` has passed,
+    whichever comes first. It records nothing: `record_proposed_approvals`
+    reads what the finished pilot approved. Inside the drain loop the wait is
+    bounded by the poll interval, so admission still runs at least that
+    often while a pilot is live. After the loop it keeps the drain open until
+    its last pilot finishes, because the pilot's apply step refuses the
+    authority of a drain that has ended. `pilot_live` reports a pilot still
+    live when the timeout ran out.
+  input_schema_json:
+    type: object
+    properties:
+      timeout_seconds:
+        type: number
+        minimum: 0
+        maximum: 3600
+  output_schema_json:
+    type: object
+    required: [pilot_live, live_pilot_run_ids, waited_seconds]
+    properties:
+      pilot_live:
+        type: boolean
+      live_pilot_run_ids:
+        type: array
+        items:
+          type: string
+      waited_seconds:
+        type: number
+  action: await_approval_pilot
+  config: {}

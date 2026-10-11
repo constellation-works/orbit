@@ -28,12 +28,13 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
                   `--complete` never approves `proposed` work; `--approve-proposed` does.\n\
-                  With it, every pass first pilots the qualifying proposed tasks (tagged\n\
-                  `no-diff-expected`, or with context files and an assessed complexity) and\n\
-                  approves each one the pilot verifies: no duplicate, already-landed,\n\
-                  conflict or warning finding. That includes tasks filed after the window\n\
-                  opens, and the same pass can admit them. Each approval's history note names\n\
-                  the drain run. Other tasks stay proposed; `orbit run show` and\n\
+                  With it, the drain pilots the qualifying proposed tasks (tagged\n\
+                  `no-diff-expected`, or with context files and an assessed complexity) in\n\
+                  the background, one batch at a time, and approves each one the pilot\n\
+                  verifies: no duplicate, already-landed, conflict or warning finding. That\n\
+                  includes tasks filed after the window opens. Backlog work keeps starting\n\
+                  while a pilot runs, and the pass that sees it finish admits what it\n\
+                  approved. Each approval's history note names the drain run. Other tasks stay proposed; `orbit run show` and\n\
                   `orbit run readiness` count the approvals and give each hold's reason.\n\
                   A task tagged `no-auto-approve` is never approved automatically; it is held\n\
                   with that reason until a human approves it.\n\

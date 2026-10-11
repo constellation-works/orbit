@@ -408,16 +408,24 @@ as `ship-sweep`.
 `proposed` work, independent of `--complete`. Default-off and never enabled by
 configuration.
 
-- Each pass selects up to ten qualifying proposed tasks, including ones filed
-  mid-window. A task qualifies with the `no-diff-expected` tag, or with
-  non-empty `context_files` and an assessed complexity.
-- The drain pilots them through `task_pilot_pipeline`, and the pilot's apply
-  step approves a task only under the existing promotion rules: no duplicate,
-  already-landed, blocked-by, conflict or warning finding, and selectors that
-  resolve at the pinned revision. The authority is verified against the drain
-  that dispatched the pilot.
+- When none of its pilots is running, a pass selects up to ten qualifying
+  proposed tasks, including ones filed mid-window. A task qualifies with the
+  `no-diff-expected` tag, or with non-empty `context_files` and an assessed
+  complexity.
+- The drain pilots them through a detached `task_pilot_pipeline` run, and the
+  pilot's apply step approves a task only under the existing promotion rules:
+  no duplicate, already-landed, blocked-by, conflict or warning finding, and
+  selectors that resolve at the pinned revision. The authority is verified
+  against the drain that dispatched the pilot.
+- Admission never waits for the pilot: eligible backlog tasks keep starting
+  and freed slots keep refilling while it runs. Idle passes wait on the pilot,
+  at most one poll interval, instead of sleeping. A task the running pilot
+  carries is held as `pilot_running` and is not piloted again.
 - An approved task gets the ordinary approve transition with a history note
-  naming the drain run, and is admitted by that same pass.
+  naming the drain run, and is admitted by the pass that sees the pilot
+  finish. A pilot still running when the window closes holds the drain open
+  until it finishes; what it approves then waits in the backlog for the next
+  drain.
 - A task tagged `no-auto-approve` is never approved by any automatic
   promotion authority (this drain or the CI sweep). The drain does not pilot
   it; it stays `proposed`, held with reason `no-auto-approve`, until a human

@@ -29,6 +29,7 @@ macro_rules! deterministic_action_catalog {
             core {
                 ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
+                AwaitApprovalPilot => "await_approval_pilot",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
                 ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
                 ContextConflictCheck => "context_conflict_check",

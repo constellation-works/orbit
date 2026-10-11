@@ -385,7 +385,7 @@ fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionP
 /// `default_input` value goes through the template engine, so `5` arrives as
 /// `"5"`; an input the caller omitted renders as an empty string rather than
 /// JSON `null`, which is the default case.
-fn templated_u64(
+pub(super) fn templated_u64(
     action: &str,
     input: &Value,
     name: &str,

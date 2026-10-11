@@ -23,20 +23,35 @@
 #   (`allow_non_success: true`).
 #
 # `--approve-proposed` [ORB-14117]
-# - Opt-in through `approve_proposed`. Each iteration first selects the
-#   qualifying `proposed` tasks (`no-diff-expected`, or context selectors plus
-#   an assessed complexity), pilots them with `task_pilot_pipeline` under this
-#   drain's own promotion authority, and records what was approved. The
-#   admission step that follows the same iteration can then admit them, so a
-#   task filed while the window is open is approved and shipped by this drain.
+# - Opt-in through `approve_proposed`. When no pilot of this drain is live, an
+#   iteration selects the qualifying `proposed` tasks (`no-diff-expected`, or
+#   context selectors plus an assessed complexity) and starts a detached
+#   `task_pilot_pipeline` over them under this drain's own promotion
+#   authority. A task filed while the window is open is therefore approved
+#   and shipped by this drain.
+# - The pilot never holds up admission [ORB-15381]. Its 1-3 minute run used to
+#   be a blocking step ahead of admission, so every eligible backlog task and
+#   every slot freed meanwhile waited for it. Now later iterations keep
+#   admitting while it runs; the iteration that sees it finished records what
+#   it approved and admits those tasks in the same pass. Only one pilot runs
+#   at a time, and a task it carries is held as `pilot_running`, so nothing is
+#   piloted twice.
+# - An idle iteration does not sleep while the pilot is live: it waits on the
+#   pilot itself, bounded by the poll interval, so a finished pilot's
+#   approvals are admitted at once and freed slots are still refilled. Nor
+#   does it sleep after a pass that recorded a finished pilot.
+# - The pilot's apply step refuses the authority of a drain that has ended,
+#   so after the loop the drain waits for a pilot still live and records its
+#   approvals before it finishes. Cancelling the drain does not cancel a
+#   detached pilot; its apply step then refuses and its tasks stay proposed.
 # - Approval is the task-pilot apply boundary's decision, not this file's:
 #   it verifies the authority record against this run, refuses any
 #   duplicate, already-landed, conflict or warning finding, and approves
 #   through the ordinary approve transition. Held tasks stay proposed and are
 #   not piloted again until they change. `allowed_crews` and the complexity
 #   pools still decide what gets admitted.
-# - Without the flag the selection step returns no candidates and the pilot
-#   and record steps are skipped.
+# - Without the flag the selection step returns no candidates and reports no
+#   pilot, so the pilot, record and wait steps are skipped.
 #
 # `for_seconds` gates *starting* the next iteration. It never cancels or
 # shortens a child that has already begun. A zero or absent window is expired
@@ -45,10 +60,11 @@
 # has.
 #
 # `max_iterations` is the fail-closed ceiling, not the intended exit. A
-# saturated or empty drain waits at least `poll_sleep_seconds` (30s) per
-# iteration, so 4000 outlasts the 24h maximum window with room for the fast
-# iterations that only dispatch. An expired window with nothing left is a plain
-# success.
+# saturated or empty drain waits up to `poll_sleep_seconds` (30s) per
+# iteration, about 2900 iterations over the 24h maximum window. 8000 leaves
+# room for the fast iterations that only dispatch, and for the two short ones
+# each approval pilot adds: the wait that ends when it finishes and the pass
+# that records it. An expired window with nothing left is a plain success.
 
 schemaVersion: 2
 kind: Job
@@ -112,7 +128,7 @@ spec:
 
     - id: drain
       loop:
-        max_iterations: 4000
+        max_iterations: 8000
         break_when: "{{ steps.window.output.expired }} == true"
         steps:
           - id: approvals
@@ -120,12 +136,20 @@ spec:
             default_input:
               approve_proposed: "{{ input.approve_proposed }}"
 
-          # Blocking, so the admission step below sees what this pass
-          # approved. A failed pilot is data here, not a drain failure: its
-          # tasks stay proposed and the record step reports them.
+          # Before admission, so the tasks a finished pilot approved are
+          # admitted by this same pass. A failed pilot is data here, not a
+          # drain failure: its tasks stay proposed and are reported held.
+          - id: approval_report
+            when: "{{ steps.approvals.output.pilot_finished }} == true"
+            target: activity:record_proposed_approvals
+            default_input: {}
+
+          # Detached: admission below and every later iteration run while the
+          # pilot does. Selection returns candidates only when no pilot of
+          # this drain is live.
           - id: approve_proposed
             when: "{{ steps.approvals.output.candidate_count }} != 0"
-            target: activity:invoke_and_wait
+            target: activity:invoke_detached
             default_input:
               job_name: task_pilot_pipeline
               run_input:
@@ -133,13 +157,6 @@ spec:
                 base_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
                 promotion_authorized: true
                 drain_promotion: "{{ steps.approvals.output.drain_promotion }}"
-
-          - id: approval_report
-            when: "{{ steps.approvals.output.candidate_count }} != 0"
-            target: activity:record_proposed_approvals
-            default_input:
-              task_ids: "{{ steps.approvals.output.task_ids }}"
-              pilot: "{{ steps.approve_proposed.output }}"
 
           - id: admissible
             target: activity:classify_workspace_auto_tasks
@@ -183,10 +200,37 @@ spec:
 
           # Only when the iteration started nothing. An iteration that
           # dispatched re-lists immediately, because a slot may still be free.
+          # While an approval pilot is live the wait is on the pilot, ending
+          # as soon as it finishes and never later than the short poll, so
+          # admission keeps its cadence.
+          - id: pilot_wait
+            when: "{{ steps.admissible.output.idle }} == true && {{ steps.window.output.expired }} == false && {{ steps.approvals.output.pilot_active }} == true"
+            target: activity:await_approval_pilot
+            default_input:
+              timeout_seconds: "{{ input.poll_sleep_seconds }}"
+
           # The classifier picks the duration: the short poll when the backlog
-          # is waiting on a slot, the long one when it is genuinely empty.
+          # is waiting on a slot, the long one when it is genuinely empty. Read
+          # from the selection step, which always runs: the record step is
+          # skipped on most passes. A pass that recorded a finished pilot
+          # re-lists at once instead.
           - id: idle_wait
-            when: "{{ steps.admissible.output.idle }} == true && {{ steps.window.output.expired }} == false"
+            when: "{{ steps.admissible.output.idle }} == true && {{ steps.window.output.expired }} == false && {{ steps.approvals.output.pilot_active }} == false && {{ steps.approvals.output.pilot_finished }} == false"
             target: activity:sleep
             default_input:
               seconds: "{{ steps.admissible.output.sleep_seconds }}"
+
+    # A pilot still live when the window closes keeps the drain open until it
+    # finishes, because its apply step refuses an ended drain's authority.
+    # Its approvals are recorded; admission is over, so they wait in the
+    # backlog for the next drain.
+    - id: approval_join
+      when: "{{ input.approve_proposed }} == true"
+      target: activity:await_approval_pilot
+      default_input:
+        timeout_seconds: 3600
+
+    - id: approval_close
+      when: "{{ input.approve_proposed }} == true"
+      target: activity:record_proposed_approvals
+      default_input: {}

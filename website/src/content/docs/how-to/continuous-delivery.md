@@ -86,10 +86,12 @@ To authorize approval throughout a local window:
 orbit run auto --for 4h --approve-proposed
 ```
 
-On every pass, the drain pilots proposed tasks with the `no-diff-expected`
-tag, or with context files and an assessed complexity. It approves those
-with no duplicate, already-landed, conflict or warning finding, including
-tasks filed while the window is open. Tasks tagged `no-auto-approve` stay
+While the window is open, the drain pilots proposed tasks with the
+`no-diff-expected` tag, or with context files and an assessed complexity. It
+approves those with no duplicate, already-landed, conflict or warning
+finding, including tasks filed while the window is open. Each pilot runs in
+the background, so backlog work keeps starting meanwhile, and the drain
+admits what a pilot approved as soon as it finishes. Tasks tagged `no-auto-approve` stay
 proposed until a human approves them. Other held tasks also stay proposed;
 `orbit run show` and `orbit run readiness` report approval counts and hold
 reasons. Each approval's history note names the drain run.

@@ -206,8 +206,9 @@ pub struct DrainWaitingTask {
 /// What an `--approve-proposed` drain has done with `proposed` work.
 ///
 /// The approval steps write it on the drain's own run state: the selection
-/// step replaces the held view every pass, and the step after each task-pilot
-/// child adds the tasks that child approved. Like `drain_last_pass` it
+/// step replaces the held view every pass, and the record step in the pass
+/// that sees a task-pilot child finish adds the tasks that child approved,
+/// closing the child's dispatch so it is counted once. Like `drain_last_pass` it
 /// survives terminalization, so `run show` reports a finished drain's
 /// approvals and holds.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

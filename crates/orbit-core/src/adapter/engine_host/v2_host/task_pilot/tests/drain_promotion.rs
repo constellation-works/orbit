@@ -5,7 +5,7 @@ use chrono::Utc;
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, Task, TaskComplexity, TaskStatus};
-use orbit_types::workflow::{ChildDispatch, PipelineState};
+use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::drain_promotion::approval_hook::{self, Hook};
@@ -31,7 +31,7 @@ fn running(runtime: &OrbitRuntime, job: &str, input: Value) -> String {
     run.run_id
 }
 
-/// An `--approve-proposed` drain and the pilot child it dispatched.
+/// An `--approve-proposed` drain and the detached pilot child it dispatched.
 fn drain_with_pilot(runtime: &OrbitRuntime, task_id: &str) -> (String, String) {
     let drain = running(
         runtime,
@@ -50,8 +50,8 @@ fn drain_with_pilot(runtime: &OrbitRuntime, task_id: &str) -> (String, String) {
     state.record_child_dispatch(ChildDispatch::submitted(
         pilot.clone(),
         "task_pilot_pipeline".into(),
-        "invoke_and_wait".into(),
-        true,
+        "invoke_detached".into(),
+        false,
         false,
         Utc::now(),
     ));
@@ -244,7 +244,13 @@ fn material_edit_after_the_pilot_write_is_held_for_revalidation() {
     );
     assert_eq!(approvals(runtime, &task), 0);
 
-    // The edited task is piloted again rather than held for good.
+    // Once that pilot ends, the edited task is piloted again rather than held
+    // for good.
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&pilot, JobRunState::Success, Utc::now(), None)
+        .expect("finish pilot");
     let selection = action(
         runtime,
         "select_proposed_approvals",
