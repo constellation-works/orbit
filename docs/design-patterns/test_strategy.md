@@ -72,6 +72,8 @@ Admitted unit tests:
 
 - `crates/orbit-engine/src/executor/automation/ci/` attribution tests: `nextest_regions_bind_only_complete_evidence_to_the_known_failed_step` (criteria 1 and 3). This table exercises private CI attribution with streamed nextest regions and incomplete selection/command flags. Public engine fixtures cannot provide scripted CI logs to this boundary; it prevents a partial or differently attributed block from becoming actionable evidence.
 
+- `crates/orbit-core/src/application/plugin/tests/lifecycle/remove.rs`: `a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it` (criterion 2, fault injection). A `#[cfg(test)]` seam fails the next delete of the namespace install tree or of its build log, as an unlink error partway through `remove_dir_all` would. The test asserts that the row, grant witness and build witness survive the failure, and that a retried `orbit plugin remove` deletes both trees and then the row. Permission bits would not force this failure under root-run tests, and the crate-root integration tests compile without `cfg(test)`, so they cannot reach the seam.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.

@@ -17,6 +17,8 @@ pub(super) use enable::{
 };
 pub use migrate::{PluginMigrateRequest, migrate_plugin_sidecars};
 pub(super) use record::{installed_plugin, verified_install_path};
+#[cfg(test)]
+pub(super) use remove::FAIL_TREE_DELETE;
 pub use remove::{PluginRemoveOptions, remove_plugin};
 pub(super) use sync::build_pin_drift;
 pub use sync::{PluginSyncOutcome, sync_plugins};

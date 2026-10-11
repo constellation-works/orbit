@@ -803,7 +803,7 @@ fn write_prebuilt_backend(source: &Path) {
     }
 }
 
-fn build_record(outputs: Vec<PluginBuildOutputRecord>) -> PluginBuildRecord {
+pub(super) fn build_record(outputs: Vec<PluginBuildOutputRecord>) -> PluginBuildRecord {
     PluginBuildRecord {
         source: commit_source(),
         commit: COMMIT.to_string(),
@@ -836,7 +836,7 @@ fn stored_build(fixture: &PluginFixture) -> Option<PluginBuildRecord> {
 }
 
 /// Record `build` on the row and in its witness, as a consented install does.
-fn attach_build(fixture: &PluginFixture, build: &PluginBuildRecord) {
+pub(super) fn attach_build(fixture: &PluginFixture, build: &PluginBuildRecord) {
     let mut installed = fixture
         .runtime
         .stores()
