@@ -601,6 +601,174 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
 }
 
 #[test]
+fn codebase_block_causes_require_failure_evidence() {
+    isolated(
+        "codebase::codebase_block_causes_require_failure_evidence",
+        || {
+            let fixture = Fixture::new();
+            let work_failures = [
+                "assertion failed in sandbox_profile_regression",
+                "error[E0425]: cannot find value in module sandbox",
+                "assertion failed in bwrap_launch_regression",
+                "compiler error in bubblewrap::profile",
+                "assertion failed in seatbelt_policy_test",
+                "assertion failed in authentication_regression",
+                "compiler error in oauth::authenticate",
+                "assertion failed in unauthorized_request",
+                "assertion failed in unauthorized",
+                "compiler error in authentication_error",
+                "assertion failed in enospc_recovery",
+                "compiler error in provider_limit_regression",
+                "assertion failed in invalid_token_parser",
+                "compiler error in authentication_failed_regression",
+            ];
+            for (index, error) in work_failures.iter().enumerate() {
+                let path = format!("src/work_{index}.rs");
+                let task = add(&fixture, error, &[&path], vec![]);
+                transition_and_return(
+                    &fixture,
+                    &task,
+                    "workflow_run_failed",
+                    Some(format!(
+                        "workflow run failed: job=task_pr_pipeline, run_id=jrun-work-{index}, error_code=execution_failed, error={error}"
+                    )),
+                    TaskStatus::Blocked,
+                );
+            }
+            let infra_failures = [
+                (
+                    "sandbox",
+                    "execution_failed",
+                    "bwrap: No permissions to create a new namespace",
+                ),
+                (
+                    "sandbox",
+                    "execution_failed",
+                    "cli subprocess exited with code 71 sandbox-exec could not apply Orbit's macOS sandbox profile (`sandbox_apply: Operation not permitted`), so the CLI never started",
+                ),
+                (
+                    "sandbox",
+                    "execution_failed",
+                    "sandbox-exec cannot apply a profile",
+                ),
+                (
+                    "sandbox",
+                    "execution_failed",
+                    "Orbit linux-bwrap policy denied the attempted write: read-only mount",
+                ),
+                (
+                    "sandbox",
+                    "provider_unavailable",
+                    "Orbit's macOS sandbox hid the stored credential and the login is not necessarily expired",
+                ),
+                ("auth", "provider_unavailable", "OAuth token expired"),
+                (
+                    "auth",
+                    "provider_unavailable",
+                    "No authentication information found",
+                ),
+                (
+                    "auth",
+                    "provider_unavailable",
+                    "Authentication required. Please run agent login first",
+                ),
+                ("auth", "execution_failed", "HTTP 401 Unauthorized"),
+                (
+                    "auth",
+                    "provider_unavailable",
+                    "codex provider authentication failure (HTTP 403): credentials rejected",
+                ),
+                ("auth", "provider_unavailable", "invalid API key"),
+                (
+                    "auth",
+                    "execution_failed",
+                    "[provider_unavailable] provider=codex Unauthorized",
+                ),
+                ("auth", "provider_unavailable", "authentication_error"),
+                (
+                    "disk",
+                    "execution_failed",
+                    "write failed: No space left on device (ENOSPC)",
+                ),
+                ("disk", "execution_failed", "disk quota exceeded"),
+                ("disk", "execution_failed", "disk full"),
+                (
+                    "provider_limit",
+                    "provider_limit",
+                    "account usage exhausted",
+                ),
+                ("provider_limit", "provider_capacity", "no capacity"),
+                (
+                    "provider_limit",
+                    "execution_failed",
+                    "[provider_limit] provider=codex usage exhausted",
+                ),
+                (
+                    "provider_unavailable",
+                    "provider_unavailable",
+                    "CLI unusable",
+                ),
+                (
+                    "provider_unavailable",
+                    "provider_refusal",
+                    "content refused",
+                ),
+            ];
+            let mut expected_causes = std::collections::BTreeMap::new();
+            for (index, (cause, code, error)) in infra_failures.iter().enumerate() {
+                let path = format!("src/infra_{index}.rs");
+                let task = add(&fixture, error, &[&path], vec![]);
+                transition_and_return(
+                    &fixture,
+                    &task,
+                    "workflow_run_failed",
+                    Some(format!(
+                        "workflow run failed: job=task_pr_pipeline, run_id=jrun-infra-{index}, error_code={code}, error={error}"
+                    )),
+                    TaskStatus::Blocked,
+                );
+                *expected_causes.entry(*cause).or_insert(0_u64) += 1;
+            }
+            let unknown = add(&fixture, "manual block", &["src/unknown.rs"], vec![]);
+            transition_and_return(
+                &fixture,
+                &unknown,
+                "status_changed",
+                Some("needs investigation of sandbox authentication module".into()),
+                TaskStatus::Blocked,
+            );
+            let server = fixture.server(false);
+            let response = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=1"
+            )));
+            let blocked = &response["blocked"];
+            for index in 0..work_failures.len() {
+                assert_eq!(rate_of(blocked, &format!("src/work_{index}.rs")), (1, 1));
+            }
+            for index in 0..infra_failures.len() {
+                assert!(row(blocked, &format!("src/infra_{index}.rs")).is_none());
+            }
+            assert_eq!(rate_of(blocked, "src/unknown.rs"), (0, 1));
+            assert_eq!(row(blocked, "src/unknown.rs").unwrap()["unclassified"], 1);
+            expected_causes.insert("run_failure", work_failures.len() as u64);
+            expected_causes.insert("unclassified", 1);
+            let actual_causes = blocked["causes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row["cause"].as_str().unwrap(),
+                        row["tasks"].as_u64().unwrap(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(actual_causes, expected_causes);
+        },
+    );
+}
+
+#[test]
 fn codebase_contention_counts_file_only_runs_and_deduplicates_retries() {
     isolated(
         "codebase::codebase_contention_counts_file_only_runs_and_deduplicates_retries",
