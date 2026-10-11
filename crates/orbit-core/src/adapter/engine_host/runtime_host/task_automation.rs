@@ -105,7 +105,7 @@ fn apply_task_automation_update_under_lock(
             plan_changed: update.plan.is_some(),
             target_status: update.status,
             explicit_planned_by: None,
-            explicit_implemented_by: None,
+            explicit_implemented_by: update.implemented_by.clone().map(Some).as_ref(),
         },
     )?;
     runtime.with_mutation(|| {

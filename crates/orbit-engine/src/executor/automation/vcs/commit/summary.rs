@@ -1,56 +1,97 @@
-//! ORB-10603: a deterministic execution summary derived from the delivered change.
+//! The durable execution summary the delivery gate reads, filled at commit.
 //!
 //! Delivery refuses to hand off a task whose durable execution summary is empty
 //! (see [`reject_failed_delivery`](super::super::handoff::reject_failed_delivery)),
 //! and the only writer of that field was a prose instruction asking the
-//! implementing agent to persist one. Agent-loop output is advisory, so every
-//! run where the agent skipped the instruction wedged at commit.
+//! implementing agent to persist one. Agents skip it, so runs whose work was
+//! done wedged at commit (ORB-10603, F2026-10-267).
 //!
-//! This module closes the gap without touching either end of the contract. It
-//! never reads the agent's returned envelope — the summary is derived from the
-//! worktree change this step is about to deliver, which is durable state any
-//! reviewer can re-check with `git status` before the commit or `git show
-//! --stat` after it. It also never overwrites a summary the agent did persist:
-//! an agent-authored account of the work is the better artifact and wins.
+//! A meaningful summary already on the task always wins. Otherwise, in order:
 //!
-//! ORB-14837: a delivery automation review leaves no change; its deliverable
-//! is the coverage evidence its settlement accepts. With a clean worktree the
-//! summary restates that evidence, which the host validates against the
-//! frozen batch. Incomplete or mismatched evidence derives nothing.
+//! 1. ORB-15584: the implementer's own account, which it returned in its
+//!    response instead of persisting: the output's `execution_summary`, else
+//!    its `summary`, the precedence a claimed handoff uses. Claimed pipelines
+//!    hand this step the output as `implementation`; local and PR pipelines
+//!    checkpoint it as `implement_one` before commit runs. Orbit writes it to
+//!    the task attributed to the run's crew, with a history event naming the
+//!    run. A placeholder is not an account and falls through.
+//! 2. ORB-10603: a summary derived from the worktree change this step is about
+//!    to deliver, durable state any reviewer can re-check with `git status`
+//!    before the commit or `git show --stat` after it.
+//! 3. ORB-14837: a delivery automation review leaves no change; its
+//!    deliverable is the coverage evidence its settlement accepts. With a
+//!    clean worktree the summary restates that evidence, which the host
+//!    validates against the frozen batch. Incomplete or mismatched evidence
+//!    derives nothing.
+//!
+//! When none applies nothing is written and the gate refuses as before.
 //!
 //! ORB-15186: a derived summary describes the review but does not pay for
 //! it. Settlement treats a review whose agent persisted no summary as a stamp
 //! and leaves the batch owed, so this module only explains the evidence.
-//!
-//! ADR-0326 records the decision and the alternatives it rejected.
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, EXECUTION_SUMMARY_DERIVED_EVENT, Task};
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, CoverageEvidence, DeliveryVerdict};
+use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
+use super::super::claim::{carries_implementer_output, implementer_summary};
 use super::super::git::git_output_raw;
 use super::super::pr::meaningful_execution_summary;
 
 /// Cap on individually named files; the remainder is reported as a count.
 const MAX_LISTED_FILES: usize = 25;
 
+/// Task history event recorded when the commit step persists the summary the
+/// implementer returned but did not write itself.
+const EXECUTION_SUMMARY_PERSISTED_EVENT: &str = "execution_summary_persisted";
+
+/// The step id local and PR pipelines give the implementer inside their
+/// implement loop; its checkpointed output carries the returned summary.
+const IMPLEMENT_STEP_ID: &str = "implement_one";
+
 /// Give the task a durable execution summary when nothing else did.
 ///
-/// Returns the task the caller must use from here on: unchanged when a
-/// meaningful summary is already persisted or when neither a worktree change
-/// nor accepted coverage evidence describes the work, otherwise carrying the
-/// derived summary that was just written to the task record.
+/// `input` is the commit step's input. Returns the task the caller must use
+/// from here on: unchanged when a meaningful summary is already persisted or
+/// none can be recovered, otherwise carrying the returned or derived summary
+/// just written to the record.
 pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
     host: &H,
     task: Task,
     workspace_path: &Path,
     run_id: &str,
+    input: &Value,
 ) -> Result<Task, OrbitError> {
     if meaningful_execution_summary(&task.execution_summary).is_some() {
+        return Ok(task);
+    }
+
+    if let Some(summary) = returned_summary(host, run_id, input)? {
+        let implemented_by = host.get_job_run(run_id)?.and_then(|run| run.resolved_crew);
+        host.apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                expected_status: Some(task.status),
+                execution_summary: Some(summary.clone()),
+                implemented_by: implemented_by.clone(),
+                status_event: Some(EXECUTION_SUMMARY_PERSISTED_EVENT.to_string()),
+                status_note: Some(format!(
+                    "automation: persisted the execution summary the implementer returned in run \
+                     {run_id} without writing it"
+                )),
+                ..TaskAutomationUpdate::default()
+            },
+        )?;
+        let mut task = task;
+        task.execution_summary = summary;
+        if implemented_by.is_some() {
+            task.implemented_by = implemented_by;
+        }
         return Ok(task);
     }
 
@@ -92,6 +133,28 @@ pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
     let mut task = task;
     task.execution_summary = summary;
     Ok(task)
+}
+
+/// The meaningful summary this run's implementer returned, if any.
+///
+/// The step input's own implementer output wins (claimed pipelines pass it as
+/// `implementation`). Otherwise the `implement_one` output this run
+/// checkpointed is read. A resumed run that skipped implementation has none,
+/// so the derivations still apply.
+fn returned_summary<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    input: &Value,
+) -> Result<Option<String>, OrbitError> {
+    let summary = if carries_implementer_output(input) {
+        implementer_summary(input)
+    } else {
+        host.read_run_state(run_id)?.and_then(|state| {
+            let output = state.pipeline.get(IMPLEMENT_STEP_ID)?;
+            implementer_summary(&json!({ "implementation": output }))
+        })
+    };
+    Ok(summary.filter(|summary| meaningful_execution_summary(summary).is_some()))
 }
 
 /// One worktree entry, reduced to the two facts a summary reports.

@@ -244,14 +244,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         reject_failed_attempt(host, input, task)?;
         task.clone()
     } else {
-        // ORB-10603: the summary the gate reads is durable state, and nothing in
-        // the pipeline filled it when the implementing agent skipped the
-        // instruction to persist one. Derive it read-only from the change about
-        // to be delivered — never from the agent's advisory response envelope —
-        // and only when the agent persisted nothing of its own. ORB-14837: a
-        // clean delivery automation review derives it from the coverage
-        // evidence the host accepts for its frozen batch instead.
-        let task = ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id)?;
+        // ORB-10603 / ORB-15584: the summary the gate reads is durable state,
+        // and the implementing agent often leaves it empty. Persist the
+        // account it returned instead, else derive one read-only from the
+        // change about to be delivered or the accepted coverage evidence.
+        let task =
+            ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id, input)?;
 
         // ORB-10313: fail closed on the durable execution outcome before staging
         // files, mutating the index, or committing. Only read-only resolution and
