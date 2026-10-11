@@ -362,3 +362,61 @@ fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_s
         .to_string();
     assert!(error.contains("window to extend"), "{error}");
 }
+
+#[test]
+fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged() {
+    if !super::dispatch_admission::isolated(
+        "drain_extend::invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged",
+    ) {
+        return;
+    }
+    let drains = Drains::new();
+    for job in [PULL, OWNER] {
+        let stamped = whole_seconds(Utc::now() + Duration::minutes(10));
+        let drain = drains.running(job, 3600, stamped, |_| {});
+        let before_state = drains.state(&drain);
+
+        let error = drains
+            .extend(&drain, Duration::hours(3), Some(0))
+            .unwrap_err();
+        match error {
+            OrbitError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("worker ceiling must be at least 1"),
+                    "{job}: {msg}"
+                );
+            }
+            other => panic!("{job}: expected InvalidInput, got {other:?}"),
+        }
+
+        let after_state = drains.state(&drain);
+        assert_eq!(
+            after_state, before_state,
+            "{job}: state must remain unchanged"
+        );
+        assert!(after_state.drain_window_extension.is_none(), "{job}");
+        assert!(after_state.drain_worker_limit.is_none(), "{job}");
+
+        let answer = drains.window(&drain, stamped);
+        assert_eq!(
+            answer["deadline"],
+            stamp(stamped),
+            "{job}: deadline unchanged"
+        );
+        assert_eq!(answer["expired"], false, "{job}: drain still open");
+
+        let completions_failure = drains.completions(&drain, AuditEventStatus::Failure);
+        assert_eq!(
+            completions_failure.len(),
+            1,
+            "{job}: {completions_failure:?}"
+        );
+        assert_eq!(completions_failure[0]["outcome"], "rejected");
+
+        let completions_success = drains.completions(&drain, AuditEventStatus::Success);
+        assert!(
+            completions_success.is_empty(),
+            "{job}: no success audit should be recorded"
+        );
+    }
+}

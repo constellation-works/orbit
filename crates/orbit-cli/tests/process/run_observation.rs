@@ -1630,6 +1630,25 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
         "{error}"
     );
 
+    let invalid_concurrency = fixture.failure(&[
+        "run",
+        "extend",
+        id,
+        "--for",
+        "4h",
+        "--concurrency",
+        "0",
+        "--json",
+    ]);
+    assert!(
+        invalid_concurrency["error"]
+            .as_str()
+            .unwrap()
+            .contains("worker ceiling must be at least 1"),
+        "{invalid_concurrency}"
+    );
+    assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), extended);
+
     // A second start does not reach the live drain: it waits for its slot.
     let successor = runtime
         .submit_pipeline_run(
