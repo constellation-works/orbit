@@ -350,6 +350,7 @@
         "application/job/pipeline/worker/tests/scope.rs::enabled_containment_always_yields_limits",
         "application/job/pipeline/worker/tests/scope.rs::scope_launch_carries_allowlisted_environment_and_honors_edits",
         "application/job/pipeline/worker/tests/supervisor.rs::a_closed_observer_channel_stops_and_reaps_the_spawned_child",
+        "application/job/pipeline/worker/tests/supervisor.rs::store_read_faults_retain_supervision_and_reap_in_a_live_parent",
         "application/job/run/tests/actions.rs::cancel_job_run_does_not_signal_reused_pid_identity_mismatch",
         "application/job/run/tests/actions.rs::cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid",
         "application/job/run/tests/actions.rs::cancellation_writes_preserve_interleaved_worker_checkpoints_and_lineage",
