@@ -2467,6 +2467,29 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
             );
             let hold =
                 BaselineRedHold::from_text(&messages[0]).expect("the failure names its hold");
+            // [ORB-15374] The lint names no failing test, so the hold keeps
+            // the tail of the base run's output, without the PATH line Orbit
+            // appends to a failed run.
+            assert!(hold.failures.identities.is_empty(), "{hold:?}");
+            assert!(
+                hold.failures
+                    .tail
+                    .iter()
+                    .any(|line| line == "README.md: lint is red"),
+                "the hold keeps the base output's tail: {hold:?}"
+            );
+            assert!(
+                hold.failures
+                    .tail
+                    .iter()
+                    .all(|line| !line.starts_with("Required validation PATH=")),
+                "{hold:?}"
+            );
+            assert!(
+                messages[0].contains("output ends") && messages[0].contains("lint is red"),
+                "the failure names what fails on the base: {}",
+                messages[0]
+            );
             assert_eq!(
                 hold,
                 BaselineRedHold {
@@ -2475,6 +2498,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
                     command: RED_LINT.to_string(),
                     run_id: RUN_ID.to_string(),
                     selection: None,
+                    failures: hold.failures.clone(),
                 }
             );
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -2523,13 +2547,13 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
                 "the task history carries the hold admission reads"
             );
 
-            assert!(
-                matches!(
-                    baseline_hold_status(&host, &fx.repo, &hold),
-                    BaselineHoldStatus::Holding(_)
+            match baseline_hold_status(&host, &fx.repo, &hold) {
+                BaselineHoldStatus::Holding(reason) => assert!(
+                    reason.contains("lint is red"),
+                    "the verdict names what fails on the base: {reason}"
                 ),
-                "the base ref still points at the red commit"
-            );
+                lifted => panic!("the base ref still points at the red commit: {lifted:?}"),
+            }
             fx.commit_on_base("Makefile", "ci-lint:\n\t@echo lint-ok\n");
             assert!(
                 matches!(
@@ -2537,6 +2561,55 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
                     BaselineHoldStatus::Lifted(_)
                 ),
                 "the base moved to a commit where the command passes"
+            );
+        },
+    );
+}
+
+/// [ORB-15374] A red base's hold names the tests nextest reports failing
+/// there: one identity per `FAIL` summary line, without the bare libtest line
+/// nextest echoes for the same test, and the failure text names them too.
+#[test]
+fn a_red_base_hold_records_the_nextest_failures_of_the_base_run() {
+    isolated(
+        "a_red_base_hold_records_the_nextest_failures_of_the_base_run",
+        |sandbox| {
+            const RED_TESTS: &str = "make ci-test";
+            let fx = Fixture::new(sandbox);
+            fx.commit_on_base(
+                "Makefile",
+                "ci-test:\n\t@echo 'test suite::broken ... FAILED'\n\
+                 \t@echo '        FAIL [   0.512s] (1/2) orbit-core::runtime suite::broken'\n\
+                 \t@echo '        FAIL [   0.101s] (2/2) orbit-core::runtime suite::flaky'\n\
+                 \t@exit 100\n",
+            );
+            git(&fx.repo, &["rebase", BASE]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_TESTS]);
+            let mut input = fx.validate_input();
+            input["base_sha"] = json!(git(&fx.repo, &["rev-parse", BASE]));
+            input["base_ref"] = json!(BASE);
+
+            let message = action(&host, "candidate_validate", &input)
+                .expect_err("a red base fails validation")
+                .to_string();
+
+            let hold = BaselineRedHold::from_text(&message).expect("the failure names its hold");
+            assert_eq!(
+                hold.failures.identities,
+                vec![
+                    "test orbit-core::runtime suite::broken".to_string(),
+                    "test orbit-core::runtime suite::flaky".to_string(),
+                ],
+                "{hold:?}"
+            );
+            assert!(hold.failures.tail.is_empty(), "{hold:?}");
+            assert!(
+                message.contains(
+                    "failing: `orbit-core::runtime suite::broken`, \
+                     `orbit-core::runtime suite::flaky`"
+                ),
+                "the failure names the tests failing on the base: {message}"
             );
         },
     );
@@ -2563,6 +2636,7 @@ fn a_red_base_during_pr_revalidation_holds_the_task() {
                 command: RED_LINT.to_string(),
                 run_id: RUN_ID.to_string(),
                 selection: None,
+                failures: Default::default(),
             };
             let diagnostic = hold.text("the rebased candidate shares the base failure");
 

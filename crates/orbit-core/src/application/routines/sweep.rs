@@ -582,6 +582,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
                     if !refresh.lifted.is_empty()
                         || !refresh.held.is_empty()
                         || refresh.dispatched.is_some()
+                        || !refresh.repairs_filed.is_empty()
+                        || !refresh.repairs_linked.is_empty()
                     {
                         tracing::info!(
                             target: "orbit.core.sweep",
@@ -590,6 +592,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
                             held = refresh.held.len(),
                             unchecked = refresh.unchecked.len(),
                             dispatched = refresh.dispatched.as_deref().unwrap_or_default(),
+                            repairs_filed = refresh.repairs_filed.len(),
+                            repairs_linked = refresh.repairs_linked.len(),
                             "sweep.baseline_holds"
                         );
                     }

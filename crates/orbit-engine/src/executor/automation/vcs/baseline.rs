@@ -52,16 +52,18 @@ use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
 use orbit_common::fs::git::git_common_dir;
 use orbit_common::fs::io::atomic_write_bytes;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::workflow::BaselineRedHold;
+use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
+use super::base_claim::failure_identities;
 use super::git::{fetch_remote_base, git_output, git_run};
 use super::required_command::{
-    RequiredCommandRun, VALIDATION_TIMEOUT_MS, ValidationSummary, run_required_command,
+    RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS, ValidationSummary,
+    run_required_command,
 };
 use super::worktree::scratch_checkout_path;
 
@@ -299,6 +301,24 @@ impl BaselineCheck {
         })
     }
 
+    /// What the base run named as failing, for the hold to record
+    /// [ORB-15374]: the failures its output names, or its last lines when it
+    /// names none. `selection` is what the base run was handed, which locates
+    /// the checkout it ran in.
+    pub(super) fn failures(
+        &self,
+        workspace_path: &Path,
+        selection: Option<&Value>,
+    ) -> BaselineRedFailures {
+        let Ok(base) = &self.result else {
+            return BaselineRedFailures::default();
+        };
+        let root = cache_paths(workspace_path, &self.base_sha, &base.command, selection)
+            .map(|paths| paths.worktree)
+            .unwrap_or_default();
+        hold_failures(failure_identities(&base.output, &root), &base.output)
+    }
+
     /// The captured base log: identity, result and output.
     pub(super) fn log(&self, run_id: &str) -> Value {
         match &self.result {
@@ -328,6 +348,22 @@ impl BaselineCheck {
             }),
         }
     }
+}
+
+/// What a hold records as failing [ORB-15374]: `identities`, as
+/// `failure_identities` parsed them from `output`, or the tail of `output`
+/// without the `PATH` line Orbit appends to a failed run, which names the
+/// host rather than the failure.
+pub(super) fn hold_failures(
+    identities: impl IntoIterator<Item = String>,
+    output: &str,
+) -> BaselineRedFailures {
+    let output = output
+        .lines()
+        .filter(|line| !line.starts_with(VALIDATION_PATH_LINE))
+        .collect::<Vec<_>>()
+        .join("\n");
+    BaselineRedFailures::new(identities, &output)
 }
 
 /// Rerun `command` on `base_sha`, or read another candidate's run of it.
@@ -613,13 +649,14 @@ pub(super) fn baseline_red_failure(
     };
     OrbitError::Execution(hold.text(&format!(
         "required validation '{}' fails on base {} exactly as on candidate {candidate} (exit \
-         {}{}). The candidate did not introduce the failure, so no repair runs: the candidate is \
-         kept and the task is held until {base_ref} moves to a base where the command passes. \
+         {}{}{}). The candidate did not introduce the failure, so no repair runs: the candidate \
+         is kept and the task is held until {base_ref} moves to a base where the command passes. \
          {logs}\n{}",
         run.command,
         hold.base_sha,
         run.exit_code,
         if run.timed_out { ", timed out" } else { "" },
+        hold.failures_clause(),
         run.output
     )))
 }
@@ -704,7 +741,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
             if let Err(reason) = &check.result {
                 record_inconclusive_hold(repo, &tip, hold, reason);
             }
-            judge_moved_base(hold, &tip, check.result)
+            judge_moved_base(repo, hold, &tip, check.result)
         }
         Err(status) => status,
     }
@@ -779,7 +816,7 @@ fn recorded_moved_base_status(
         // A full run could not locate the cache either.
         Err(error) => Err(format!("locate the base result cache: {error}")),
     };
-    Some(judge_moved_base(hold, tip, result))
+    Some(judge_moved_base(repo, hold, tip, result))
 }
 
 /// The commit the hold's base ref now names, when it moved off the red
@@ -813,8 +850,9 @@ fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, Baselin
     })?;
     if tip == hold.base_sha {
         return Err(BaselineHoldStatus::Holding(format!(
-            "`{base_ref}` is still at {tip}, where required validation `{}` fails",
-            hold.command
+            "`{base_ref}` is still at {tip}, where required validation `{}` fails{}",
+            hold.command,
+            hold.failures_clause()
         )));
     }
     Ok(tip)
@@ -823,6 +861,7 @@ fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, Baselin
 /// The hold's status once its base moved to `tip`, from the command's result
 /// there or why there is none.
 fn judge_moved_base(
+    repo: &Path,
     hold: &BaselineRedHold,
     tip: &str,
     result: Result<BaseCommandResult, String>,
@@ -837,22 +876,35 @@ fn judge_moved_base(
             .ok()
             .and_then(|result| not_comparable(Some(selection), result))
     });
+    // [ORB-15374] A verdict that keeps the hold names what the held base
+    // failed, so the readiness detail it becomes says what is red.
+    let held = hold.failures_clause();
     match (result, unlike) {
         (Ok(_), Some(reason)) => BaselineHoldStatus::Holding(format!(
             "`{base_ref}` moved to {tip}, but the run of required validation `{}` there is not \
-             comparable with the held one: {reason}",
+             comparable with the held one: {reason}{held}",
             hold.command
         )),
         (Ok(result), None) if result.passed => BaselineHoldStatus::Lifted(format!(
             "`{base_ref}` moved from {} to {tip}, where required validation `{}` passes",
             hold.base_sha, hold.command
         )),
-        (Ok(_), None) => BaselineHoldStatus::Holding(format!(
-            "`{base_ref}` moved to {tip}, where required validation `{}` still fails",
-            hold.command
-        )),
+        (Ok(result), None) => {
+            let root = cache_paths(repo, tip, &hold.command, hold.selection.as_ref())
+                .map(|paths| paths.worktree)
+                .unwrap_or_default();
+            let now = hold_failures(failure_identities(&result.output, &root), &result.output);
+            BaselineHoldStatus::Holding(format!(
+                "`{base_ref}` moved to {tip}, where required validation `{}` still fails{}",
+                hold.command,
+                now.describe()
+                    .map(|described| format!("; {described}"))
+                    .unwrap_or(held)
+            ))
+        }
         (Err(reason), _) => BaselineHoldStatus::Holding(format!(
-            "`{base_ref}` moved to {tip}, but required validation `{}` could not be checked: {reason}",
+            "`{base_ref}` moved to {tip}, but required validation `{}` could not be checked: \
+             {reason}{held}",
             hold.command
         )),
     }

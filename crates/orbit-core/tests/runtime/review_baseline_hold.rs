@@ -11,9 +11,9 @@ use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, execute_deterministic_action};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HostCandidateOverride, PipelineState,
-    REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewVerdict,
-    ValidationOutcome, is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedFailures, BaselineRedHold, HostCandidateOverride,
+    PipelineState, REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewCertificate,
+    ReviewVerdict, ValidationOutcome, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 
@@ -177,7 +177,15 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
             command: CHECK.into(),
             run_id: run_id.clone(),
             selection: None,
+            failures: BaselineRedFailures {
+                identities: vec!["test suite::broken".into()],
+                ..Default::default()
+            },
         }
+    );
+    assert!(
+        failure.contains("failing: `suite::broken`"),
+        "[ORB-15374] the refusal names the test failing on the base: {failure}"
     );
     let settled = certificate(&fixture);
     assert_eq!(settled.verdict, ReviewVerdict::Reject, "the verdict stands");
@@ -238,10 +246,16 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
             None,
         )
         .unwrap();
+    let held = readiness(&fixture);
     assert_eq!(
-        readiness(&fixture)["reason"],
-        "baseline_red_hold",
+        held["reason"], "baseline_red_hold",
         "admission withholds the task while the base is red"
+    );
+    assert!(
+        held["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("`suite::broken`")),
+        "[ORB-15374] the readiness detail names the test failing on the base: {held}"
     );
 
     // The executor records the handoff as the run's failure activity.
@@ -418,6 +432,7 @@ pub(super) fn held_on_red_base() -> (Fixture, BaselineRedHold) {
         command: CHECK.into(),
         run_id: run_id.clone(),
         selection: None,
+        failures: Default::default(),
     };
     let handoff = execute_deterministic_action(
         &fixture.runtime,

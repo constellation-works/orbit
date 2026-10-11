@@ -17,13 +17,14 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::BaselineRedFailures;
 use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
 use super::baseline::{
-    FAILING_TESTS_KEY, cache_paths, cached_base_check, compare_with_base_until,
+    FAILING_TESTS_KEY, cache_paths, cached_base_check, compare_with_base_until, hold_failures,
     run_validation_command_until,
 };
 use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
@@ -142,6 +143,22 @@ pub struct BaseFailureCheck {
     pub candidate_log: Value,
     /// The base run as `BaselineCheck::log` records it.
     pub base_log: Value,
+}
+
+impl BaseFailureCheck {
+    /// What a hold for a reproduced claim records as failing on the base
+    /// [ORB-15374]: the failures both runs name, or the tail of the base
+    /// run's output when they name none.
+    pub fn base_failures(&self) -> BaselineRedFailures {
+        let identities = match &self.verdict {
+            BaseFailureVerdict::Reproduced { failures } => failures.clone(),
+            _ => Vec::new(),
+        };
+        hold_failures(
+            identities,
+            self.base_log["output"].as_str().unwrap_or_default(),
+        )
+    }
 }
 
 /// Check a reviewer's claim that `command` fails on `base_sha` exactly as on
