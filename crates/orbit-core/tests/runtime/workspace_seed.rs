@@ -1,29 +1,259 @@
 #![allow(missing_docs, clippy::expect_used)]
 
 //! Workspace-local defaults: create-only seeding preserves existing definitions,
-//! and sync serializes settings-only migrations with runtime edits.
+//! and reconciliation serializes migrations and manifests with runtime edits.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
 use orbit_automation::auto_tasks::settings::load_settings_table;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::fs::io::{
+    FileLockOptions, with_exclusive_file_lock, with_exclusive_file_lock_options,
+};
 use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_common::security::release::sha256_hex;
 use orbit_core::application::auto_tasks::AutoTaskBody;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
+use orbit_core::test_support::with_auto_task_manifest_read_hook;
 use orbit_core::{
-    ManagedArtifactOutcome, ManagedArtifactScope, OrbitRuntime, RoutineSeedIdentity,
-    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
+    AutoTaskDeleteParams, ManagedArtifactOutcome, ManagedArtifactScope, OrbitRuntime,
+    RoutineSeedIdentity, reconcile_workspace_managed_artifacts,
+    seed_absent_workspace_managed_artifacts,
 };
 use orbit_store::compose::auto_task::cursor_state_path;
 
 use super::dispatch_admission::isolated;
 
 const MANIFEST: &str = ".orbit-managed-assets.json";
+
+#[test]
+fn reconciliation_preserves_concurrent_delete_opt_out() {
+    if !isolated("workspace_seed::reconciliation_preserves_concurrent_delete_opt_out") {
+        return;
+    }
+    for create_only in [false, true] {
+        reconcile_during_lifecycle_change(create_only, false);
+    }
+}
+
+#[test]
+fn reconciliation_preserves_concurrent_restore_provenance() {
+    if !isolated("workspace_seed::reconciliation_preserves_concurrent_restore_provenance") {
+        return;
+    }
+    for create_only in [false, true] {
+        reconcile_during_lifecycle_change(create_only, true);
+    }
+}
+
+/// Pause after reconciliation has read its manifest, then admit a competing
+/// lifecycle writer. Without exclusion, let that writer commit before sync
+/// resumes, reproducing the stale snapshot deterministically [ORB-15609].
+fn reconcile_during_lifecycle_change(create_only: bool, restoring: bool) {
+    let dir = tempfile::tempdir().expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let runtime =
+        Arc::new(OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime"));
+    let catalog = workspace.join("auto_tasks");
+    let name = "qa-sweep";
+    let path = catalog.join(format!("{name}.yaml"));
+    let shipped = std::fs::read(&path).expect("shipped definition");
+    let delete_params = || AutoTaskDeleteParams {
+        name: name.to_string(),
+        ..Default::default()
+    };
+    if restoring {
+        runtime
+            .auto_task_delete(delete_params())
+            .expect("initial opt-out");
+    }
+    // Force a later manifest replacement; an otherwise unchanged catalog
+    // could conceal the stale-snapshot bug in either mode.
+    forget_shipped_default(&catalog, "friction-curation");
+
+    #[cfg(unix)]
+    let sync_workspace = {
+        let alias = dir.path().join("repo-alias");
+        std::os::unix::fs::symlink(workspace.parent().expect("repository"), &alias)
+            .expect("workspace alias");
+        alias.join(".orbit")
+    };
+    #[cfg(not(unix))]
+    let sync_workspace = workspace.clone();
+
+    let (read_tx, read_rx) = sync_channel(1);
+    let (resume_tx, resume_rx) = sync_channel(1);
+    let (started_tx, started_rx) = sync_channel(1);
+    let (done_tx, done_rx) = sync_channel(1);
+    std::thread::scope(|scope| {
+        let sync = scope.spawn(|| {
+            with_auto_task_manifest_read_hook(
+                move || {
+                    read_tx.send(()).expect("manifest read rendezvous");
+                    resume_rx
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("release paused reconciliation");
+                },
+                || {
+                    if create_only {
+                        seed_absent_workspace_managed_artifacts(
+                            &global,
+                            &sync_workspace,
+                            &identity(),
+                            "main",
+                        )
+                    } else {
+                        reconcile_workspace_managed_artifacts(
+                            &global,
+                            &sync_workspace,
+                            None,
+                            "main",
+                            false,
+                        )
+                    }
+                },
+            )
+        });
+        read_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("sync loaded its manifest");
+        // A nonblocking probe proves exclusion at the precise read/write
+        // boundary without relying on how quickly the writer is scheduled.
+        let lock = with_exclusive_file_lock_options(
+            &cursor_state_path(&runtime.paths().state_dir),
+            "auto-task cursor",
+            FileLockOptions {
+                timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            || Ok::<_, std::io::Error>(()),
+        );
+        let locked = match lock {
+            Ok(()) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => true,
+            Err(error) => panic!("cursor lock probe failed: {error}"),
+        };
+        let writer = scope.spawn(|| {
+            started_tx.send(()).expect("writer admission rendezvous");
+            let outcome = if restoring {
+                runtime
+                    .auto_task_restore(name)
+                    .map(|definition| assert!(!definition.enabled))
+            } else {
+                runtime
+                    .auto_task_delete(delete_params())
+                    .map(|report| assert!(report.opted_out))
+            };
+            done_tx.send(outcome).expect("lifecycle writer result");
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("writer started after manifest read");
+        let early = if locked {
+            match done_rx.recv_timeout(Duration::from_secs(1)) {
+                Err(RecvTimeoutError::Timeout) => None,
+                outcome => Some(outcome.expect("writer channel")),
+            }
+        } else {
+            Some(
+                done_rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("unlocked writer commits"),
+            )
+        };
+        resume_tx.send(()).expect("resume sync");
+        let report = sync
+            .join()
+            .expect("sync thread")
+            .expect("reconcile defaults");
+        let wrote_early = early.is_some();
+        early
+            .unwrap_or_else(|| {
+                done_rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("writer completes after sync")
+            })
+            .expect("lifecycle operation succeeds");
+        writer.join().expect("writer thread");
+        assert!(
+            report.actions.iter().any(|action| {
+                action.name == "friction-curation"
+                    && action.outcome == ManagedArtifactOutcome::Created
+            }),
+            "sync must exercise a manifest replacement"
+        );
+        assert_lifecycle_manifest(&catalog, name, restoring, &shipped);
+        assert!(
+            locked,
+            "reconciliation must hold CRUD's cursor sidecar through manifest replacement [ORB-15609]"
+        );
+        assert!(
+            !wrote_early,
+            "delete and restore must wait for reconciliation's manifest transaction [ORB-15609]"
+        );
+    });
+
+    // A stale opt-out can stay hidden until the next convergence pass. Check
+    // all entry points that could otherwise recreate a deleted default.
+    reconcile_workspace_managed_artifacts(&global, &workspace, None, "main", false)
+        .expect("later sync");
+    seed_absent_workspace_managed_artifacts(&global, &workspace, &identity(), "main")
+        .expect("later seed");
+    init_workspace_at_root(
+        &workspace,
+        InitOptions {
+            refresh_defaults: true,
+            global_root_override: Some(global),
+            routine_seed_identity: Some(identity()),
+            ..Default::default()
+        },
+    )
+    .expect("forced workspace initialization");
+    assert_lifecycle_manifest(&catalog, name, restoring, &shipped);
+    assert_eq!(
+        runtime
+            .auto_task_show(name)
+            .expect("definition lookup")
+            .is_some(),
+        restoring
+    );
+}
+
+fn assert_lifecycle_manifest(catalog: &Path, name: &str, restored: bool, shipped: &[u8]) {
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(catalog.join(MANIFEST)).expect("read lifecycle manifest"),
+    )
+    .expect("parse lifecycle manifest");
+    let opted_out = manifest["optedOut"]
+        .as_array()
+        .is_some_and(|names| names.iter().any(|entry| entry == name));
+    assert_eq!(
+        opted_out, !restored,
+        "concurrent reconciliation must preserve the operator's opt-out state [ORB-15609]"
+    );
+    let path = catalog.join(format!("{name}.yaml"));
+    if restored {
+        assert_eq!(std::fs::read(path).expect("restored definition"), shipped);
+        assert_eq!(
+            manifest["assets"][name],
+            sha256_hex(shipped),
+            "restored provenance must survive reconciliation"
+        );
+    } else {
+        assert!(
+            !path.exists(),
+            "a concurrently deleted default must remain absent [ORB-15609]"
+        );
+        assert!(
+            manifest["assets"].get(name).is_none(),
+            "deleted default must have no managed provenance"
+        );
+    }
+}
 
 fn identity() -> RoutineSeedIdentity {
     RoutineSeedIdentity::new("repo", "hm_test", "main").expect("routine seed identity")

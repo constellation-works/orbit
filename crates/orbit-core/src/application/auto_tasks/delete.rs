@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
@@ -174,10 +174,15 @@ impl OrbitRuntime {
 
     /// Write a shipped default back with its shipped content and clear the
     /// opt-out a delete recorded for it. Refuses a name Orbit does not ship
-    /// and a definition that already exists.
+    /// and a definition that already exists. The existence check, definition
+    /// write and manifest update share the cursor lock with delete and sync.
     pub fn auto_task_restore(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let (_, embedded) = DEFAULT_AUTO_TASK_FILES
+        let state_path = cursor_state_path(&self.paths().state_dir);
+        // Restore does not consume cursor state; take its sidecar without
+        // loading the cursor, as sync and the other definition writers do.
+        with_exclusive_file_lock(&state_path, "auto-task cursor", || {
+            let (_, embedded) = DEFAULT_AUTO_TASK_FILES
             .iter()
             .find(|(shipped, _)| *shipped == name)
             .ok_or_else(|| {
@@ -185,49 +190,50 @@ impl OrbitRuntime {
                     "auto-task '{name}' is not a shipped default; only shipped defaults can be restored"
                 ))
             })?;
-        let path = definition_path(&self.paths().local_dir, name);
-        let collection = self.validated_auto_tasks(name)?;
-        if path.exists()
-            || collection
-                .definitions
-                .iter()
-                .any(|loaded| loaded.definition.name == name)
-        {
-            return Err(OrbitError::InvalidInput(format!(
-                "auto-task '{name}' already exists; delete it first to restore the shipped content"
-            )));
-        }
+            let path = definition_path(&self.paths().local_dir, name);
+            let collection = self.validated_auto_tasks(name)?;
+            if path.exists()
+                || collection
+                    .definitions
+                    .iter()
+                    .any(|loaded| loaded.definition.name == name)
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "auto-task '{name}' already exists; delete it first to restore the shipped content"
+                )));
+            }
 
-        let rendered = render_default_auto_task(embedded, self.workspace_base_branch());
-        let definition = parse_auto_task_yaml(&rendered)?;
-        // Restore means the shipped definition, without earlier settings.
-        self.drop_auto_task_settings(name)?;
-        atomic_write_text(&path, &rendered).map_err(|error| {
-            OrbitError::Io(format!(
-                "restore auto-task '{name}' at {}: {error}",
-                path.display()
-            ))
-        })?;
-        restore_managed_asset(
-            &auto_tasks_dir(&self.paths().local_dir),
-            ASSET_KIND,
-            ManagedAssetLayout::YamlStem,
-            name,
-            sha256_hex(rendered.as_bytes()),
-        )?;
+            let rendered = render_default_auto_task(embedded, self.workspace_base_branch());
+            let definition = parse_auto_task_yaml(&rendered)?;
+            // Restore means the shipped definition, without earlier settings.
+            self.drop_auto_task_settings(name)?;
+            atomic_write_text(&path, &rendered).map_err(|error| {
+                OrbitError::Io(format!(
+                    "restore auto-task '{name}' at {}: {error}",
+                    path.display()
+                ))
+            })?;
+            restore_managed_asset(
+                &auto_tasks_dir(&self.paths().local_dir),
+                ASSET_KIND,
+                ManagedAssetLayout::YamlStem,
+                name,
+                sha256_hex(rendered.as_bytes()),
+            )?;
 
-        let actor = self.actor().resolve_write_label(None, None)?;
-        self.record_auto_task_audit(
-            "restore",
-            name,
-            json!({
-                "name": name,
-                "path": path,
-                "restored_by": actor,
-                "restored_at": Utc::now().to_rfc3339(),
-            }),
-        );
-        Ok(definition)
+            let actor = self.actor().resolve_write_label(None, None)?;
+            self.record_auto_task_audit(
+                "restore",
+                name,
+                json!({
+                    "name": name,
+                    "path": path,
+                    "restored_by": actor,
+                    "restored_at": Utc::now().to_rfc3339(),
+                }),
+            );
+            Ok(definition)
+        })
     }
 
     /// Persist one definition-lifecycle audit event. The change it records is

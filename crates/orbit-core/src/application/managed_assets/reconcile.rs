@@ -32,6 +32,9 @@ use super::retired::{ambiguous_legacy_yaml_files, unsafe_preservation_component}
 /// place and produces an actionable warning. Every asset path is resolved
 /// through [`resolve_confined_asset_path`] first: one that crosses a link or a
 /// wrongly typed component is reported and left untouched in both modes.
+/// Auto-task callers hold the workspace cursor sidecar across this operation
+/// and any preceding settings migration, sharing exclusion with delete,
+/// opt-out rollback and restore. Check mode remains lock-free.
 // ADR-0346: content provenance, rather than filenames, authorizes retirement.
 pub(crate) fn reconcile_managed_assets<'a>(
     dir: &Path,
@@ -68,6 +71,10 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
 
     let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
     let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
+    #[cfg(feature = "test-support")]
+    if asset_kind == "auto_task" {
+        super::test_support::after_auto_task_manifest_read();
+    }
     let current_names: BTreeSet<&str> = files.iter().map(|(name, _)| *name).collect();
     let opted_out: BTreeSet<String> = previous
         .as_ref()
@@ -432,6 +439,8 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
 /// A directory that was never reconciled gains a manifest here; without one
 /// the next seed would treat the directory as legacy and re-create the file.
 /// The returned record undoes the opt-out when a later step fails.
+/// The caller must hold the workspace cursor sidecar from definition removal
+/// through this update and any rollback, excluding reconciliation and restore.
 pub(crate) fn record_managed_asset_opt_out(
     dir: &Path,
     asset_kind: &str,
@@ -471,7 +480,8 @@ pub(crate) struct ManagedAssetOptOut {
 
 impl ManagedAssetOptOut {
     /// Restore the manifest as it stood before the opt-out, removing one the
-    /// opt-out created.
+    /// opt-out created. Runs within the caller's original cursor lock; a new
+    /// acquisition here alone would not protect the saved manifest snapshot.
     pub(crate) fn revert(self) -> Result<(), OrbitError> {
         if !self.changed {
             return Ok(());
@@ -493,6 +503,8 @@ impl ManagedAssetOptOut {
 
 /// Clear an operator opt-out and record `digest` as the provenance of the
 /// shipped content just written back for `name`.
+/// The caller holds the workspace cursor sidecar across the definition write
+/// and this manifest update, excluding reconciliation, delete and rollback.
 pub(crate) fn restore_managed_asset(
     dir: &Path,
     asset_kind: &str,
