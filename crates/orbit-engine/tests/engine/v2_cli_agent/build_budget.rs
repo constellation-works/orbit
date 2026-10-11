@@ -121,6 +121,11 @@ print(json.dumps({{'schemaVersion':1,'status':'success','result':{{}},'error':No
     assert!(waits["total_ms"].as_u64().unwrap() >= 3000, "{waits}");
     assert_eq!(waits["total_ms"], waits["longest_ms"]);
     assert_eq!(waits["queued_wall_ms"], waits["deadline_extension_ms"]);
+    assert_eq!(
+        outcome.output["effective_deadline_ms"].as_u64().unwrap(),
+        4000 + waits["deadline_extension_ms"].as_u64().unwrap(),
+        "the recorded deadline must include earned queue credit",
+    );
     assert!(outcome.output["duration_ms"].as_u64().unwrap() > 4000);
     let events = events_snapshot(&store, "wait-credit").unwrap();
     let persisted = events

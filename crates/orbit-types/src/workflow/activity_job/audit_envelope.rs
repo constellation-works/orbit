@@ -274,6 +274,12 @@ pub enum V2AuditEventKind {
         model: Option<String>,
         cwd: Option<String>,
         wall_clock_timeout_ms: u64,
+        /// Provider-side budget injected at launch, when the provider has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        print_timeout_ms: Option<u64>,
+        /// Runtime plus earned queue credit at launch, measured from spawn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effective_deadline_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sandbox_backend: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
