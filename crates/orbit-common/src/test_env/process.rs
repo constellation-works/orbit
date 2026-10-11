@@ -122,9 +122,22 @@ pub enum PsRun {
 /// other failure to start it panics, and a `ps` that ran is returned whatever
 /// its status, so a sandbox can never turn a wrong rendering into a pass.
 pub fn ps_lstart_utc(pid: u32) -> PsRun {
+    ps_field_utc(pid, "lstart=")
+}
+
+/// Run `ps -o stat= -p <pid>` to distinguish a running process from a zombie.
+///
+/// Uses the same bounded run and spawn-denial classifier as [`ps_lstart_utc`].
+/// A process that no longer exists may yield an unsuccessful status with empty
+/// output; callers must distinguish that from other errors reported by `ps`.
+pub fn ps_stat(pid: u32) -> PsRun {
+    ps_field_utc(pid, "stat=")
+}
+
+fn ps_field_utc(pid: u32, field: &str) -> PsRun {
     let mut command = std::process::Command::new("ps");
     command
-        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .args(["-o", field, "-p", &pid.to_string()])
         .env("TZ", "UTC")
         .env("LC_ALL", "C")
         .env("LANG", "C");
