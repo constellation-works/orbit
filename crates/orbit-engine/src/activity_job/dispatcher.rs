@@ -199,9 +199,6 @@ pub enum DispatchError {
     )]
     TaskCompletionLiveRun { task_id: String, run_id: String },
 
-    #[error("agent_loop run failed: {0}")]
-    AgentLoopFailed(String),
-
     /// CLI subprocess invocation failed at the host layer (e.g. failed to
     /// spawn, or provider key unknown). Wraps the host's error text verbatim.
     /// Treated as transient: the step retry wrapper may re-attempt it.

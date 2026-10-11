@@ -364,15 +364,11 @@ impl LoginShell {
             })
     }
 
-    /// [`Self::resolve`], reused for [`LOGIN_SHELL_CACHE_TTL`] per shell,
-    /// starting PATH, HOME, timeout and interactive policy. Failures and
-    /// fallback results are cached too, costing at most two probes per window.
-    pub fn resolve_cached(&self, base: &[(String, String)]) -> Result<LoginShellEnv, String> {
-        self.resolve_cached_with_interactive(base, true)
-    }
-
     /// Cached resolution with the configured interactive-startup policy.
-    pub(crate) fn resolve_cached_with_interactive(
+    /// Reused for [`LOGIN_SHELL_CACHE_TTL`] per shell, starting PATH, HOME,
+    /// timeout and interactive policy. Failures and fallback results are cached
+    /// too, costing at most two probes per window.
+    fn resolve_cached_with_interactive(
         &self,
         base: &[(String, String)],
         interactive: bool,
