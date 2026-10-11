@@ -401,6 +401,7 @@
         "application/plugin/tests/install.rs::add_from_a_git_source_excludes_the_clone_metadata",
         "application/plugin/tests/install.rs::an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance",
         "application/plugin/tests/install.rs::upgrade_broadens_a_templated_fs_default_only_when_the_resolved_root_grows",
+        "application/plugin/tests/lifecycle/remove.rs::a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it",
         "application/plugin/tests/lifecycle/remove.rs::purge_refuses_a_symlinked_state_prefix_before_changing_the_install",
         "application/plugin/tests/secrets.rs::a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them",
         "application/plugin/tests/secrets.rs::a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything",

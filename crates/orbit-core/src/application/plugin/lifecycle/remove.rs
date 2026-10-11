@@ -1,5 +1,7 @@
 //! `orbit plugin remove`.
 
+use std::path::Path;
+
 use orbit_common::OrbitError;
 use orbit_types::plugin::is_valid_namespace;
 use orbit_types::record::OrbitEvent;
@@ -132,6 +134,32 @@ pub fn remove_plugin(
         delete_plugin_secrets(&runtime.global_root(), name)?;
     }
 
+    // Everything below deletes files, so it runs only for a verified install.
+    // The trees go before the row: the row is the only record that finds them
+    // again, so a failed delete must leave it for the retry that finishes.
+    if owns_install {
+        // The whole namespace family goes, not only the recorded version. An
+        // upgrade performed by an Orbit that did not prune may have left older
+        // `<ns>/<version>/` trees, and every plugin backend can read the install
+        // family (§4.3), so leaving them would leave this plugin's code on the
+        // host after `remove` reported it gone. Deleting the directory rather than
+        // the recorded path also retires the previous `remove_dir(parent)`, which
+        // silently failed whenever anything else was still in there. The path is
+        // derived from the namespace and the global root, never from the row
+        // [ORB-12800], and the verification above already held the recorded path
+        // to it.
+        let namespace_dir = plugin_namespace_dir(&runtime.global_root(), name);
+        if namespace_dir.exists() {
+            delete_install_tree(&namespace_dir)?;
+        }
+        // The build log describes a tree that no longer exists.
+        if let Some(log_dir) = build_log_path(&runtime.global_root(), name).parent()
+            && log_dir.exists()
+        {
+            delete_install_tree(log_dir)?;
+        }
+    }
+
     runtime.with_mutation(|| {
         runtime.stores().plugins().delete_plugin(name)?;
         Ok((
@@ -146,33 +174,32 @@ pub fn remove_plugin(
     // starts from no authorized grants rather than inheriting these.
     forget_authorized_grants(&runtime.global_root(), name);
     forget_build_witness(&runtime.global_root(), name);
-
-    // Everything below deletes files, so it runs only for a verified install.
-    if !owns_install {
-        return Ok(());
-    }
-    // The whole namespace family goes, not only the recorded version. An
-    // upgrade performed by an Orbit that did not prune may have left older
-    // `<ns>/<version>/` trees, and every plugin backend can read the install
-    // family (§4.3), so leaving them would leave this plugin's code on the
-    // host after `remove` reported it gone. Deleting the directory rather than
-    // the recorded path also retires the previous `remove_dir(parent)`, which
-    // silently failed whenever anything else was still in there. The path is
-    // derived from the namespace and the global root, never from the row
-    // [ORB-12800], and the verification above already held the recorded path
-    // to it.
-    let namespace_dir = plugin_namespace_dir(&runtime.global_root(), name);
-    if namespace_dir.exists() {
-        std::fs::remove_dir_all(&namespace_dir).map_err(|error| {
-            OrbitError::Io(format!("remove {}: {error}", namespace_dir.display()))
-        })?;
-    }
-    // The build log describes a tree that no longer exists.
-    if let Some(log_dir) = build_log_path(&runtime.global_root(), name).parent()
-        && log_dir.exists()
-    {
-        std::fs::remove_dir_all(log_dir)
-            .map_err(|error| OrbitError::Io(format!("remove {}: {error}", log_dir.display())))?;
-    }
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The install-family tree whose next deletion fails, as an unlink error
+    /// partway through `remove_dir_all` would. Production builds do not have it.
+    pub(crate) static FAIL_TREE_DELETE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Delete one tree of the install family. A failure leaves the row in place,
+/// so the retry still finds the tree.
+fn delete_install_tree(path: &Path) -> Result<(), OrbitError> {
+    #[cfg(test)]
+    if FAIL_TREE_DELETE.with(|armed| {
+        armed
+            .borrow_mut()
+            .take_if(|armed| armed.as_path() == path)
+            .is_some()
+    }) {
+        return Err(OrbitError::Io(format!(
+            "remove {}: injected failure",
+            path.display()
+        )));
+    }
+    std::fs::remove_dir_all(path)
+        .map_err(|error| OrbitError::Io(format!("remove {}: {error}", path.display())))
 }
