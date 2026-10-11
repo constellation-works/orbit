@@ -8,6 +8,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -106,24 +108,50 @@ fn write_hosts(fixture: &Fixture, entries: &[(&str, &str, &str, &str)]) {
 fn old_dashboard() -> u16 {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
+    serve_dashboard(listener, None);
+    port
+}
+
+/// Answer `/healthz` with 200, `/api/hosts?probe=false` with `identity` (404
+/// without one) and everything else with 404. Returns the connection count.
+fn serve_dashboard(listener: TcpListener, identity: Option<Value>) -> Arc<AtomicUsize> {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&connections);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { break };
+            counted.fetch_add(1, Ordering::SeqCst);
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let mut buf = [0u8; 2048];
             let n = stream.read(&mut buf).unwrap_or(0);
-            let status = if buf[..n].starts_with(b"GET /healthz ") {
-                "200 OK"
-            } else {
-                "404 Not Found"
+            let request = &buf[..n];
+            let (status, body) = match &identity {
+                _ if request.starts_with(b"GET /healthz ") => ("200 OK", String::new()),
+                Some(identity) if request.starts_with(b"GET /api/hosts?probe=false ") => {
+                    ("200 OK", identity.to_string())
+                }
+                _ => ("404 Not Found", String::new()),
             };
             let _ = write!(
                 stream,
-                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
             );
         }
     });
-    port
+    connections
+}
+
+/// The local port a stub call was told to forward (`-L 127.0.0.1:<port>:…`).
+fn forwarded_port(call: &Value) -> u16 {
+    let argv: Vec<&str> = call["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    let spec = argv[argv.iter().position(|arg| *arg == "-L").unwrap() + 1];
+    spec.split(':').nth(1).unwrap().parse().unwrap()
 }
 
 /// B's task with an HTML artifact, which the dashboard serves as a sandboxed download.
@@ -493,6 +521,76 @@ fn forward_failures_are_typed_and_bounded() {
                 "host_too_old",
             );
             json_ok(a_server.get("/api/on/hostb/workspaces"));
+        },
+    );
+}
+
+/// The reserved local port is released before ssh binds it. A healthy
+/// dashboard that takes it first, reporting another machine, must never be
+/// read as the tunnel: the request fails with ssh's own exit, not a 409.
+#[test]
+fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
+    isolated(
+        "host_forward::a_foreign_listener_on_the_reserved_port_is_never_the_tunnel",
+        || {
+            let a = Fixture::new();
+            write_hosts(
+                &a,
+                &[
+                    ("deadhost", "hm_deadhost", "dead-ssh", "HD"),
+                    ("takenhost", "hm_takenhost", "taken-ssh", "HT"),
+                ],
+            );
+            let behind = old_dashboard();
+            // `dead-ssh` never binds. `taken-ssh` authenticates for
+            // `bind_delay`, then finds the port taken and exits at once.
+            let stub = StubSsh::new(json!({
+                "dead-ssh": {"exit": 255, "delay": 1.5},
+                "taken-ssh": {"attach": behind, "spawn": behind, "bind_delay": 1.5},
+            }));
+            let a_server = a.server_with_path(false, stub.bin());
+            let foreign_identity = json!({"hosts": [{"local": true, "machine_id": "hm_foreign"}]});
+
+            for host in ["deadhost", "takenhost"] {
+                let before = stub.calls().len();
+                let origin = a_server.origin.clone();
+                let request = thread::spawn(move || {
+                    reqwest::blocking::Client::builder()
+                        .no_proxy()
+                        .timeout(SLOW_REQUEST)
+                        .build()
+                        .unwrap()
+                        .get(format!("{origin}/api/on/{host}/workspaces"))
+                        .send()
+                        .unwrap()
+                });
+                wait_until(
+                    &format!("{host}'s ssh to start"),
+                    Duration::from_secs(10),
+                    || stub.calls().len() > before,
+                );
+                let reserved = forwarded_port(&stub.calls()[before]);
+                let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
+                    .expect("the reserved port is free until ssh binds it");
+                let probes = serve_dashboard(foreign, Some(foreign_identity.clone()));
+
+                let failed = error_code(request.join().unwrap(), 502, "unreachable_destination");
+                assert_eq!(failed["host"], host, "{failed}");
+                assert!(
+                    failed["error"].as_str().unwrap().contains("exit 255"),
+                    "{host}: ssh's own failure is reported: {failed}"
+                );
+                assert_eq!(
+                    probes.load(Ordering::SeqCst),
+                    0,
+                    "{host}: nothing is probed through a port its ssh never bound"
+                );
+                assert_eq!(
+                    stub.calls().len(),
+                    before + 1,
+                    "{host}: a failed probe spawns no remote dashboard"
+                );
+            }
         },
     );
 }

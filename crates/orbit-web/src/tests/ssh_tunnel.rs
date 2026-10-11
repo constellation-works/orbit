@@ -24,7 +24,7 @@ const BIND_DELAY: Duration = Duration::from_millis(2000);
 const ATTACH_BUDGET: Duration = Duration::from_millis(500);
 
 const STUB_SSH: &str = r#"#!/usr/bin/env python3
-import os, socket, sys, threading, time
+import os, socket, subprocess, sys, threading, time
 from pathlib import Path
 
 def main():
@@ -39,11 +39,19 @@ def main():
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", local_port))
     listener.listen(32)
+    local_command(sys.argv[1:])
     while True:
         client, _ = listener.accept()
         threading.Thread(
             target=proxy, args=(client, remote_port), daemon=True
         ).start()
+
+def local_command(argv):
+    # ssh runs -o LocalCommand once its forwards are bound.
+    opts = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-o")
+    if opts.get("PermitLocalCommand") == "yes" and "LocalCommand" in opts:
+        shell = os.environ.get("SHELL") or "/bin/sh"
+        subprocess.run([shell, "-c", opts["LocalCommand"].replace("%%", "%")])
 
 def parse_forward(argv):
     for i, arg in enumerate(argv):

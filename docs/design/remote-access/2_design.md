@@ -2,7 +2,7 @@
 title: "Remote Access — Design"
 owner: codex
 last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_validated: 2026-10-10
 status: Accepted
 feature: remote-access
 doc_role: design
@@ -70,12 +70,12 @@ connect reads no local workspace state. It selects a local loopback port: an exp
 
 The Web-owned tunnel then follows an attach-first lifecycle:
 
-1. Start ssh -N with ExitOnForwardFailure=yes and -L 127.0.0.1:<local>:localhost:<remote>.
-2. Wait until a TCP connect to that local port succeeds, or until ssh exits. OpenSSH binds -L only after authentication, so passphrase, password, and 2FA time is outside the attach budget. An exit before the listener accepts is a connection failure. Ctrl-C cancels a stuck prompt; there is no separate authentication deadline.
-3. Poll GET /healthz through the forward for up to five seconds, measured from that successful connect.
+1. Start ssh -N with ExitOnForwardFailure=yes and -L 127.0.0.1:<local>:localhost:<remote>, plus a LocalCommand that writes a private marker file once ssh has bound the forward ([bind report](./specs/ssh-tunnel.md#bind-report)).
+2. Wait until that marker exists, or until ssh exits. OpenSSH binds -L only after authentication, so passphrase, password, and 2FA time is outside the attach budget. An exit before the marker is a connection failure. A listener on the port alone proves nothing: another process may have taken the port before ssh, and ssh then exits. Ctrl-C cancels a stuck prompt; there is no separate authentication deadline.
+3. Poll GET /healthz through the forward for up to five seconds, measured from that bind report.
 4. If health answers 200, keep that commandless forward and mark the session attached.
 5. If nothing answers, tear down the probe and start ssh -tt with the same forward plus orbit web serve --no-open --port <remote-port>.
-6. Poll health for up to 30 seconds, then open the local browser unless --no-open was requested.
+6. Poll health for up to 30 seconds, once that child has reported its own bind, then open the local browser unless --no-open was requested.
 7. Block until Ctrl-C, SIGTERM, or SSH exit; dropping the tunnel terminates and reaps the local SSH child.
 
 In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the remote serve process started by this session. In attach mode there is no remote command, so teardown closes only the forward and leaves the pre-existing dashboard running.
@@ -86,7 +86,7 @@ connect's --workspace is POSIX-quoted and forwarded to the remote serve as --wor
 
 `/api/on/<host>/<path>` forwards one request to `/api/<path>` on a registered host's own dashboard ([specs/host-forward.md](./specs/host-forward.md)). The host is resolved from the serving host's host file; the serving host's own name is answered locally.
 
-host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel's establish in unattended mode: `BatchMode=yes`, a bounded `ConnectTimeout` and a bounded wait for the forward listener, since a server has no terminal to prompt on. Establish is single-flight per host and runs on the blocking pool. Each new tunnel reads the remote's `GET /api/hosts?probe=false` and compares its local row's `machine_id` with the host file's. A dead child is re-established by the next request, an idle tunnel closes after five minutes, and serve stops every child after its graceful-shutdown future completes, the one path that both a signal and the update handover take before exit or exec.
+host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel's establish in unattended mode: `BatchMode=yes`, a bounded `ConnectTimeout` and a bounded wait for the forward listener, since a server has no terminal to prompt on. Establish is single-flight per host and runs on the blocking pool. Each new tunnel reads the remote's `GET /api/hosts?probe=false` and compares its local row's `machine_id` with the host file's; when the SSH child has exited by the end of that read, the exit is reported instead, since its port may have passed to another listener. A dead child is re-established by the next request, an idle tunnel closes after five minutes, and serve stops every child after its graceful-shutdown future completes, the one path that both a signal and the update handover take before exit or exec.
 
 The forwarding client speaks HTTP/1.1 to the tunnel's loopback port, one connection per request, and streams both bodies. Unsafe methods need the operator session through the governed dashboard operation `host.forward`, and a spawned remote gets `--operator` only when that session has it. The router's origin guard, the authorization check, path refusals and host resolution all run before any SSH process starts.
 

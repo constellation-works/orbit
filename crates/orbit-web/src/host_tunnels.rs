@@ -13,7 +13,10 @@
 //! - A tunnel is reused while its `ssh` child lives. A dead child is replaced
 //!   by the next request. Nothing reconnects or probes in the background.
 //! - Every new tunnel reads the remote's own identity before it serves a
-//!   request; a different `machine_id` tears it down.
+//!   request; a different `machine_id` tears it down. The read goes through
+//!   the port only after its `ssh` child reported binding it, and is trusted
+//!   only if that child is still running afterwards, so a foreign listener on
+//!   the port can never answer it.
 //! - A tunnel no request has used for [`TunnelConfig::idle_timeout`] is torn
 //!   down by a timer thread that only compares instants.
 //! - [`HostTunnels::shutdown_all`] stops every child on graceful shutdown and
@@ -342,10 +345,21 @@ impl HostTunnels {
             }),
         };
         // Every error return below drops `tunnel`, which stops the child.
-        let (tunnel, origin) =
+        let (mut tunnel, origin) =
             ssh_tunnel::establish(&spec, || crate::connect::healthz_ok(local_port))
                 .map_err(|error| ForwardError::from_establish(target, &error))?;
-        let identity = read_identity(target, local_port, self.config.identity_timeout)?;
+        let identity = read_identity(target, local_port, self.config.identity_timeout);
+        // The child holds its `-L` listener until it exits, so a child still
+        // running after the read means its forward answered it. One that
+        // exited may have left the port to another listener: report the exit.
+        let exited = tunnel
+            .try_wait()
+            .map_err(|error| ForwardError::from_establish(target, &error))?;
+        if let Some(status) = exited {
+            let error = ssh_tunnel::classify_ssh_exit(status, &spec.remote_description);
+            return Err(ForwardError::from_establish(target, &error));
+        }
+        let identity = identity?;
         if identity.machine_id != target.machine_id {
             return Err(ForwardError::registry(
                 HostRegistryCode::HostIdentityMismatch,

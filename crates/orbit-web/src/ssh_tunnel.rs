@@ -13,27 +13,30 @@
 //! only ever stops what this process started — an attached, pre-existing
 //! remote server is never touched.
 //!
+//! The local port is released before `ssh` binds it, so a TCP handshake on it
+//! does not prove the forward is `ssh`'s: another process may have taken the
+//! port first. Each child therefore runs with a `LocalCommand` that writes a
+//! private marker file, which OpenSSH runs only after every `-L` listener is
+//! bound ([`ForwardMarker`]). Until that marker exists nothing is probed
+//! through the port, and a child that could not bind exits through
+//! `ExitOnForwardFailure`.
+//!
 //! Deliberately synchronous: the tunnel is a child-process lifetime, not a
 //! future. The `connect` command owns the small async wait around it, and the
 //! dashboard's host forward ([`crate::host_tunnels`]) runs it on the blocking
 //! pool with [`Unattended`] bounds.
 
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, TcpListener};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orbit_core::OrbitError;
 
 /// Delay between readiness probes.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);
-
-/// How long one "has `-L` bound yet?" connect may block.
-///
-/// Connection refused — the listener is not up yet — returns immediately.
-/// This only bounds a black-holed route. It is not the attach budget.
-const FORWARD_BIND_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Grace period between SIGTERM and SIGKILL when tearing the tunnel down.
 #[cfg(unix)]
@@ -118,9 +121,10 @@ pub(crate) enum TunnelOrigin {
 /// [`classify_ssh_exit`] — when `ssh` itself fails, e.g. a bad host).
 ///
 /// The attach budget does not include authentication. The probe stays up
-/// until its local listener accepts a TCP connection (OpenSSH binds `-L`
-/// only after auth) or the probe exits. Only then does [`TunnelSpec::attach_timeout`]
-/// bound the `/healthz` wait.
+/// until it reports that it bound its local listener (OpenSSH binds `-L`
+/// only after auth; see [`ForwardMarker`]) or the probe exits. Only then does
+/// [`TunnelSpec::attach_timeout`] bound the `/healthz` wait. `ready` is never
+/// called before the child owning the forward has reported its bind.
 ///
 /// The returned [`SshTunnel`] tears the forward down on drop, so every exit
 /// path — error, panic, normal return — releases it.
@@ -129,12 +133,8 @@ pub(crate) fn establish(
     mut ready: impl FnMut() -> bool,
 ) -> Result<(SshTunnel, TunnelOrigin), OrbitError> {
     let unattended = spec.unattended.as_ref();
-    let options = unattended.map_or(&[][..], |bounds| &bounds.ssh_options[..]);
-    let mut probe = SshTunnel::new(spawn_ssh_for(
-        spec,
-        &probe_forward_args(&spec.ssh_host, spec.local_port, spec.remote_port, options),
-    )?);
-    // A refused connect here is "still authenticating", not "nothing listening".
+    let mut probe = spawn_tunnel(spec, None)?;
+    // No marker yet is "still authenticating", not "nothing listening".
     wait_until_forward_bound(&mut probe, spec)?;
     if poll_until_ready(
         &mut probe,
@@ -147,16 +147,7 @@ pub(crate) fn establish(
     }
     probe.shutdown();
 
-    let mut tunnel = SshTunnel::new(spawn_ssh_for(
-        spec,
-        &command_forward_args(
-            &spec.ssh_host,
-            spec.local_port,
-            spec.remote_port,
-            options,
-            &spec.remote_command,
-        ),
-    )?);
+    let mut tunnel = spawn_tunnel(spec, Some(&spec.remote_command))?;
     if poll_until_ready(
         &mut tunnel,
         &mut ready,
@@ -194,6 +185,30 @@ fn cancelled(remote_description: &str) -> OrbitError {
     OrbitError::Execution(format!(
         "stopped establishing the tunnel to `{remote_description}`: the dashboard is shutting down"
     ))
+}
+
+/// Spawn one `ssh` child with its own [`ForwardMarker`]: a bare probe forward
+/// when `remote_command` is `None`, otherwise a forward that runs it.
+fn spawn_tunnel(spec: &TunnelSpec, remote_command: Option<&str>) -> Result<SshTunnel, OrbitError> {
+    let marker = ForwardMarker::create()?;
+    let mut options = marker.ssh_options();
+    if let Some(bounds) = &spec.unattended {
+        options.extend_from_slice(&bounds.ssh_options);
+    }
+    let args = match remote_command {
+        None => probe_forward_args(&spec.ssh_host, spec.local_port, spec.remote_port, &options),
+        Some(command) => command_forward_args(
+            &spec.ssh_host,
+            spec.local_port,
+            spec.remote_port,
+            &options,
+            command,
+        ),
+    };
+    Ok(SshTunnel {
+        child: Some(spawn_ssh_for(spec, &args)?),
+        marker: Some(marker),
+    })
 }
 
 /// Spawn `spec.ssh_program` (normally `ssh`) with the given argument vector.
@@ -320,6 +335,89 @@ pub(crate) fn select_local_port(
     }
 }
 
+/// Proof that one `ssh` child bound its own `-L` listener.
+///
+/// The child runs with `PermitLocalCommand=yes` and a `LocalCommand` that
+/// creates `bound` inside a directory only this user can write. OpenSSH runs
+/// `LocalCommand` after it has set up every local forward, and with
+/// `ExitOnForwardFailure=yes` a forward it cannot bind (the port was taken
+/// after it was reserved) makes it exit instead. A marker therefore means the
+/// listener on the port is this child's for as long as the child lives.
+///
+/// `ControlPath=none` keeps the child from handing the forward to an existing
+/// multiplexing master: the master would own the listener, never run the
+/// command, and keep the forward after this child is torn down. The
+/// operator's own `LocalCommand`, if any, does not run for these children.
+struct ForwardMarker {
+    dir: PathBuf,
+}
+
+impl ForwardMarker {
+    fn create() -> Result<Self, OrbitError> {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.subsec_nanos());
+        let mut last_error = None;
+        for _ in 0..8 {
+            let dir = std::env::temp_dir().join(format!(
+                "orbit-ssh-forward-{}-{}-{nanos:08x}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            ));
+            match private_dir(&dir) {
+                Ok(()) => return Ok(Self { dir }),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(OrbitError::Io(format!(
+            "could not create the ssh forward marker directory: {}",
+            last_error.map_or_else(String::new, |error| error.to_string())
+        )))
+    }
+
+    fn path(&self) -> PathBuf {
+        self.dir.join("bound")
+    }
+
+    /// `-o` options that make the child write the marker once it is bound.
+    /// `LocalCommand` runs through the operator's shell after `%` tokens are
+    /// expanded, so the path is shell-quoted and `%` is escaped.
+    fn ssh_options(&self) -> Vec<String> {
+        let path = self.path().display().to_string();
+        #[cfg(unix)]
+        let quoted = orbit_common::process::shell::quote_posix_arg(&path);
+        #[cfg(not(unix))]
+        let quoted = format!("\"{path}\"");
+        [
+            "ControlPath=none".to_string(),
+            "PermitLocalCommand=yes".to_string(),
+            format!("LocalCommand=echo > {}", quoted.replace('%', "%%")),
+        ]
+        .into_iter()
+        .flat_map(|option| ["-o".to_string(), option])
+        .collect()
+    }
+
+    fn seen(&self) -> bool {
+        self.path().exists()
+    }
+}
+
+impl Drop for ForwardMarker {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Create `dir`, failing if it exists; on Unix only its owner may enter it.
+fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
 /// Wait until `ssh` has bound the local forward, or until it exits.
 ///
 /// No deadline for `connect`: OpenSSH listens on `-L` only after
@@ -328,7 +426,8 @@ pub(crate) fn select_local_port(
 /// prompt; it is delivered here because the child's stdin is null. An
 /// [`Unattended`] establish has no prompt to wait for, so it is bounded by
 /// [`Unattended::bind_timeout`] and stops when cancelled. An exit before the
-/// listener accepts is a connection failure, not "nothing is running".
+/// child reports its bind is a connection failure, not "nothing is running".
+/// A listener on the port alone proves nothing (see [`ForwardMarker`]).
 fn wait_until_forward_bound(tunnel: &mut SshTunnel, spec: &TunnelSpec) -> Result<(), OrbitError> {
     let deadline = spec
         .unattended
@@ -338,7 +437,7 @@ fn wait_until_forward_bound(tunnel: &mut SshTunnel, spec: &TunnelSpec) -> Result
         if let Some(status) = tunnel.try_wait()? {
             return Err(classify_ssh_exit(status, &spec.remote_description));
         }
-        if forward_listener_up(spec.local_port) {
+        if tunnel.forward_bound() {
             return Ok(());
         }
         if let Some((deadline, bounds)) = deadline {
@@ -359,22 +458,15 @@ fn wait_until_forward_bound(tunnel: &mut SshTunnel, spec: &TunnelSpec) -> Result
     }
 }
 
-/// True when a TCP handshake to the loopback forward port completes.
-///
-/// A completed handshake means the local listener is bound. It does not mean
-/// the far side accepted the forwarded channel.
-fn forward_listener_up(local_port: u16) -> bool {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
-    TcpStream::connect_timeout(&addr, FORWARD_BIND_PROBE_TIMEOUT).is_ok()
-}
-
 /// Poll `ready` through `tunnel`'s forward until it answers or `timeout`
 /// elapses.
 ///
 /// Returns `Ok(true)` once ready, `Ok(false)` on a plain timeout (the forward
 /// is still up; nothing has answered yet), or `Err` if `ssh` exited before
 /// either happened — a dead `ssh` is a configuration failure, not a
-/// "nothing running there yet" — or `cancel` was set.
+/// "nothing running there yet" — or `cancel` was set. `ready` is consulted
+/// only once the child has reported its bind, so whatever answers is behind
+/// this child's forward.
 pub(crate) fn poll_until_ready(
     tunnel: &mut SshTunnel,
     mut ready: impl FnMut() -> bool,
@@ -390,7 +482,7 @@ pub(crate) fn poll_until_ready(
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
             return Err(cancelled(remote_description));
         }
-        if ready() {
+        if tunnel.forward_bound() && ready() {
             return Ok(true);
         }
         if Instant::now() >= deadline {
@@ -435,11 +527,13 @@ pub(crate) fn classify_ssh_exit(status: ExitStatus, remote_description: &str) ->
 /// forward and leaves the pre-existing remote process running.
 pub(crate) struct SshTunnel {
     child: Option<Child>,
+    marker: Option<ForwardMarker>,
 }
 
 impl SshTunnel {
-    pub(crate) fn new(child: Child) -> Self {
-        Self { child: Some(child) }
+    /// True once the child has reported that it bound its local forward.
+    fn forward_bound(&self) -> bool {
+        self.marker.as_ref().is_some_and(ForwardMarker::seen)
     }
 
     /// Non-blocking check for the child's exit status.
@@ -454,13 +548,14 @@ impl SshTunnel {
 
     /// Terminate the `ssh` child if it is still running. Idempotent.
     pub(crate) fn shutdown(&mut self) {
+        let marker = self.marker.take();
         let Some(mut child) = self.child.take() else {
             return;
         };
-        if let Ok(Some(_)) = child.try_wait() {
-            return; // already gone
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            terminate_child(&mut child);
         }
-        terminate_child(&mut child);
+        drop(marker);
     }
 }
 

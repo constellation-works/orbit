@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web host forward — another registered host's dashboard API through this one"
-last_validated: 2026-10-08
+last_validated: 2026-10-10
 tags: [remote-access, host-registry]
 ---
 
@@ -44,7 +44,7 @@ One tunnel per host, keyed by `machine_id`.
 - **Establish.** Attach first, then spawn, exactly as `web connect` does. The spawned remote command is `orbit web serve --no-open --port <remote>`, plus `--operator` exactly when the serving session has the operator capability. The local listener is `127.0.0.1` on an ephemeral port; the remote port is the default dashboard port, 7878.
 - **Unattended SSH.** A server has no terminal, so every SSH child gets `-o BatchMode=yes -o ConnectTimeout=10`, and the wait for the forward listener is bounded. A host that needs a passphrase or password fails as `unreachable_destination` rather than waiting.
 - **Single flight.** Concurrent first requests for one host share one establish. Requests waiting behind a failed attempt get that failure rather than starting another. Establish runs on the blocking pool, so a slow host never stalls other requests.
-- **Identity.** On each new tunnel the dashboard reads `GET /api/hosts?probe=false` through it and takes the row marked `local`. A `machine_id` other than the host file's is 409 `host_identity_mismatch`, and the tunnel is torn down. A 404 is 409 `host_too_old`: that dashboard predates the host registry and cannot prove its identity.
+- **Identity.** On each new tunnel the dashboard reads `GET /api/hosts?probe=false` through it and takes the row marked `local`. A `machine_id` other than the host file's is 409 `host_identity_mismatch`, and the tunnel is torn down. The read starts only after the SSH child reported binding the forward ([bind report](./ssh-tunnel.md#bind-report)), and if that child has exited by the end of the read the result is `unreachable_destination` with its exit classification: a listener that took the port from a failed SSH is never reported as a mismatched host. A 404 is 409 `host_too_old`: that dashboard predates the host registry and cannot prove its identity.
 - **Reuse and re-establish.** A live tunnel is reused. When its SSH child has exited, or the host's SSH target changed, the next request tears it down and establishes again. There is no reconnect loop and no heartbeat.
 - **Idle.** A tunnel with no request or open stream for five minutes is torn down.
 - **Shutdown.** Graceful shutdown and the binary-update handover both stop every SSH child this process started, and refuse new tunnels, before the process exits or execs. Open event streams end when shutdown begins. An attached tunnel stops only its forward; a spawned remote dashboard exits with its PTY session, as in `web connect`.
