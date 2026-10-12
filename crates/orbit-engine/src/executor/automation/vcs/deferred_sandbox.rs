@@ -7,8 +7,9 @@
 //! the [`DeferredSandboxValidation`] from it, checks it against the gates this
 //! host names ([`RuntimeHost::validation_gates`]: on a claimed leaf, the
 //! owner's gates its claim captured [ORB-15622]) and the step's pinned base,
-//! and runs the deferring sandbox's probe in the implementer's lane itself
-//! [ORB-15516]. Whether the step is claimed and the host's OS
+//! and runs each deferring sandbox's probe in the implementer's lane itself
+//! [ORB-15516]: one per kind the notices name, all of which must refuse
+//! [ORB-15692]. Whether the step is claimed and the host's OS
 //! ([`RuntimeHost::host_os`]) decide which kinds it may defer. The derived
 //! record replaces the handoff in the step's output, and an owner run keeps
 //! it on the task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate skips
@@ -75,11 +76,11 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
         format!(
             "{CONTRACT_REFUSAL_MARKER}: `deferred_sandbox_validation` \
              {reason}. Hand off only `{{\"summary\": \"<path>\"}}` for a passing \
-             affected-test gate whose sole gap is one sandbox's notices: Bubblewrap \
-             `DEFERRED: bubblewrap unavailable:` notices on Linux, Seatbelt `SKIP: \
-             sandbox-exec cannot apply a profile:` notices on macOS, or `DEFERRED: ps \
-             denied:` notices on a macOS claimed leaf, in a lane that refuses that sandbox; \
-             otherwise fix the gate or report the validation blocker."
+             affected-test gate whose sole gap is deferral notices of sandboxes the lane \
+             refuses: Bubblewrap `DEFERRED: bubblewrap unavailable:` notices on Linux, \
+             Seatbelt `SKIP: sandbox-exec cannot apply a profile:` notices on macOS, and \
+             `DEFERRED: ps denied:` notices on a macOS claimed leaf; otherwise fix the gate \
+             or report the validation blocker."
         )
     })?;
     if input.get("claimed").and_then(Value::as_bool) == Some(true) {
@@ -146,9 +147,12 @@ fn derive<H: RuntimeHost + ?Sized>(
                 handoff.summary
             )
         })?;
-    let probe =
-        host.run_deferral_probe(&pending.probe(), lane.provider, lane.fs_profile, &checkout);
-    pending.complete(probe).map(Some)
+    let probes = pending
+        .probes()
+        .iter()
+        .map(|probe| host.run_deferral_probe(probe, lane.provider, lane.fs_profile, &checkout))
+        .collect();
+    pending.complete(probes).map(Some)
 }
 
 /// The summary at checkout-relative `path`, which must resolve inside the

@@ -442,15 +442,17 @@ that executed the path, such as owner fulfilment below, stands in for the
 record and clears its notices.
 
 The implementer lane follows the same reading [ORB-15287]. An affected-test
-gate that exits 0 with only one sandbox's notices is handed off by naming the
+gate that exits 0 with only deferral notices is handed off by naming the
 gate's validation summary, and the implement step derives the typed
 `deferred_sandbox_validation` record from it before commit [ORB-15516]: one
 of the owner's validation gates, exit 0, executed tests on the pinned base,
-and either only Bubblewrap `DEFERRED:` notices with a failing namespace probe
-(Linux), only Seatbelt `SKIP: sandbox-exec cannot apply a profile:` notices
-with a refused apply probe (macOS) [ORB-15409], or, on a macOS claimed leaf
-only, `DEFERRED: ps denied:` notices with a refused `ps` probe [ORB-15587],
-the probe run by Orbit in the implementer's lane. The owner's `candidate_validate`, or a claim's `claim_validate` on its
+and only notices of these kinds, each backed by its own probe that Orbit runs
+in the implementer's lane: Bubblewrap `DEFERRED:` notices with a failing
+namespace probe (Linux), Seatbelt `SKIP: sandbox-exec cannot apply a
+profile:` notices with a refused apply probe (macOS) [ORB-15409], and, on a
+macOS claimed leaf only, `DEFERRED: ps denied:` notices with a refused `ps`
+probe [ORB-15587]. A gate that prints several kinds, as a Mac claimed leaf's
+broad gate does, needs every kind's probe refused [ORB-15692]. The owner's `candidate_validate`, or a claim's `claim_validate` on its
 claim host, replays that gate outside the agent sandbox before delivery and
 refuses a replay that defers again (`validation_environment`) or reports no
 executed tests. The implementer's own pass stays `not_run`.

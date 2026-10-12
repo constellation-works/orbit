@@ -919,8 +919,8 @@ fn the_deferral_probe_records_what_the_lane_answers() {
             },
         )
         .unwrap();
-    pending.clone().complete(refused).unwrap();
-    let refusal = pending.complete(unresolved).expect_err(
+    pending.clone().complete(vec![refused]).unwrap();
+    let refusal = pending.complete(vec![unresolved]).expect_err(
         "a lane-resolution error carrying the namespace-refusal text is not an executed probe",
     );
     assert!(refusal.contains("no failing namespace probe"), "{refusal}");

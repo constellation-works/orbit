@@ -1330,7 +1330,7 @@ fn check_deferral(
                 os: orbit_types::workflow::EvidenceHostOs::current(),
             },
         )?
-        .complete(probe)
+        .complete(vec![probe])
 }
 
 impl CleanLeaf {
