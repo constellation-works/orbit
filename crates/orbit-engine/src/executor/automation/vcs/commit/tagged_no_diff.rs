@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use super::super::git::git_output;
 
 /// The owner's tag-skip decision, which the claimed checkpoint shares.
-pub(super) const DECISION: &str = "skipped_no_diff_expected";
+pub(in crate::executor::automation::vcs) const DECISION: &str = "skipped_no_diff_expected";
 
 /// The checkpoint a claimed tagged leaf commits to instead of a verifier
 /// report. Unlike the owner's skip, it names its run and pinned base.
