@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canonical Audit Actor Identity"
 tags: ["auditability"]
-last_validated: 2026-10-08
+last_validated: 2026-10-11
 ---
 
 # Spec: Canonical Audit Actor Identity

@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-10-08
+last_validated: 2026-10-11
 ---
 # Crate-Boundary Error Translation
 
@@ -73,6 +73,7 @@ maps each surfaced family to a specific `OrbitError` variant. From
 ```rust
 #[derive(Debug, Error, Clone)]
 pub enum DispatchError {
+    ProtocolSkew(String),
     JobValidation(String),
     DeterministicActionUnavailable { activity: String, action: String },
     CliInvocationFailed(String),
@@ -80,13 +81,14 @@ pub enum DispatchError {
 }
 ```
 
-The translator lives next to the error. It preserves validation failures as
-`JobValidation`, recoverable VCS conflicts, and live-completion refusals; other
-dispatch errors collapse to `InvalidInput`.
+The translator lives next to the error. It preserves protocol skew, validation failures as
+`JobValidation`, recoverable VCS conflicts, and live-completion refusals; other dispatch errors
+collapse to `InvalidInput`.
 
 ```rust
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
     match error {
+        DispatchError::ProtocolSkew(message) => OrbitError::ProtocolSkew(message),
         DispatchError::JobValidation(message) => OrbitError::JobValidation(message),
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
