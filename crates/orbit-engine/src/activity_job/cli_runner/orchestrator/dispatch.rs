@@ -658,11 +658,7 @@ pub(crate) fn run_cli_backend_for_step(
                 threshold: stopped_descendant_threshold(),
                 report: &report_stopped,
             }),
-            wait: None,
-            live_readers: None,
             spawned_child: Some(spawned),
-            #[cfg(unix)]
-            cancel_pair: None,
         })
     });
     // The provider has exited, timed out, or failed to start: nothing in its

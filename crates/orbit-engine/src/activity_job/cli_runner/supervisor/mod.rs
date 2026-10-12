@@ -1,55 +1,41 @@
-//! CLI subprocess supervisor.
+//! CLI provider supervision on the shared supervisor.
 //!
-//! # Stdin ownership / cancellation contract
+//! [`spawn_with_timeout`] runs a provider child under
+//! [`orbit_common::process::supervisor`], which owns the wait loop, the pipe
+//! workers, the stdin writer, termination and the drain bound. This module
+//! keeps only what is engine-specific:
 //!
-//! The stdin writer owns its prompt buffer and pipe until it finishes. On
-//! Unix it polls a nonblocking pipe for space alongside the same owned cancel
-//! signal as output readers. Every write checks cancellation, including when
-//! the pipe is continuously writable. Once the child exits, times out, or
-//! `wait` fails, the supervisor cancels the writer before killing the process
-//! group, then joins it within the output readers' shared cleanup window,
-//! abandoning undelivered bytes and closing the pipe on the owning thread. A failed
-//! nonblocking setup fails supervision after killing and reaping the child;
-//! it never starts a blocking writer. Without a wakeup pair, the writer checks
-//! cancellation every [`output::CANCEL_FLAG_POLL_INTERVAL`]. Stdin has no separate
-//! delivery or cleanup budget. Native non-Unix stdin supervision
-//! is unsupported; Windows runs Orbit through WSL2.
+//! - **Request shape.** [`spawn_for_supervision`] spawns the child (sandboxed
+//!   when asked) so a caller can register it, bind the plugin broker or take
+//!   the Linux post-run guard first; the Linux mount plan outlives
+//!   supervision. The provider prompt goes to stdin, and the run uses
+//!   kill-at-once termination with the post-kill group drain wait, a
+//!   [`spawn::OUTPUT_DRAIN_BUDGET`] drain bound, and no SIGINT/SIGTERM
+//!   interception. Native non-Unix stdin is refused; Windows runs Orbit
+//!   through WSL2.
+//! - **Hooks.** `on_spawn` receives the PID before any pipe setup.
+//!   `on_progress` samples the newest stdout lines on the supervising thread
+//!   between waits. Stopped descendants the supervisor ends are reported one
+//!   by one. The deadline is extended by build-budget queue credit read from
+//!   `WAIT_DIRECTORY_ENV`, re-read at most every 100 ms, and is kept on the
+//!   supervision clock that `with_cli_supervision_clock` replaces in tests.
+//! - **Capture** ([`capture`]). Each stream's [`output::TracedCaptureSink`]
+//!   feeds a [`capture::RollingOutputCapture`] that keeps going past its
+//!   limit: under the limit everything is kept; over it a redacted
+//!   complete-line prefix plus a raw complete-line protocol tail are kept and
+//!   `truncated` is set.
+//! - **Trace events** ([`output`]). Every output line becomes a tracing event
+//!   in the job's dispatch context, emitted from the supervisor's pipe worker.
 //!
-//! # Output drain / truncation contract
-//!
-//! stdout/stderr readers belong to the supervisor until it returns. After the
-//! child exits, times out, or `wait` fails, the supervisor kills the process
-//! tree and then:
-//!
-//! 1. **Bounded drain.** Readers keep consuming readable bytes and emitting
-//!    tracing line events until EOF or [`output::OUTPUT_READER_JOIN_TIMEOUT`].
-//! 2. **Cancel.** If a writer still holds the pipe (an escaped session), the
-//!    supervisor sets each reader's cancel flag and wakes it through an owned
-//!    pollable cancel fd. The reader then drains at most the bytes already
-//!    queued in the pipe when it observed the cancel (capped at
-//!    [`output::POST_CANCEL_DRAIN_LIMIT_BYTES`]), so a writer that keeps producing
-//!    cannot extend the drain, and stops capturing and emitting. The
-//!    supervisor joins the reader thread before returning. It does not close
-//!    another thread's pipe descriptor and does not treat a duplicate close
-//!    as cancellation.
-//! 3. **Capture finish.** Bytes collected before cancel/EOF are frozen by
-//!    [`capture::RollingOutputCapture::finish`]: under the limit they are kept in full;
-//!    over the limit a redacted complete-line prefix plus a raw complete-line
-//!    protocol tail are kept and `truncated` is set. Writes after cancel are discarded and
-//!    must not be logged for the completed invocation.
-//! 4. **Wait error.** Readers are finalized the same way; the function then
-//!    returns [`super::spawn::SpawnError`] and drops the finished capture because the error
-//!    type has no output payload.
-//!
-//! Unix implements wakeup with `poll` on the reader fd plus a `UnixStream`
-//! pair. When the pair cannot be created (for example `EMFILE`), the reader
-//! still never blocks in `read`: it polls the pipe with a
-//! [`output::CANCEL_FLAG_POLL_INTERVAL`] timeout and rechecks the cancel flag, so
-//! finalization stays bounded without a wakeup fd. On Unix the supervisor
-//! therefore returns within [`output::OUTPUT_READER_JOIN_TIMEOUT`] of process-tree
-//! cleanup plus one poll interval and one bounded drain, whatever an escaped
-//! writer does. Non-Unix platforms keep a blocking `Read` and cannot
-//! interrupt an escaped holder; that path is not tested here.
+//! After the child exits, times out, or a wait fails, the supervisor kills
+//! the process group and waits for it to drain, then gives the pipe workers
+//! the drain budget to reach EOF. A helper the agent left in its own session
+//! (`setsid`) can keep a pipe open past that; its worker is then stopped:
+//! a reader still takes what the pipe already buffers, later output is
+//! discarded, and undelivered stdin is abandoned. Every worker is joined
+//! before supervision returns, and only then are the captures frozen. A
+//! supervision error drops the captures and returns a retryable
+//! [`super::spawn::SpawnError`].
 
 mod capture;
 mod output;

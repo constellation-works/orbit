@@ -61,3 +61,6 @@ pub use process::{
 pub use process::{UnrelatedProcess, spawn_unrelated_process};
 pub use process_scrub::{SCRUBBED_MARKER_ENV, scrub_inherited_authority};
 pub use temp_dir::{bulk_write_temp_dir, canonical_temp_dir};
+
+/// Supervision seams for tests of a supervisor's callers in other crates.
+pub use crate::process::supervisor::seam::{SupervisorSeam, WaitHook, with_supervisor_seam};

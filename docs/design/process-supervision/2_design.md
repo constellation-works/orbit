@@ -18,7 +18,7 @@ related_artifacts: [ORB-15722]
 
 This doc covers every place Orbit waits on a child process it spawned:
 the three supervisors, two ad-hoc wait loops, and their callers, verified
-at `f9d7a0ccd`, with the changes of steps 1–3 reflected below. §1–§3
+at `f9d7a0ccd`, with the changes of steps 1–3 and 5 reflected below. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -80,6 +80,9 @@ the supervision notes to stderr.
   pair owned by `DrainStop` (`drain.rs`). After the child is reaped,
   `settle(drain_budget)` (exec: 1 s) stops any worker whose pipe is still
   held by a descendant outside the group.
+  When the pair, or a worker's clone of it, cannot be created (`EMFILE`),
+  that worker polls its pipe every 25 ms and rechecks a stop flag instead
+  of failing the run.
 - **Capture.** Each stream goes to an `OutputSink`. Exec's `CaptureSink`
   has a 1 MiB limit (`ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES`). Reaching it
   terminates the group and fails the run with
@@ -96,41 +99,50 @@ the supervision notes to stderr.
 - **Outcome.** The result carries `timed_out`, typed `ProcessStopCause`s
   and `drain_stopped`, so callers never parse stderr to classify a run.
 
-Every failure path reaps: fault-injection seams (`SupervisionFailure`)
-prove it for signal install, drain-stop setup, watch setup and wait.
+- **Hooks.** `on_spawn(pid)` before pipe setup; a `Periodic` hook on the
+  supervising thread between waits; a stopped-descendant report callback;
+  and an extendable deadline the supervisor re-reads at most every 100 ms
+  and afresh before acting on its passing.
 
-### 1.3 Engine provider supervisor — `orbit-engine`
+Every failure path reaps and joins its pipe workers before returning:
+fault-injection seams (`SupervisionFailure`) prove it for signal install and
+wait. After the child exits, the group is killed and given up to 1 s to
+drain before the workers settle.
+
+Tests in other crates reach two thread-scoped seams through
+`orbit_common::test_env::with_supervisor_seam`: a `try_wait`-style hook that
+replaces the blocking wait, and a host without a wakeup pair.
+
+### 1.3 Engine provider runner — `orbit-engine`
 
 [`cli_runner/supervisor/`](../../../crates/orbit-engine/src/activity_job/cli_runner/supervisor/mod.rs)
 runs provider CLIs (`spawn_for_supervision`, then `spawn_with_timeout`).
+Since step 5 it has no wait loop, pipe readers or stdin writer of its own:
+`spawn_with_timeout` adopts the child into `SupervisedChild` and supervises
+it under one `Supervision` request.
 
-- **Stdin.** A nonblocking writer polls the pipe together with a
-  cancellation pair (`output.rs::PipeCancel`). When the pair cannot be
-  created (`EMFILE`), it falls back to rechecking a flag every 25 ms
-  instead of failing.
+- **Stdin.** The prompt is a `Payload` for the shared writer.
 - **Capture.** `RollingOutputCapture` (`capture.rs`, 1 MiB,
   `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES`) keeps a redacted head and
   a raw protocol tail, and sets `truncated`. The run continues past the
-  limit.
-- **Trace events.** Each output line becomes a tracing event in the job's
-  dispatch context.
+  limit. Each stream's engine `OutputSink` (`output.rs`) feeds a shared
+  capture, which the runner freezes after supervision has joined the workers.
+- **Trace events.** The sink turns each output line into a tracing event in
+  the job's dispatch context.
 - **Hooks.** `on_spawn(pid)`; progress sampling of the newest 64 KiB of
-  stdout at an interval; a stopped-descendant reporter callback.
-- **Deadline.** It can be extended by build-budget wait credits read from
-  `WAIT_DIRECTORY_ENV`.
-- **Termination.** No grace period. `kill_child_process_tree` sends SIGKILL
-  to the group, reaps, and polls up to 1 s for the group to drain. Readers
-  get 500 ms to reach EOF, then are cancelled and drain at most 1 MiB more.
-- **Test seams.** An injected clock, a try-wait hook, a cancel-pair hook and
-  a live-reader counter.
+  stdout as the periodic hook; a stopped-descendant reporter callback.
+- **Deadline.** Extendable: build-budget wait credits read from
+  `WAIT_DIRECTORY_ENV`. It is kept on the supervision clock that
+  `with_cli_supervision_clock` replaces in tests and handed to the supervisor
+  as the matching real instant.
+- **Termination.** `KillNow`, with the group drain wait. The drain budget is
+  500 ms. Signal interception stays off (§6).
 
 `SpawnedChild` holds `process::OwnedChild`, which kills and reaps the
 provider group on early return or panic during worker registration, broker
-binding or `on_spawn`. The container stays intact through supervision so
-the owned child drops before the Linux mount plan. The macOS profile is
-passed inline; there is no profile temp file to retain. After every wait,
-the handle explicitly kills and drains the group before pipe readers finish.
-It installs no signal fan-out. Non-Unix stdin is refused.
+binding or `on_spawn`. The Linux mount plan outlives supervision, which
+reaps the child before returning. The macOS profile is passed inline; there
+is no profile temp file to retain. Non-Unix stdin is refused.
 
 ### 1.4 Ad-hoc wait loops
 
@@ -220,13 +232,13 @@ Tests that call a supervisor directly are left out.
 | Kill-on-drop ownership | yes | yes | yes | yes | yes |
 | Survives `?` from pipe/wait errors | yes | yes | yes | yes | yes |
 | SIGINT/SIGTERM fan-out to child groups | no | yes | no | no | no |
-| Stdin payload | no (null) | yes (thread, stop-aware) | yes (nonblocking, cancel pair + flag fallback) | no | temp file |
+| Stdin payload | no (null) | yes (thread, stop-aware) | yes (shared writer) | no | temp file |
 | Capture policy | prefix, continue | fail at limit | redacted head + protocol tail, continue | merged head/tail | file + size limit |
 | Stdout relay to a consumer | no | yes | no | no | no |
 | Line trace events | no | debug echo only | yes | no | no |
 | Termination | TERM, 200 ms, KILL | TERM, 5 s, KILL (or KILL) | KILL, 1 s group drain | exec's (5 s) | KILL, 1 s group drain |
 | Cancellation flag | no | yes | no | no | no |
-| Post-exit drain bound | 500 ms (≤ deadline) | 1 s, workers stopped | 500 ms, then cancel | 2 s, readers detached | n/a |
+| Post-exit drain bound | 500 ms (≤ deadline) | 1 s, workers stopped | 500 ms, workers stopped | 2 s, readers detached | n/a |
 | Require EOF before success | optional | no | no | no | n/a |
 | Stopped-descendant handling | no | end + stderr note | end + callback | no | no |
 | Progress / periodic hook | no | no | progress sampling | size check | size check |
@@ -304,8 +316,14 @@ fail-at-limit with an optional redacting echo, and `RelaySink`), a timeout
 with `Termination`, the cancellation flag, `intercept_signals`, the drain
 budget and an optional stopped-descendant threshold. A sink's `finish`
 returns the bytes the outcome reports, and errors are still `OrbitError`.
-The remaining options and `SuperviseError` arrive with the steps that need
-them.
+Step 5 added what the engine needs: `on_spawn`, a `Periodic` hook (`every`
+in the sketch, without a stop cause yet), an `extendable_deadline` beside
+`timeout`, an `on_stopped_descendant` callback, the flag fallback when no
+wakeup pair can be created, and the post-kill group drain after every exit.
+The engine's sink keeps its capture behind a shared handle instead of
+returning it from `finish`, because progress sampling reads it while the
+child runs. The remaining options and `SuperviseError` arrive with the steps
+that need them.
 
 ### 4.3 How each caller group maps
 
@@ -389,10 +407,13 @@ it moves the most callers with the least new API.
   runner's thread-based fallback become the supervisor's non-Unix path. The
   engine's refusal of stdin off Unix (Windows runs Orbit through WSL2)
   stays.
-- **Test seams merge.** Exec's thread-local fault injection and the
-  engine's clock, wait, cancel-pair and live-reader seams must coexist in
-  one module without becoming production API. Step 3 and step 5 own that,
-  behind `cfg(test)` or the existing `test-support` feature.
+- **Test seams merge.** Exec's fault injection stays `cfg(test)` inside
+  the supervisor. The engine's wait and cancel-pair seams became one
+  thread-scoped `SupervisorSeam` that other crates' tests set through
+  `orbit_common::test_env`, which `orbit-common` always compiles (it has no
+  `test-support` feature). The engine's clock stays behind its
+  `test-support` feature and only moves the deadline it hands over. The
+  unused live-reader counter was dropped.
 - **Line numbers.** File references in §1–§2 were verified at `f9d7a0ccd`;
   the migration tasks re-verify before editing.
 

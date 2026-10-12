@@ -44,11 +44,15 @@ fn supervision<'a>(
         stdout: Box::new(CaptureSink::new("stdout", output_limit)),
         stderr: Box::new(CaptureSink::new("stderr", output_limit)),
         timeout,
+        extendable_deadline: None,
         termination: Termination::Grace(GRACE),
         cancelled,
         intercept_signals: true,
         drain_budget: DRAIN_BUDGET,
         stopped_descendants,
+        on_stopped_descendant: None,
+        on_spawn: None,
+        every: None,
     }
 }
 
@@ -75,7 +79,6 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
     use wait_timeout::ChildExt;
 
     use super::super::super::OwnedChild;
-    use super::super::RelaySink;
     use super::super::wait::{SupervisionFailure, with_supervision_failure};
 
     struct ProcessGroup {
@@ -102,16 +105,11 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
     }
 
     let cases = [
-        (None, false), // Payload requested without a stdin pipe.
-        (Some(SupervisionFailure::DrainStop), false),
-        (Some(SupervisionFailure::Watch(0)), false), // Stdin.
-        (Some(SupervisionFailure::Watch(1)), false), // Captured stdout.
-        (Some(SupervisionFailure::Watch(1)), true),  // Relayed stdout.
-        (Some(SupervisionFailure::Watch(2)), false), // Stderr, after two workers.
-        (Some(SupervisionFailure::SignalInstall), false), // Before pipe setup.
-        (Some(SupervisionFailure::Wait), false),     // Handler already installed.
+        None,                                    // Payload requested without a stdin pipe.
+        Some(SupervisionFailure::SignalInstall), // Before pipe setup.
+        Some(SupervisionFailure::Wait),          // Pipe workers running.
     ];
-    for (failure, relay) in cases {
+    for failure in cases {
         let payload = vec![b'x'; 1024 * 1024];
         let sleeper = || command("/bin/sleep", &["60"], failure.is_some());
         let child = sleeper().spawn().expect("spawn group leader");
@@ -131,19 +129,13 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
         );
         let child = group.child.take().expect("group leader");
         let supervise = || {
-            let mut run = supervision(
+            let run = supervision(
                 Some(Duration::from_secs(5)),
                 Stdin::Payload(payload),
                 OUTPUT_LIMIT,
                 None,
                 None,
             );
-            let _reader;
-            if relay {
-                let (reader, writer) = std::io::pipe().expect("relay pipe");
-                _reader = reader;
-                run.stdout = Box::new(RelaySink::new(writer));
-            }
             SupervisedChild::adopt(child).supervise(run).map(|_| ())
         };
         let result = match failure {
@@ -170,24 +162,21 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
             group.pid = None;
         }
 
-        assert!(
-            result.is_err(),
-            "fixture must return an error: {failure:?}, relay={relay}"
-        );
+        assert!(result.is_err(), "fixture must return an error: {failure:?}");
         assert_eq!(
             (waited, wait_error),
             (-1, Some(libc::ECHILD)),
-            "supervision must reap its child on error: {failure:?}, relay={relay}"
+            "supervision must reap its child on error: {failure:?}"
         );
         assert_eq!(
             peer_status.and_then(|status| status.signal()),
             Some(libc::SIGKILL),
-            "supervision must kill the whole group on error: {failure:?}, relay={relay}"
+            "supervision must kill the whole group on error: {failure:?}"
         );
         assert_eq!(
             (group_probe, group_error),
             (-1, Some(libc::ESRCH)),
-            "no live process group may survive a supervision error: {failure:?}, relay={relay}"
+            "no live process group may survive a supervision error: {failure:?}"
         );
     }
 }

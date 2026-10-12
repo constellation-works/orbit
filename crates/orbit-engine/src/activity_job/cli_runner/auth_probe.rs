@@ -151,11 +151,7 @@ pub fn run_auth_probe(
         on_spawn: None,
         on_progress: None,
         stopped_descendants: None,
-        wait: None,
-        live_readers: None,
         spawned_child: Some(spawned),
-        #[cfg(unix)]
-        cancel_pair: None,
     })
     .map_err(|SpawnError { message, .. }| DispatchError::CliInvocationPermanent(message))?;
     if let Some(guard) = guard {
