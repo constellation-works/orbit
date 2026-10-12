@@ -2,8 +2,8 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 ---
 
 # Scope: Orbit plugin standard

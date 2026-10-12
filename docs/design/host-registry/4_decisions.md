@@ -4,7 +4,7 @@ type: design
 title: "Host Registry — Decisions"
 owner: codex
 last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_validated: 2026-10-12
 status: Accepted
 feature: host-registry
 doc_role: decisions

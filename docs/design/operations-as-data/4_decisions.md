@@ -2,7 +2,7 @@
 title: Operations as Data — Decisions
 owner: claude
 last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
