@@ -1,21 +1,10 @@
 //! Step and final recovery requests, admission, and decisions.
 
-/// Resolved crew assignment from `config.toml`. Each field
-/// is independently optional — the resolver in
-/// `crate::activity_job::crew` falls back to the inline activity value
-/// for any field the config does not specify.
-///
-/// String fields from the on-disk crew assignment are parsed into the
-/// strongly typed activity-job enums at the orbit-core boundary; an
-/// unrecognized provider yields `None` for that field rather than
-/// silently coercing dispatch to a wrong runtime.
 /// Whether a step-recovery hook may dispatch [ORB-11332].
 ///
-/// `Allowed` is the pre-existing behavior for runs without an operation-mode
-/// admission. `Reserved` names the aggregate-budget episode the host charged
-/// before dispatch, and `Denied` carries the reason recovery must not run
-/// (`recovery_episodes_exhausted`, `recovery_minutes_exhausted`,
-/// `grant_revoked`). The original step error stays authoritative either way.
+/// The `RuntimeHost` default answers `Allowed`. `Reserved` admits the attempt
+/// under its `episode`, and `Denied` carries the reason recovery must not run.
+/// The original step error stays authoritative either way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepRecoveryAdmission {
     Allowed,

@@ -41,10 +41,6 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
     task_ids: &[String],
     authorization: &str,
 ) -> Result<Value, OrbitError> {
-    // [ORB-11332] A run admitted under an operation-mode grant rechecks that
-    // grant here, at the transition itself, so a hard revocation stops
-    // completion even after the admission window expired.
-    host.authorize_task_completion(run_id, task_ids)?;
     let mut completed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
     for task_id in task_ids {

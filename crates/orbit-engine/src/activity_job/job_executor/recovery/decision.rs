@@ -37,25 +37,9 @@ pub(super) fn attempt_recovery_activity(
         return RecoveryAdmission::Original;
     }
 
-    let recovery_started = std::time::Instant::now();
     let result = match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
         Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {
-            let result = dispatch_recovery(step, ctx, recovery, failure, attempt, max_attempts);
-            // Preparation failures spend the reserved episode too.
-            if let Err(error) = ctx.host.settle_step_recovery(
-                &ctx.run_id,
-                &step.id,
-                recovery_started.elapsed().as_secs(),
-            ) {
-                tracing::warn!(
-                    target: "orbit.engine.job_executor",
-                    run_id = %ctx.run_id,
-                    failed_step_id = %step.id,
-                    error = %error,
-                    "step recovery settlement failed"
-                );
-            }
-            result
+            dispatch_recovery(step, ctx, recovery, failure, attempt, max_attempts)
         }
         Ok(StepRecoveryAdmission::Denied { reason }) => Err(("authorization", reason)),
         Err(error) => Err(("authorization", error.to_string())),
