@@ -565,22 +565,25 @@ fn read_capped_body(
 }
 
 fn http_status_code(status_line: &str) -> io::Result<u16> {
-    if !status_line.starts_with("HTTP/1.") {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("not an HTTP response: {:?}", status_line.trim_end()),
-        ));
+    let mut fields = status_line.split_ascii_whitespace();
+    let version = fields.next().unwrap_or_default();
+    let code = fields.next().unwrap_or_default();
+    // HTTP-version has a single minor digit; status-code has exactly three
+    // ASCII digits. Integer parsing alone also accepts signed or padded codes.
+    let valid_version = version
+        .strip_prefix("HTTP/1.")
+        .is_some_and(|minor| minor.len() == 1 && minor.as_bytes()[0].is_ascii_digit());
+    if valid_version
+        && code.len() == 3
+        && code.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(status @ 100..=599) = code.parse::<u16>()
+    {
+        return Ok(status);
     }
-    status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::InvalidData,
-                format!("not an HTTP response: {:?}", status_line.trim_end()),
-            )
-        })
+    Err(io::Error::new(
+        ErrorKind::InvalidData,
+        format!("not an HTTP response: {:?}", status_line.trim_end()),
+    ))
 }
 
 fn probe_stopped(deadline: Instant, cancel: Option<&AtomicBool>) -> bool {
