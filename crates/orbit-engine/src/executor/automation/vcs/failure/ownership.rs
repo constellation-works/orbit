@@ -221,10 +221,13 @@ fn reviewer_push_sentence(reviewer_push: Option<&Value>) -> String {
     }
 }
 
-/// The typed reason a failure message leads with — the first `snake_case:`
-/// token, such as `review_gate_blocked` or `review_timeout_incomplete` —
-/// else the step's error code.
+/// The typed reason for a failed step: a review-gate refusal's code, else the
+/// first `snake_case:` token its message leads with, such as
+/// `push_lease_lost`, else the step's error code.
 fn typed_reason(error_code: &str, error_message: &str) -> String {
+    if let Some(refusal) = orbit_types::workflow::ReviewGateRefusal::from_error_code(error_code) {
+        return refusal.error_code().to_string();
+    }
     error_message
         .split_whitespace()
         .filter_map(|word| word.strip_suffix(':'))

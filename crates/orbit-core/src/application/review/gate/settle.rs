@@ -17,7 +17,7 @@ use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     CommitIdentity, REVIEW_ABANDONED_MARKER, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
-    ReviewAttemptState, ReviewCertificate, ReviewTiming, ReviewerIdentity,
+    ReviewAttemptState, ReviewCertificate, ReviewGateRefusal, ReviewTiming, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -159,8 +159,9 @@ pub(crate) fn review_gate_settle(
     match outcome {
         Ok(Settled::Passed(value)) => Ok(value),
         Ok(Settled::AwaitingEvidence(hold)) => Err(DispatchError::ReviewEvidenceHold(hold)),
-        Ok(Settled::Blocked(certificate)) => Err(DispatchError::DeterministicActionRefused {
+        Ok(Settled::Blocked(certificate)) => Err(DispatchError::ReviewGateRefused {
             action: action.to_string(),
+            refusal: ReviewGateRefusal::Blocked,
             message: format!(
                 "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; {}",
                 certificate.verdict.as_str(),
@@ -179,8 +180,9 @@ pub(crate) fn review_gate_settle(
             message: baseline::baseline_red_refusal(&certificate.baseline_red, &attempt_id)
                 .unwrap_or_default(),
         }),
-        Ok(Settled::Abandoned) => Err(DispatchError::DeterministicActionRefused {
+        Ok(Settled::Abandoned) => Err(DispatchError::ReviewGateRefused {
             action: action.to_string(),
+            refusal: ReviewGateRefusal::Abandoned,
             message: format!(
                 "{REVIEW_ABANDONED_MARKER} the reviewer exited successfully but its only report \
                  is the initial provisional one (verdict incomplete, no escalation, finding or \

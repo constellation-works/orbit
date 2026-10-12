@@ -5,7 +5,9 @@ use std::fs;
 
 use chrono::{Duration, Utc};
 use orbit_engine::DispatchError;
-use orbit_types::workflow::{FindingDisposition, ReviewAttemptState, ReviewFinding, ReviewVerdict};
+use orbit_types::workflow::{
+    FindingDisposition, ReviewAttemptState, ReviewFinding, ReviewGateRefusal, ReviewVerdict,
+};
 use serde_json::json;
 
 use super::support::{
@@ -146,10 +148,15 @@ fn the_most_severe_bundle_report_decides_and_refuses_without_retry() {
         .settle(&admission)
         .expect_err("changes required blocks");
     assert!(
-        matches!(error, DispatchError::DeterministicActionRefused { .. }),
+        matches!(
+            error,
+            DispatchError::ReviewGateRefused {
+                refusal: ReviewGateRefusal::Blocked,
+                ..
+            }
+        ),
         "a settled verdict is a decision, not a retryable fault: {error}"
     );
-    assert!(error.to_string().contains("review_gate_blocked"), "{error}");
     let certificate = gated.certificate();
     assert_eq!(certificate.verdict, ReviewVerdict::Reject);
 }
@@ -281,10 +288,15 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
 
     let error = gated.settle(&admission).expect_err("reject blocks");
     assert!(
-        matches!(error, DispatchError::DeterministicActionRefused { .. }),
+        matches!(
+            error,
+            DispatchError::ReviewGateRefused {
+                refusal: ReviewGateRefusal::Blocked,
+                ..
+            }
+        ),
         "a reject is a decision, not a retryable fault: {error}"
     );
-    assert!(error.to_string().contains("review_gate_blocked"), "{error}");
     let certificate = gated.certificate();
     assert_eq!(certificate.verdict, ReviewVerdict::Reject);
     assert_eq!(certificate.findings.len(), 2);

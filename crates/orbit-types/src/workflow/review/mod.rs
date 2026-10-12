@@ -13,6 +13,7 @@ mod certificate;
 mod history;
 mod ledger;
 mod records;
+mod refusal;
 mod report;
 mod verdict;
 
@@ -39,6 +40,7 @@ pub use ledger::{
     ReviewerInvocationEvent, seconds_between,
 };
 pub use records::{RecordGap, RetiredValidation, record_gap};
+pub use refusal::ReviewGateRefusal;
 pub use report::{FindingDisposition, ReviewFinding, ReviewReport};
 pub use verdict::{
     NegativeControl, RetainedObligation, ReviewAssurance, ReviewBaselineClaim, ReviewValidation,

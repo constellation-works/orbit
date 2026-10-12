@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::REVIEW_ABANDONED_MARKER;
+use orbit_types::workflow::ReviewGateRefusal;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -91,9 +91,11 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     // admitted by a later run. Its refusal already proved that the held
     // candidate's tree and task meaning still match and that the evidence has
     // not arrived, so the admission path checks only the candidate commit.
+    // [ORB-15714] Each decision reads the step's typed code, never its text.
+    let refusal = ReviewGateRefusal::from_error_code(error_code);
     let evidence_hold = task.status == TaskStatus::InProgress
         && failed_step_id == "review_gate_admit"
-        && error_message.contains("review_awaiting_evidence:")
+        && refusal == Some(ReviewGateRefusal::AwaitingEvidence)
         && host.get_task_artifacts(&task.id)?.iter().any(|artifact| {
             artifact.path == orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT
                 && artifact.created_by.as_deref() == Some("system")
@@ -106,7 +108,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         });
     let timed_out = task.status == TaskStatus::InProgress
         && failed_step_id == "review"
-        && error_message.contains("review_timeout_incomplete:");
+        && refusal == Some(ReviewGateRefusal::TimeoutIncomplete);
     let timeout_requeues = if timed_out {
         host.get_task_history(&task.id)?
             .iter()
@@ -124,7 +126,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     // [ORB-15130] Settlement released an attempt whose reviewer ended with only
     // its initial placeholder report: no verdict, so no escalation to decide.
     let abandoned =
-        failed_step_id == "review_gate_settle" && error_message.contains(REVIEW_ABANDONED_MARKER);
+        failed_step_id == "review_gate_settle" && refusal == Some(ReviewGateRefusal::Abandoned);
     let (status, event, decision) = if evidence_hold {
         (
             TaskStatus::InProgress,

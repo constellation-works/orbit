@@ -11,7 +11,7 @@ use orbit_types::identity::Crew;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewManifest, ReviewReservation, ReviewerIdentity,
+    ReviewGateRefusal, ReviewManifest, ReviewReservation, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -154,8 +154,16 @@ pub(crate) fn review_gate_admit(
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-    let outcome = require_external_evidence(runtime, &context).and_then(|()| {
-        if preflight {
+    let mut awaiting_evidence = false;
+    let outcome = awaiting_external_evidence(runtime, &context).and_then(|awaiting| {
+        awaiting_evidence = awaiting;
+        if awaiting {
+            Err(OrbitError::CapabilityDenied(
+                "review_awaiting_evidence: named external checks have not arrived for the held \
+                 candidate"
+                    .into(),
+            ))
+        } else if preflight {
             preflight_budget(runtime, &context)
         } else {
             let host_step = input
@@ -188,13 +196,25 @@ pub(crate) fn review_gate_admit(
             outcome.as_ref().err().map(ToString::to_string),
         )
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-    outcome.map_err(refused_or_failed)
+    outcome.map_err(|error| match error {
+        OrbitError::CapabilityDenied(message) if awaiting_evidence => {
+            DispatchError::ReviewGateRefused {
+                action: action.to_string(),
+                refusal: ReviewGateRefusal::AwaitingEvidence,
+                message,
+            }
+        }
+        other => refused_or_failed(other),
+    })
 }
 
-fn require_external_evidence(
+/// Whether a task's held candidate is still waiting for named external
+/// evidence: the hold matches its task meaning and tree, and not every
+/// requirement has arrived.
+fn awaiting_external_evidence(
     runtime: &OrbitRuntime,
     context: &GateContext,
-) -> Result<(), OrbitError> {
+) -> Result<bool, OrbitError> {
     for task in &context.tasks {
         if let Some(hold) = super::super::evidence::evidence_hold(runtime, &task.id)?
             && hold.task_meaning_digest == context.task_digests.1
@@ -202,10 +222,10 @@ fn require_external_evidence(
                 == hold.candidate.tree
             && !super::super::evidence::evidence_ready(runtime, &task.id, &hold)?
         {
-            return Err(OrbitError::CapabilityDenied("review_awaiting_evidence: named external checks have not arrived for the held candidate".into()));
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// The head a completion step rebased onto a new base and left unpublished
