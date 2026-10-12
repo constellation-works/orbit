@@ -388,9 +388,11 @@ fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
-    /// Every named check reported a pass, and none is still running.
+    /// Every named check reported an explicit success, and none is still
+    /// running or finished without one.
     Passed,
-    /// A named check has not reported yet or is still running.
+    /// A named check has not reported yet, is still running, or completed
+    /// without an explicit success (skipped or neutral).
     Waiting(Vec<String>),
     /// A named check failed, or its state is unreadable.
     Failed(String),
@@ -399,6 +401,12 @@ pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
 /// Judge the hosted checks `names` against the pull request's status rollup.
 /// A rollup entry answers a name by its own name or as `<workflow> / <job>`,
 /// as the forge displays it. A name no entry answers has not reported yet.
+///
+/// Only an explicit success satisfies a name: a CheckRun conclusion of
+/// `SUCCESS`, or a StatusContext state of `SUCCESS`. A completed `SKIPPED`
+/// or `NEUTRAL` conclusion is not that analysis, so the owner keeps waiting
+/// [ORB-15812]. Branch protection still classifies those conclusions as
+/// satisfied.
 pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
     pull_request: &PullRequestStatus,
     names: &[String],
@@ -421,7 +429,7 @@ pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
                 continue;
             }
             answered = true;
-            match check.state {
+            match check.owed_state {
                 Some(CheckState::Passed) => {}
                 Some(CheckState::Pending) => pending = true,
                 Some(CheckState::Failed) => {

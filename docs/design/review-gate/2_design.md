@@ -979,9 +979,10 @@ query or a workspace without hosted CodeQL never loses its obligation.
 The owner enforces owner-owed evidence. Handoff acceptance refuses a
 certificate whose `owner_owed_evidence` names a check its captured rules did
 not declare hosted for a before-landing review. `handoff_land` merges only once
-each owed hosted check reports a pass in the pull request's status rollup for
-the pinned head; it waits while one is absent or running and stops when one
-failed, independent of branch protection.
+each owed hosted check reports an explicit success (CheckRun `SUCCESS` or
+StatusContext `SUCCESS`) in the pull request's status rollup for the pinned
+head. It waits while one is absent, running, or completed `SKIPPED` or
+`NEUTRAL`, and stops when one failed, independent of branch protection.
 
 The same review decides the owner's required gates from the claim host's own
 runs. `claim_validate` ran them natively, outside the agent sandbox, on the
