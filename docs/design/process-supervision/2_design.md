@@ -18,7 +18,7 @@ related_artifacts: [ORB-15722]
 
 This doc covers every place Orbit waits on a child process it spawned:
 the three supervisors, two ad-hoc wait loops, and their callers, verified
-at `f9d7a0ccd`, with steps 1–2 ownership changes reflected below. §1–§3
+at `f9d7a0ccd`, with the changes of steps 1–3 reflected below. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -56,38 +56,44 @@ Normal completion disarms the handle after descendant cleanup. It installs
 no signal handling: a SIGTERM to Orbit during a call leaves the child's
 group running.
 
-### 1.2 Exec supervisor — `orbit-exec`
+### 1.2 Shared supervisor — `orbit-common`, driven by `orbit-exec`
 
-[`supervision/`](../../../crates/orbit-exec/src/supervision/mod.rs) is the
-most complete supervisor.
+[`process/supervisor/`](../../../crates/orbit-common/src/process/supervisor/mod.rs)
+is the most complete supervisor. It was exec's until step 3 moved it into
+`orbit-common` behind one `Supervision` request;
+[`orbit-exec`'s `supervision/`](../../../crates/orbit-exec/src/supervision/mod.rs)
+is now an adapter that builds that request with exec's policy and appends
+the supervision notes to stderr.
 
 - **Ownership.** `SupervisedChild` (`wait.rs`) holds the shared
   `process::OwnedChild` handle, which kills and reaps the group on drop
   unless cleanup was completed. Its wrapper releases the signal slot after
-  cleanup and before dropping the signal guard. `SupervisedChild::spawn`
+  cleanup and before dropping the signal guard. `SupervisedChild::spawn_guarded`
   installs the signal guard before the spawn closure runs, so post-spawn work such as a
   plugin's callback `bind_pid` is covered.
-- **Signals.** `SignalHandlerGuard` (`signal.rs`) is a refcounted
+- **Signals.** `SignalHandlerGuard` (`signal_guard.rs`) is a refcounted
   process-wide SIGINT/SIGTERM handler. It fans the signal out with `killpg`
   to a lock-free table of live child groups. The last guard restores the
   previous disposition and re-raises the signal.
 - **Pipes.** One thread drains each stream, and a stdin writer thread
   delivers a payload. All of them `poll(2)` on their pipe and on a socket
-  pair owned by `DrainStop` (`tee.rs`). After the child is reaped,
-  `settle(DRAIN_BUDGET = 1 s)` stops any worker whose pipe is still held by
-  a descendant outside the group.
-- **Capture.** Each stream has a 1 MiB limit
-  (`ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES`). Reaching it terminates the
-  group and fails the run with `ProcessStopCause::OutputCaptureLimit`.
-  Debug mode echoes both streams to Orbit's stderr, redacted.
-  `wait_with_stdout_relay` forwards stdout to a consumer instead of
-  capturing it.
-- **Termination.** The deadline sends SIGTERM, allows a 5 s grace period,
-  then SIGKILL. `kill_on_deadline` sends SIGKILL at once, for probes.
+  pair owned by `DrainStop` (`drain.rs`). After the child is reaped,
+  `settle(drain_budget)` (exec: 1 s) stops any worker whose pipe is still
+  held by a descendant outside the group.
+- **Capture.** Each stream goes to an `OutputSink`. Exec's `CaptureSink`
+  has a 1 MiB limit (`ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES`). Reaching it
+  terminates the group and fails the run with
+  `ProcessStopCause::OutputCaptureLimit`. Debug mode echoes both streams to
+  Orbit's stderr, redacted. `RelaySink` forwards stdout to a consumer
+  instead of capturing it.
+- **Termination.** `Termination::Grace` sends SIGTERM (or the intercepted
+  signal), allows a grace period (exec: 5 s), then SIGKILL.
+  `Termination::KillNow` sends SIGKILL at once, for probes.
   Callers can also stop a run with a cancellation `AtomicBool`.
-- **Stopped descendants.** A child that stays stopped past the configured
-  threshold is ended and reported on stderr.
-- **Outcome.** The result carries `timed_out`, a typed `ProcessStopCause`
+- **Stopped descendants.** With the opt-in watch, a descendant that stays
+  stopped past the threshold is ended and reported in the outcome; exec
+  notes it on stderr.
+- **Outcome.** The result carries `timed_out`, typed `ProcessStopCause`s
   and `drain_stopped`, so callers never parse stderr to classify a run.
 
 Every failure path reaps: fault-injection seams (`SupervisionFailure`)
@@ -289,6 +295,17 @@ pub fn spawn_guarded(spawn: impl FnOnce() -> Result<Child, OrbitError>, run: Sup
 `Outcome` carries `status`, `timed_out`, `stop_cause`, `drain_stopped`,
 `duration`, any stopped descendants it ended, and each stream's finished
 sink. `SuperviseError::Spawn(io::Error)` keeps the spawn error kind.
+
+Step 3 landed the subset exec needs, as
+`SupervisedChild::{spawn_guarded, adopt}` followed by
+`SupervisedChild::supervise(Supervision)`. Its request carries stdin
+(`Null` | `Payload`), one `OutputSink` per stream (built-ins `CaptureSink`,
+fail-at-limit with an optional redacting echo, and `RelaySink`), a timeout
+with `Termination`, the cancellation flag, `intercept_signals`, the drain
+budget and an optional stopped-descendant threshold. A sink's `finish`
+returns the bytes the outcome reports, and errors are still `OrbitError`.
+The remaining options and `SuperviseError` arrive with the steps that need
+them.
 
 ### 4.3 How each caller group maps
 

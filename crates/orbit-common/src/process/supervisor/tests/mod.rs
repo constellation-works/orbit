@@ -1,2 +1,2 @@
-mod tee;
+mod echo;
 mod wait;

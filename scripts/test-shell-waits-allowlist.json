@@ -5,7 +5,7 @@
     "reason": "Bounded to 40 attempts; detached flood writers publish their own PID files, so a handshake would restructure the process-drain fixture (operator approved)."
   },
   {
-    "path": "crates/orbit-exec/src/supervision/tests/wait.rs",
+    "path": "crates/orbit-common/src/process/supervisor/tests/wait.rs",
     "loop": "while [ ! -s \"$2/holder.pid\" ]; do",
     "reason": "Bounded to 400 attempts and the request timeout; an escaped child test publishes its own PID, so a handshake would restructure the pipe-holder fixture (operator approved)."
   }

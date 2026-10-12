@@ -15,10 +15,10 @@ workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 regex.workspace = true
-wait-timeout.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+wait-timeout.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

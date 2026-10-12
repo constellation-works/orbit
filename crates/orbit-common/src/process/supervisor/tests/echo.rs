@@ -1,4 +1,4 @@
-use super::super::tee::{MAX_PENDING_ECHO_BYTES, RedactingEcho};
+use super::super::echo::{MAX_PENDING_ECHO_BYTES, RedactingEcho};
 
 fn echo(chunks: &[&[u8]]) -> String {
     let mut echo = RedactingEcho::new(Vec::new());
@@ -91,7 +91,7 @@ fn assert_secret_replaced(secret: &str, payload: &[u8], output: &str, chunk: usi
 #[test]
 fn a_secret_split_across_reads_is_still_redacted() {
     let secret = "orbit-tee-test-secret-value-8c1f";
-    let _env = orbit_common::test_env::scoped([("ORBIT_TEE_TEST_TOKEN", Some(secret))]);
+    let _env = crate::test_env::scoped([("ORBIT_TEE_TEST_TOKEN", Some(secret))]);
 
     let output = echo(&[b"token=orbit-tee-test-", b"secret-value-8c1f\n"]);
 
@@ -117,7 +117,7 @@ fn a_secret_split_across_the_forced_flush_is_redacted_for_many_chunkings() {
         MAX_PENDING_ECHO_BYTES + 1,
     ];
     for secret in secrets {
-        let _env = orbit_common::test_env::scoped([("ORBIT_TEE_FLUSH_TOKEN", Some(secret))]);
+        let _env = crate::test_env::scoped([("ORBIT_TEE_FLUSH_TOKEN", Some(secret))]);
         let payload = boundary_payload(secret);
         for chunk in chunkings {
             let output = echo_chunked(&payload, chunk);
@@ -131,7 +131,7 @@ fn a_secret_split_across_the_forced_flush_is_redacted_for_many_chunkings() {
 #[test]
 fn a_multiline_secret_split_on_its_newline_is_redacted() {
     let secret = "orbit-tee-multi-head-8c1f\norbit-tee-multi-tail-8c1f";
-    let _env = orbit_common::test_env::scoped([("ORBIT_TEE_MULTI_TOKEN", Some(secret))]);
+    let _env = crate::test_env::scoped([("ORBIT_TEE_MULTI_TOKEN", Some(secret))]);
     let (first, second) = secret.split_once('\n').expect("multiline fixture");
     let mut payload = Vec::new();
     payload.extend_from_slice(b"BEFORE-");

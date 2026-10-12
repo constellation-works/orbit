@@ -6,10 +6,12 @@ use std::thread;
 use std::time::Instant;
 
 use orbit_common::OrbitError;
+use orbit_common::process::supervisor::{Outcome, SupervisedChild};
 use orbit_common::security::redaction::is_sensitive_env_name;
 use orbit_types::tool::ExecutionResult;
 
 use crate::sandbox::Sandbox;
+use crate::supervision::{ExecSupervision, supervise};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum StdinMode {
@@ -88,9 +90,10 @@ pub fn run_process_supervised(
     run_supervised(req, sandbox, false)
 }
 
-/// Run a probe: like [`run_process`], but a child still running at
-/// `timeout_ms` has its process group killed at once rather than signalled
-/// and given the termination grace period.
+/// Run a probe: like [`run_process`], but a child the supervisor stops — at
+/// `timeout_ms`, at the capture limit or on an intercepted signal — has its
+/// process group killed at once rather than signalled and given the
+/// termination grace period.
 ///
 /// A probe only reports what it printed, so there is nothing for a grace
 /// period to protect, and its caller's time bound must hold even when the
@@ -106,27 +109,32 @@ pub(crate) fn run_probe_process(
 fn run_supervised(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
-    kill_on_deadline: bool,
+    kill_at_once: bool,
 ) -> Result<SupervisedOutcome, OrbitError> {
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let mut child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
-    if kill_on_deadline {
-        child = child.kill_on_deadline();
-    }
-    let stdin_payload = match &req.stdin_mode {
-        StdinMode::Bytes(bytes) => Some(bytes.clone()),
-        StdinMode::Inherit | StdinMode::Null => None,
-    };
-    let result = crate::supervision::wait_with_optional_timeout(
+    let child = SupervisedChild::spawn_guarded(|| sandbox.spawn(req))?;
+    let outcome = supervise(
         child,
-        req.timeout_ms,
-        req.debug,
-        stdin_payload,
+        ExecSupervision {
+            timeout_ms: req.timeout_ms,
+            debug: req.debug,
+            stdin_payload: stdin_payload(req),
+            stdout_relay: None,
+            cancelled: None,
+            kill_at_once,
+        },
     )?;
 
-    Ok(supervised_outcome(result, started))
+    Ok(supervised_outcome(outcome, started))
+}
+
+fn stdin_payload(req: &ExecRequest) -> Option<Vec<u8>> {
+    match &req.stdin_mode {
+        StdinMode::Bytes(bytes) => Some(bytes.clone()),
+        StdinMode::Inherit | StdinMode::Null => None,
+    }
 }
 
 /// Outcome of supervising a process, including trusted stop metadata.
@@ -181,9 +189,18 @@ pub fn supervise_child_cancellable(
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<SupervisedOutcome, OrbitError> {
     let started = Instant::now();
-    let result =
-        crate::supervision::wait_with_cancellation(child, timeout_ms, stdin_payload, cancelled)?;
-    Ok(supervised_outcome(result, started))
+    let outcome = supervise(
+        SupervisedChild::adopt(child),
+        ExecSupervision {
+            timeout_ms,
+            debug: false,
+            stdin_payload,
+            stdout_relay: None,
+            cancelled,
+            kill_at_once: false,
+        },
+    )?;
+    Ok(supervised_outcome(outcome, started))
 }
 
 /// Spawn and supervise a child, intercepting termination signals before
@@ -228,31 +245,34 @@ pub fn spawn_owned_supervised_cancellable(
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<SupervisedOutcome, OrbitError> {
     let started = Instant::now();
-    let result = crate::supervision::wait_with_spawn_cancellation(
-        spawn,
-        timeout_ms,
-        stdin_payload,
-        cancelled,
+    let child = SupervisedChild::spawn_guarded(spawn)?;
+    let outcome = supervise(
+        child,
+        ExecSupervision {
+            timeout_ms,
+            debug: false,
+            stdin_payload,
+            stdout_relay: None,
+            cancelled,
+            kill_at_once: false,
+        },
     )?;
-    Ok(supervised_outcome(result, started))
+    Ok(supervised_outcome(outcome, started))
 }
 
-fn supervised_outcome(
-    result: crate::supervision::WaitResult,
-    started: Instant,
-) -> SupervisedOutcome {
+fn supervised_outcome(outcome: Outcome, started: Instant) -> SupervisedOutcome {
     SupervisedOutcome {
         result: ExecutionResult {
-            success: result.exit_success,
-            timed_out: result.timed_out,
-            stdout: String::from_utf8_lossy(&result.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
-            exit_code: result.exit_code,
+            success: outcome.success,
+            timed_out: outcome.timed_out,
+            stdout: String::from_utf8_lossy(&outcome.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&outcome.stderr).to_string(),
+            exit_code: outcome.exit_code,
             duration_ms: started.elapsed().as_millis() as u64,
             output: None,
         },
-        timed_out: result.timed_out,
-        stop_cause: result.stop_cause,
+        timed_out: outcome.timed_out,
+        stop_cause: outcome.stop_cause(),
     }
 }
 
@@ -286,22 +306,22 @@ where
     let started = Instant::now();
     // Own cleanup before allocating the relay, and transfer the same guard
     // into supervision so no fallible setup operation can strand the child.
-    let mut child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
-    let (stdout, relay) = stdout_relay(child.process_mut())?;
+    let mut child = SupervisedChild::spawn_guarded(|| sandbox.spawn(req))?;
+    let (stdout, relay) = stdout_relay(child.child_mut())?;
     let stdout_thread = thread::spawn(move || consume(stdout));
-    let stdin_payload = match &req.stdin_mode {
-        StdinMode::Bytes(bytes) => Some(bytes.clone()),
-        StdinMode::Inherit | StdinMode::Null => None,
-    };
     // The supervisor forwards stdout into the relay and closes it within its
     // drain bound, besides draining stderr, enforcing timeouts, and cleaning
     // up the child process group.
-    let result = crate::supervision::wait_with_stdout_relay(
+    let result = supervise(
         child,
-        req.timeout_ms,
-        req.debug,
-        stdin_payload,
-        relay,
+        ExecSupervision {
+            timeout_ms: req.timeout_ms,
+            debug: req.debug,
+            stdin_payload: stdin_payload(req),
+            stdout_relay: relay,
+            cancelled: None,
+            kill_at_once: false,
+        },
     )?;
     let consumed = stdout_thread
         .join()
@@ -309,7 +329,7 @@ where
 
     Ok((
         ExecutionResult {
-            success: result.exit_success,
+            success: result.success,
             timed_out: result.timed_out,
             stdout: String::new(),
             stderr: String::from_utf8_lossy(&result.stderr).to_string(),

@@ -1,5 +1,67 @@
-use super::super::wait::wait_with_timeout_and_output_limit;
-use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+use super::super::{CaptureSink, Outcome, Stdin, SupervisedChild, Supervision, Termination};
+
+const OUTPUT_LIMIT: usize = 1024 * 1024;
+const GRACE: Duration = Duration::from_secs(5);
+const DRAIN_BUDGET: Duration = Duration::from_secs(1);
+
+/// A process-group leader with piped stdout and stderr, and a piped stdin
+/// when `stdin_piped`; otherwise stdin is null.
+fn command(program: &str, args: &[&str], stdin_piped: bool) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(if stdin_piped {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    command
+}
+
+fn shell(script: &str) -> Child {
+    command("/bin/sh", &["-c", script], false)
+        .spawn()
+        .expect("spawn supervised shell")
+}
+
+fn supervision<'a>(
+    timeout: Option<Duration>,
+    stdin: Stdin,
+    output_limit: usize,
+    cancelled: Option<&'a AtomicBool>,
+    stopped_descendants: Option<Duration>,
+) -> Supervision<'a> {
+    Supervision {
+        stdin,
+        stdout: Box::new(CaptureSink::new("stdout", output_limit)),
+        stderr: Box::new(CaptureSink::new("stderr", output_limit)),
+        timeout,
+        termination: Termination::Grace(GRACE),
+        cancelled,
+        intercept_signals: true,
+        drain_budget: DRAIN_BUDGET,
+        stopped_descendants,
+    }
+}
+
+fn supervise(
+    child: Child,
+    timeout: Option<Duration>,
+    stdin: Stdin,
+    output_limit: usize,
+) -> Outcome {
+    SupervisedChild::adopt(child)
+        .supervise(supervision(timeout, stdin, output_limit, None, None))
+        .expect("supervised wait")
+}
 
 /// Fault injection is admitted here because setup errors cannot be requested
 /// through the public API without exhausting descriptors or poisoning global
@@ -9,15 +71,12 @@ use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 #[test]
 fn supervision_errors_kill_the_process_group_and_reap_the_child() {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
-    use std::process::Child;
-    use std::time::Duration;
 
     use wait_timeout::ChildExt;
 
-    use super::super::cleanup::kill_process_group;
-    use super::super::wait::{
-        SupervisedChild, SupervisionFailure, wait_with_stdout_relay, with_supervision_failure,
-    };
+    use super::super::super::OwnedChild;
+    use super::super::RelaySink;
+    use super::super::wait::{SupervisionFailure, with_supervision_failure};
 
     struct ProcessGroup {
         pid: Option<u32>,
@@ -28,7 +87,7 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
     impl Drop for ProcessGroup {
         fn drop(&mut self) {
             if let Some(pid) = self.pid {
-                kill_process_group(pid);
+                let _ = OwnedChild::signal_spawned_group(pid, libc::SIGKILL);
                 if self.child.is_none() {
                     // SAFETY: this is the child the fixture handed to the
                     // supervisor. Reap it if failed supervision did not.
@@ -54,20 +113,8 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
     ];
     for (failure, relay) in cases {
         let payload = vec![b'x'; 1024 * 1024];
-        let req = ExecRequest {
-            program: "/bin/sleep".to_string(),
-            args: vec!["60".to_string()],
-            current_dir: None,
-            timeout_ms: Some(5_000),
-            stdin_mode: if failure.is_some() {
-                StdinMode::Bytes(payload.clone())
-            } else {
-                StdinMode::Null
-            },
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        };
-        let child = crate::process::spawn(&req).expect("spawn group leader");
+        let sleeper = || command("/bin/sleep", &["60"], failure.is_some());
+        let child = sleeper().spawn().expect("spawn group leader");
         let pid = child.id();
         let mut group = ProcessGroup {
             pid: Some(pid),
@@ -77,26 +124,27 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
         // Unlike a grandchild orphaned by SIGKILL, this peer is ours to reap,
         // so the test does not depend on the host init process reaping it.
         group.peer = Some(
-            crate::process::command(&req)
+            sleeper()
                 .process_group(pid as i32)
                 .spawn()
                 .expect("spawn peer in supervised process group"),
         );
         let child = group.child.take().expect("group leader");
         let supervise = || {
+            let mut run = supervision(
+                Some(Duration::from_secs(5)),
+                Stdin::Payload(payload),
+                OUTPUT_LIMIT,
+                None,
+                None,
+            );
+            let _reader;
             if relay {
-                let (_reader, writer) = std::io::pipe().expect("relay pipe");
-                wait_with_stdout_relay(
-                    SupervisedChild::new(child),
-                    req.timeout_ms,
-                    false,
-                    Some(payload),
-                    Some(writer),
-                )
-                .map(|_| ())
-            } else {
-                crate::runner::supervise_child(child, req.timeout_ms, Some(payload)).map(|_| ())
+                let (reader, writer) = std::io::pipe().expect("relay pipe");
+                _reader = reader;
+                run.stdout = Box::new(RelaySink::new(writer));
             }
+            SupervisedChild::adopt(child).supervise(run).map(|_| ())
         };
         let result = match failure {
             Some(failure) => with_supervision_failure(failure, supervise),
@@ -150,6 +198,8 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
 #[cfg(unix)]
 #[test]
 fn capture_limits_are_reported_after_child_exit() {
+    use super::super::ProcessStopCause;
+
     let cases: [(&str, bool, &[&str]); 5] = [
         ("exec yes", false, &["stdout"]),
         ("printf '%065d' 0", true, &["stdout"]),
@@ -157,38 +207,33 @@ fn capture_limits_are_reported_after_child_exit() {
         (
             "printf '%065d' 0; printf '%065d' 0 >&2",
             true,
-            &["stdout", "stderr"],
+            &["stderr", "stdout"],
         ),
         ("printf '%064d' 0; printf '%064d' 0 >&2", true, &[]),
     ];
     for (script, exited, limited_streams) in cases {
-        let req = ExecRequest {
-            program: "/bin/sh".to_string(),
-            args: vec!["-c".to_string(), script.to_string()],
-            current_dir: None,
-            timeout_ms: Some(5_000),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        };
-        let mut child = crate::process::spawn(&req).expect("spawn child");
+        let mut child = shell(script);
         if exited {
             assert!(child.wait().expect("finite child exit").success());
         }
 
-        let result = wait_with_timeout_and_output_limit(child, req.timeout_ms, false, None, 64)
-            .expect("supervised wait");
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        for stream in ["stdout", "stderr"] {
-            let note = format!("process output capture limit exceeded on {stream}");
-            assert_eq!(
-                stderr.contains(&note),
-                limited_streams.contains(&stream),
-                "capture-limit reporting for {script:?}: stderr was {stderr:?}"
-            );
-        }
+        let result = supervise(child, Some(Duration::from_secs(5)), Stdin::Null, 64);
+        let mut reported: Vec<&str> = result
+            .stop_causes
+            .iter()
+            .filter_map(|cause| match cause {
+                ProcessStopCause::OutputCaptureLimit { stream } => Some(*stream),
+                // `yes` can die of SIGPIPE once its stream stops being read.
+                _ => None,
+            })
+            .collect();
+        reported.sort_unstable(); // Expected streams are listed sorted.
         assert_eq!(
-            result.exit_success,
+            reported, limited_streams,
+            "capture-limit reporting for {script:?}"
+        );
+        assert_eq!(
+            result.success,
             limited_streams.is_empty(),
             "truncated output must fail even when the child exited successfully: {script:?}"
         );
@@ -209,25 +254,22 @@ fn stdin_broken_pipe_reports_exit_status_and_stderr() {
     // reliably observing EPIPE instead of racing a write that already fully
     // buffered before the child closed its end.
     let payload = vec![b'x'; 4 * 1024 * 1024];
-    let req = ExecRequest {
-        program: "/bin/sh".to_string(),
-        args: vec![
-            "-c".to_string(),
-            "echo boom-stderr-tail >&2; exit 3".to_string(),
-        ],
-        current_dir: None,
-        timeout_ms: Some(5_000),
-        stdin_mode: StdinMode::Bytes(payload.clone()),
-        environment_mode: EnvironmentMode::Inherit,
-        debug: false,
-    };
-    let child = crate::process::spawn(&req).expect("spawn child");
+    let child = command(
+        "/bin/sh",
+        &["-c", "echo boom-stderr-tail >&2; exit 3"],
+        true,
+    )
+    .spawn()
+    .expect("spawn child");
 
-    let result =
-        wait_with_timeout_and_output_limit(child, Some(5_000), false, Some(payload), 64 * 1024)
-            .expect("wait");
+    let result = supervise(
+        child,
+        Some(Duration::from_secs(5)),
+        Stdin::Payload(payload),
+        64 * 1024,
+    );
 
-    assert!(!result.exit_success);
+    assert!(!result.success);
     assert_eq!(result.exit_code, Some(3));
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("boom-stderr-tail"), "stderr was {stderr:?}");
@@ -245,12 +287,13 @@ mod escaped {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
-    use super::super::super::tee::DRAIN_BUDGET;
-    use super::super::super::wait::{WaitResult, wait_with_timeout_and_output_limit};
-    use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
+    use std::process::Child;
+
+    use super::super::super::Stdin;
+    use super::{DRAIN_BUDGET, OUTPUT_LIMIT, command};
 
     const HOLDER_DIR_ENV: &str = "ORBIT_TEST_ESCAPED_HOLDER_DIR";
-    const HOLDER_TEST: &str = "supervision::tests::wait::escaped::escaped_pipe_holder";
+    const HOLDER_TEST: &str = "process::supervisor::tests::wait::escaped::escaped_pipe_holder";
     /// Backstop only: well past any bounded return, so a supervisor that
     /// waits for the holder instead of the budget fails the timing assertion.
     const HOLDER_LIFETIME: Duration = Duration::from_secs(60);
@@ -333,8 +376,8 @@ mod escaped {
         }
 
         /// Start an escaped holder, mark both streams, then await timeout.
-        fn request(&self) -> ExecRequest {
-            orbit_common::test_env::assert_child_test_exists(HOLDER_TEST);
+        fn spawn(&self) -> Child {
+            crate::test_env::assert_child_test_exists(HOLDER_TEST);
             let script = format!(
                 r#"{HOLDER_DIR_ENV}="$2" "$1" --exact {HOLDER_TEST} --nocapture &
 i=0
@@ -348,21 +391,11 @@ printf 'pre-exit-stderr\n' >&2
 sleep 60"#
             );
             let exe = std::env::current_exe().expect("test executable");
-            ExecRequest {
-                program: "/bin/sh".to_string(),
-                args: vec![
-                    "-c".to_string(),
-                    script,
-                    "sh".to_string(),
-                    exe.display().to_string(),
-                    self.guard.dir.display().to_string(),
-                ],
-                current_dir: None,
-                timeout_ms: Some(TIMEOUT.as_millis() as u64),
-                stdin_mode: StdinMode::Null,
-                environment_mode: EnvironmentMode::Inherit,
-                debug: false,
-            }
+            let exe = exe.display().to_string();
+            let dir = self.guard.dir.display().to_string();
+            command("/bin/sh", &["-c", &script, "sh", &exe, &dir], false)
+                .spawn()
+                .expect("spawn child")
         }
 
         fn assert_released(&self) {
@@ -379,12 +412,9 @@ sleep 60"#
 
     fn supervise() {
         let fixture = Fixture::new();
-        let req = fixture.request();
-        let child = crate::process::spawn(&req).expect("spawn child");
+        let child = fixture.spawn();
         let started = Instant::now();
-        let result: WaitResult =
-            wait_with_timeout_and_output_limit(child, req.timeout_ms, false, None, 1024 * 1024)
-                .expect("supervised wait");
+        let result = super::supervise(child, Some(TIMEOUT), Stdin::Null, OUTPUT_LIMIT);
         let elapsed = started.elapsed();
         let bound = TIMEOUT + DRAIN_BUDGET + SLACK;
 
@@ -416,7 +446,7 @@ sleep 60"#
 
 /// A descendant that stops itself (state `T`) is ended once it has stayed
 /// stopped across the threshold, so the child's wait on it returns; nothing
-/// else is ever signalled. The threshold seam keeps each case to seconds.
+/// else is ever signalled. A short threshold keeps each case to seconds.
 /// Kernel process states are only observable on a real process tree.
 #[cfg(target_os = "linux")]
 mod stopped_descendants {
@@ -425,38 +455,35 @@ mod stopped_descendants {
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
-    use orbit_common::process::identity::linux_process_stat;
-
-    use super::super::super::wait::{
-        WaitResult, wait_with_cancellation, wait_with_timeout_and_output_limit,
-        with_stopped_descendant_threshold,
-    };
-    use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
+    use super::super::super::super::identity::linux_process_stat;
+    use super::super::super::{Outcome, Stdin, SupervisedChild};
+    use super::{OUTPUT_LIMIT, shell, supervision};
 
     /// Writes the stopped shell's pid, then reports how `wait` on it ended.
     const SELF_STOPPING_CHILD: &str = "sh -c 'kill -STOP $$; echo resumed' & child=$!; echo \"child=$child\"; \
          wait $child; echo \"wait=$?\"; exit 0";
 
-    fn spawn(script: &str) -> Child {
-        crate::process::spawn(&ExecRequest {
-            program: "/bin/sh".to_string(),
-            args: vec!["-c".to_string(), script.to_string()],
-            current_dir: None,
-            timeout_ms: None,
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        })
-        .expect("spawn supervised shell")
+    fn supervise_with(
+        child: Child,
+        threshold: Duration,
+        timeout: Duration,
+        cancelled: Option<&AtomicBool>,
+    ) -> Outcome {
+        SupervisedChild::adopt(child)
+            .supervise(supervision(
+                Some(timeout),
+                Stdin::Null,
+                OUTPUT_LIMIT,
+                cancelled,
+                Some(threshold),
+            ))
+            .expect("supervised wait")
     }
 
-    fn supervise(script: &str, threshold: Duration, timeout_ms: u64) -> (WaitResult, Duration) {
-        let child = spawn(script);
+    fn supervise(script: &str, threshold: Duration, timeout_ms: u64) -> (Outcome, Duration) {
+        let child = shell(script);
         let started = Instant::now();
-        let result = with_stopped_descendant_threshold(threshold, || {
-            wait_with_timeout_and_output_limit(child, Some(timeout_ms), false, None, 1024 * 1024)
-        })
-        .expect("supervised wait");
+        let result = supervise_with(child, threshold, Duration::from_millis(timeout_ms), None);
         (result, started.elapsed())
     }
 
@@ -464,11 +491,11 @@ mod stopped_descendants {
         String::from_utf8_lossy(bytes).into_owned()
     }
 
-    fn assert_nothing_ended(result: &WaitResult, case: &str) {
-        let stderr = text(&result.stderr);
+    fn assert_nothing_ended(result: &Outcome, case: &str) {
         assert!(
-            !stderr.contains("stopped descendant"),
-            "{case}: the supervisor must not end anything: {stderr:?}"
+            result.stopped_descendants.is_empty(),
+            "{case}: the supervisor must not end anything: {:?}",
+            result.stopped_descendants
         );
     }
 
@@ -504,7 +531,7 @@ mod stopped_descendants {
             .find_map(|line| line.strip_prefix("child="))
             .expect("the shell names its stopped child");
         assert!(
-            result.exit_success && result.exit_code == Some(0),
+            result.success && result.exit_code == Some(0),
             "the supervised shell exits 0 once its wait returns: {result:?}",
             result = (result.exit_code, &stdout, &stderr)
         );
@@ -517,17 +544,23 @@ mod stopped_descendants {
             elapsed < Duration::from_secs(30),
             "the stop must not hold the child until its deadline: {elapsed:?}"
         );
-        assert!(
-            stderr.contains(&format!(
-                "supervisor: stopped descendant pid={child_pid} command=`sh -c kill -STOP $$; echo resumed` stopped for at least 1s: ended"
-            )),
-            "the diagnostic names the pid, command and stop time: {stderr:?}"
+        let reports: Vec<String> = result
+            .stopped_descendants
+            .iter()
+            .map(|stopped| stopped.describe())
+            .collect();
+        assert_eq!(
+            reports,
+            [format!(
+                "stopped descendant pid={child_pid} command=`sh -c kill -STOP $$; echo resumed` stopped for at least 1s: ended"
+            )],
+            "the report names the pid, command and stop time"
         );
     }
 
     #[test]
     fn a_stopped_supervised_child_leaves_its_stopped_descendants_alone() {
-        let child = spawn("sleep 1 & wait $!; echo \"wait=$?\"; exit 0");
+        let child = shell("sleep 1 & wait $!; echo \"wait=$?\"; exit 0");
         let group = child.id() as libc::pid_t;
         let operator = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
@@ -537,15 +570,17 @@ mod stopped_descendants {
             // SAFETY: as above.
             unsafe { libc::killpg(group, libc::SIGCONT) };
         });
-        let result = with_stopped_descendant_threshold(Duration::from_millis(400), || {
-            wait_with_timeout_and_output_limit(child, Some(30_000), false, None, 1024 * 1024)
-        })
-        .expect("supervised wait");
+        let result = supervise_with(
+            child,
+            Duration::from_millis(400),
+            Duration::from_secs(30),
+            None,
+        );
         operator.join().expect("operator thread");
 
         assert_nothing_ended(&result, "whole group stopped");
         assert!(
-            text(&result.stdout).contains("wait=0") && result.exit_success,
+            text(&result.stdout).contains("wait=0") && result.success,
             "the group resumes and finishes as if never watched: {:?}",
             text(&result.stdout)
         );
@@ -608,23 +643,25 @@ mod stopped_descendants {
         // descendant.
         let (result, elapsed) = supervise(SELF_STOPPING_CHILD, Duration::from_secs(30), 500);
         assert!(result.timed_out && result.exit_code.is_none());
-        assert!(text(&result.stderr).ends_with("process timed out"));
+        assert!(result.stop_causes.is_empty(), "{:?}", result.stop_causes);
         assert_nothing_ended(&result, "deadline");
         assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
 
         let cancelled = AtomicBool::new(false);
-        let child = spawn(SELF_STOPPING_CHILD);
+        let child = shell(SELF_STOPPING_CHILD);
         let result = std::thread::scope(|scope| {
             scope.spawn(|| {
                 std::thread::sleep(Duration::from_millis(300));
                 cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
             });
-            with_stopped_descendant_threshold(Duration::from_secs(30), || {
-                wait_with_cancellation(child, Some(30_000), None, Some(&cancelled))
-            })
-        })
-        .expect("cancelled wait");
-        assert!(!result.exit_success && result.exit_code.is_none() && !result.timed_out);
+            supervise_with(
+                child,
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+                Some(&cancelled),
+            )
+        });
+        assert!(!result.success && result.exit_code.is_none() && !result.timed_out);
         assert_nothing_ended(&result, "cancellation");
     }
 }
