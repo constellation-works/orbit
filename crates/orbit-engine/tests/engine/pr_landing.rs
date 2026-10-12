@@ -6910,6 +6910,7 @@ impl RuntimeHost for DeliveryHost {
                     note: Some(record.text()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 }],
                 ..Default::default()
             },

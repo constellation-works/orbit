@@ -139,8 +139,7 @@ fn host_operational_holds_human_approved_work_until_a_current_operator_decision(
         assert!(!evidence.is_empty());
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
-                .unwrap();
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
         assert_eq!(audit["host_operational_hold"], record["hold"]);
         assert_eq!(audit["assessment"]["evidence"], evidence);
         let refused = orbit_engine::RuntimeHost::admit_task_for_workflow(
@@ -335,6 +334,7 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
                     at,
                     by: "task-pilot".into(),
                     message: format!("operation_id=legacy-host-pilot\n{audit}"),
+                    operation_id: None,
                 }],
                 append_history: vec![orbit_types::task::TaskHistoryEntry {
                     at,
@@ -343,6 +343,7 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
                     note: Some("host_operational (operation_id=legacy-host-pilot)".into()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 }],
                 ..Default::default()
             },
@@ -672,8 +673,7 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
         );
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
-                .unwrap();
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
         assert_eq!(
             audit["operator_validation_hold"]["requirements"],
             hold["hold"]["requirements"]
@@ -862,8 +862,7 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
         assess(&workspace, &task, None);
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
-                .unwrap();
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
         assert_eq!(
             !audit["assessment"]["validation_tool_warnings"]
                 .as_array()
@@ -951,11 +950,13 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
                     note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 }],
                 append_comments: vec![orbit_types::task::TaskComment {
                     at,
                     by: "task-pilot".into(),
                     message: format!("operation_id=legacy-pilot\n{audit}"),
+                    operation_id: None,
                 }],
                 ..Default::default()
             },
@@ -1013,7 +1014,7 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
     assess(&workspace, &task, None);
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
     let audit: serde_json::Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
     let warnings = audit["assessment"]["validation_tool_warnings"]
         .as_array()
         .unwrap();
@@ -1068,11 +1069,13 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
                     note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 }],
                 append_comments: vec![orbit_types::task::TaskComment {
                     at,
                     by: "task-pilot".into(),
                     message: format!("operation_id=legacy-pilot\n{legacy_audit}"),
+                    operation_id: None,
                 }],
                 ..Default::default()
             },

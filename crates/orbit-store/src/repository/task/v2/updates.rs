@@ -25,13 +25,9 @@ impl TaskV2Store {
         reject_forged_grant(&fields.append_history)?;
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
-            let receipt = format!("operation_id={}", fields.operation_id);
             if bundle.events.iter().any(|event| {
                 event.event_type == fields.event_type
-                    && event.note.as_deref().is_some_and(|note| {
-                        note.ends_with(&format!(" ({receipt})"))
-                            || note.lines().next() == Some(receipt.as_str())
-                    })
+                    && event.receipt() == Some(fields.operation_id.as_str())
             }) {
                 return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
             }
@@ -66,6 +62,7 @@ impl TaskV2Store {
                     note: entry.note.clone(),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -77,9 +74,10 @@ impl TaskV2Store {
                 at: now,
                 by: fields.actor.clone(),
                 event_type: fields.event_type.clone(),
-                note: Some(format!("{} ({receipt})", fields.history_summary)),
+                note: Some(fields.history_summary.clone()),
                 from_status: status_changed.then_some(bundle.envelope.status),
                 to_status: status_changed.then_some(fields.status),
+                operation_id: Some(fields.operation_id.clone()),
             };
             self.bundle_store.append_event(id, &event)?;
             bundle.events.push(event);
@@ -88,7 +86,8 @@ impl TaskV2Store {
                 comment_id: format!("C-{:04}", next_sequence(&bundle.comments, "C-")),
                 at: now,
                 by: fields.actor.clone(),
-                body: format!("{receipt}\n{}", fields.audit_note),
+                body: fields.audit_note.clone(),
+                operation_id: Some(fields.operation_id.clone()),
             };
             self.bundle_store.append_comment(id, &comment)?;
             append_creation_grant(
@@ -319,6 +318,7 @@ impl TaskV2Store {
                     note,
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -375,6 +375,7 @@ impl TaskV2Store {
                     note: Some("task fields updated".to_string()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -468,6 +469,7 @@ impl TaskV2Store {
                     note: entry.note.clone(),
                     from_status: entry.from_status,
                     to_status: entry.to_status,
+                    operation_id: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -481,6 +483,7 @@ impl TaskV2Store {
                     at: comment.at,
                     by: comment.by.clone(),
                     body: comment.message.clone(),
+                    operation_id: None,
                 };
                 self.bundle_store.append_comment(id, &row)?;
                 bundle.comments.push(row);
@@ -501,6 +504,7 @@ impl TaskV2Store {
                     note: fields.status_note.clone(),
                     from_status: status_transition.map(|(from, _)| from),
                     to_status: status_transition.map(|(_, to)| to),
+                    operation_id: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);

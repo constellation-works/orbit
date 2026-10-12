@@ -103,6 +103,7 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
                     message: message.clone(),
+                    operation_id: None,
                 }],
                 ..TaskAutomationUpdate::default()
             },

@@ -430,6 +430,7 @@ fn record_known_red<H: RuntimeHost + ?Sized>(
                     note: Some(note.clone()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 }],
                 ..TaskAutomationUpdate::default()
             },

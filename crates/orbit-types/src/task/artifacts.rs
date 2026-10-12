@@ -309,6 +309,8 @@ pub struct TaskEventRowV2 {
     pub from_status: Option<TaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_status: Option<TaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 impl TaskEventRowV2 {
@@ -341,6 +343,8 @@ pub struct TaskCommentRowV2 {
     pub at: DateTime<Utc>,
     pub by: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 impl TaskCommentRowV2 {

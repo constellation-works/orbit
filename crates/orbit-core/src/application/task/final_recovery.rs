@@ -560,6 +560,7 @@ impl OrbitRuntime {
             at: Utc::now(),
             by: SYSTEM_ACTOR_LABEL.to_string(),
             message: plan.comment.clone(),
+            operation_id: None,
         };
         let transition = plan.status != task.status;
         // A requeue is a new retry decision even if the task is already in

@@ -87,6 +87,7 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
             at: now,
             by: "daniel".to_string(),
             message: "Please build this.".to_string(),
+            operation_id: None,
         }],
         context_creation: Vec::new(),
     }

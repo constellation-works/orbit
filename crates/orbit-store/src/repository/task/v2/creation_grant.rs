@@ -53,6 +53,7 @@ pub(super) fn append_creation_grant(
         note: Some(grant.to_note()),
         from_status: None,
         to_status: None,
+        operation_id: None,
     };
     store.append_event(&bundle.envelope.id, &event)?;
     bundle.events.push(event);

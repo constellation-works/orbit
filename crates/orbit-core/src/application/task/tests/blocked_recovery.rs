@@ -359,6 +359,7 @@ fn activity_by_a_human_after_the_block_suppresses_recovery() {
                 at: Utc::now(),
                 by: "claude".to_string(),
                 message: "agent note".to_string(),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },

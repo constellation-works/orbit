@@ -38,6 +38,7 @@ pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> Task
         )),
         from_status: None,
         to_status: None,
+        operation_id: None,
     }
 }
 
@@ -127,6 +128,7 @@ pub(super) fn build_task_comments(
         at: Utc::now(),
         by: by.to_string(),
         message: message.to_string(),
+        operation_id: None,
     }])
 }
 

@@ -164,7 +164,7 @@ fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
     assert_eq!(output["status"], "succeeded", "{output}");
     assert_eq!(output["applied_count"], 1, "{output}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit = comments.last().unwrap().message.lines().nth(1).unwrap();
+    let audit = comments.last().unwrap().receipt().unwrap().body;
     let audit: Value = serde_json::from_str(audit).unwrap();
     assert_eq!(
         audit["assessment"]["assessment_rationale"],

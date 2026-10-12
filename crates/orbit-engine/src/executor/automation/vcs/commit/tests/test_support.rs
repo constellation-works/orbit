@@ -255,6 +255,7 @@ impl RuntimeHost for CommitTestHost {
                 note: Some(note),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
             },
         ));
         Ok(added)

@@ -155,6 +155,7 @@ impl OrbitRuntime {
                                  validation `{}` fails on base `{}`, run `{}`.",
                                 held.id, held.title, hold.command, hold.base_sha, hold.run_id
                             ),
+                            operation_id: None,
                         }],
                         ..Default::default()
                     },

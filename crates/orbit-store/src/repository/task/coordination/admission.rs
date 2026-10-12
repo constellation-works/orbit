@@ -16,7 +16,7 @@ use super::TaskCommitBoundary;
 use super::lifecycle::fresh_offer_history;
 use super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::contracts::*;
-use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
+use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_history_from_events};
 
 /// The in-section re-check of assessment-scoped holds a caller gives
 /// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
@@ -395,11 +395,8 @@ impl TaskCommitBoundary {
             let comments = bundle
                 .comments
                 .iter()
-                .map(|comment| TaskComment {
-                    at: comment.at,
-                    by: comment.by.clone(),
-                    message: comment.body.clone(),
-                })
+                .cloned()
+                .map(task_comment_from_row)
                 .collect::<Vec<_>>();
             let history = task_history_from_events(bundle.events.clone());
             let task = translator.task_from_bundle(bundle)?;

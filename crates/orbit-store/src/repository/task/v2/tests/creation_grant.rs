@@ -321,6 +321,7 @@ fn a_history_append_cannot_forge_a_grant() {
                 note: Some(forged.to_note()),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
             }],
             ..Default::default()
         },

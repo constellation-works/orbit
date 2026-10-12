@@ -214,6 +214,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },

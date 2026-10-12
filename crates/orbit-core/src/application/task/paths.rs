@@ -72,6 +72,7 @@ pub(super) fn context_files_restored_history_entry(
         )),
         from_status: None,
         to_status: None,
+        operation_id: None,
     }
 }
 

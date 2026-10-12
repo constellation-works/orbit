@@ -91,6 +91,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             note: None,
             from_status: None,
             to_status: Some(TaskStatus::Backlog),
+            operation_id: None,
         }],
         comments: Vec::new(),
         artifact_manifest: None,

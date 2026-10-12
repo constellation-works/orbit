@@ -127,6 +127,7 @@ fn writes_the_recovery_may_cause_leave_its_requeue_standing() {
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("run {run}: final recovery repaired the worktree"),
+                operation_id: None,
             }],
             ..Default::default()
         },

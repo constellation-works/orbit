@@ -15,6 +15,8 @@
 //!   claim and lifecycle rows stay, so a pruned replay is refused, never rerun.
 //! - Claimed evidence stores canonical artifact paths, and racing review
 //!   report revisions are each retained in the store-owned report history.
+//! - An atomic task mutation's receipt is a typed field it replays on; a
+//!   receipt written as text before that field still replays.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -79,6 +81,8 @@ mod claim_retention;
 mod dependencies;
 #[path = "allocation_admission/known_red.rs"]
 mod known_red;
+#[path = "allocation_admission/mutation_receipts.rs"]
+mod mutation_receipts;
 #[path = "allocation_admission/ordering.rs"]
 mod ordering;
 #[path = "allocation_admission/reservation_grants.rs"]
@@ -2658,6 +2662,7 @@ fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
         note: None,
         from_status: Some(TaskStatus::InProgress),
         to_status: Some(TaskStatus::Done),
+        operation_id: None,
     };
     let aborted_comment = TaskCommentRowV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -2665,6 +2670,7 @@ fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
         at: Utc::now(),
         by: "aborted-writer".into(),
         body: "aborted".into(),
+        operation_id: None,
     };
     let append = |path: &Path, row: String| {
         use std::io::Write;

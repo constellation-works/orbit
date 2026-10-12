@@ -55,6 +55,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             note: None,
             from_status: None,
             to_status: Some(TaskStatus::Backlog),
+            operation_id: None,
         }],
         comments: vec![TaskCommentRowV2 {
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -62,6 +63,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             at: now,
             by: "daniel".to_string(),
             body: "Looks good.".to_string(),
+            operation_id: None,
         }],
         artifact_manifest: None,
     }

@@ -268,11 +268,17 @@ for (const [index, comment] of [
   { by: 'human:fixture', message: pilotMessage },
   { by: 'task-pilot', message: `operation_id=invalid\n${JSON.stringify({ assessment })}` },
   { by: 'task-pilot', message: `operation_id=${'c'.repeat(64)}\n{"assessment":{}}` },
+  { by: 'task-pilot', operation_id: 'invalid', message: JSON.stringify({ assessment }) },
+  { by: 'task-pilot', message: JSON.stringify({ assessment }) },
 ].entries()) {
   const fallback = openTask({ ...pilotTask, id: `ORB-${80 + index}`, comments: [comment] });
   assert.equal(fallback.querySelector('.comment-body').textContent, comment.message, 'unrecognized comment retains the Markdown/plain-text fallback');
   assert.equal(fallback.querySelector('.comment-raw').textContent, comment.message);
 }
+// A receipt written with the typed operation id carries only the audit body.
+const typed = openTask({ ...pilotTask, id: 'ORB-89', comments: [{ by: 'task-pilot', operation_id: 'e'.repeat(64), message: JSON.stringify({ assessment }) }] });
+assert.ok(typed.querySelector('.comment-body').textContent.includes(assessment.assessment_rationale), 'typed receipt renders its assessment');
+assert.ok(!typed.querySelector('.comment-body').textContent.includes('{"'), 'typed receipt presents fields rather than serialized JSON');
 const plain = openTask({ ...pilotTask, id: 'ORB-90', comments: [{ ...pilotTask.comments[0], message: `operation_id=${'d'.repeat(64)}\n${JSON.stringify({ assessment: { ...assessment, assessment_rationale: '<img src=x onerror=alert(1)>' } })}` }] });
 assert.ok(plain.querySelector('.comment-body').textContent.includes('<img src=x onerror=alert(1)>'));
 assert.equal(plain.querySelectorAll('img').length, 0, 'assessment fields are text, never executable markup');

@@ -1026,6 +1026,7 @@ fn legacy_confirmation_is_readable_but_cannot_authorize_promotion() {
                     note: Some(legacy.to_string()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 }],
                 ..Default::default()
             },

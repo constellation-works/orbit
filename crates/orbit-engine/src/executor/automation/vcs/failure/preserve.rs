@@ -69,6 +69,7 @@ fn held_history(held: &HeldCandidate) -> TaskHistoryEntry {
         note: Some(held.text()),
         from_status: None,
         to_status: None,
+        operation_id: None,
     }
 }
 
@@ -171,6 +172,7 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -264,6 +266,7 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
+                operation_id: None,
             }],
             append_history: vec![held_history(&held)],
             ..TaskAutomationUpdate::default()
@@ -339,6 +342,7 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
                          committed on branch `{branch}`.\n\n{}",
                         held_place(&held)
                     ),
+                    operation_id: None,
                 })
                 .into_iter()
                 .collect(),
@@ -413,6 +417,7 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
                      settles.\n\n{}",
                     held_place(&held)
                 ),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -488,6 +493,7 @@ pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
                     error_message.trim(),
                     held_place(&held)
                 ),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -631,6 +637,7 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: body,
+                operation_id: None,
             }],
             append_history: vec![held_history(&held)],
             ..TaskAutomationUpdate::default()

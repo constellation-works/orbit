@@ -65,6 +65,7 @@ impl TaskCommitBoundary {
                 at: Utc::now(),
                 by: actor.into(),
                 body: message.clone(),
+                operation_id: None,
             };
             comment.validate()?;
             intent.evidence.comments.push(comment);

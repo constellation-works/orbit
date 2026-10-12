@@ -285,6 +285,7 @@ impl TaskCommitBoundary {
                 note: entry.note.clone(),
                 from_status: entry.from_status,
                 to_status: entry.to_status,
+                operation_id: None,
             });
             next_event += 1;
         }
@@ -302,6 +303,7 @@ impl TaskCommitBoundary {
                 note: params.status_note.clone(),
                 from_status: transition.map(|(from, _)| from),
                 to_status: transition.map(|(_, to)| to),
+                operation_id: None,
             });
         }
         for event in &events {
@@ -366,6 +368,7 @@ impl TaskCommitBoundary {
             note: Some(grant.to_note()),
             from_status: None,
             to_status: None,
+            operation_id: None,
         });
         Ok(())
     }

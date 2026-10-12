@@ -12,11 +12,7 @@ impl TaskV2Store {
                 bundle
                     .comments
                     .into_iter()
-                    .map(|comment| TaskComment {
-                        at: comment.at,
-                        by: comment.by,
-                        message: comment.body,
-                    })
+                    .map(task_comment_from_row)
                     .collect(),
             )),
             Err(OrbitError::NotFound {
@@ -61,6 +57,17 @@ pub(crate) fn task_history_from_events(events: Vec<TaskEventRowV2>) -> Vec<TaskH
             note: event.note,
             from_status: event.from_status,
             to_status: event.to_status,
+            operation_id: event.operation_id,
         })
         .collect()
+}
+
+/// Project a bundle's comment row as the task comment read surface.
+pub(crate) fn task_comment_from_row(comment: TaskCommentRowV2) -> TaskComment {
+    TaskComment {
+        at: comment.at,
+        by: comment.by,
+        message: comment.body,
+        operation_id: comment.operation_id,
+    }
 }

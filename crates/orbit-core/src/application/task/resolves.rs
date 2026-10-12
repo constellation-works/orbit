@@ -322,5 +322,6 @@ fn resolves_history_entry(event: &str, target: &str, reason: Option<&str>) -> Ta
         note: Some(note),
         from_status: None,
         to_status: None,
+        operation_id: None,
     }
 }

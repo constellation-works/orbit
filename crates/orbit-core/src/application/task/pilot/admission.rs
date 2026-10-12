@@ -76,6 +76,7 @@ impl HostOperationalHold {
             ),
             from_status: None,
             to_status: None,
+            operation_id: None,
         }
     }
 }
@@ -143,6 +144,7 @@ impl OperatorValidationHold {
             note: Some(json!({"operation_id": operation_id, "hold": self}).to_string()),
             from_status: None,
             to_status: None,
+            operation_id: None,
         }
     }
 }
@@ -415,9 +417,10 @@ impl OrbitRuntime {
         }
         let material = validation_material(task);
         let mut legacy_decision = false;
-        // Atomic pilot application persists the full assessment after its replay
-        // receipt in a task-pilot-authored comment. Read that durable format, not
-        // the human-readable history summary or an uncommitted agent result.
+        // Atomic pilot application persists the full assessment in a
+        // task-pilot-authored comment carrying its replay receipt. Read that
+        // durable record, not the human-readable history summary or an
+        // uncommitted agent result.
         for comment in comments.iter().rev() {
             let mut lines = comment.message.lines();
             let header = lines.next().unwrap_or_default().trim();
@@ -432,19 +435,19 @@ impl OrbitRuntime {
                 // validation additionally requires its trusted resolution event.
                 legacy_decision = true;
             }
-            if comment.by != "task-pilot" || !header.starts_with("operation_id=") {
+            if comment.by != "task-pilot" {
                 continue;
             }
-            let (_, audit) = comment.message.split_once('\n').ok_or_else(|| {
-                OrbitError::Execution("pilot receipt is missing its assessment".into())
-            })?;
-            let audit: Value = serde_json::from_str(audit).map_err(|error| {
+            let Some(receipt) = comment.receipt() else {
+                continue;
+            };
+            let audit: Value = serde_json::from_str(receipt.body).map_err(|error| {
                 OrbitError::Execution(format!("decode pilot assessment: {error}"))
             })?;
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
-            let operation_id = header.strip_prefix("operation_id=").unwrap_or_default();
+            let operation_id = receipt.operation_id;
             if assessment["disposition"] == "host_operational" {
                 // New receipts seal the assessed material. Older receipts have
                 // no snapshot: hold conservatively until admission or a trusted
@@ -609,13 +612,7 @@ impl OrbitRuntime {
                     .iter()
                     .rev()
                     .filter(|comment| comment.by == "task-pilot")
-                    .find_map(|comment| {
-                        comment
-                            .message
-                            .lines()
-                            .next()?
-                            .strip_prefix("operation_id=")
-                    })
+                    .find_map(|comment| Some(comment.receipt()?.operation_id))
                     .ok_or_else(|| {
                         OrbitError::Execution("operator handoff has no pilot receipt".into())
                     })?;
@@ -648,6 +645,7 @@ impl OrbitRuntime {
                                 "{header}\n{}",
                                 event.note.as_deref().unwrap_or_default()
                             ),
+                            operation_id: None,
                         }],
                         append_history: vec![event],
                         ..Default::default()
@@ -737,13 +735,7 @@ impl OrbitRuntime {
             .iter()
             .rev()
             .filter(|comment| comment.by == "task-pilot")
-            .find_map(|comment| {
-                comment
-                    .message
-                    .lines()
-                    .next()?
-                    .strip_prefix("operation_id=")
-            })
+            .find_map(|comment| Some(comment.receipt()?.operation_id))
             .ok_or_else(|| {
                 OrbitError::Execution("task-pilot admission decision has no pilot receipt".into())
             })?;
@@ -762,6 +754,7 @@ impl OrbitRuntime {
             ),
             from_status: None,
             to_status: None,
+            operation_id: None,
         }))
     }
 }
@@ -772,15 +765,9 @@ impl OrbitRuntime {
     /// pilot assessed and still left without selectors is one it declined to
     /// prepare, so admission stops waiting for it.
     pub(crate) fn task_pilot_assessed(&self, task_id: &str) -> Result<bool, OrbitError> {
-        Ok(self.get_task_comments(task_id)?.iter().any(|comment| {
-            comment.by == "task-pilot"
-                && comment
-                    .message
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .starts_with("operation_id=")
-        }))
+        Ok(self
+            .get_task_comments(task_id)?
+            .iter()
+            .any(|comment| comment.by == "task-pilot" && comment.receipt().is_some()))
     }
 }

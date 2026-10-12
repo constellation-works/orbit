@@ -107,6 +107,7 @@ impl TaskV2Store {
                 at: comment.at,
                 by: comment.by.clone(),
                 body: comment.message.clone(),
+                operation_id: None,
             })
             .collect();
         let mut events = vec![orbit_types::task::TaskEventRowV2 {
@@ -118,6 +119,7 @@ impl TaskV2Store {
             note: None,
             from_status: None,
             to_status: Some(params.status),
+            operation_id: None,
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.
@@ -140,6 +142,7 @@ impl TaskV2Store {
                 note: Some(grant.to_note()),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
             });
         }
         let bundle = TaskBundleV2 {

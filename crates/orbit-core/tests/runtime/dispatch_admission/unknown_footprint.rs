@@ -103,6 +103,7 @@ fn record_pilot_assessment(runtime: &OrbitRuntime, task: &str) {
                 at,
                 by: "task-pilot".into(),
                 message: "operation_id=fixture-pilot\n{\"assessment\":{}}".into(),
+                operation_id: None,
             }],
             ..Default::default()
         },
