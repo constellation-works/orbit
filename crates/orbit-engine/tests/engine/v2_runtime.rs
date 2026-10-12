@@ -947,6 +947,210 @@ fn assert_empty_join_resume(
     );
 }
 
+#[test]
+fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint() {
+    use orbit_common::{ConflictedFile, RecoverableVcsConflict};
+    use orbit_types::workflow::activity_job::JobV2StepBody;
+
+    struct DiagnosticHost {
+        state: Mutex<PipelineState>,
+        conflict: Mutex<Option<RecoverableVcsConflict>>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl orbit_engine::test_support::NullRuntimeHost for DiagnosticHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls.lock().unwrap().push(action.to_string());
+            match action {
+                "probe_rebase" => {
+                    if let Some(conflict) = self.conflict.lock().unwrap().take() {
+                        return Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)));
+                    }
+                    Ok(json!({"rebased": true}))
+                }
+                "resolve_conflict" => Ok(json!({})),
+                _ => panic!("unexpected action {action}"),
+            }
+        }
+
+        fn checkpoint_step_diagnostic(
+            &self,
+            _: &str,
+            step_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError> {
+            self.state
+                .lock()
+                .unwrap()
+                .record_pipeline_output(step_id, output.clone());
+            Ok(())
+        }
+
+        fn checkpoint_step(
+            &self,
+            _: &str,
+            index: u32,
+            step_id: &str,
+            output: &Value,
+            _: &BTreeMap<String, Value>,
+        ) -> Result<(), DispatchError> {
+            let mut state = self.state.lock().unwrap();
+            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output(step_id, output.clone());
+            Ok(())
+        }
+    }
+
+    let conflict = |path: &str, resolvable: bool| RecoverableVcsConflict {
+        operation: "git_rebase".into(),
+        original_base_sha: "original".into(),
+        target_base_sha: "target".into(),
+        conflicting_paths: vec![path.into()],
+        conflicting_files: vec![ConflictedFile {
+            path: path.into(),
+            deterministically_resolvable: resolvable,
+        }],
+        diagnostic: "stopped rebase".into(),
+    };
+    for new_conflict in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let run_id = "diagnostic-resume";
+        let (writer, _, _) = build_writer_and_sinks(root.path(), run_id);
+        let mut job = job_asset(json!([{
+            "id": "sync_base",
+            // A custom action reaches the stub host; the built-in
+            // git_rebase dispatches the real VCS implementation instead.
+            "spec": {"type": "deterministic", "action": "probe_rebase", "config": {}},
+        }]));
+        let host = DiagnosticHost {
+            state: Mutex::new(PipelineState::new(
+                run_id.into(),
+                "graph_fixture".into(),
+                json!({}),
+            )),
+            conflict: Mutex::new(Some(conflict("old.rs", false))),
+            calls: Mutex::new(Vec::new()),
+        };
+        let stopped = execute_job_with_resume(&job, json!({}), run_id, writer.clone(), &host, None);
+        assert!(
+            matches!(stopped, Err(DispatchError::RecoverableVcsConflict(_))),
+            "initial conflict must checkpoint diagnostics: {stopped:?}"
+        );
+        let mut resume = host.state.lock().unwrap().clone();
+        assert!(
+            resume.step_states.is_empty(),
+            "diagnostics do not certify completion"
+        );
+        assert!(
+            resume.step_outputs.is_empty(),
+            "diagnostics are not usable checkpoints"
+        );
+        assert_eq!(
+            resume.pipeline["sync_base"]["conflicting_paths"],
+            json!(["old.rs"])
+        );
+        assert_eq!(
+            resume.pipeline["sync_base"]["conflicting_files"],
+            json!([{
+                "path": "old.rs", "deterministically_resolvable": false,
+            }])
+        );
+        // A persisted failed output may contain other fields; none may
+        // become a usable checkpoint or survive into the success output.
+        resume.pipeline["sync_base"]["failed_only"] = json!("discard me");
+        *host.state.lock().unwrap() = resume.clone();
+        host.calls.lock().unwrap().clear();
+
+        let mut reads_incomplete = job.clone();
+        let JobV2StepBody::Target(target) = &mut reads_incomplete.steps[0].body else {
+            panic!("target step");
+        };
+        target.default_input = Some(json!({"prior": "{{ steps.sync_base.output }}"}));
+        let error = execute_job_with_resume(
+            &reads_incomplete,
+            json!({}),
+            run_id,
+            writer.clone(),
+            &host,
+            Some(&resume),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, DispatchError::JobExecution(ref message) if message.contains("no data recorded for step 'sync_base'")),
+            "incomplete output stays outside the template pipeline: {error}"
+        );
+        assert!(host.calls.lock().unwrap().is_empty());
+        assert!(host.state.lock().unwrap().step_states.is_empty());
+
+        if new_conflict {
+            *host.conflict.lock().unwrap() = Some(conflict("new.rs", true));
+            job.steps[0].recovery_activity = Some("resolve_conflict".into());
+            job.steps[0].resolved_recovery_activity = Some(ActivityV2 {
+                description: String::new(),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: "resolve_conflict".into(),
+                    config: json!({}),
+                }),
+            });
+        }
+        let (resumed_writer, _, _) = build_writer_and_sinks(root.path(), run_id);
+        let outcome = execute_job_with_resume(
+            &job,
+            json!({}),
+            run_id,
+            resumed_writer.clone(),
+            &host,
+            Some(&resume),
+        )
+        .unwrap();
+        assert!(outcome.success);
+        assert_eq!(
+            *host.calls.lock().unwrap(),
+            if new_conflict {
+                vec!["probe_rebase", "resolve_conflict", "probe_rebase"]
+            } else {
+                vec!["probe_rebase"]
+            },
+            "an incomplete sync_base must execute; a fresh conflict must recover and rerun"
+        );
+        let expected = conflict(if new_conflict { "new.rs" } else { "old.rs" }, new_conflict);
+        let expected_output = json!({
+            "rebased": true,
+            "conflicting_paths": expected.conflicting_paths,
+            "conflicting_files": expected.conflicting_files,
+        });
+        assert_eq!(outcome.pipeline["sync_base"], expected_output);
+        let state = host.state.lock().unwrap();
+        assert_eq!(
+            state.pipeline_step_output("sync_base"),
+            Some(&expected_output)
+        );
+        assert_eq!(state.step_outputs.get(&0), Some(&expected_output));
+        assert_eq!(state.step_states.get(&0), Some(&JobRunState::Success));
+        assert!(
+            resumed_writer
+                .events_snapshot()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(
+                    &event.kind, V2AuditEventKind::StepStarted { step_id } if step_id == "sync_base"
+                ))
+        );
+        assert!(!resumed_writer.events_snapshot().unwrap().iter().any(|event| matches!(
+            &event.kind, V2AuditEventKind::StepSkipped { step_id, .. } if step_id == "sync_base"
+        )));
+    }
+}
+
 /// Runs the single `probe` action every graph fixture uses. Its input says
 /// what to do: sleep `sleep_ms`, then panic, fail or echo the input back.
 #[derive(Default)]

@@ -142,9 +142,20 @@ pub(super) fn run_target(
         (success, message)
     };
     if let Some(output) = dispatch.output.as_object_mut() {
+        if let Some(diagnostics) = ctx.resumed_diagnostics.get(&step.id) {
+            for key in CONFLICT_DIAGNOSTIC_KEYS {
+                if let Some(value) = diagnostics.get(key) {
+                    output
+                        .entry(key.to_string())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+        // A conflict encountered in this execution replaces the resumed
+        // diagnostics, including an empty list after a newer conflict.
         let prior = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(prior_output) = prior.get(&step.id).and_then(|step| step.get("output")) {
-            for key in ["conflicting_paths", "conflicting_files"] {
+            for key in CONFLICT_DIAGNOSTIC_KEYS {
                 if let Some(diagnostics) = prior_output.get(key) {
                     output.insert(key.to_string(), diagnostics.clone());
                 }
