@@ -135,7 +135,7 @@ installs no signal fan-out. Non-Unix stdin is refused.
   `SOURCE_DEADLINE` and the size of the stdout file. `SourceChild` is its
   own kill-on-drop group handle.
 - **Plugin MCP sessions** —
-  [`plugin/mcp.rs`](../../../crates/orbit-tools/src/plugin/mcp.rs). This is
+  [`crates/orbit-tools/src/plugin/mcp.rs`](../../../crates/orbit-tools/src/plugin/mcp.rs). This is
   a long-lived stdio JSON-RPC session, not a run to completion. It has its
   own `kill_group` and `Drop for McpSession`. Only its ownership handle is
   in scope (§5 step 2); its request loop is not a supervisor wait loop.
