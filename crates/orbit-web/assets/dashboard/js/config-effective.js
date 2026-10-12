@@ -20,6 +20,9 @@
 import { el, formatDateTime, getWorkspace, requestJson } from './common.js';
 
 const LAYERS = ["built-in", "environment", "global", "workspace"];
+/// The opt-in review-finding gate the Review findings card switches. A host
+/// whose registry lacks it renders no card.
+const FINDING_VERIFICATION_KEY = "review.verify_findings";
 const FILTERS = [
   { id: "set", label: "All set" },
   { id: "workspace", label: "Workspace" },
@@ -68,6 +71,8 @@ export function renderEffective(body, payload, context) {
   if (callouts) root.appendChild(callouts);
   const review = reviewStrip(payload.review);
   if (review) root.appendChild(review);
+  const verification = findingVerificationCard(payload, model, context);
+  if (verification) root.appendChild(verification);
   root.appendChild(el("div", { class: "cfx-main" }, [keyTable(model), inspector(payload, model, context)]));
   root.appendChild(crewsSection(payload.crews || []));
   root.appendChild(pathsSection(payload.paths || []));
@@ -412,6 +417,66 @@ function reviewStrip(review) {
     ]));
   }
   return section;
+}
+
+/// Settings › Effective's switch for `review.verify_findings`: one write to
+/// the workspace file through the key route `orbit config set` shares, then
+/// the view re-reads, so the switch shows the value the server resolved.
+function findingVerificationCard(payload, model, context) {
+  const info = model.byKey.get(FINDING_VERIFICATION_KEY);
+  if (!info) return null;
+  const row = info.row;
+  const on = row.value === true;
+  const section = el("section", { class: "cfx-verify cfx-card", "aria-labelledby": "cfx-verify-title" });
+  const title = el("h2", { class: "cfx-h2", text: "Review findings" });
+  title.id = "cfx-verify-title";
+  section.appendChild(el("div", { class: "cfx-section-head" }, [
+    title,
+    el("span", { class: "cfx-section-note mono", text: `${row.key} = ${on} (${info.layer})` }),
+  ]));
+  const input = el("input", { type: "checkbox" });
+  input.id = "cfx-verify-findings";
+  input.setAttribute("role", "switch");
+  input.checked = on;
+  input.disabled = pending || !context.canEdit || row.settable === false;
+  input.addEventListener("change", () => saveFindingVerification(row, context, input.checked));
+  const toggle = el("label", { class: `cfx-switch${input.disabled ? " disabled" : ""}` }, [
+    input,
+    el("span", { text: "Review findings must be verified before approval" }),
+  ]);
+  if (!context.canEdit && context.refusal) toggle.title = context.refusal;
+  section.appendChild(toggle);
+  section.appendChild(el("p", {
+    class: "cfx-hint",
+    text: on
+      ? "On: a review-filed bug is refused at approval, promotion and drain admission until the verification job confirms it."
+      : "Off: review-filed bugs are approved, promoted and admitted without a verification verdict.",
+  }));
+  section.appendChild(el("p", {
+    class: "cfx-hint",
+    text: "The finding_verification routine is enabled separately, under Operations.",
+  }));
+  const cli = el("code", { class: "cfx-cli mono", text: cliCommand(row, { text: String(!on), scope: "workspace" }) });
+  section.appendChild(el("div", { class: "cfx-cli-wrap" }, [el("span", { class: "cfx-hint", text: "Same as running" }), cli]));
+  const message = noticeNode(info);
+  if (message) section.appendChild(message);
+  if (notice?.kind === "error" && notice.key === row.key && notice.offerInit) {
+    section.appendChild(el("div", { class: "cfx-actions" }, [
+      el("span", { class: "cfx-hint", text: "Create the workspace file:" }),
+      button("Copy global policy", () => saveFindingVerification(row, context, !on, "seed-from-global")),
+      button("Start empty", () => saveFindingVerification(row, context, !on, "fresh")),
+    ]));
+  }
+  return section;
+}
+
+async function saveFindingVerification(row, context, value, init) {
+  if (pending) return;
+  await write(context, row.key, () => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, "PUT", {
+    value,
+    scope: "workspace",
+    ...(init ? { init } : {}),
+  }), { kind: "saved", text: `Saved ${row.key} = ${value} to the workspace file.` }, "workspace");
 }
 
 function reviewStep(step) {

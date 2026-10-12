@@ -140,8 +140,17 @@ promotes it.
 
 ## 6. The gate
 
-`OrbitRuntime::unverified_finding_hold` holds a review finding in a
-verifiable status until its latest record is CONFIRMED for the current material.
+The gate is opt-in per workspace: `[review] verify_findings = true` turns it
+on, and with the key false or absent (the default) no surface below holds a
+finding on verification state [ORB-15760]. The key is read from the config
+files each time the gate is checked, not from the settings the runtime opened
+with, so `orbit config set` or the dashboard's Settings › Effective switch
+applies to a running drain, clock or dashboard. The job and the state trigger
+(§7) work either way, and turning the gate on does not enable the routine.
+
+With the gate on, `OrbitRuntime::unverified_finding_hold` holds a review
+finding in a verifiable status until its latest record is CONFIRMED for the
+current material.
 Material edits restore the hold and require a new verification; comment-only
 edits and status changes retain confirmation. Promotion with a material edit
 in the same update checks the resulting material. The hold's detail
@@ -164,7 +173,7 @@ These surfaces enforce it:
   promotion, which hold the task as `unverified_review_finding`.
 
 To take a finding without verification, the operator changes its type from
-`bug` or removes its review tag. A task filed straight into `backlog` is not
+`bug` or removes its review tag, or turns the gate off for the workspace. A task filed straight into `backlog` is not
 refused at creation, but every admission surface above holds it.
 
 ## 7. State trigger

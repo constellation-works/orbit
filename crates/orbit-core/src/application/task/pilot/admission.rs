@@ -12,9 +12,7 @@ use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::super::finding_verification::{
-    UnverifiedFindingHold, VERIFIABLE_STATUSES, is_review_finding,
-};
+use super::super::finding_verification::UnverifiedFindingHold;
 use super::super::positive_validation_tools;
 
 use super::super::helpers::is_automation_actor;
@@ -35,8 +33,9 @@ pub(crate) enum PilotAdmissionHold {
     /// pilot required this owner's machine. It holds a host by
     /// [`NativeOsHold::wait_on`], so a capable host may still start the task.
     NativeOs(NativeOsHold),
-    /// A review-filed bug without a CONFIRMED verification verdict. Ranked
-    /// first: until the finding is confirmed, no assessment of it is acted on.
+    /// A review-filed bug without a CONFIRMED verification verdict, while the
+    /// workspace sets `[review] verify_findings`. Ranked first: until the
+    /// finding is confirmed, no assessment of it is acted on.
     UnverifiedFinding(UnverifiedFindingHold),
 }
 
@@ -411,10 +410,7 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
     ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
-        if is_review_finding(task)
-            && VERIFIABLE_STATUSES.contains(&task.status)
-            && let Some(hold) = UnverifiedFindingHold::of(task, &history()?)
-        {
+        if let Some(hold) = self.unverified_finding_hold_in(task, history)? {
             return Ok(Some(PilotAdmissionHold::UnverifiedFinding(hold)));
         }
         let material = validation_material(task);

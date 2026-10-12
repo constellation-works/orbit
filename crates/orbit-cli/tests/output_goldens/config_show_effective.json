@@ -213,6 +213,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "review.verify_findings": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "runtime.log_max_file_mb": {
       "scope": "built-in",
       "state": "default",
