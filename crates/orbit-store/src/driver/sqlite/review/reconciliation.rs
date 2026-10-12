@@ -3,6 +3,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::ReviewReconciliation;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
@@ -21,7 +22,7 @@ fn read(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     raw.as_deref().map(decode).transpose()
 }
 
@@ -40,7 +41,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if let Some(raw) = existing {
                 let existing: ReviewReconciliation = decode(&raw)?;
                 if existing.binding_digest != record.binding_digest {
@@ -67,7 +68,7 @@ impl Store {
                     inserted.updated_at.to_rfc3339(),
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
             Ok(inserted)
         })
     }
@@ -90,12 +91,12 @@ impl Store {
                 .prepare(
                     "SELECT record_json FROM review_reconciliations WHERE workspace_id=?1 AND task_id=?2 ORDER BY updated_at DESC, reconciliation_id DESC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = statement
                 .query_map(params![workspace_id, task_id], |row| row.get::<_, String>(0))
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.map(|raw| {
-                raw.map_err(|error| OrbitError::Store(error.to_string()))
+                raw.map_err(sqlite_store_error)
                     .and_then(|raw| decode(&raw))
             })
             .collect()
@@ -142,7 +143,7 @@ impl Store {
                         record.revision,
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if changed == 0 {
                 return Err(OrbitError::Store(
                     "review reconciliation changed concurrently; reread and retry".into(),

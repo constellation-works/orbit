@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, Transaction, TransactionBehavior, types::Value};
 
 use super::REGISTRY_SCHEMA_VERSION;
@@ -99,7 +100,7 @@ pub(super) fn apply_schema(conn: &Connection, prior_partitions: bool) -> Result<
             ON task_bundle_relations(workspace_id, relation_type, target_task_id, source_task_id);
         ",
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(
         conn,
@@ -126,23 +127,29 @@ pub(super) fn apply_schema(conn: &Connection, prior_partitions: bool) -> Result<
             ON task_bundle_index(workspace_id, job_run_id, created_at DESC, task_id ASC)",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_bundle_index_workspace_terminal
             ON task_bundle_index(workspace_id, terminal_month, task_id)",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_bundle_index_workspace_complexity
             ON task_bundle_index(workspace_id, complexity, status)",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     seed_allocator(conn, prior_partitions)?;
     conn.pragma_update(None, "user_version", i64::from(REGISTRY_SCHEMA_VERSION))
-        .map_err(|e| OrbitError::Store(format!("failed to set registry user_version: {e}")))?;
+        .map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("failed to set registry user_version: {e}"),
+            )
+        })?;
     Ok(())
 }
 
@@ -151,7 +158,7 @@ pub(super) fn apply_schema(conn: &Connection, prior_partitions: bool) -> Result<
 /// from the unmarked zero counter.
 fn seed_allocator(conn: &Connection, prior_partitions: bool) -> Result<(), OrbitError> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let now = now_string();
     let seeded = tx
         .execute(
@@ -159,16 +166,16 @@ fn seed_allocator(conn: &Connection, prior_partitions: bool) -> Result<(), Orbit
              VALUES ('local', 0, 'ORB', ?1)",
             [&now],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     if seeded == 1 && prior_partitions {
         tx.execute(
             "INSERT OR IGNORE INTO allocator_state(authority, next_number, task_prefix, updated_at)
              VALUES (?1, 0, 'ORB', ?2)",
             [HIGH_WATER_UNKNOWN_AUTHORITY, &now],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
-    tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+    tx.commit().map_err(sqlite_store_error)
 }
 
 /// Whether the stored schema is already exactly the shape this build reads.
@@ -227,10 +234,14 @@ pub(super) fn ensure_compatible_schema(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| {
-            OrbitError::Store(format!(
-                "task registry '{}' requires writable additive setup/recovery: {e}",
-                path.display()
-            ))
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!(
+                    "task registry '{}' requires writable additive setup/recovery: {e}",
+                    path.display()
+                ),
+            )
         })?;
     let version = registry_user_version(&tx)?;
     if version > REGISTRY_SCHEMA_VERSION && (version != 6 || !is_known_additive_v6(&tx)?) {
@@ -240,11 +251,20 @@ pub(super) fn ensure_compatible_schema(
     if version == 6 {
         tx.pragma_update(None, "user_version", REGISTRY_SCHEMA_VERSION)
             .map_err(|e| {
-                OrbitError::Store(format!("recover compatible task registry version: {e}"))
+                sqlite_error(
+                    StorageLayer::Store,
+                    &e,
+                    format!("recover compatible task registry version: {e}"),
+                )
             })?;
     }
-    tx.commit()
-        .map_err(|e| OrbitError::Store(format!("commit task registry additive setup: {e}")))
+    tx.commit().map_err(|e| {
+        sqlite_error(
+            StorageLayer::Store,
+            &e,
+            format!("commit task registry additive setup: {e}"),
+        )
+    })
 }
 
 fn ensure_action_keys(conn: &Connection) -> Result<(), OrbitError> {
@@ -257,7 +277,13 @@ fn ensure_action_keys(conn: &Connection) -> Result<(), OrbitError> {
             PRIMARY KEY(workspace_id, action_key)
         );",
     )
-    .map_err(|e| OrbitError::Store(format!("ensure task action keys: {e}")))
+    .map_err(|e| {
+        sqlite_error(
+            StorageLayer::Store,
+            &e,
+            format!("ensure task action keys: {e}"),
+        )
+    })
 }
 
 /// PR1509's v6 only added action keys to v5. Match the actual columns, keys,
@@ -266,7 +292,7 @@ fn ensure_action_keys(conn: &Connection) -> Result<(), OrbitError> {
 /// columns explicitly. Action reservations use positional inserts, so retain
 /// their column order. This reference must stay at v5 when a future format ships.
 fn is_known_additive_v6(conn: &Connection) -> Result<bool, OrbitError> {
-    let reference = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;
+    let reference = Connection::open_in_memory().map_err(sqlite_store_error)?;
     apply_schema(&reference, false)?;
     ensure_action_keys(&reference)?;
     // Envelope stamps are a derived cache any format may carry; they are
@@ -328,16 +354,14 @@ fn is_known_additive_v6(conn: &Connection) -> Result<bool, OrbitError> {
 }
 
 fn schema_rows(conn: &Connection, query: &str) -> Result<Vec<Vec<Value>>, OrbitError> {
-    let mut stmt = conn
-        .prepare(query)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let mut stmt = conn.prepare(query).map_err(sqlite_store_error)?;
     let columns = stmt.column_count();
     stmt.query_map([], |row| {
         (0..columns).map(|column| row.get(column)).collect()
     })
-    .map_err(|e| OrbitError::Store(e.to_string()))?
+    .map_err(sqlite_store_error)?
     .collect::<Result<_, _>>()
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 fn unsupported_schema(version: u32, path: &Path) -> OrbitError {
@@ -380,7 +404,13 @@ fn migrate_allocator_state_v5(conn: &Connection) -> Result<(), OrbitError> {
         COMMIT;
         ",
     )
-    .map_err(|error| OrbitError::Store(format!("migrate task allocator to v5: {error}")))
+    .map_err(|error| {
+        sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!("migrate task allocator to v5: {error}"),
+        )
+    })
 }
 
 /// Schema v4 splits stable coordination identity from machine-local checkout
@@ -393,7 +423,13 @@ fn migrate_path_coupled_workspace_bindings(conn: &Connection) -> Result<(), Orbi
     }
 
     conn.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")
-        .map_err(|e| OrbitError::Store(format!("start task registry v4 migration: {e}")))?;
+        .map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("start task registry v4 migration: {e}"),
+            )
+        })?;
     let migration = conn.execute_batch(
         "
         CREATE TABLE workspace_bindings_v4 (
@@ -430,24 +466,32 @@ fn migrate_path_coupled_workspace_bindings(conn: &Connection) -> Result<(), Orbi
     );
     if let Err(error) = migration {
         let _ = conn.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;");
-        return Err(OrbitError::Store(format!(
-            "migrate task registry workspace bindings to v4: {error}"
-        )));
+        return Err(sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!("migrate task registry workspace bindings to v4: {error}"),
+        ));
     }
     conn.execute_batch("COMMIT; PRAGMA foreign_keys = ON;")
-        .map_err(|e| OrbitError::Store(format!("finish task registry v4 migration: {e}")))?;
+        .map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("finish task registry v4 migration: {e}"),
+            )
+        })?;
     Ok(())
 }
 
 fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, OrbitError> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let columns = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     Ok(columns.iter().any(|candidate| candidate == column))
 }
 
@@ -459,15 +503,14 @@ fn add_column_if_missing(
 ) -> Result<(), OrbitError> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let columns = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     if !columns.iter().any(|candidate| candidate == column) {
-        conn.execute(alter_sql, [])
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        conn.execute(alter_sql, []).map_err(sqlite_store_error)?;
     }
     Ok(())
 }
@@ -475,7 +518,13 @@ fn add_column_if_missing(
 pub(super) fn registry_user_version(conn: &Connection) -> Result<u32, OrbitError> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|e| OrbitError::Store(format!("failed to read registry user_version: {e}")))?;
+        .map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("failed to read registry user_version: {e}"),
+            )
+        })?;
     u32::try_from(version)
         .map_err(|e| OrbitError::Store(format!("invalid registry user_version {version}: {e}")))
 }

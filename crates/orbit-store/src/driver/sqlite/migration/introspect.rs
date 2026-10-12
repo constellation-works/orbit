@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 /// Add `column` to `table` with `definition` (its type and constraints),
@@ -24,7 +25,7 @@ pub(super) fn add_column_if_missing(
         &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     Ok(())
 }
 
@@ -35,7 +36,7 @@ pub(super) fn table_exists(conn: &Connection, table: &str) -> Result<bool, Orbit
             [table],
             |row| row.get(0),
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     Ok(exists > 0)
 }
 
@@ -45,15 +46,13 @@ pub(super) fn table_has_column(
     column: &str,
 ) -> Result<bool, OrbitError> {
     let pragma = format!("PRAGMA table_info({table})");
-    let mut stmt = conn
-        .prepare(&pragma)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let mut stmt = conn.prepare(&pragma).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     for name in rows {
-        let name = name.map_err(|e| OrbitError::Store(e.to_string()))?;
+        let name = name.map_err(sqlite_store_error)?;
         if name == column {
             return Ok(true);
         }
@@ -67,15 +66,13 @@ pub(super) fn table_has_foreign_key_to(
     referenced_table: &str,
 ) -> Result<bool, OrbitError> {
     let pragma = format!("PRAGMA foreign_key_list({table})");
-    let mut stmt = conn
-        .prepare(&pragma)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let mut stmt = conn.prepare(&pragma).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(2))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     for name in rows {
-        let name = name.map_err(|e| OrbitError::Store(e.to_string()))?;
+        let name = name.map_err(sqlite_store_error)?;
         if name == referenced_table {
             return Ok(true);
         }

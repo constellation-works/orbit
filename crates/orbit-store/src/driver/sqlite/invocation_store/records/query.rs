@@ -4,6 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use rusqlite::types::ToSql;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use super::hydrate::{
     hydrate_invocation_records, map_invocation_accounting_fact, map_invocation_record,
@@ -20,7 +21,7 @@ impl Store {
         let conn = self.read()?;
         let max_id: Option<i64> = conn
             .query_row("SELECT MAX(id) FROM invocations", [], |row| row.get(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(Some(max_id.unwrap_or(0) as u64))
     }
 
@@ -32,16 +33,14 @@ impl Store {
         let (sql, params) = build_invocation_list_query(filter);
         let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), map_invocation_record)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut records = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         drop(stmt);
         drop(conn);
 
@@ -92,9 +91,7 @@ impl Store {
             .iter()
             .map(|value| value.as_ref())
             .collect::<Vec<_>>();
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 let ts_raw: String = row.get(0)?;
@@ -105,10 +102,10 @@ impl Store {
                     cost_usd: row.get(3)?,
                 })
             })
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut entries = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         entries.retain(|entry| entry.ts >= since);
         Ok(entries)
     }
@@ -142,15 +139,13 @@ impl Store {
             .iter()
             .map(|value| value.as_ref())
             .collect::<Vec<_>>();
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), map_invocation_accounting_fact)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut facts = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         drop(stmt);
         drop(conn);
 

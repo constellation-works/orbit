@@ -14,7 +14,8 @@
 //! breaking migration it lacks. Upgrade admission reads the same declarations
 //! (`compose::compiled_compatibility`).
 
-use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
@@ -190,10 +191,14 @@ impl Store {
                     ],
                 )
                 .map_err(|error| {
-                    OrbitError::Migration(format!(
-                        "failed to record feature migration '{feature}' v{} ({}): {error}",
-                        migration.version, migration.name
-                    ))
+                    sqlite_error(
+                        StorageLayer::Migration,
+                        &error,
+                        format!(
+                            "failed to record feature migration '{feature}' v{} ({}): {error}",
+                            migration.version, migration.name
+                        ),
+                    )
                 })?;
                 write_compat_record(conn, feature, migrations, migration.version)?;
                 Ok(true)
@@ -254,7 +259,7 @@ fn read_applied_migrations(
              WHERE feature = ?1
              ORDER BY version ASC",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map([feature], |row| {
             Ok((
@@ -263,12 +268,11 @@ fn read_applied_migrations(
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut applied = Vec::new();
     for row in rows {
-        let (version, name, applied_at) =
-            row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let (version, name, applied_at) = row.map_err(sqlite_store_error)?;
         let version = u32::try_from(version).map_err(|error| {
             OrbitError::Migration(format!(
                 "feature migration ledger for '{feature}' contains invalid version {version}: {error}"
@@ -410,9 +414,13 @@ fn write_compat_record(
         params![compat_key(feature), record.encode()?, crate::now_string()],
     )
     .map_err(|error| {
-        OrbitError::Migration(format!(
-            "failed to record feature schema compatibility for '{feature}' at v{version}: {error}"
-        ))
+        sqlite_error(
+            StorageLayer::Migration,
+            &error,
+            format!(
+                "failed to record feature schema compatibility for '{feature}' at v{version}: {error}"
+            ),
+        )
     })?;
     Ok(())
 }
@@ -481,5 +489,5 @@ pub(super) fn apply_feature_schema_ledger(conn: &Connection) -> Result<(), Orbit
             END;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{table_exists, table_has_column};
@@ -35,7 +36,7 @@ pub(super) fn apply_learning_index_workspace_scope(conn: &Connection) -> Result<
                 ON learnings_index(workspace_id, status) WHERE status = 'active';
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v14 `remove_native_learning_subsystem` (ORB-10736): remove every SQLite
@@ -45,7 +46,7 @@ pub(super) fn apply_learning_index_workspace_scope(conn: &Connection) -> Result<
 pub(super) fn apply_remove_native_learning_subsystem(conn: &Connection) -> Result<(), OrbitError> {
     if table_exists(conn, "embeddings")? && table_has_column(conn, "embeddings", "source_kind")? {
         conn.execute("DELETE FROM embeddings WHERE source_kind = 'learning'", [])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
     }
     conn.execute_batch(
         r#"
@@ -54,5 +55,5 @@ pub(super) fn apply_remove_native_learning_subsystem(conn: &Connection) -> Resul
             DROP TABLE IF EXISTS id_allocations;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

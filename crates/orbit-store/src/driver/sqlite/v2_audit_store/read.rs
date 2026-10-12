@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::Store;
 
@@ -40,12 +41,10 @@ impl Store {
             params.iter().map(|b| b.as_ref()).collect();
 
         let conn = self.read()?;
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), row_to_v2_audit_event)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         collect_rows(rows)
     }
 
@@ -127,12 +126,10 @@ impl Store {
             );
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|b| b.as_ref()).collect();
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let mapped = stmt
                 .query_map(param_refs.as_slice(), row_to_v2_audit_event)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.extend(collect_rows(mapped)?);
         }
         Ok(rows)
@@ -156,14 +153,12 @@ impl Store {
             let sql = format!("SELECT DISTINCT run_id FROM v2_audit_events {where_clause}");
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|b| b.as_ref()).collect();
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let mapped = stmt
                 .query_map(param_refs.as_slice(), |row| row.get::<_, String>(0))
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             for run_id in mapped {
-                present.insert(run_id.map_err(|e| OrbitError::Store(e.to_string()))?);
+                present.insert(run_id.map_err(sqlite_store_error)?);
             }
         }
         Ok(present)
@@ -182,14 +177,14 @@ struct ReadSnapshot<'a> {
 impl<'a> ReadSnapshot<'a> {
     fn begin(conn: &'a rusqlite::Connection) -> Result<Self, OrbitError> {
         conn.execute_batch("BEGIN DEFERRED")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(Self { conn, open: true })
     }
 
     fn commit(mut self) -> Result<(), OrbitError> {
         self.conn
             .execute_batch("COMMIT")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         self.open = false;
         Ok(())
     }

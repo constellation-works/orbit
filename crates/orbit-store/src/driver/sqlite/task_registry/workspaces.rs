@@ -12,6 +12,7 @@ use crate::contracts::{
     BindWorkspaceParams, RegisterWorkspaceParams, WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 use crate::fs::path_safety::normalize_path;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use rusqlite::{TransactionBehavior, params};
 use std::collections::BTreeSet;
@@ -69,7 +70,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if let Some(existing) = workspace_by_orbit_dir(&tx, &orbit_dir)? {
             if let Some(requested) = &requested_partition_id
@@ -82,7 +83,7 @@ impl TaskRegistryStore {
                     requested
                 )));
             }
-            tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+            tx.commit().map_err(sqlite_store_error)?;
             return Ok(existing);
         }
 
@@ -120,11 +121,11 @@ impl TaskRegistryStore {
                  WHERE workspace_id = ?1",
                 params![partition_id, path_to_string(&orbit_dir), now],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
             let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
                 OrbitError::Store("failed to read rebound workspace checkout binding".into())
             })?;
-            tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+            tx.commit().map_err(sqlite_store_error)?;
             return Ok(binding);
         }
 
@@ -135,7 +136,7 @@ impl TaskRegistryStore {
                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
                 params![partition_id, slug, params.repo_fingerprint, now],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
         tx.execute(
             "INSERT INTO workspace_checkout_bindings (
@@ -149,12 +150,12 @@ impl TaskRegistryStore {
                 now,
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read inserted workspace checkout binding".into())
         })?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
     }
 
@@ -183,7 +184,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let now = now_string();
 
         if workspace_by_id(&tx, &partition_id)?.is_none() {
@@ -193,7 +194,7 @@ impl TaskRegistryStore {
                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
                 params![partition_id, slug, params.repo_fingerprint, now],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
 
         if let Some(existing) = workspace_by_orbit_dir(&tx, &orbit_dir)?
@@ -203,7 +204,7 @@ impl TaskRegistryStore {
                 "DELETE FROM workspace_checkout_bindings WHERE orbit_dir = ?1",
                 [path_to_string(&orbit_dir)],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
 
         if workspace_checkout_by_id(&tx, &partition_id)?.is_some() {
@@ -219,7 +220,7 @@ impl TaskRegistryStore {
                     now,
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         } else {
             tx.execute(
                 "INSERT INTO workspace_checkout_bindings (
@@ -233,13 +234,13 @@ impl TaskRegistryStore {
                     now,
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
 
         let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read rebound workspace checkout binding".into())
         })?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
     }
 
@@ -255,14 +256,14 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if let Some(existing) = workspace_by_id(&tx, &partition_id)? {
             if existing.slug != slug || existing.repo_fingerprint != params.repo_fingerprint {
                 return Err(OrbitError::InvalidInput(format!(
                     "logical workspace '{partition_id}' is already registered with different metadata"
                 )));
             }
-            tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+            tx.commit().map_err(sqlite_store_error)?;
             return Ok(existing);
         }
 
@@ -273,11 +274,11 @@ impl TaskRegistryStore {
              ) VALUES (?1, ?2, ?3, ?4, ?4)",
             params![partition_id, slug, params.repo_fingerprint, now],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         let binding = workspace_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read inserted logical workspace binding".into())
         })?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
     }
 
@@ -303,7 +304,7 @@ impl TaskRegistryStore {
             .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let existing = workspace_by_id(&tx, &partition_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, partition_id.clone()))?;
         match existing.repo_fingerprint.as_deref() {
@@ -320,14 +321,13 @@ impl TaskRegistryStore {
                      WHERE workspace_id = ?1",
                     params![partition_id, repo_fingerprint, now_string()],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             }
         }
         let binding = workspace_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read fingerprinted workspace binding".to_string())
         })?;
-        tx.commit()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
     }
 
@@ -348,7 +348,7 @@ impl TaskRegistryStore {
                  WHERE repo_root = ?1 OR workspace_path = ?2 OR orbit_dir = ?3
                  ORDER BY updated_at DESC, workspace_id ASC",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(
                 params![
@@ -358,9 +358,9 @@ impl TaskRegistryStore {
                 ],
                 decode_workspace_checkout_binding,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Every task-store partition id the registry binds.
@@ -374,12 +374,12 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare_cached("SELECT workspace_id FROM workspace_bindings")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<BTreeSet<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Retire one workspace's registry rows: its checkout binding, every task
@@ -397,7 +397,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         for statement in [
             // Relations are retired from both ends, like `unregister_task_bundle`:
@@ -414,16 +414,16 @@ impl TaskRegistryStore {
             "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
         ] {
             tx.execute(statement, [&partition_id])
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
         }
         let deleted = tx
             .execute(
                 "DELETE FROM workspace_bindings WHERE workspace_id = ?1",
                 [&partition_id],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(deleted > 0)
     }
 

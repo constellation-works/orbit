@@ -4,6 +4,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::contracts::{
     BreakingMigration, COMPATIBILITY_RECORD_FORMAT, CompatibilityRecord, MigrationCompatibility,
@@ -379,14 +380,14 @@ fn breaking_newer_database_refuses_and_names_the_first_missing_migration() {
 
 fn migration_v1_marker(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch("CREATE TABLE ledger_test_v1 (x INTEGER)")
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 fn migration_v2_fails_midway(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(
         "CREATE TABLE ledger_test_half_applied (x INTEGER);\n         this is not valid migration SQL",
     )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     Ok(())
 }
 
@@ -498,7 +499,7 @@ fn concurrent_store_open_on_pre_ledger_fixture_applies_each_version_once() {
 
 fn migration_v1_marker_v2(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch("CREATE TABLE ledger_test_v2 (x INTEGER)")
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 fn schema_column_fingerprint(conn: &Connection) -> String {

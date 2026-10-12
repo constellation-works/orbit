@@ -7,6 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::JobRunState;
 use rusqlite::{TransactionBehavior, params};
 
@@ -28,10 +29,6 @@ const ARCHIVABLE_RUN_STATES: [JobRunState; 5] = [
     JobRunState::Cancelled,
     JobRunState::Interrupted,
 ];
-
-fn store_error(error: rusqlite::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
-}
 
 fn archivable_states_sql() -> String {
     ARCHIVABLE_RUN_STATES
@@ -80,7 +77,7 @@ impl StoreRetentionBackend for Store {
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             ),
         }
-        .map_err(store_error)?;
+        .map_err(sqlite_store_error)?;
         Ok(selection(rows, bytes))
     }
 
@@ -107,7 +104,7 @@ impl StoreRetentionBackend for Store {
                     params![workspace_id, cutoff, limit],
                 ),
             }
-            .map_err(store_error)
+            .map_err(sqlite_store_error)
         })
     }
 
@@ -126,7 +123,7 @@ impl StoreRetentionBackend for Store {
                 params![workspace_id, cutoff.to_rfc3339()],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         Ok(selection(rows, bytes))
     }
 
@@ -146,13 +143,13 @@ impl StoreRetentionBackend for Store {
                         "SELECT r.run_id {} LIMIT ?3",
                         archivable_runs_sql()
                     ))
-                    .map_err(store_error)?;
+                    .map_err(sqlite_store_error)?;
                 stmt.query_map(params![workspace_id, cutoff.to_rfc3339(), limit], |row| {
                     row.get::<_, String>(0)
                 })
-                .map_err(store_error)?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(store_error)?
+                .map_err(sqlite_store_error)?
             };
             let archived_at = archived_at.to_rfc3339();
             for run_id in &run_ids {
@@ -161,14 +158,14 @@ impl StoreRetentionBackend for Store {
                         "DELETE FROM job_run_states WHERE workspace_id = ?1 AND run_id = ?2",
                         params![workspace_id, run_id],
                     )
-                    .map_err(store_error)?;
+                    .map_err(sqlite_store_error)?;
                 tx.tx
                     .execute(
                         "UPDATE job_runs SET archived_at = ?3 \
                          WHERE workspace_id = ?1 AND run_id = ?2",
                         params![workspace_id, run_id, archived_at],
                     )
-                    .map_err(store_error)?;
+                    .map_err(sqlite_store_error)?;
             }
             Ok(run_ids.len())
         })
@@ -212,7 +209,7 @@ impl StoreRetentionBackend for Store {
         let pragma = |name: &str| -> Result<u64, OrbitError> {
             conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get::<_, i64>(0))
                 .map(|value| u64::try_from(value).unwrap_or(0))
-                .map_err(store_error)
+                .map_err(sqlite_store_error)
         };
         Ok(StoreSpace {
             page_size: pragma("page_size")?,
@@ -240,20 +237,20 @@ fn scan_chunks(
     let mut after = i64::MIN;
     loop {
         let conn = store.read()?;
-        let mut stmt = conn.prepare(sql).map_err(store_error)?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
         let map =
             |row: &rusqlite::Row<'_>| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?));
         let rows = match extra {
             Some((first, second)) => stmt
                 .query_map(params![after, REFERENCE_SCAN_CHUNK, first, second], map)
-                .map_err(store_error)?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>(),
             None => stmt
                 .query_map(params![after, REFERENCE_SCAN_CHUNK], map)
-                .map_err(store_error)?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>(),
         }
-        .map_err(store_error)?;
+        .map_err(sqlite_store_error)?;
         let Some(last) = rows.last().map(|(key, _)| *key) else {
             return Ok(());
         };

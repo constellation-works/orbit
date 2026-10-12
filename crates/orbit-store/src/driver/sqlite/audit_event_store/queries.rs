@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::AuditEvent;
 use rusqlite::{OptionalExtension, params};
 
@@ -111,19 +112,17 @@ impl Store {
         param_values.push(Box::new(limit as i64));
         param_values.push(Box::new(filter.offset as i64));
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|b| b.as_ref()).collect();
 
         let rows = stmt
             .query_map(param_refs.as_slice(), audit_event_from_row)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     pub fn get_audit_event(&self, id: i64) -> Result<Option<AuditEvent>, OrbitError> {
@@ -133,12 +132,12 @@ impl Store {
             .prepare(&format!(
                 "SELECT {AUDIT_EVENT_COLUMNS} FROM audit_events WHERE id = ?1"
             ))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let result = stmt
             .query_row(params![id], audit_event_from_row)
             .optional()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         Ok(result)
     }
@@ -176,15 +175,13 @@ impl Store {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|value| value.as_ref()).collect();
         let conn = self.read()?;
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), audit_event_from_row)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     pub fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError> {
@@ -196,7 +193,7 @@ impl Store {
                 "DELETE FROM audit_events WHERE timestamp < ?1",
                 params![older_than.to_rfc3339()],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         Ok(count)
     }

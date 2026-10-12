@@ -2,6 +2,7 @@
 //! claim-receipt deletion.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
@@ -18,7 +19,7 @@ impl Store {
             tx.tx.execute(
                 "INSERT INTO task_coordination_rows(workspace_id,kind,row_id,payload_json,journal_id,created_at) VALUES (?1,?2,?3,?4,'sql-only',?5)",
                 params![workspace, row.kind, row.row_id, row.payload_json, crate::now_string()],
-            ).map_err(|e| OrbitError::Store(e.to_string()))?;
+            ).map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -35,7 +36,7 @@ impl Store {
             tx.tx.execute(
                 "UPDATE task_coordination_rows SET payload_json=?5 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
                 params![workspace, old.kind, old.row_id, old.payload_json, payload],
-            ).map(|n| n == 1).map_err(|e| OrbitError::Store(e.to_string()))
+            ).map(|n| n == 1).map_err(sqlite_store_error)
         })
     }
 
@@ -69,14 +70,14 @@ impl Store {
                                WHERE j.journal_id = r.journal_id
                                  AND j.state IN ('prepared', 'committed'))",
                     )
-                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                    .map_err(sqlite_store_error)?;
                 stmt.query_map(
                     params![workspace, receipt_kind, created_before, claim_ids],
                     |row| row.get::<_, String>(0),
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
             };
             let mut delete = tx
                 .tx
@@ -84,11 +85,11 @@ impl Store {
                     "DELETE FROM task_coordination_rows
                      WHERE workspace_id = ?1 AND kind IN (?2, ?3) AND row_id = ?4",
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             for receipt_id in &receipt_ids {
                 delete
                     .execute(params![workspace, receipt_kind, sidecar_kind, receipt_id])
-                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                    .map_err(sqlite_store_error)?;
             }
             Ok(receipt_ids.len())
         })
@@ -108,7 +109,7 @@ impl Store {
                      WHERE workspace_id = ?1 AND kind = ?2
                      ORDER BY row_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, kind], |row| {
                     Ok(TaskCoordinationRow {
@@ -117,9 +118,9 @@ impl Store {
                         payload_json: row.get(2)?,
                     })
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -143,7 +144,7 @@ impl Store {
                      WHERE r.workspace_id = ?1 AND r.kind = ?2
                      ORDER BY r.row_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, kind, related_kind], |row| {
                     Ok((
@@ -155,9 +156,9 @@ impl Store {
                         row.get(3)?,
                     ))
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -185,7 +186,7 @@ impl Store {
                        AND row_id >= ?3 AND row_id < ?4
                      ORDER BY row_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, kind, prefix, upper], |row| {
                     Ok(TaskCoordinationRow {
@@ -194,9 +195,9 @@ impl Store {
                         payload_json: row.get(2)?,
                     })
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -218,7 +219,7 @@ impl Store {
                      WHERE workspace_id = ?1 AND kind = ?2 AND instr(payload_json, ?3) > 0
                      ORDER BY row_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, kind, needle], |row| {
                     Ok(TaskCoordinationRow {
@@ -227,9 +228,9 @@ impl Store {
                         payload_json: row.get(2)?,
                     })
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -255,7 +256,7 @@ impl Store {
                 },
             )
             .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
         })
     }
 }

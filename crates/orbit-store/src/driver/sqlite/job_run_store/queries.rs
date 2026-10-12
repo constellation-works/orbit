@@ -39,15 +39,13 @@ impl Store {
             let sql = latest_job_runs_sql(chunk.len());
             let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&workspace_id];
             params.extend(chunk.iter().map(|id| *id as &dyn rusqlite::types::ToSql));
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params.as_slice(), row_to_job_run)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             runs.extend(
                 rows.collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| OrbitError::Store(e.to_string()))?,
+                    .map_err(sqlite_store_error)?,
             );
         }
         let run_ids = runs
@@ -144,15 +142,13 @@ impl Store {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
         let conn = self.read()?;
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), row_to_job_run)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut runs = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         drop(stmt);
         if query.include_steps {
             let run_ids = runs
@@ -185,7 +181,7 @@ impl Store {
             |row| row.get::<_, i64>(0),
         )
         .map(|count| count.max(0) as u64)
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
     }
 
     /// Every recorded `duration_ms` matching the filter, ignoring `limit`.
@@ -204,13 +200,13 @@ impl Store {
                 "SELECT duration_ms FROM job_runs \
                  WHERE {where_clause} AND duration_ms IS NOT NULL"
             ))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| row.get::<_, i64>(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.map(|row| row.map(|value| value.max(0) as u64))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Job and completion time of every run matching the filter, ignoring
@@ -230,7 +226,7 @@ impl Store {
                 "SELECT job_id, COALESCE(finished_at, created_at) FROM job_runs \
                  WHERE {where_clause}"
             ))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 let completed_raw: String = row.get(1)?;
@@ -239,9 +235,9 @@ impl Store {
                     completed_at: parse_timestamp(&completed_raw)?,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     pub fn delete_job_run_for_workspace(
@@ -256,7 +252,7 @@ impl Store {
             rusqlite::params![workspace_id, run_id],
         )
         .map(|count| count > 0)
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
     }
 }
 
@@ -315,7 +311,7 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             executed_on_json,
         ],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     // `None` keeps whatever state the run already has.
     if let Some(state_json) = pipeline_state_json {
         write_state_json_conn(conn, workspace_id, &run.run_id, &state_json)?;
@@ -326,7 +322,7 @@ pub(super) fn upsert_job_run_for_workspace_conn(
         "INSERT OR IGNORE INTO job_run_id_allocations(workspace_id, run_id) VALUES (?1, ?2)",
         rusqlite::params![workspace_id, run.run_id],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     Ok(())
 }
 
@@ -367,7 +363,7 @@ pub(super) fn next_run_id_conn(
                 rusqlite::params![workspace_id, candidate],
                 |row| row.get(0),
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if !taken {
             return Ok(candidate);
         }
@@ -387,11 +383,11 @@ pub(super) fn get_job_run_for_workspace_conn(
         .prepare(&format!(
             "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2"
         ))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let mut run = match stmt.query_row(rusqlite::params![workspace_id, run_id], row_to_job_run) {
         Ok(run) => run,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(err) => return Err(OrbitError::Store(err.to_string())),
+        Err(err) => return Err(sqlite_store_error(err)),
     };
     run.steps = read_steps(conn, workspace_id, run_id)?;
     Ok(Some(run))
@@ -582,7 +578,7 @@ pub(super) fn read_steps_for_runs(
                  WHERE workspace_id = ?1 AND run_id IN ({placeholders}) \
                  ORDER BY run_id ASC, step_index ASC"
             ))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(workspace_id.to_string())];
         params.extend(
@@ -597,9 +593,9 @@ pub(super) fn read_steps_for_runs(
                 let run_id: String = row.get(0)?;
                 Ok((run_id, row_to_job_run_step_at(row, 1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         for row in rows {
-            let (run_id, step) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (run_id, step) = row.map_err(sqlite_store_error)?;
             grouped.entry(run_id).or_default().push(step);
         }
     }
@@ -617,12 +613,12 @@ fn read_steps(
              duration_ms, exit_code, error_code, error_message, agent_response_json, lock_wait_ms \
              FROM job_run_steps WHERE workspace_id = ?1 AND run_id = ?2 ORDER BY step_index ASC",
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(rusqlite::params![workspace_id, run_id], row_to_job_run_step)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 fn row_to_job_run_step(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRunStep> {

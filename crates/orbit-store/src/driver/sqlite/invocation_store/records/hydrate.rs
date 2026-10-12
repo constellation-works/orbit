@@ -7,6 +7,7 @@ use rusqlite::types::ToSql;
 
 use orbit_common::OrbitError;
 use orbit_common::model::pricing::derive_cost_usd;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::TokenUsage;
 
 use crate::Store;
@@ -46,9 +47,7 @@ impl Store {
                 .collect();
             let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
 
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(param_refs.as_slice(), |row| {
                     Ok(InvocationToolCallRecord {
@@ -58,10 +57,10 @@ impl Store {
                         result_bytes: row.get::<_, i64>(3)? as u64,
                     })
                 })
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             for row in rows {
-                let call = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                let call = row.map_err(sqlite_store_error)?;
                 grouped.entry(call.invocation_id).or_default().push(call);
             }
         }
@@ -227,17 +226,15 @@ fn load_grouped_strings(
             .collect();
         let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         for row in rows {
-            let (invocation_id, value) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (invocation_id, value) = row.map_err(sqlite_store_error)?;
             grouped.entry(invocation_id).or_default().push(value);
         }
     }

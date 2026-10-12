@@ -16,6 +16,7 @@ use crate::{
     TaskReservationReserveResult, TaskReservationScope,
 };
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl Store {
@@ -39,22 +40,17 @@ impl Store {
                 select_reservation_columns(),
                 reservation_scope_clause(TaskReservationScope::Files),
             );
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(
                     params![workspace_id, workspace_orbit_dir, now],
                     reservation_row,
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             let mut reservations = Vec::new();
             for row in rows {
-                reservations.push(
-                    row.map_err(|error| OrbitError::Store(error.to_string()))?
-                        .into_active()?,
-                );
+                reservations.push(row.map_err(sqlite_store_error)?.into_active()?);
             }
             Ok(reservations)
         })
@@ -78,9 +74,7 @@ impl Store {
                  ORDER BY created_at ASC, reservation_id ASC",
                 reservation_scope_clause(TaskReservationScope::Files),
             );
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, workspace_orbit_dir], |row| {
                     Ok((
@@ -92,11 +86,11 @@ impl Store {
                         row.get::<_, Option<String>>(5)?,
                     ))
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let mut records = Vec::new();
             for row in rows {
                 let (reservation_id, task_ids_json, files_json, created_at, released_at, owner) =
-                    row.map_err(|error| OrbitError::Store(error.to_string()))?;
+                    row.map_err(sqlite_store_error)?;
                 records.push(TaskReservationRecord {
                     reservation_id,
                     task_ids: parse_string_list(&task_ids_json)?,
@@ -139,7 +133,7 @@ impl Store {
                 reservation_row,
             )
             .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .map_err(sqlite_store_error)?
             .map(super::rows::ReservationRow::into_active)
             .transpose()
         })
@@ -169,23 +163,17 @@ impl Store {
                 select_reservation_columns(),
                 reservation_scope_clause(TaskReservationScope::Files),
             );
-            let mut stmt = tx
-                .tx
-                .prepare(&sql)
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(
                     params![workspace_id, workspace_orbit_dir, now],
                     reservation_row,
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             let mut reservations = Vec::new();
             for row in rows {
-                reservations.push(
-                    row.map_err(|error| OrbitError::Store(error.to_string()))?
-                        .into_active()?,
-                );
+                reservations.push(row.map_err(sqlite_store_error)?.into_active()?);
             }
 
             Ok(TaskReservationListResult {
@@ -293,7 +281,7 @@ impl Store {
                         params.release_metadata_json.as_deref(),
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             if affected == 0 {
                 expired_reservations.push(ExpiredTaskReservation {
@@ -370,7 +358,7 @@ impl Store {
                         params.release_metadata_json.as_deref(),
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             let released_reservations = existing
                 .into_iter()
