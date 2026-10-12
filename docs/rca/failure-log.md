@@ -2,13 +2,14 @@
 type: context
 summary: Open causes of Orbit task-run failures and blocks, one entry per distinct cause, each with the task that will close it; resolved causes are removed.
 incident_date: 2026-09-27
-last_validated: 2026-10-11
+last_validated: 2026-10-12
 tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: []
 related_artifacts:
   - ORB-14777
   - ORB-15156
-  - ORB-15409
+  - ORB-15692
+  - ORB-15864
 ---
 
 # Run failure log
@@ -33,37 +34,44 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
-## 2026-10-11: A Mac claimed implementer cannot pass a gate that reaches Seatbelt tests
+## 2026-10-12: Loaded-host wall-clock bounds in orbit-web tests fail unrelated Mac gates
+
+- **Where:** Mac follower, the before-landing affected-test gate of
+  `task_claimed_pr_pipeline` (`landing_review_gate_settle`).
+- **Symptom:** the reviewer returns verdict `incomplete` with "Resolve the
+  failing affected-test gate", naming
+  `host_tunnels::a_paced_identity_body_cannot_outlive_its_deadline` (elapsed
+  over `identity_budget + 4s`) and `host_forward::*` tests that time out in
+  `wait_until(.., 10s)`. The candidate diff touches none of that code.
+- **Cause:** the tests bound liveness with fixed wall-clock limits. With five
+  Mac leaves at test-threads 4 (load 12-14 on 14 cores) the limits are
+  exceeded on the candidate and the base alike.
+- **Fix:** ORB-15864 (backlog). Until it lands, land the candidate by hand
+  when the diff does not touch orbit-web and hosted checks are green.
+- **Tasks:** ORB-15793 (comment-only, PR #4554).
+- **Final recovery:** `escalate` (`jrun-20261012-0946-c4`).
+
+## 2026-10-12: A Mac claimed gate with both Seatbelt and `ps` notices cannot be deferred
 
 - **Where:** Mac follower, `implement_one` in `task_claimed_pr_pipeline`. The
   implementer runs `make ci-test-affected` inside its own sandbox-exec
   profile.
 - **Symptom:** the implementer finishes the change, then declares
-  `validation_environment` or `validation_incomplete` ("macOS refuses nested
-  sandbox profiles"). Step recovery returns `not_recovered`, final recovery
-  escalates, and the claim fails with the diff uncommitted in the Mac worktree.
-- **Cause:** nested sandbox-exec cannot apply a profile, so every
-  Seatbelt-gated test prints `SKIP: sandbox-exec cannot apply a profile: …`
-  (39 lines for an orbit-core change). `judge_host_test_output` refuses any
-  `SKIP:` line. The implementer prompt says a Seatbelt denial is not
-  deferrable, and macOS has no counterpart of the Bubblewrap deferral
-  (ORB-15287). Whether a claim fails depends on how strictly the model reads
-  that rule, not on the change. In the same context three `orbit-cli::process`
-  tests also fail on the base, and they pass on dk-server-2.
-- **Fix:** ORB-15409 (backlog). Daniel chose macOS deferral parity on
-  2026-10-11: the Mac implementer may hand off a gate whose only gaps are
-  these `SKIP:` lines, and the claimed `validate` step replays
-  `make ci-test-affected` outside the agent sandbox before push. Until it lands:
-  - Rescue by hand. Copy the worktree diff (`git diff HEAD`) to a box
-    worktree on current `agent-main`, run ci-fast, ci-test-affected and
-    ci-lint there, and open a PR.
-  - Only crew sol has failed this way. Claude crews hand off anyway (9/9 on
-    2026-10-11), so their Seatbelt tests never run before landing. Tag sol
-    tasks that reach Seatbelt-gated crates `os:linux`.
-- **Tasks:** ORB-15399 (luna, PR #4260), ORB-15395 (sol, PR #4262), and in
-  part ORB-15365 (PR #4253).
-- **Final recovery:** `escalate` (`jrun-20261011-0356-c1`,
-  `jrun-20261011-0406-c1`).
+  `validation_environment` ("the affected-test gate's mixed sandbox notices
+  make its deferral ineligible"). Final recovery escalates and the claim
+  fails with the diff uncommitted in the Mac worktree.
+- **Cause:** ORB-15409 lets a Mac gate whose only gaps are nested-Seatbelt
+  `SKIP:` lines defer to the host replay. A broad gate also prints `ps`
+  refusals from process-inspection tests inside the agent sandbox, and a gate
+  with both kinds of notice does not qualify, so broad Mac gates never defer.
+- **Fix:** ORB-15692 (backlog, critical). Until it lands, rescue by hand:
+  save `git diff <merge-base>` from the Mac worktree to
+  `~/.orbit/state/rescue/`, apply it to a scratch worktree on current
+  `agent-main`, run the affected tests natively on the Mac (outside the agent
+  sandbox) or on dk-server-2 for portable code, open a PR and merge.
+- **Tasks:** ORB-15782 (`jrun-20261012-0744-c2`), ORB-15816
+  (`jrun-20261012-0946-c1`), ORB-15817 (`jrun-20261012-0946-c2`, PR #4549).
+- **Final recovery:** `escalate` on each run named above.
 
 ## Operational causes (no code defect)
 
