@@ -1,7 +1,8 @@
 //! ORB-15107: a queued admission holds back ordinary sections that arrive
 //! after it, so it is not starved by overlapping readers. That priority must
 //! keep per-thread re-entrance and the host-then-partition order, and must
-//! not let two exclusive waiters and nested readers wait on each other.
+//! not let two exclusive waiters and nested readers wait on each other. Only
+//! a status-only observation is exempt.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -196,4 +197,80 @@ fn nested_reads_never_queue_behind_writers_they_hold_back() {
             .expect("section thread")
             .unwrap_or_else(|error| panic!("{name} must finish, not time out: {error}"));
     }
+}
+
+/// Criterion: a status-only observation passes a writer queued behind an
+/// ordinary section, while an ordinary section arriving after that writer
+/// still waits for it. The orders are fixed by the held section, not timing:
+/// the admission cannot take the partition until the first reader leaves,
+/// and that reader leaves only after the status read has returned.
+#[test]
+fn a_status_observation_passes_a_queued_writer_that_ordinary_reads_wait_for() {
+    let (_root, boundary, _) = partitions();
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = |order: &Arc<std::sync::Mutex<Vec<&'static str>>>, entry| {
+        order.lock().expect("order log").push(entry);
+    };
+
+    let (inside_tx, inside_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let holder = {
+        let boundary = Arc::clone(&boundary);
+        std::thread::spawn(move || {
+            boundary.enter_ordinary(|| {
+                inside_tx.send(()).expect("signal inside");
+                go_rx.recv().expect("go");
+                Ok(())
+            })
+        })
+    };
+    inside_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("holder entered");
+
+    let admission = {
+        let boundary = Arc::clone(&boundary);
+        let order = Arc::clone(&order);
+        std::thread::spawn(move || {
+            boundary.with_admission(|| {
+                log(&order, "admission");
+                Ok(())
+            })
+        })
+    };
+    wait_until_queued(&boundary.lock_target());
+    let ordinary = {
+        let boundary = Arc::clone(&boundary);
+        let order = Arc::clone(&order);
+        std::thread::spawn(move || {
+            boundary.enter_ordinary(|| {
+                log(&order, "ordinary");
+                Ok(())
+            })
+        })
+    };
+
+    TaskCommitBoundary::observe_for_status(|| {
+        boundary.enter_ordinary(|| {
+            log(&order, "status");
+            Ok(())
+        })
+    })
+    .expect("the status read passes the queued writer");
+    go_tx.send(()).expect("release holder");
+    for (name, thread) in [
+        ("holder", holder),
+        ("admission", admission),
+        ("ordinary", ordinary),
+    ] {
+        thread
+            .join()
+            .expect("section thread")
+            .unwrap_or_else(|error| panic!("{name} must finish, not time out: {error}"));
+    }
+    assert_eq!(
+        *order.lock().expect("order log"),
+        ["status", "admission", "ordinary"],
+        "only the status observation passes the queued writer"
+    );
 }

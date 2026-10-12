@@ -306,3 +306,84 @@ fn inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read() 
         "Git reads the refused repository to the same status"
     );
 }
+
+/// Every task-commit lock (host and partition) under `root`.
+fn task_commit_locks(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("task-commit.lock"))
+            {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+/// A writer queued for the task store holds back every ordinary read that
+/// arrives after it. Routine status decides nothing, so it reads past that
+/// writer: held turnstiles, not load, fix the interleaving here, and an
+/// ordinary read started meanwhile is still waiting when status returns.
+#[test]
+fn routine_status_does_not_wait_behind_a_queued_task_commit_writer() {
+    use fs2::FileExt;
+
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::inspection::routine_status_does_not_wait_behind_a_queued_task_commit_writer",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("queued writer candidate");
+    let routines = workspace.runtime.shared_root().join("routines");
+    std::fs::create_dir_all(&routines).unwrap();
+    std::fs::write(
+        routines.join("fixture-pilot.yaml"),
+        serde_yaml::to_string(&pilot_routine()).unwrap(),
+    )
+    .unwrap();
+    let now = Utc::now();
+    let unqueued = automation(&workspace, now);
+    assert_eq!(unqueued["reason"], "debouncing");
+    assert!(unqueued["state"]["members"]["pending"][&task.id].is_object());
+
+    let locks = task_commit_locks(&workspace.runtime.global_root());
+    assert_eq!(locks.len(), 2, "host and partition locks: {locks:?}");
+    let turnstiles: Vec<_> = locks
+        .iter()
+        .map(|lock| {
+            let mut name = lock.file_name().unwrap().to_owned();
+            name.push(".turnstile");
+            let turnstile = std::fs::File::create(lock.with_file_name(name)).unwrap();
+            turnstile.lock_exclusive().unwrap();
+            turnstile
+        })
+        .collect();
+
+    let ordinary = {
+        let runtime = workspace.runtime.clone();
+        let id = task.id.clone();
+        std::thread::spawn(move || runtime.get_task(&id).map(|task| task.id))
+    };
+    let queued = automation(&workspace, now);
+    let ordinary_waiting = !ordinary.is_finished();
+    drop(turnstiles);
+    assert_eq!(
+        queued, unqueued,
+        "status reads past the queued writer and reports the same automation"
+    );
+    assert!(
+        ordinary_waiting,
+        "an ordinary read waits behind the queued writer"
+    );
+    assert_eq!(ordinary.join().unwrap().unwrap(), task.id);
+}

@@ -323,6 +323,19 @@ pub(crate) fn inspect_routine_with_cache(
     now: DateTime<Utc>,
     cache: &SourceCache,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    // Status decides nothing, so its task reads do not queue behind every
+    // admission and commit waiting on the task store.
+    orbit_store::TaskCommitBoundary::observe_for_status(|| {
+        inspect_routine_status(runtime, definition, now, cache)
+    })
+}
+
+fn inspect_routine_status(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    now: DateTime<Utc>,
+    cache: &SourceCache,
+) -> Result<AutomationDiagnostic, OrbitError> {
     if definition.trigger.state.is_some() {
         return super::members::evaluate_with_cache(runtime, definition, true, now, Some(cache));
     }

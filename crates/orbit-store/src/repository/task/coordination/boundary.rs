@@ -85,8 +85,9 @@ fn shared_section<T>(
     // queueing this read behind that writer could close a cycle that plain
     // shared locks never had. Only an outermost section yields to a writer.
     // The depth counts partition sections only, so the host lock every
-    // section takes first does not exempt its partition read.
-    if BoundaryDepth::any() {
+    // section takes first does not exempt its partition read. A status-only
+    // observation never yields ([`TaskCommitBoundary::observe_for_status`]).
+    if BoundaryDepth::any() || StatusObservation::active() {
         options.prefer_exclusive_waiters = false;
     }
     with_shared_file_lock_options(target, &section.label(), options, op)
@@ -131,6 +132,34 @@ impl Drop for BoundaryDepth {
         BOUNDARY_DEPTH.with(|depth| {
             depth.borrow_mut().pop();
         });
+    }
+}
+
+thread_local! {
+    /// Whether this thread is inside
+    /// [`TaskCommitBoundary::observe_for_status`].
+    static STATUS_OBSERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+struct StatusObservation {
+    outer: bool,
+}
+
+impl StatusObservation {
+    fn enter() -> Self {
+        Self {
+            outer: STATUS_OBSERVATION.with(|active| active.replace(true)),
+        }
+    }
+
+    fn active() -> bool {
+        STATUS_OBSERVATION.with(std::cell::Cell::get)
+    }
+}
+
+impl Drop for StatusObservation {
+    fn drop(&mut self) {
+        STATUS_OBSERVATION.with(|active| active.set(self.outer));
     }
 }
 
@@ -304,6 +333,25 @@ impl TaskCommitBoundary {
                 return Ok(result);
             }
         }
+    }
+
+    /// Run a status-only observation whose ordinary sections on this thread
+    /// pass a queued admission, recovery or commit instead of waiting behind
+    /// it at the turnstile.
+    ///
+    /// For a diagnostic that decides and writes nothing, such as routine
+    /// status. Its sections still take the shared locks and settle a pending
+    /// commit first, so it never observes a half-applied transition and still
+    /// waits for a section that holds a lock exclusively. Only the queued
+    /// writers' hold times leave its wait: one status pass entered dozens of
+    /// sections, each queued behind every admission and commit of a drain,
+    /// and took seconds. A queued writer may in turn wait for the sections
+    /// this observation enters while it is queued, which a status pass bounds
+    /// to a short sequence of reads; every other ordinary section keeps
+    /// yielding to it (ORB-15107).
+    pub fn observe_for_status<T>(op: impl FnOnce() -> T) -> T {
+        let _observation = StatusObservation::enter();
+        op()
     }
 
     /// Hold this partition exclusively for one admission decision.
