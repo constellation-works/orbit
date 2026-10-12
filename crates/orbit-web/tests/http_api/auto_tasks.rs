@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
@@ -273,6 +274,76 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
                 );
                 assert_eq!(report.reason.as_deref(), open.then_some("dedupe_open"));
             }
+        },
+    );
+}
+
+/// The panel reads the listing every surface shares: the effective enabled
+/// state, which a legacy-enabled consumer no longer shows as disabled, and the
+/// ownership skip, which no longer looks like a live delivery trigger.
+#[test]
+fn list_reports_effective_enabled_and_the_ownership_skip() {
+    isolated(
+        "auto_tasks::list_reports_effective_enabled_and_the_ownership_skip",
+        || {
+            let fixture = Fixture::new();
+            for (name, owner) in [
+                ("delivery-code-review", None),
+                ("elsewhere", Some("hm_elsewhere")),
+            ] {
+                let schedule = serde_json::from_value(json!({"deliveries_landed": {
+                    "owner_machine": owner, "branch": "agent-main", "threshold": 1,
+                    "max_wait_minutes": 10, "coverage": "landed_code_review_v1",
+                    "max_items": 50, "retries": 0,
+                }}))
+                .unwrap();
+                definition_with_schedule(&fixture, name, schedule);
+            }
+            fixture.runtime.auto_task_toggle("elsewhere", true).unwrap();
+            // Leave the consumer as the seed does: added disabled and written
+            // by no operator, so the deprecated policy still enables it.
+            let consumer = fixture.work.join("auto_tasks/delivery-code-review.yaml");
+            let body = fs::read_to_string(&consumer).unwrap();
+            let seeded = body
+                .lines()
+                .filter(|line| !line.starts_with("updated_by:"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_ne!(seeded, body.trim_end(), "{body}");
+            fs::write(&consumer, seeded).unwrap();
+            let config = fixture.global.join("config.toml");
+            let mut global = fs::read_to_string(&config).unwrap_or_default();
+            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
+            fs::write(&config, global).unwrap();
+
+            let server = fixture.server(false);
+            let listed = json_ok(server.get(URL));
+            let rows = listed["definitions"].as_array().unwrap();
+            let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
+
+            let consumer = row("delivery-code-review");
+            assert_eq!(consumer["enabled"], false, "{consumer}");
+            assert_eq!(consumer["effective_enabled"], true, "{consumer}");
+            assert_ne!(
+                consumer["next_evaluation"]["state"], "disabled",
+                "the schedule state reads the effective value: {consumer}"
+            );
+            assert!(consumer["skipped_reason"].is_null(), "{consumer}");
+
+            let elsewhere = row("elsewhere");
+            assert_eq!(elsewhere["effective_enabled"], true, "{elsewhere}");
+            assert_eq!(elsewhere["plugin_inactive"], false, "{elsewhere}");
+            assert!(
+                elsewhere["skipped_reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("hm_elsewhere")),
+                "{elsewhere}"
+            );
+            assert_eq!(
+                elsewhere["next_evaluation"]["state"], "unavailable",
+                "{elsewhere}"
+            );
+            assert!(elsewhere["next_evaluation"]["at"].is_null(), "{elsewhere}");
         },
     );
 }

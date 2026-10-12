@@ -174,6 +174,39 @@ fn reject_retired_delivery_coverage(schedule: &AutoTaskSchedule) -> Result<(), O
     Ok(())
 }
 
+/// The fail-closed rule for one discovery pass: an error only when nothing
+/// loaded, each skipped file logged either way.
+pub(crate) fn require_loaded(collection: &AutoTaskCollection) -> Result<(), OrbitError> {
+    for error in &collection.errors {
+        tracing::warn!(
+            target: "orbit.core.auto_tasks",
+            path = %error.path.as_ref().map_or_else(
+                || "<auto_tasks dir>".to_string(),
+                |path| path.display().to_string()
+            ),
+            reason = error.message.as_str(),
+            "auto-task definition failed to load and is treated as absent"
+        );
+    }
+    if collection.definitions.is_empty() && !collection.errors.is_empty() {
+        let detail = collection
+            .errors
+            .iter()
+            .map(|error| {
+                error.path.as_ref().map_or_else(
+                    || error.message.clone(),
+                    |path| format!("{}: {}", path.display(), error.message),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(OrbitError::InvalidInput(format!(
+            "no auto-task definition could be loaded; every definition failed fail-closed: {detail}"
+        )));
+    }
+    Ok(())
+}
+
 impl OrbitRuntime {
     /// Create a new auto-task definition. Fails if a definition with the same
     /// name already exists (update or toggle it instead).
@@ -231,33 +264,7 @@ impl OrbitRuntime {
     /// definition that silently stopped firing is discoverable [ORB-10800].
     pub fn auto_task_list(&self) -> Result<Vec<AutoTaskDefinition>, OrbitError> {
         let collection = collect_auto_tasks(&self.paths().local_dir);
-        for error in &collection.errors {
-            tracing::warn!(
-                target: "orbit.core.auto_tasks",
-                path = %error.path.as_ref().map_or_else(
-                    || "<auto_tasks dir>".to_string(),
-                    |path| path.display().to_string()
-                ),
-                reason = error.message.as_str(),
-                "auto-task definition failed to load and is treated as absent"
-            );
-        }
-        if collection.definitions.is_empty() && !collection.errors.is_empty() {
-            let detail = collection
-                .errors
-                .iter()
-                .map(|error| {
-                    error.path.as_ref().map_or_else(
-                        || error.message.clone(),
-                        |path| format!("{}: {}", path.display(), error.message),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(OrbitError::InvalidInput(format!(
-                "no auto-task definition could be loaded; every definition failed fail-closed: {detail}"
-            )));
-        }
+        require_loaded(&collection)?;
         Ok(collection
             .definitions
             .into_iter()

@@ -17,6 +17,8 @@
 //! - [`scheduler`] — the evaluator called by the host tick.
 //! - `change_probe` — the `skip_if_unchanged` precondition's evidence.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
+//! - [`listing`] — whether each listed definition fires here, and when: the
+//!   one decision every list surface renders.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
 //! - [`settings`] — operator settings layered over bundled bodies, and the
 //!   sync migration of settings-only forks.
@@ -27,6 +29,7 @@ mod body_history;
 mod change_probe;
 pub mod crud;
 pub mod delete;
+pub mod listing;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
@@ -35,6 +38,7 @@ pub mod state;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
 pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
+pub use listing::{AutoTaskListing, AutoTaskListingRow, AutoTaskSkip};
 pub use loader::{
     AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,
     definition_path,

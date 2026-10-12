@@ -11,13 +11,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
+use orbit_core::application::auto_tasks::AutoTaskListingRow;
 use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
-use orbit_core::application::auto_tasks::{
-    AutoTaskCursor, ListedAutoTask, collect_auto_tasks, cursor_state_path, load_cursor_state,
-};
-use orbit_core::application::plugin::is_listed;
-use orbit_core::application::routines::ScheduleDisplayState;
 use orbit_core::{OrbitRuntime, Task};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde::Deserialize;
@@ -396,26 +391,14 @@ fn list_json(
     operator_session: bool,
     include_inactive_plugins: bool,
 ) -> Value {
-    let collection = collect_auto_tasks(&runtime.paths().local_dir);
-    let cursor_load = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
-    let cursor_state_error = cursor_load.as_ref().err().map(ToString::to_string);
-    let cursors = cursor_load.as_ref().ok();
     let now = Utc::now();
-    let listed = collection
-        .definitions
-        .iter()
-        .map(|loaded| runtime.listed_auto_task(loaded.definition.clone()))
-        .collect::<Vec<_>>();
-    let inactive_plugin_count = listed
-        .iter()
-        .filter(|listed| listed.inactive_plugin.is_some())
-        .count();
+    let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
     // One freshness pass for the request, with no task-body hydration. The
     // metadata listing is newest first, exactly as the per-tag listing was.
-    let tags = listed
+    let tags = listing
+        .rows
         .iter()
-        .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
-        .map(|listed| (auto_task_tag(&listed.definition.name), Vec::new()))
+        .map(|row| (auto_task_tag(&row.listed.definition.name), Vec::new()))
         .collect::<BTreeMap<_, Vec<&Task>>>();
     let tasks = if tags.is_empty() {
         Ok(Vec::new())
@@ -430,20 +413,18 @@ fn list_json(
             }
         }
     }
-    let definitions = listed
+    let definitions = listing
+        .rows
         .iter()
-        .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
-        .map(|listed| {
+        .map(|row| {
             definition_json(
                 runtime,
-                listed,
+                row,
                 tasks.as_ref().map(|_| {
                     instances
-                        .get(&auto_task_tag(&listed.definition.name))
+                        .get(&auto_task_tag(&row.listed.definition.name))
                         .map_or(&[][..], Vec::as_slice)
                 }),
-                cursors.and_then(|state| state.definitions.get(&listed.definition.name)),
-                cursor_state_error.is_some(),
                 now,
             )
         })
@@ -476,9 +457,9 @@ fn list_json(
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "cron_zone": host_cron_zone(),
         "definitions": definitions,
-        "inactive_plugin_count": inactive_plugin_count,
-        "cursor_state_error": cursor_state_error,
-        "load_errors": collection.errors.iter().map(|error| json!({
+        "inactive_plugin_count": listing.inactive_plugin_count,
+        "cursor_state_error": listing.cursor_state_error,
+        "load_errors": listing.load_errors.iter().map(|error| json!({
             "path": error.path.as_ref().map(|path| path.display().to_string()),
             "message": error.message,
         })).collect::<Vec<_>>(),
@@ -487,13 +468,13 @@ fn list_json(
 
 fn definition_json(
     runtime: &OrbitRuntime,
-    listed: &ListedAutoTask,
+    row: &AutoTaskListingRow,
     minted: Result<&[&Task], &orbit_core::OrbitError>,
-    cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
-    cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
+    let listed = &row.listed;
     let definition = &listed.definition;
+    let cursor = row.cursor.as_ref();
     let open_duplicate = minted.as_ref().is_ok_and(|tasks| {
         open_auto_task_instances_from_tasks(tasks.iter().copied())
             .next()
@@ -528,6 +509,7 @@ fn definition_json(
         "name": definition.name,
         "description": definition.description,
         "enabled": definition.enabled,
+        "effective_enabled": row.effective_enabled,
         "schedule": definition.schedule,
         "schedule_summary": schedule_summary(&definition.schedule),
         "automation": automation,
@@ -568,19 +550,12 @@ fn definition_json(
         })),
         "last_minted_task_id": last_minted_task_id,
         "last_minted_task_status": last_minted_task_status,
-        "next_evaluation": next_evaluation_projection(
-            definition.enabled,
-            &definition.schedule,
-            cursor,
-            cursor_state_unavailable,
-            automation.as_ref(),
-            now,
-        ),
+        "next_evaluation": next_evaluation_projection(row, automation.as_ref()),
         "open_duplicate": open_duplicate,
         "may_create_open_duplicate": open_duplicate,
         "plugin_inactive": listed.inactive_plugin.is_some(),
         "inactive_plugin": listed.inactive_plugin,
-        "skipped_reason": listed.skipped_reason,
+        "skipped_reason": row.skipped_reason,
     })
 }
 
@@ -623,37 +598,11 @@ fn template_summary(template: &AutoTaskTemplate) -> String {
     parts.join(" · ")
 }
 
-fn next_evaluation_projection(
-    enabled: bool,
-    schedule: &AutoTaskSchedule,
-    cursor: Option<&AutoTaskCursor>,
-    cursor_state_unavailable: bool,
-    automation: Option<&Value>,
-    now: DateTime<Utc>,
-) -> Value {
-    if !enabled {
-        return next_evaluation_json(
-            ScheduleDisplayState::Disabled,
-            projected_next_slot(schedule, cursor, now),
-        );
-    }
-    if cursor_state_unavailable || automation_unavailable(automation) {
-        return next_evaluation_json(ScheduleDisplayState::Unavailable, None);
-    }
-    match schedule {
-        AutoTaskSchedule::Deliveries { .. } => {
-            next_evaluation_json(ScheduleDisplayState::Waiting, None)
-        }
-        AutoTaskSchedule::Cron { .. } | AutoTaskSchedule::Interval { .. } => {
-            if cursor.is_none() {
-                return next_evaluation_json(ScheduleDisplayState::NeverObserved, None);
-            }
-            match projected_next_slot(schedule, cursor, now) {
-                Some(at) => next_evaluation_json(ScheduleDisplayState::Scheduled, Some(at)),
-                None => next_evaluation_json(ScheduleDisplayState::Unavailable, None),
-            }
-        }
-    }
+/// The shared schedule state, with a delivery trigger whose state the panel's
+/// inspection could not read labelled unavailable.
+fn next_evaluation_projection(row: &AutoTaskListingRow, automation: Option<&Value>) -> Value {
+    let (state, at) = row.schedule_with_trigger(!automation_unavailable(automation));
+    next_evaluation_json(state, at.map(|slot| slot.to_rfc3339()))
 }
 
 fn automation_unavailable(automation: Option<&Value>) -> bool {
@@ -661,32 +610,4 @@ fn automation_unavailable(automation: Option<&Value>) -> bool {
         .and_then(|value| value.get("reason"))
         .and_then(Value::as_str)
         .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
-}
-
-/// The schedule's next occurrence, rendered for the dashboard.
-///
-/// This is the next scheduled arrival, never catch-up eligibility: a definition
-/// with a missed slot pending is due for that earlier slot while this points
-/// forward. The arithmetic belongs to the auto-task scheduler, so this only
-/// adapts the cursor and renders the result; a schedule that cannot be
-/// projected (unparseable cron, interval with no anchor) yields `None` and the
-/// caller labels the row.
-fn projected_next_slot(
-    schedule: &AutoTaskSchedule,
-    cursor: Option<&AutoTaskCursor>,
-    now: DateTime<Utc>,
-) -> Option<String> {
-    let baseline = cursor.and_then(cursor_baseline);
-
-    next_scheduled_slot(schedule, baseline, now)
-        .ok()
-        .flatten()
-        .map(|slot| slot.to_rfc3339())
-}
-
-/// The cursor's first-observed slot, which anchors interval projections.
-fn cursor_baseline(cursor: &AutoTaskCursor) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(&cursor.baseline_at)
-        .ok()
-        .map(|baseline| baseline.with_timezone(&Utc))
 }

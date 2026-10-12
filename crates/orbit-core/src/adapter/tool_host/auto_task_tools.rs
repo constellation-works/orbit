@@ -39,29 +39,47 @@ pub(super) fn add(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitEr
 
 /// Definitions whose seeding plugin is off in this workspace are omitted
 /// unless `include_inactive_plugins` is true; then each is marked with the
-/// plugin and the reason it never fires.
+/// plugin and the reason it never fires. A delivery definition this host can
+/// never admit carries that reason too.
 pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let include_inactive_plugins = input
         .get("include_inactive_plugins")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let array = runtime
-        .auto_task_listing(include_inactive_plugins)?
+        .auto_task_listing_state(include_inactive_plugins, chrono::Utc::now())?
+        .rows
         .iter()
-        .map(|listed| listed_json(runtime, listed))
+        .map(|row| {
+            listed_json(
+                &row.listed,
+                row.effective_enabled,
+                row.skipped_reason.as_deref(),
+            )
+        })
         .collect::<Result<_, _>>()?;
     Ok(Value::Array(array))
 }
 
 /// The canonical definition record, plus the inactive-plugin marker when its
-/// seeding plugin is off here. A live definition is the bare record.
-fn listed_json(runtime: &OrbitRuntime, listed: &ListedAutoTask) -> Result<Value, OrbitError> {
+/// seeding plugin is off here and the reason when it never fires here. A
+/// live definition is the bare record.
+fn listed_json(
+    listed: &ListedAutoTask,
+    effective_enabled: bool,
+    skipped_reason: Option<&str>,
+) -> Result<Value, OrbitError> {
     let mut value = to_json(&listed.definition)?;
-    value["effective_enabled"] = json!(runtime.auto_task_enabled(&listed.definition));
-    if let (Some(inactive), Some(object)) = (&listed.inactive_plugin, value.as_object_mut()) {
+    value["effective_enabled"] = json!(effective_enabled);
+    let Some(object) = value.as_object_mut() else {
+        return Ok(value);
+    };
+    if let Some(inactive) = &listed.inactive_plugin {
         object.insert("plugin_inactive".to_string(), json!(true));
         object.insert("inactive_plugin".to_string(), json!(inactive));
-        object.insert("skipped_reason".to_string(), json!(listed.skipped_reason));
+    }
+    if let Some(reason) = skipped_reason {
+        object.insert("skipped_reason".to_string(), json!(reason));
     }
     Ok(value)
 }
@@ -82,7 +100,11 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
     // A definition listings hide still resolves here, marked inactive.
     let listed = runtime.listed_auto_task(definition);
-    let mut value = listed_json(runtime, &listed)?;
+    let mut value = listed_json(
+        &listed,
+        runtime.auto_task_enabled(&listed.definition),
+        listed.skipped_reason.as_deref(),
+    )?;
     match runtime.auto_task_layering(&name) {
         Ok(layering) => value["layering"] = json!(layering),
         Err(error) => value["layering_error"] = json!(error.to_string()),

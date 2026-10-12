@@ -57,6 +57,18 @@ becomes just the first definition.
   minted task and tick report, with time cursors for cron/interval definitions
   and durable batch/receipt state for delivery-trigger definitions. Auto-tasks
   are shown on the Operations auto-task panel, not on the routines surface.
+- **Listing state** — whether a definition fires on this host is decided once,
+  in `OrbitRuntime::auto_task_listing_state`, and `orbit auto-task list`, MCP
+  `orbit.auto_task.list` (plain and bounded) and `GET /api/auto-tasks` render
+  that decision. It carries the effective enabled state (the toggle, or for
+  one release the deprecated `after-landing` policy), the skip reason when it
+  never fires here — its seeding plugin is off, or it is an enabled delivery
+  definition another machine owns — and the schedule state with the next due
+  slot. The CLI labels the row `inactive`, `skipped`, `enabled` or `disabled`
+  and prints each skip reason on stderr. The bounded view and the dashboard
+  show `scheduled`, `waiting`, `never_observed`, `disabled` or `unavailable`.
+  A definition owned elsewhere, an unreadable cursor file or a schedule that
+  cannot be projected reads `unavailable` on its own row only.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
