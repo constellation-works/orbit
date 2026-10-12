@@ -6,6 +6,8 @@ use crate::contracts::TaskCoordinationRow;
 pub(in super::super) const CLAIM: &str = "distributed-execution-claim-v1";
 pub(in super::super) const STATE: &str = "distributed-claim-lifecycle-v1";
 pub(super) const RECEIPT: &str = "distributed-claim-mutation-v1";
+/// A friction mutation's recorded friction, keyed by its receipt id.
+pub(super) const FRICTION: &str = "distributed-claim-friction-v1";
 
 /// Budgeted failure releases a task takes within
 /// [`RELEASE_BUDGET_WINDOW_HOURS`] before its next one blocks it instead

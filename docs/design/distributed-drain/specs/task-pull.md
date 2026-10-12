@@ -357,8 +357,10 @@ store schema are implementation choices; their atomic behavior is required:
 
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to
 `in-progress`. Replay of a previously committed mutation may return its recorded outcome without
-performing it again. All worker write routes carry claim context; generic task tools cannot bypass
-these checks. Status/run/footprint edits affecting an active claim must preserve it or use recovery.
+performing it again. A settled claim's receipts are pruned 7 days after its last mutation; a later
+replay is refused `stale_claim` and still does not run
+([claim row retention](../2_design.md#31-attempt-ownership-and-recovery)). All worker write
+routes carry claim context; generic task tools cannot bypass these checks. Status/run/footprint edits affecting an active claim must preserve it or use recovery.
 Interrupted claimed leaves cannot use generic `orbit job resume`, which creates a different run.
 Deliberate recovery revokes the old claim before a new attempt; branch evidence may be reused but
 validation/handoff must be fresh. Owner-local mode uses a local-candidate handoff and authorized

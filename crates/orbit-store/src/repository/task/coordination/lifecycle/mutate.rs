@@ -26,7 +26,13 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("invalid claim invocation"));
         }
-        self.with_admission(|| self.mutate_claim_locked(auth, mutation_id, mutation))
+        let result =
+            self.with_admission(|| self.mutate_claim_locked(auth, mutation_id, mutation))?;
+        // Each settlement sweeps receipts past retention, outside the section.
+        if !result.phase.is_unsettled() {
+            self.prune_settled_receipts_after_settlement();
+        }
+        Ok(result)
     }
 
     /// The claim `auth` acts under, refused as `stale_claim` unless it is the

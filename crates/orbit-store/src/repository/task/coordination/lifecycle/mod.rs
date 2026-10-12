@@ -11,6 +11,7 @@ mod evidence;
 mod inspect;
 mod mutate;
 mod releases;
+mod retention;
 
 pub(super) use codec::{CLAIM, STATE, decode, encode, invalid, row};
 pub(super) use releases::{DrainReleases, fresh_offer_history};
