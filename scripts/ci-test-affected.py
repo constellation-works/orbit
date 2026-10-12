@@ -20,12 +20,13 @@ and every skip or deferral notice its tests printed under nextest.
 
 It records where that time went. compile_ms and test_ms are millisecond
 totals, and package_timings lists each package's share. A total equals the
-sum of the per-package values for that phase. Compile time is Cargo's unit
-durations (they overlap when the build is parallel). Test time is nextest
-testcase time plus doctest time (testcase time overlaps when tests are
-parallel). A phase that was not measured is null. The cargo test fallback
-has no per-package test split, so those package test_ms values stay null
-while test_ms is the sum of libtest's finished-in times.
+sum of the per-package values for that phase, except under the cargo test
+fallback. Compile time is Cargo's unit durations (they overlap when the build
+is parallel). Test time is nextest testcase time plus doctest time (testcase
+time overlaps when tests are parallel). A phase that was not measured is null.
+The cargo test fallback has no per-package test split: its libtest time has no
+package, so those package test_ms values stay null while test_ms is that
+libtest time plus the doctest time.
 """
 
 import argparse
@@ -363,7 +364,8 @@ class PhaseTimings:
     Cargo's `--timings` report lists every unit. Those durations overlap
     under a parallel build, so compile_ms is their sum, not the build's wall
     time. Test durations overlap the same way. The two totals are defined as
-    those sums, which is what a later reader can check.
+    those sums, which is what a later reader can check, except for libtest
+    time under the cargo test fallback, which has no package to credit.
     """
 
     def __init__(self, packages, metadata):
@@ -456,7 +458,9 @@ class PhaseTimings:
         if not compile_split and self.unsplit_compile_seen and len(ordered) == 1:
             self.compile = {ordered[0]: self.unsplit_compile}
             compile_split = True
-        test_split = self.test is not None
+        # libtest time from the cargo test fallback has no package to credit, so
+        # the per-package test split is withheld rather than shown as zero.
+        test_split = self.test is not None and not self.unsplit_test_seen
         entries = [dict(
             package=name,
             compile_ms=self.compile.get(name, 0) if compile_split else None,
@@ -464,8 +468,14 @@ class PhaseTimings:
         ) for name in ordered]
         compile_ms = (sum(entry["compile_ms"] for entry in entries) if compile_split
                       else (self.unsplit_compile if self.unsplit_compile_seen else None))
-        test_ms = (sum(entry["test_ms"] for entry in entries) if test_split
-                   else (self.unsplit_test if self.unsplit_test_seen else None))
+        if test_split:
+            test_ms = sum(entry["test_ms"] for entry in entries)
+        elif self.unsplit_test_seen:
+            # Doctests arrive per package even under the fallback, so they add to the unsplit libtest time.
+            doctest_ms = sum(self.test.values()) if self.test is not None else 0
+            test_ms = self.unsplit_test + doctest_ms
+        else:
+            test_ms = None
         return compile_ms, test_ms, entries
 
 

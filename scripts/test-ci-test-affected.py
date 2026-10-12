@@ -413,6 +413,20 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.assertTrue(all(entry["test_ms"] is None for entry in fallback["package_timings"]))
         self.assertEqual(sum(entry["compile_ms"] for entry in fallback["package_timings"]), fallback["compile_ms"])
 
+    def test_cargo_fallback_keeps_libtest_time_when_doctests_follow(self):
+        # cargo test cannot attribute its libtest time to a package, so no row
+        # claims it. The doctests that follow are still per package, and they
+        # add to the total without replacing the libtest time.
+        self.touch_core()
+        directory = str(self.root / "target" / "cargo-timings")
+        result, summary = self.summarized(GUARD_TEST_NO_NEXTEST="1", GUARD_TEST_TIMINGS="1",
+                                          GUARD_TEST_TIMING_DIR=directory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert_phase_sums(self, summary)
+        # 50 ms of libtest runtime, plus 30 ms (orbit-cli) and 20 ms (orbit-core) of doctests.
+        self.assertEqual(summary["test_ms"], 100)
+        self.assertTrue(all(entry["test_ms"] is None for entry in summary["package_timings"]))
+
     def test_doctest_target_names_resolve_to_package_rows(self):
         metadata = json.loads(self.metadata.read_text())
         for package in metadata["packages"]:
