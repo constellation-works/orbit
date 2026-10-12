@@ -34,6 +34,16 @@ make goldens           # CLI/MCP, CI log and sandbox profile goldens; UPDATE=1 r
 - [check-doc-links.py](../scripts/check-doc-links.py) fails on a missing relative link target, heading anchor or backticked repository path in tracked Markdown. Website links resolve through Starlight routes and code blocks are ignored; its exclusions (historical decisions, RCAs, templates, changelog, fixture prose) are listed in the script. Run `python3 scripts/check-doc-links.py`; its fixtures are in `python3 scripts/test-ci-fast-guards.py`.
 - [check-unused-dependencies.py](../scripts/check-unused-dependencies.py) fails on a manifest dependency its sources never use, a normal dependency only test targets use, or a `[workspace.dependencies]` entry no member declares. Keep a feature-only dependency in its `FEATURE_ONLY` allowlist with a reason. Self-test: `python3 scripts/test-check-unused-dependencies.py`.
 
+[check-codeql-production-paths.py](../scripts/check-codeql-production-paths.py) in `make ci-fast` rejects Rust source
+names matched by `.github/codeql/codeql-config.yml`'s `paths-ignore`, reporting
+the file and pattern. It checks tracked and non-ignored untracked sources,
+excluding `tests/`, `examples/` and `benches/`. Other matches need a direct
+`#[cfg(test)]` or `#[cfg(feature = "test-support")]` on every declaring module;
+the latter is the existing feature for helpers enabled from dev-dependencies.
+This naming guard fails closed for indirect or composite cfg gates and
+unrecognized module layouts: use a filename that CodeQL includes in those
+cases. Its behavioral fixtures run in [test-codeql-production-paths.py](../scripts/test-codeql-production-paths.py).
+
 ### Affected-test selection
 
 Delivery remote-source and provider-attribution fixtures freeze monotonic source-budget time through

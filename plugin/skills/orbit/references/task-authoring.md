@@ -152,6 +152,8 @@ inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
+Check helper filenames against `.github/codeql/codeql-config.yml` exclusions before prescribing them; production helpers must remain in CodeQL's source selection.
+
 For a known new target, use the supported `allow_missing_context` option and
 explain creation intent; a rejected selector's message names that option. The
 option records each missing selector as durable creation intent for that exact
