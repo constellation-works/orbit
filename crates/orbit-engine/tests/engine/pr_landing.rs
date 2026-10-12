@@ -65,6 +65,8 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod flaky;
+
 use super::git_fixture;
 use super::v2_runtime::{build_writer_and_sinks, job_asset, workspace_root};
 
@@ -6406,6 +6408,27 @@ impl RuntimeHost for DeliveryHost {
             .unwrap()
             .insert(path.to_string(), content);
         Ok(())
+    }
+
+    fn record_flaky_validation(
+        &self,
+        task_id: &str,
+        record: &orbit_types::workflow::FlakyValidation,
+    ) -> Result<(), OrbitError> {
+        self.apply_task_automation_update(
+            task_id,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: orbit_types::workflow::FLAKY_VALIDATION_EVENT.into(),
+                    note: Some(record.text()),
+                    from_status: None,
+                    to_status: None,
+                }],
+                ..Default::default()
+            },
+        )
     }
 
     fn record_claim_handoff(&self, handoff: &TaskHandoff) -> Result<(), OrbitError> {

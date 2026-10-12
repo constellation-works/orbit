@@ -287,7 +287,7 @@ def main():
         selection[FAILING_TESTS] = failing_tests
         run_packages, filterset, names = failing_test_runs(packages, failing_tests)
         run_target_flags = target_flags_for(run_packages)
-        filters, libtest_filters = ["-E", filterset], ["--", "--exact", *names]
+        filters, libtest_filters = ["-E", filterset, "--test-threads", "1", "--retries", "0"], ["--", "--exact", *names, "--test-threads", "1"]
         doc_packages = []
     if not packages:
         print("ci-test-affected: no affected workspace crates; no Rust tests to run", file=sys.stderr)

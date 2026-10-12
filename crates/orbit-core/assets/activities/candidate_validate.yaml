@@ -27,6 +27,12 @@ spec:
     them, so the step goes on and records them as `known_red` in its output,
     the command's log and each delivered task's `known_red_validation`
     history event, which `pr_open` lists in the pull request body.
+    A comparable passing base permits one serial isolated replay of at most
+    three failed tests, when the command reports a replayable selection.
+    All named tests must pass with the exact selection, executed coverage
+    and no host refusals. The step then records `flaky` evidence, uses
+    `passed_with_flaky_tests`, and proceeds. Each signature is filed once
+    as a friction; `pr_open` names the tests and their rerun evidence.
     With `ownership_base_sha`, every path the candidate changed since that
     commit is first attributed to the delivered tasks; a path no selector owns
     widens a task's selectors with review provenance rather than failing. An
@@ -71,7 +77,7 @@ spec:
         type: string
       decision:
         type: string
-        enum: [passed, passed_with_known_red, skipped_no_required_commands]
+        enum: [passed, passed_with_known_red, passed_with_flaky_tests, skipped_no_required_commands]
       note:
         type: string
         description: Why no command ran, when the requirement list is empty.
@@ -85,6 +91,14 @@ spec:
         description: >
           Commands that failed only with tests the base fails too, each with
           command, base_sha, tested_head, run_id and failures.
+        items:
+          type: object
+      flaky:
+        type: array
+        description: >
+          Tests that failed initially, passed on a comparable base, and passed
+          one bounded isolated candidate replay, with pinned command, run,
+          base/head, selection, executed count and captured evidence.
         items:
           type: object
       branch:

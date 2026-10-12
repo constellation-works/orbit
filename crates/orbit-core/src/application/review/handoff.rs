@@ -54,6 +54,26 @@ impl OrbitRuntime {
             &ClaimMutation::AcceptHandoff(handoff),
         )?;
         self.record_handoff_review_certificate(&claim_id)?;
+        let accepted = self.accepted_task_handoff(&claim_id)?;
+        for reference in &accepted.handoff.validation {
+            let artifact = self
+                .get_task_artifact(&accepted.handoff.task_id, &reference.path)?
+                .ok_or_else(|| {
+                    OrbitError::PolicyDenied("accepted validation artifact missing".into())
+                })?;
+            if orbit_common::security::release::sha256_hex(&artifact.content) != reference.sha256 {
+                return Err(OrbitError::PolicyDenied(
+                    "accepted validation artifact changed".into(),
+                ));
+            }
+            let log: orbit_types::workflow::handoff::HandoffValidationLog =
+                serde_json::from_slice(&artifact.content).map_err(|error| {
+                    OrbitError::Execution(format!("decode accepted validation: {error}"))
+                })?;
+            if let Some(flaky) = &log.flaky {
+                super::flaky::record_frictions(self, &accepted.handoff.task_id, flaky)?;
+            }
+        }
         dispatch_recorded_authority(self);
         Ok(result)
     }

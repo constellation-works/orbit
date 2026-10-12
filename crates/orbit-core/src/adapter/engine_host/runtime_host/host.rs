@@ -434,6 +434,28 @@ impl RuntimeHost for OrbitRuntime {
         .map(|_| ())
     }
 
+    fn record_flaky_validation(
+        &self,
+        task_id: &str,
+        record: &orbit_types::workflow::FlakyValidation,
+    ) -> Result<(), OrbitError> {
+        crate::application::review::flaky::record_frictions(self, task_id, record)?;
+        self.apply_task_automation_update(
+            task_id,
+            orbit_engine::TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "system".into(),
+                    event: orbit_types::workflow::FLAKY_VALIDATION_EVENT.into(),
+                    note: Some(record.text()),
+                    from_status: None,
+                    to_status: None,
+                }],
+                ..Default::default()
+            },
+        )
+    }
+
     fn record_claim_handoff(
         &self,
         handoff: &orbit_types::workflow::handoff::TaskHandoff,

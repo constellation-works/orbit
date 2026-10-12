@@ -298,3 +298,18 @@ pub(super) fn batch_pr_signature(tasks: &[Task], pr_opener_model: Option<&str>) 
         })?;
     Some(format!("*authored by: {model}*"))
 }
+
+/// Name flaky tests and make their passing isolated replay evidence reviewable.
+pub(super) fn render_flaky_section(
+    records: &[orbit_types::workflow::FlakyValidation],
+) -> Option<String> {
+    if records.is_empty() {
+        return None;
+    }
+    let entries = records.iter().map(|record| {
+        let tests = record.failures.iter().map(|test| format!("`{}`", test.strip_prefix("test ").unwrap_or(test)))
+            .collect::<Vec<_>>().join(", ");
+        format!("- `{}` initially failed (exit {}) on `{}`: {tests}. Base `{}` passed; one serial isolated replay passed ({} executed tests).\n\n<details><summary>Captured rerun evidence</summary>\n\n```text\n{}\n```\n\n</details>", record.command, record.original_exit_code, record.tested_head, record.base_sha, record.rerun_tests_run, super::super::required_command::bounded_validation_text(&record.rerun_output, 4096).replace("```", "` ` `"))
+    }).collect::<Vec<_>>().join("\n\n");
+    Some(format!("## Flaky-test validation\n\n{entries}"))
+}

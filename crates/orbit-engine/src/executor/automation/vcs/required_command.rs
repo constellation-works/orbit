@@ -112,7 +112,8 @@ pub(super) struct RequiredCommandRun {
     pub(super) output: String,
     /// Why the complete output cannot count as executed host coverage,
     /// independently of the exit status. Ordinary failed tests stay in
-    /// `failures`; skips and sandbox refusals prevent known-red continuation.
+    /// `failures`; skips and sandbox refusals prevent known-red and flaky-test
+    /// continuation.
     pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
     /// The first `DEFERRED:` or Seatbelt `SKIP: sandbox-exec cannot apply a
     /// profile:` line the run printed: a test returned without running its

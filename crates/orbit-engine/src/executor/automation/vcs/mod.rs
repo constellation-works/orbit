@@ -12,6 +12,7 @@ mod deferral_probe;
 mod deferred_sandbox;
 mod delivery_marker;
 mod failure;
+mod flaky;
 mod freshness;
 pub(crate) mod git;
 mod handoff;

@@ -1611,6 +1611,7 @@ fn handoff_with_logs(
                 exit_code: 0,
                 output: format!("{command} captured output"),
                 known_red: None,
+                flaky: None,
             };
             TaskArtifact {
                 path: format!("{command}.json"),

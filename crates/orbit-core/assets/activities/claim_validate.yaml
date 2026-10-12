@@ -11,7 +11,8 @@ spec:
     captured log per command to the owner's copy of the task. On the
     pull-request route the step runs before publication: with no
     `pull_request` it runs the commands and returns their results as
-    `publication: pending` without attaching logs, and a later run given that
+    `publication: pending` without attaching typed handoff logs (diagnostic
+    failure/base/replay logs may already be attached), and a later run given that
     output as `prevalidated` runs nothing, pins the results to the published
     candidate and attaches the logs. A network-inconclusive failure (curl
     status 000, DNS, TLS timeout) is rerun up to twice with backoff; a failure
@@ -22,7 +23,14 @@ spec:
     candidate fails also fails on the base: that command is known red, its
     log carries its exit status and a known-red report the owner rechecks
     against its own run of the base before accepting the handoff, the
-    decision is `passed_with_known_red`, and the next command runs. An empty
+    decision is `passed_with_known_red`, and the next command runs.
+    A comparable passing base permits one serial isolated replay of at most
+    three failed tests with a replayable selection. A pass with exact
+    selection, executed coverage and no host refusals carries `flaky`
+    evidence and `passed_with_flaky_tests` through publication and pinning;
+    owner acceptance records the tests in task history and files each
+    signature once as a friction. `pr_open` names them with rerun evidence.
+    An empty
     requirement list
     runs nothing and records `skipped_no_required_commands` with no
     validation references. Task, claim, execution machine and bound run come
@@ -94,7 +102,7 @@ spec:
     properties:
       decision:
         type: string
-        enum: [passed, passed_with_known_red, skipped_no_required_commands]
+        enum: [passed, passed_with_known_red, passed_with_flaky_tests, skipped_no_required_commands]
       note:
         type: string
         description: Why no command ran, when the requirement list is empty.
@@ -108,7 +116,7 @@ spec:
         type: array
         description: >
           Each passed or known-red command with its captured output, exit
-          status and known-red report, when publication is pending.
+          status and known-red or flaky report, when publication is pending.
         items:
           type: object
       known_red:
@@ -116,6 +124,14 @@ spec:
         description: >
           The commands that failed only with tests the base fails too:
           command, base and candidate commits, run and failing tests.
+        items:
+          type: object
+      flaky:
+        type: array
+        description: >
+          Tests that failed initially, passed on a comparable base, and passed
+          one bounded isolated candidate replay, with pinned command, run,
+          base/head, selection, executed count and captured evidence.
         items:
           type: object
       candidate:

@@ -64,7 +64,8 @@ spec:
           A claimed leaf's `claim_validate` output. Its `known_red` records
           for this run, base and head are listed under "Known-red
           validation", as the owner's delivery lists the known-red history
-          notes it records on the task.
+          notes it records on the task. Its `flaky` records name the tests
+          and captured isolated replay evidence under "Flaky-test validation".
       candidate_resume:
         type: [object, "null"]
         description: >

@@ -172,6 +172,9 @@ pub struct HandoffValidationLog {
     /// failure it names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub known_red: Option<HandoffKnownRed>,
+    /// Original failure and passing isolated replay on this exact candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flaky: Option<super::FlakyValidation>,
 }
 
 /// A claimed leaf's report that a required command failed only with tests

@@ -2,6 +2,7 @@ mod agent_blocker;
 mod baseline;
 mod deferred_sandbox;
 mod delivery;
+mod flaky;
 mod forge_hold;
 mod held_candidate;
 mod id;
@@ -66,3 +67,5 @@ pub use state::{
     is_validation_environment_failure,
 };
 pub use validation_gates::{HostValidationGates, ValidationGateSource, ValidationGates};
+
+pub use flaky::{FLAKY_VALIDATION_EVENT, FlakyValidation, MAX_FLAKY_TESTS};

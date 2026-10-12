@@ -361,6 +361,8 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.assertEqual(run[run.index("-E") + 1],
                          "(binary_id(=orbit-core::runtime) & test(=suite::broken))"
                          " | (binary_id(=orbit-cli) & test(=suite::other))")
+        self.assertEqual(run[run.index("--test-threads") + 1], "1")
+        self.assertEqual(run[run.index("--retries") + 1], "0")
         self.assertFalse(any("--doc" in call for call in self.calls()))
         # A bare test name could be in any package, so the whole selection builds;
         # cargo test filters by exact name.
@@ -372,7 +374,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         [run] = [call for call in self.calls() if call[:2] == ["test", "--no-fail-fast"]]
         self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
                          self.core_dependents)
-        self.assertEqual(run[run.index("--"):], ["--", "--exact", "suite::broken"])
+        self.assertEqual(run[run.index("--"):], ["--", "--exact", "suite::broken", "--test-threads", "1"])
 
     def test_failing_tests_that_cannot_be_replayed_fail_without_a_summary(self):
         self.touch_core()

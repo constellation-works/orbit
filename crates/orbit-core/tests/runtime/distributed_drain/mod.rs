@@ -72,6 +72,7 @@ mod claimed_owner;
 mod claimed_review;
 mod desktop_completion;
 mod failure_class;
+mod flaky_validation;
 #[cfg(unix)]
 mod forge_hold;
 #[cfg(unix)]
@@ -240,6 +241,7 @@ impl Wire {
                         exit_code: 0,
                         output: format!("{command} passed"),
                         known_red: None,
+                        flaky: None,
                     };
                     TaskArtifact {
                         path: format!("validation/{}/{index}.json", handoff.claim_id),

@@ -13,7 +13,9 @@
 //! synchronized base [ORB-14258] (see [`super::baseline`]). One the base shares
 //! fails as a typed `baseline_red`: no recovery repairs it, and the failure
 //! handoff (or run finalization) holds the task. One the base does not share
-//! fails like any other deterministic step, so a workflow can attach
+//! first receives one bounded isolated failing-test replay when it reports
+//! a replayable selection. A pass records the flaky tests and proceeds;
+//! a repeated failure fails like any other deterministic step, so a workflow can attach
 //! `step_failure_recovery` to repair the candidate (for example commit a
 //! formatting fix) before the one post-recovery attempt reruns every command.
 //!
@@ -57,6 +59,7 @@ use super::claim::{
 };
 use super::commit::attribute_candidate_paths;
 use super::deferred_sandbox::{deferred_replays, with_replays};
+use super::flaky::rerun_failed_tests;
 use super::git::{git_command_success, git_output};
 use super::handoff::completed_task_ids_from_input;
 
@@ -75,7 +78,9 @@ use super::handoff::completed_task_ids_from_input;
 /// failing command fails the step after its log — those of the commands that
 /// passed before it, and the base's run of it — is attached, unless its
 /// failing tests are all known red on the base [ORB-15375]: then the
-/// decision is `passed_with_known_red` and `known_red` names them.
+/// decision is `passed_with_known_red` and `known_red` names them. A passing
+/// base also permits a bounded isolated failing-test replay: tests passing it
+/// are recorded in `flaky`, and delivery proceeds with the rerun evidence.
 pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -144,6 +149,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     let mut logs = Vec::new();
     let mut passed = Vec::new();
     let mut known_red = Vec::new();
+    let mut flaky = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in commands.iter().enumerate() {
         let run = run_validation_command(host, &workspace_path, command, None)?;
@@ -189,6 +195,40 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     failures: BaselineRedFailures::new(failures.iter().cloned(), ""),
                 })
             });
+        let rerun = if coverage_failure.is_none() {
+            rerun_failed_tests(
+                host,
+                &workspace_path,
+                &candidate,
+                &run_id,
+                &run,
+                baseline.as_ref(),
+            )?
+        } else {
+            None
+        };
+        let recovered = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref());
+        let rerun_path = format!("validation/{run_id}/{index}.rerun.json");
+        let evidence = if rerun.is_some() {
+            format!("{evidence} Candidate rerun log: `{rerun_path}`.")
+        } else {
+            evidence
+        };
+        if let Some(rerun) = &rerun {
+            logs.push((
+                rerun_path.clone(),
+                serde_json::to_vec(&json!({
+                    "schema_version": 1, "role": "candidate_rerun", "run_id": run_id,
+                    "tested_head": candidate, "command": rerun.run.command,
+                    "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
+                    "output": rerun.run.output, "summary": rerun.run.summary,
+                    "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
+                }))
+                .map_err(|error| {
+                    OrbitError::Execution(format!("encode candidate rerun: {error}"))
+                })?,
+            ));
+        }
         let content = serde_json::to_vec(&json!({
             "schema_version": 1,
             "run_id": run_id,
@@ -201,7 +241,9 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "timed_out": run.timed_out,
             "output": run.output,
             "validation_env": validation_env,
-            "failure_kind": if known.is_some() {
+            "failure_kind": if recovered.is_some() {
+                json!("flaky")
+            } else if known.is_some() {
                 json!("known_red")
             } else if red {
                 json!("baseline_red")
@@ -211,6 +253,8 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 run.failure_kind()
             },
             "known_red": known.as_ref().map(|known| &known.failures),
+            "flaky": recovered,
+            "candidate_rerun": rerun.as_ref().map(|_| &rerun_path),
             "deferred_notice": run.deferred_notice,
             "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
                 "reason": refusal.reason.as_str(),
@@ -235,6 +279,16 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         if let Some(failure) = coverage_failure {
             attach_logs(host, &task_ids, &run_id, &logs)?;
             return Err(failure);
+        }
+        if let Some(recovered) = recovered {
+            require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+            attach_logs(host, &task_ids, &run_id, &logs)?;
+            for task_id in &task_ids {
+                host.record_flaky_validation(task_id, recovered)?;
+            }
+            flaky.push(recovered.clone());
+            passed.push(run.command);
+            continue;
         }
         if let Some(known) = known {
             record_known_red(host, &task_ids, &known)?;
@@ -278,9 +332,10 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     let references = attach_logs(host, &task_ids, &run_id, &logs)?;
     let mut output = json!({
         "phase": "validate",
-        "decision": if known_red.is_empty() { "passed" } else { "passed_with_known_red" },
+        "decision": if !known_red.is_empty() { "passed_with_known_red" } else if !flaky.is_empty() { "passed_with_flaky_tests" } else { "passed" },
         "commands": passed,
         "known_red": known_red,
+        "flaky": flaky,
         "branch": branch,
         "tested_head": candidate,
         "validation": serde_json::to_value(&references)

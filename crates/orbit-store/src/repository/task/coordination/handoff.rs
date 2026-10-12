@@ -424,6 +424,20 @@ impl TaskCommitBoundary {
                     "validation must pass for the exact claim/run/candidate/base",
                 ));
             }
+            if let Some(flaky) = &log.flaky
+                && (!flaky.valid()
+                    || report.is_some()
+                    || log.exit_code != 0
+                    || flaky.command != log.command
+                    || flaky.run_id != log.run_id
+                    || flaky.base_sha != log.candidate.base.commit
+                    || flaky.tested_head != log.tested_head
+                    || flaky.rerun_output != log.output)
+            {
+                return Err(invalid(
+                    "flaky validation evidence does not match the exact handoff",
+                ));
+            }
             if let Some(report) = report {
                 known.push(known_red_validation(&log, report, handoff, known_red)?);
             }
@@ -727,6 +741,23 @@ impl TaskCommitBoundary {
                     from_status: None,
                     to_status: None,
                 });
+        }
+        for reference in &handoff.validation {
+            let log: HandoffValidationLog =
+                serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, reference)?)
+                    .map_err(|error| invalid(&format!("invalid validation log: {error}")))?;
+            if let Some(flaky) = log.flaky {
+                params
+                    .append_history
+                    .push(orbit_types::task::TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: params.actor.clone(),
+                        event: orbit_types::workflow::FLAKY_VALIDATION_EVENT.into(),
+                        note: Some(flaky.text()),
+                        from_status: None,
+                        to_status: None,
+                    });
+            }
         }
         let accepted = AcceptedHandoff {
             handoff_id: format!("handoff-{}", sha256_hex(encode(handoff)?.as_bytes())),

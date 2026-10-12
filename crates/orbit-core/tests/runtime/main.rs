@@ -31,6 +31,7 @@ mod drain_cancel;
 mod drain_extend;
 mod final_recovery;
 mod finding_verification;
+mod flaky_validation;
 mod forge_hold_resume;
 mod git_protection;
 mod held_child_guard;

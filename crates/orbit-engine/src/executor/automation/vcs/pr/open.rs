@@ -110,6 +110,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             )
         });
     let body = with_known_red(host, body, context, base_sha, input);
+    let body = with_flaky(host, body, context, base_sha, input);
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
@@ -572,4 +573,61 @@ fn pr_output(output: PrOutput<'_>) -> Value {
         "commits_behind": output.freshness.commits_behind,
         "commits_ahead": output.freshness.commits_ahead,
     })
+}
+
+/// Include flaky names and the captured replay evidence from this run/head/base.
+fn with_flaky<H: RuntimeHost + ?Sized>(
+    host: &H,
+    body: String,
+    context: &HandoffContext,
+    base_sha: &str,
+    input: &Value,
+) -> String {
+    use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
+    let Ok(head) = git_output(&context.workspace_path, &["rev-parse", "HEAD"]) else {
+        return body;
+    };
+    let mut records = BTreeMap::new();
+    for task in &context.tasks {
+        match host.get_task_history(&task.id) {
+            Ok(history) => {
+                for record in history
+                    .iter()
+                    .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
+                    .filter_map(|entry| entry.note.as_deref().and_then(FlakyValidation::from_text))
+                {
+                    records.insert(record.command.clone(), record);
+                }
+            }
+            Err(error) => {
+                tracing::warn!("pr_open could not read flaky validation history: {error}")
+            }
+        }
+    }
+    if let Some(handed) = input
+        .get("claim_validation")
+        .and_then(|validation| validation.get("flaky"))
+    {
+        match serde_json::from_value::<Vec<FlakyValidation>>(handed.clone()) {
+            Ok(handed) => {
+                for record in handed {
+                    records.insert(record.command.clone(), record);
+                }
+            }
+            Err(error) => tracing::warn!("pr_open ignored malformed flaky evidence: {error}"),
+        }
+    }
+    let records = records
+        .into_values()
+        .filter(|record| {
+            record.valid()
+                && record.run_id == context.batch_id
+                && record.base_sha == base_sha
+                && record.tested_head == head
+        })
+        .collect::<Vec<_>>();
+    match super::body::render_flaky_section(&records) {
+        Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
+        None => body,
+    }
 }
