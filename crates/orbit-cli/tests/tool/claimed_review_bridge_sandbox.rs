@@ -1105,8 +1105,6 @@ fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewM
 /// The reviewer provider, confined as a managed launch confines it.
 struct Confined {
     child: ProviderChild,
-    #[cfg(target_os = "macos")]
-    _profile: Arc<tempfile::NamedTempFile>,
 }
 
 impl Confined {
@@ -1196,22 +1194,20 @@ impl Confined {
         let mut profile_text =
             orbit_exec::compile_macos_sandbox_profile(profile, "codex").expect("compile profile");
         orbit_exec::append_macos_subpath_mask(&mut profile_text, &prepared.trees);
-        let (child, profile_file) =
-            orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
-                profile_text: &profile_text,
-                program: "/usr/bin/python3",
-                args: argv,
-                env,
-                cwd: Some(cwd),
-                stdin: Stdio::null(),
-                stdout: Stdio::piped(),
-                stderr: Stdio::piped(),
-                inherited_fds: &[],
-            })
-            .expect("spawn real sandbox");
+        let child = orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: "/usr/bin/python3",
+            args: argv,
+            env,
+            cwd: Some(cwd),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn real sandbox");
         Self {
             child: ProviderChild::new(child),
-            _profile: profile_file,
         }
     }
 

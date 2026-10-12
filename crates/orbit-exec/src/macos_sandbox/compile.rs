@@ -10,7 +10,7 @@ use crate::credential_paths::{
 };
 
 /// Compile a [`ResolvedFsProfile`] into SBPL text suitable for
-/// `sandbox-exec -f`.
+/// `sandbox-exec -p`.
 ///
 /// `provider` is the canonical provider name of the CLI this profile will
 /// confine (`claude`, `codex`, ...). It only selects the credential-store

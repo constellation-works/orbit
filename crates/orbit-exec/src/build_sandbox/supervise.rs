@@ -94,7 +94,7 @@ impl BuildLog {
 }
 
 /// Spawn `command` (the sandbox wrapper) and supervise it. `guard` holds what
-/// the wrapper needs until it ends (a ruleset descriptor, a profile file).
+/// the wrapper needs until it ends (a ruleset descriptor).
 pub(super) fn run<G>(
     mut command: Command,
     guard: G,
