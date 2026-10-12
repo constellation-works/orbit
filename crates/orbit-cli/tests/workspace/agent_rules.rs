@@ -1,10 +1,12 @@
+//! `orbit_cmd::agent_rules::inject_agent_rules`, the guide injector behind
+//! `--inject-agent-rules`, refuses before writing either guide.
+
 #[cfg(unix)]
 use std::path::Path;
 
+use orbit_cmd::agent_rules::{END_MARKER, START_MARKER, inject_agent_rules};
 use orbit_common::OrbitError;
 use tempfile::tempdir;
-
-use super::super::agent_rules::{END_MARKER, START_MARKER, inject_agent_rules};
 
 #[test]
 fn bad_markers_in_one_guide_leave_every_guide_unchanged() {

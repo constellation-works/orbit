@@ -23,6 +23,9 @@ mod git_authority;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 #[cfg(unix)]
+#[path = "../support/isolated_test.rs"]
+mod isolated_test;
+#[cfg(unix)]
 #[path = "../support/workflow_gate.rs"]
 mod workflow_gate;
 

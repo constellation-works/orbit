@@ -1798,6 +1798,7 @@ dependencies = [
  "predicates",
  "regex",
  "reqwest",
+ "rsa",
  "rusqlite",
  "serde",
  "serde_json",

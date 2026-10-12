@@ -5,6 +5,10 @@
 //! one. That is what makes the replacement, rollback, and convergence paths
 //! testable at all — the flow runs the installed binary, so the installed
 //! binary has to be something a test can write and observe.
+//!
+//! Only the private restore-callback fault injection uses it here. Behavior
+//! the exported `run_update` reaches is tested from the CLI crate's
+//! `tests/process/update/flow.rs`, against its own copy of this fixture.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -66,7 +70,7 @@ R7dTEa7m1rPGwS7jBMC+avb7EOPmVyZuIRqHwzDITTeCpT+R1YWu0DyFJdZyvPvB
 -----END PUBLIC KEY-----";
 
 /// Test trust set carrying the throwaway key above.
-pub fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
+fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
     &[TrustedReleaseKey {
         id: "orbit-test-key-1",
         not_after: "2099-12-31",
@@ -76,24 +80,11 @@ pub fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
 }
 
 /// The release target the fixture publishes for.
-pub const TEST_TARGET: &str = "x86_64-unknown-linux-gnu";
+const TEST_TARGET: &str = "x86_64-unknown-linux-gnu";
 
 /// What the fake binary's `clock repair` reports on stdout, standing in for a
 /// real rewrite of a unit whose program had moved.
-pub const CLOCK_REPAIR_REPORT: &str = "rewrote clock unit ~/Library/LaunchAgents/com.orbit.sweep.plist: it ran /opt/homebrew/bin/orbit, which no longer exists, and now runs ~/.orbit/bin/orbit (reloaded)";
-
-/// How the fake replacement binary behaves when it is run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FakeBinary {
-    /// Reports its version and succeeds at every subcommand.
-    Healthy,
-    /// Inspection succeeds but the older candidate can only read the store.
-    ReadOnlyStore,
-    /// Candidate cannot coordinate with protected clients.
-    NoAdmissionContract,
-    /// Post-replacement convergence step `migrate --confirm` fails until repaired.
-    FailsMigrationConfirm,
-}
+const CLOCK_REPAIR_REPORT: &str = "rewrote clock unit ~/Library/LaunchAgents/com.orbit.sweep.plist: it ran /opt/homebrew/bin/orbit, which no longer exists, and now runs ~/.orbit/bin/orbit (reloaded)";
 
 /// A fake installation plus the release mirror it updates from.
 pub struct Fixture {
@@ -120,10 +111,7 @@ impl Fixture {
         }
         let invocation_log = root.path().join("invocations.log");
         let executable = bin.join("orbit");
-        write_script(
-            &executable,
-            &script(installed_version, &invocation_log, FakeBinary::Healthy),
-        );
+        write_script(&executable, &script(installed_version, &invocation_log));
         Self {
             _root: root,
             executable,
@@ -134,14 +122,8 @@ impl Fixture {
         }
     }
 
-    /// Publish `version` to the mirror, and make it the mirror's latest.
-    pub fn publish(&self, version: &str, behavior: FakeBinary) {
-        let archive = tar_gz(&script(version, &self.invocation_log, behavior));
-        self.publish_archive(version, &archive, true);
-    }
-
     /// Publish raw archive bytes, signing a manifest that matches them.
-    pub fn publish_archive(&self, version: &str, archive: &[u8], sign_correctly: bool) {
+    pub fn publish_archive(&self, version: &str, archive: &[u8]) {
         let directory = self.mirror.join(format!("v{version}"));
         std::fs::create_dir_all(&directory).expect("release directory");
         let asset = crate::update::channel::release_archive_name(TEST_TARGET);
@@ -151,14 +133,9 @@ impl Fixture {
         let manifest = format!("{digest}  {asset}\n");
         std::fs::write(directory.join(RELEASE_CHECKSUMS_FILENAME), &manifest)
             .expect("write manifest");
-        let signed = if sign_correctly {
-            manifest.clone()
-        } else {
-            format!("{manifest}# not what was published\n")
-        };
         std::fs::write(
             directory.join(RELEASE_CHECKSUMS_SIGNATURE_FILENAME),
-            sign(signed.as_bytes()),
+            sign(manifest.as_bytes()),
         )
         .expect("write signature");
         std::fs::write(
@@ -168,59 +145,9 @@ impl Fixture {
         .expect("write latest");
     }
 
-    /// Publish arbitrary assets under one manifest, signed correctly or not.
-    pub fn publish_assets(&self, version: &str, assets: &[(&str, &[u8])], sign_correctly: bool) {
-        let directory = self.mirror.join(format!("v{version}"));
-        std::fs::create_dir_all(&directory).expect("release directory");
-        let mut manifest = String::new();
-        for (name, bytes) in assets {
-            std::fs::write(directory.join(name), bytes).expect("write asset");
-            let digest = orbit_common::security::release::sha256_hex(bytes);
-            manifest.push_str(&format!("{digest}  {name}\n"));
-        }
-        std::fs::write(directory.join(RELEASE_CHECKSUMS_FILENAME), &manifest)
-            .expect("write manifest");
-        let signed = if sign_correctly {
-            manifest
-        } else {
-            format!("{manifest}# not what was published\n")
-        };
-        std::fs::write(
-            directory.join(RELEASE_CHECKSUMS_SIGNATURE_FILENAME),
-            sign(signed.as_bytes()),
-        )
-        .expect("write signature");
-    }
-
-    /// A source reading this fixture's release mirror.
-    pub fn source(&self) -> DirectoryReleaseSource {
-        DirectoryReleaseSource::new(self.mirror.clone())
-    }
-
-    /// Corrupt a published archive after its manifest was signed.
-    pub fn tamper_with_archive(&self, version: &str) {
-        let asset = crate::update::channel::release_archive_name(TEST_TARGET);
-        let path = self.mirror.join(format!("v{version}")).join(asset);
-        let mut archive = std::fs::read(&path).expect("read archive");
-        archive.extend_from_slice(b"tampered");
-        std::fs::write(&path, archive).expect("write tampered archive");
-    }
-
-    /// Path of a published mirror input, including the latest-version marker.
-    pub fn mirror_input(&self, version: &str, asset: &str) -> PathBuf {
-        if asset == MIRROR_LATEST_FILE {
-            self.mirror.join(asset)
-        } else {
-            self.mirror.join(format!("v{version}")).join(asset)
-        }
-    }
-
     /// Build the update environment for this fixture.
     pub fn environment(&self) -> UpdateEnvironment {
-        self.environment_with_workspace(Some(self.workspace.clone()))
-    }
-
-    fn environment_with_workspace(&self, workspace_cwd: Option<PathBuf>) -> UpdateEnvironment {
+        let cwd = self.workspace.clone();
         UpdateEnvironment {
             admission_roots: vec![self._root.path().join("global")],
             install_channel: InstallChannel::Managed {
@@ -232,7 +159,7 @@ impl Fixture {
             source: Box::new(DirectoryReleaseSource::new(self.mirror.clone())),
             trusted_keys: test_trusted_keys(),
             today: NaiveDate::from_ymd_opt(2026, 9, 5).expect("valid date"),
-            workspace: workspace_cwd.map(|cwd| UpdateWorkspace {
+            workspace: Some(UpdateWorkspace {
                 root_argument: Some(cwd.join(".orbit")),
                 root: cwd.join(".orbit"),
                 cwd,
@@ -268,12 +195,6 @@ impl Fixture {
         names.sort();
         names
     }
-
-    /// Allow subsequent `migrate --confirm` calls for `FakeBinary::FailsMigrationConfirm` to succeed.
-    pub fn repair_migration(&self) {
-        std::fs::write(format!("{}.repaired", self.invocation_log.display()), b"")
-            .expect("write repaired marker");
-    }
 }
 
 /// A default request: latest version, apply, no downgrade.
@@ -286,29 +207,11 @@ fn sign(message: &[u8]) -> Vec<u8> {
     SigningKey::<Sha256>::new(key).sign(message).to_vec()
 }
 
-/// A `sh` stand-in for the `orbit` binary: it answers `--version` and records
-/// every other invocation so a test can assert the convergence order.
-fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
-    let contract = if behavior == FakeBinary::NoAdmissionContract {
-        "{}"
-    } else {
-        r#"{"schema_version":1,"contract":"executable-generation-v1"}"#
-    };
-    let inspection = if behavior == FakeBinary::ReadOnlyStore {
-        // Keep every other compatibility check satisfied so only read_only
-        // can prevent this candidate from authorizing a downgrade.
-        r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":true}}"#
-    } else {
-        r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#
-    };
-    let migration_confirm = if behavior == FakeBinary::FailsMigrationConfirm {
-        format!(
-            "if [ \"$1\" = migrate ] && [ \"$2\" = --confirm ] && [ ! -f '{log}.repaired' ]; then exit 1; fi\n",
-            log = log.display()
-        )
-    } else {
-        String::new()
-    };
+/// A `sh` stand-in for the installed `orbit` binary: it answers `--version`
+/// and records every other invocation so a test can assert none happened.
+fn script(version: &str, log: &Path) -> Vec<u8> {
+    let contract = r#"{"schema_version":1,"contract":"executable-generation-v1"}"#;
+    let inspection = r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#;
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
@@ -318,7 +221,6 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
          echo \"{version}: $all_args\" >> '{log}'\n\
          if [ \"$1\" = clock ]; then echo '{CLOCK_REPAIR_REPORT}'; fi\n\
          if [ \"$1\" = migrate ] && [ \"$2\" = --dry-run ]; then echo '{inspection}'; fi\n\
-         {migration_confirm}\
          exit 0\n",
         log = log.display()
     )
@@ -335,17 +237,11 @@ fn write_script(path: &Path, body: &[u8]) {
     }
 }
 
-/// Pack `body` as the single `orbit` member of a gzipped tar, the shape every
-/// published release archive has.
-pub fn tar_gz(body: &[u8]) -> Vec<u8> {
-    tar_gz_named(&[("orbit", body)])
-}
-
-/// Pack arbitrary members, for the archive-shape rejection tests.
+/// Pack named members into a gzipped tar, the shape every published release
+/// archive has.
 ///
 /// Member names are written into the header directly rather than through
-/// `set_path`, which refuses `..` — the traversal names a hostile archive
-/// would carry are exactly what the extractor has to be shown rejecting.
+/// `set_path`, which refuses `..`.
 pub fn tar_gz_named(members: &[(&str, &[u8])]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for (name, body) in members {
