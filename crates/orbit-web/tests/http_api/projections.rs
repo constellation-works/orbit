@@ -932,3 +932,132 @@ fn github_pr_refs_link_the_pull_request_from_the_origin_remote() {
         },
     );
 }
+
+/// The dashboard serves the task JSON every read surface shares and adds only
+/// its own extras: the detail is the tool host's `orbit.task.show` record plus
+/// `status_transitions`, `job_run_navigable` and `readiness.preparing`, and a
+/// list row carries the same base keys as `orbit.task.list` minus the prose
+/// bodies. A crew this host no longer configures reads as `crew_unresolved` on
+/// the detail, as it does on the CLI and tool host, instead of being swapped
+/// for the default crew.
+#[test]
+fn task_detail_and_list_rows_serve_the_shared_task_projection() {
+    isolated(
+        "projections::task_detail_and_list_rows_serve_the_shared_task_projection",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let create = |server: &super::support::Server, body: Value| {
+                json_ok(server.send("POST", "/api/tasks?workspace=ws_http_fixture", body))["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            };
+            let id = create(
+                &server,
+                json!({"title": "Projection parity", "description": "Shared JSON",
+                "acceptance_criteria": ["Match"], "complexity": "low"}),
+            );
+            let source = fixture.runtime.paths().repo_root.join("parity.txt");
+            fs::write(&source, "parity artifact\n").unwrap();
+            fixture
+                .runtime
+                .run_tool(
+                    "orbit.task.artifact.put",
+                    json!({"id": id, "source_path": source, "path": "reports/parity.txt",
+                    "model": "codex"}),
+                )
+                .unwrap();
+
+            let mut detail =
+                json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")));
+            let extras = detail.as_object_mut().unwrap();
+            for key in ["status_transitions", "job_run_navigable"] {
+                assert!(extras.remove(key).is_some(), "dashboard extra `{key}`");
+            }
+            assert!(
+                extras["readiness"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("preparing")
+                    .is_some()
+            );
+            let shown = fixture
+                .runtime
+                .run_tool("orbit.task.show", json!({"id": id}))
+                .unwrap();
+            assert_eq!(detail, shown, "the detail is the shared task record");
+            assert!(detail.as_object().unwrap().contains_key("job_run_machine"));
+            assert_eq!(detail["artifacts"][0]["size_bytes"], 16);
+
+            let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+            let row = page["items"]
+                .as_array()
+                .or_else(|| page.as_array())
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id.as_str())
+                .cloned()
+                .unwrap();
+            let listed = fixture
+                .runtime
+                .run_tool("orbit.task.list", json!({}))
+                .unwrap();
+            let tool_row = listed["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id.as_str())
+                .unwrap();
+            for (key, value) in tool_row.as_object().unwrap() {
+                match key.as_str() {
+                    "description" | "plan" | "execution_summary" | "acceptance_criteria" => {
+                        assert!(row.get(key).is_none(), "a summary row omits `{key}`");
+                    }
+                    "readiness" => assert_eq!(row[key]["gaps"], value["gaps"]),
+                    _ => assert_eq!(&row[key], value, "list row `{key}`"),
+                }
+            }
+            assert!(row.as_object().unwrap().contains_key("job_run_machine"));
+            drop(server);
+
+            // Author a task while its crew exists, then serve it from a host
+            // configuration that no longer defines that crew.
+            let global_path = fixture.global.join("config.toml");
+            let baseline = fs::read_to_string(&global_path).unwrap();
+            let configured = concat!(
+                "\n[workflow]\ndefault_crew = \"keep\"\n",
+                "\n[crews.keep]\nprovider = \"claude\"\nmodel = \"keep-model\"\n",
+            );
+            fs::write(
+                &global_path,
+                format!(
+                    "{baseline}{configured}\n[crews.gone]\nprovider = \"claude\"\nmodel = \"gone-model\"\n"
+                ),
+            )
+            .unwrap();
+            let server = fixture.server(true);
+            let stale = create(
+                &server,
+                json!({"title": "Stale crew", "description": "Crew removed later",
+                "acceptance_criteria": ["Stay readable"], "complexity": "low", "crew": "gone"}),
+            );
+            drop(server);
+            fs::write(&global_path, format!("{baseline}{configured}")).unwrap();
+            let server = fixture.server(true);
+            let detail =
+                json_ok(server.get(&format!("/api/tasks/{stale}?workspace=ws_http_fixture")));
+            assert_eq!(detail["crew"], "gone");
+            assert!(
+                detail.get("resolved_crew").is_none() && detail.get("crew_model").is_none(),
+                "an unresolvable crew is not swapped for the default: {detail}"
+            );
+            assert!(
+                detail["crew_unresolved"]
+                    .as_str()
+                    .is_some_and(|reason| !reason.is_empty()),
+                "the detail names why the crew is unresolved: {detail}"
+            );
+        },
+    );
+}

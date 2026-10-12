@@ -23,6 +23,7 @@ mod pilot;
 mod pr_closure;
 mod pull_request_links;
 mod query;
+mod record_json;
 mod records;
 mod resolves;
 mod retained_candidate;
@@ -79,6 +80,7 @@ pub use provider_limit::{
     UngatedLaneLimit, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
+pub use record_json::{task_record_json, task_show_field_json};
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
