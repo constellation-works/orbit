@@ -1,6 +1,7 @@
 //! Host-local installed-plugin records (`plugins`, beside `tools`).
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::plugin::{InstalledPlugin, PluginBuildRecord};
 use rusqlite::{OptionalExtension, Row, params};
 
@@ -55,12 +56,12 @@ impl Store {
             .prepare(&format!(
                 "SELECT {PLUGIN_COLUMNS} FROM plugins ORDER BY name"
             ))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([], plugin_from_row)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     pub fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
@@ -69,10 +70,10 @@ impl Store {
             .prepare(&format!(
                 "SELECT {PLUGIN_COLUMNS} FROM plugins WHERE name = ?1"
             ))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         stmt.query_row(params![name], plugin_from_row)
             .optional()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 }
 
@@ -120,7 +121,7 @@ impl StoreTx<'_> {
                     build_json,
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(())
     }
 
@@ -128,7 +129,7 @@ impl StoreTx<'_> {
         let affected = self
             .tx
             .execute("DELETE FROM plugins WHERE name = ?1", params![name])
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(affected > 0)
     }
 
@@ -146,7 +147,7 @@ impl StoreTx<'_> {
                 "UPDATE plugins SET certified_orbit_version = ?1, updated_at = ?2 WHERE name = ?3",
                 params![orbit_version, now_string(), name],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(affected > 0)
     }
 
@@ -164,7 +165,7 @@ impl StoreTx<'_> {
                 "UPDATE plugins SET enabled = ?1, grants_json = ?2, updated_at = ?3 WHERE name = ?4",
                 params![enabled as i32, grants_json, now_string(), name],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(affected > 0)
     }
 }

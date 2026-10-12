@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::task::{TaskComplexity, TaskEnvelopeV2, normalize_task_tags};
 use rusqlite::{Connection, OptionalExtension, Statement, Transaction, params};
 
@@ -94,12 +95,12 @@ pub(super) fn task_ids_for_workspace(
              WHERE workspace_id = ?1
              ORDER BY task_id ASC",
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map([partition_id], |row| row.get::<_, String>(0))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     rows.collect::<Result<BTreeSet<_>, _>>()
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 pub(super) struct TaskIndexWriter<'tx> {
@@ -125,20 +126,20 @@ impl<'tx> TaskIndexWriter<'tx> {
             terminal_month = excluded.terminal_month,
             complexity = excluded.complexity",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let tag = tx
             .prepare(
                 "INSERT OR IGNORE INTO task_bundle_tags(task_id, workspace_id, tag)
              VALUES (?1, ?2, ?3)",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let relation = tx
             .prepare(
                 "INSERT OR IGNORE INTO task_bundle_relations(
                 source_task_id, workspace_id, relation_type, target_task_id
             ) VALUES (?1, ?2, ?3, ?4)",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(Self {
             index,
             tag,
@@ -163,12 +164,12 @@ impl<'tx> TaskIndexWriter<'tx> {
                 terminal_month(envelope.status, envelope.updated_at),
                 indexed_complexity(envelope.complexity),
             ])
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         for tag in normalize_task_tags(envelope.tags.clone()) {
             self.tag
                 .execute(params![&envelope.id, partition_id, &tag])
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
         }
 
         for relation in &envelope.relations {
@@ -179,7 +180,7 @@ impl<'tx> TaskIndexWriter<'tx> {
                     relation_type_name(relation.relation_type),
                     &relation.target
                 ])
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
         }
 
         Ok(())
@@ -197,10 +198,10 @@ where
     F: FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
 {
     conn.prepare_cached(sql)
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .query_row(params, f)
         .optional()
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 /// Indexed form of [`TaskComplexity`]: a populated band, or `""` for unset.

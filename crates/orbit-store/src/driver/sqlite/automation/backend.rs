@@ -3,6 +3,7 @@
 use crate::Store;
 use crate::contracts::AutomationStoreBackend;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::recovery::RecoveryRecord;
 use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -75,7 +76,7 @@ impl AutomationStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             raw.as_deref().map(decode).transpose()
         })
     }
@@ -105,7 +106,7 @@ impl AutomationStoreBackend for Store {
                     |r| r.get(0),
                 )
                 .optional()
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             raw.as_deref().map(decode).transpose()
         })
     }
@@ -136,7 +137,7 @@ impl AutomationStoreBackend for Store {
                     params![state.consumer, encode(state)?],
                 )
                 .map(|n| n == 1)
-                .map_err(|e| OrbitError::Store(e.to_string()))
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -167,7 +168,7 @@ impl AutomationStoreBackend for Store {
                         previous_json
                     ],
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             if changed == 0 {
                 return Ok(false);
@@ -192,7 +193,7 @@ impl AutomationStoreBackend for Store {
                         receipt.accepted_at.to_rfc3339()
                     ],
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             }
 
             Ok(true)
@@ -209,13 +210,13 @@ impl AutomationStoreBackend for Store {
                 .prepare(
                     "SELECT state_json FROM automation_consumers WHERE consumer LIKE ?1 ESCAPE '\\' ORDER BY consumer LIMIT ?2",
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
             let rows = stmt
                 .query_map(params![pattern, limit.min(100)], |row| row.get::<_, String>(0))
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.map(|row| {
-                row.map_err(|e| OrbitError::Store(e.to_string()))
+                row.map_err(sqlite_store_error)
                     .and_then(|raw| decode(&raw))
             })
             .collect()
@@ -241,15 +242,15 @@ impl AutomationStoreBackend for Store {
                      AND substr(consumer,1,length(?1)) = ?1 \
                      ORDER BY consumer LIMIT ?3",
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(
                     params![prefix, after.unwrap_or(""), limit.min(100)],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.map(|row| {
-                let (consumer, raw) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                let (consumer, raw) = row.map_err(sqlite_store_error)?;
                 let state: AutomationState = decode(&raw)?;
                 if state.consumer != consumer {
                     return Err(OrbitError::Store(
@@ -272,15 +273,15 @@ impl AutomationStoreBackend for Store {
                 .prepare(
                     "SELECT receipt_json FROM automation_coverage WHERE consumer=?1 ORDER BY accepted_at DESC,batch_id DESC LIMIT ?2",
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             let rows = stmt
                 .query_map(params![consumer, limit.min(100)], |row| {
                     row.get::<_, String>(0)
                 })
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
-            rows.map(|row| decode(&row.map_err(|e| OrbitError::Store(e.to_string()))?))
+            rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
     }

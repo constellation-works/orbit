@@ -53,7 +53,9 @@ and codes exactly like the variant it refines:
   failure from `io::Error` kinds (`From<io::Error>`, `OrbitError::storage_io`)
   or SQLite codes (`storage::sqlite::sqlite_error`). It reads and codes as the
   `Io`, `Store` or `Migration` error named by `layer`. Query it with
-  `is_readonly_or_access_failure()` and `storage_layer()`.
+  `is_readonly_or_access_failure()` and `storage_layer()`. Wrap a
+  `rusqlite::Error` with `.map_err(sqlite_store_error)`, or `sqlite_error` to
+  add context; `OrbitError::Store(e.to_string())` drops the class.
 - `ClaimRefused { kind, message }`: an owner claim or handoff refusal. It reads
   and codes as `InvalidInput`. Query it with `claim_refusal()`.
 - `ExecutionTimeout { timeout_ms, message }`: an execution failure caused by a

@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Row};
@@ -137,18 +138,16 @@ pub(super) fn list_records(
         predicate.sql
     );
 
-    let mut statement = conn
-        .prepare(&sql)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = statement
         .query_map(rusqlite::params_from_iter(params.iter()), |row| {
             Ok(decode_record(row))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut records = Vec::new();
     for row in rows {
-        records.push(row.map_err(|error| OrbitError::Store(error.to_string()))??);
+        records.push(row.map_err(sqlite_store_error)??);
     }
     Ok(records)
 }
@@ -171,14 +170,11 @@ pub(super) fn find_by_dedupe_marker(
              ORDER BY r.created_at ASC, r.friction_id ASC \
              LIMIT 1"
         ))
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let mut rows = statement
         .query(rusqlite::params![workspace_id, marker_line])
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    match rows
-        .next()
-        .map_err(|error| OrbitError::Store(error.to_string()))?
-    {
+        .map_err(sqlite_store_error)?;
+    match rows.next().map_err(sqlite_store_error)? {
         Some(row) => Ok(Some(decode_record(row)?)),
         None => Ok(None),
     }
@@ -194,14 +190,11 @@ pub(super) fn show_record(
             "SELECT {RECORD_COLUMNS} FROM friction_records r \
              WHERE r.workspace_id = ?1 AND r.friction_id = ?2"
         ))
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let mut rows = statement
         .query(rusqlite::params![workspace_id, id])
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    match rows
-        .next()
-        .map_err(|error| OrbitError::Store(error.to_string()))?
-    {
+        .map_err(sqlite_store_error)?;
+    match rows.next().map_err(sqlite_store_error)? {
         Some(row) => Ok(Some(decode_record(row)?)),
         None => Ok(None),
     }
@@ -223,15 +216,15 @@ pub(super) fn foreign_owners_of(
              WHERE friction_id = ?1 AND workspace_id != ?2 \
              ORDER BY workspace_id",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map(rusqlite::params![friction_id, workspace_id], |row| {
             row.get::<_, String>(0)
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let mut owners = Vec::new();
     for row in rows {
-        owners.push(row.map_err(|error| OrbitError::Store(error.to_string()))?);
+        owners.push(row.map_err(sqlite_store_error)?);
     }
     Ok(owners)
 }
@@ -240,12 +233,11 @@ pub(crate) use crate::driver::sqlite::friction_write::{next_month_seq, upsert_re
 
 fn decode_record(row: &Row<'_>) -> Result<StoredFrictionRecord, OrbitError> {
     let get_text = |index: usize| -> Result<String, OrbitError> {
-        row.get::<_, String>(index)
-            .map_err(|error| OrbitError::Store(error.to_string()))
+        row.get::<_, String>(index).map_err(sqlite_store_error)
     };
     let get_optional = |index: usize| -> Result<Option<String>, OrbitError> {
         row.get::<_, Option<String>>(index)
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
     };
 
     let id = get_text(0)?;

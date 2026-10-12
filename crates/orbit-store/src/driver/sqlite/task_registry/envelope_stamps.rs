@@ -13,8 +13,9 @@
 use std::collections::HashMap;
 use std::sync::TryLockError;
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::sqlite_synchronous;
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 
 use super::partition_id::validate_partition_id;
@@ -37,7 +38,13 @@ pub(super) fn ensure_envelope_stamps(conn: &Connection) -> Result<(), OrbitError
         CREATE INDEX IF NOT EXISTS idx_task_envelope_stamps_workspace
             ON task_envelope_stamps(workspace_id);",
     )
-    .map_err(|e| OrbitError::Store(format!("ensure task envelope stamps: {e}")))
+    .map_err(|e| {
+        sqlite_error(
+            StorageLayer::Store,
+            &e,
+            format!("ensure task envelope stamps: {e}"),
+        )
+    })
 }
 
 pub(super) fn has_envelope_stamps(conn: &Connection) -> Result<bool, OrbitError> {
@@ -46,7 +53,7 @@ pub(super) fn has_envelope_stamps(conn: &Connection) -> Result<bool, OrbitError>
         [ENVELOPE_STAMPS_TABLE],
         |row| row.get(0),
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 impl TaskRegistryStore {
@@ -66,7 +73,7 @@ impl TaskRegistryStore {
                 "SELECT task_id, stamp, fingerprint FROM task_envelope_stamps
                  WHERE workspace_id = ?1",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([&partition_id], |row| {
                 Ok(EnvelopeStampRecord {
@@ -75,10 +82,10 @@ impl TaskRegistryStore {
                     fingerprint: row.get(2)?,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.map(|row| {
             row.map(|record| (record.task_id.clone(), record))
-                .map_err(|e| OrbitError::Store(e.to_string()))
+                .map_err(sqlite_store_error)
         })
         .collect()
     }
@@ -132,7 +139,7 @@ fn write_envelope_stamps(
         Err(error) if error.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) => {
             return Ok(false);
         }
-        Err(error) => return Err(OrbitError::Store(error.to_string())),
+        Err(error) => return Err(sqlite_store_error(error)),
     };
     ensure_envelope_stamps(&tx)?;
     {
@@ -148,7 +155,7 @@ fn write_envelope_stamps(
                      stamp = excluded.stamp,
                      fingerprint = excluded.fingerprint",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         for record in records {
             stmt.execute(params![
                 record.task_id,
@@ -156,10 +163,10 @@ fn write_envelope_stamps(
                 record.stamp,
                 record.fingerprint
             ])
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
     }
-    tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+    tx.commit().map_err(sqlite_store_error)?;
     Ok(true)
 }
 
@@ -177,12 +184,20 @@ impl CacheWriteSettings {
         let settings = Self {
             busy_timeout_ms: conn
                 .pragma_query_value(None, "busy_timeout", |row| row.get::<_, i64>(0))
-                .map_err(|e| OrbitError::Store(format!("read busy_timeout: {e}")))?,
+                .map_err(|e| {
+                    sqlite_error(StorageLayer::Store, &e, format!("read busy_timeout: {e}"))
+                })?,
         };
         let applied = conn
             .pragma_update(None, "busy_timeout", 0)
             .and_then(|()| conn.pragma_update(None, "synchronous", sqlite_synchronous("NORMAL")))
-            .map_err(|e| OrbitError::Store(format!("relax envelope stamp write: {e}")));
+            .map_err(|e| {
+                sqlite_error(
+                    StorageLayer::Store,
+                    &e,
+                    format!("relax envelope stamp write: {e}"),
+                )
+            });
         if let Err(error) = applied {
             let _ = settings.restore(conn);
             return Err(error);
@@ -193,6 +208,12 @@ impl CacheWriteSettings {
     fn restore(&self, conn: &Connection) -> Result<(), OrbitError> {
         conn.pragma_update(None, "synchronous", sqlite_synchronous("FULL"))
             .and_then(|()| conn.pragma_update(None, "busy_timeout", self.busy_timeout_ms))
-            .map_err(|e| OrbitError::Store(format!("restore registry writer settings: {e}")))
+            .map_err(|e| {
+                sqlite_error(
+                    StorageLayer::Store,
+                    &e,
+                    format!("restore registry writer settings: {e}"),
+                )
+            })
     }
 }

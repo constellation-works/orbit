@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use rusqlite::params;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::Store;
 
@@ -162,7 +163,7 @@ impl Store {
                 ORDER BY call_count DESC, i.activity_id ASC, tc.tool_name ASC
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -174,10 +175,10 @@ impl Store {
                     total_result_bytes: row.get::<_, i64>(4)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Every invocation with a resolved model, in storage order. The callers
@@ -198,7 +199,7 @@ impl Store {
                 WHERE model IS NOT NULL AND TRIM(model) <> ''
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -213,10 +214,10 @@ impl Store {
                     tool_call_count: row.get::<_, i64>(7)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     fn group_invocation_metrics<K, F>(
@@ -265,7 +266,7 @@ impl Store {
                 LIMIT ?2
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(params![task_id, limit], |row| {
                 Ok(TaskInvocationMetrics {
@@ -279,9 +280,9 @@ impl Store {
                     total_tool_calls: row.get::<_, i64>(7)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 }
 

@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::Store;
 
@@ -64,7 +65,7 @@ impl Store {
                 LIMIT ?4
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         // Over-fetch by one so a full page can be distinguished from a page
         // that happens to end exactly on the cap.
@@ -80,11 +81,11 @@ impl Store {
                     })
                 },
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut facts = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let truncated = facts.len() > max_rows;
         facts.truncate(max_rows);
         Ok(BoundedFacts { facts, truncated })
@@ -116,7 +117,7 @@ impl Store {
                 ORDER BY invocation_count DESC, i.activity_id ASC
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(
@@ -129,10 +130,10 @@ impl Store {
                     })
                 },
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Counts distinct job runs with any invocation in `[since, until)`, and
@@ -190,6 +191,6 @@ impl Store {
                 matching_job_runs: row.get::<_, i64>(1)?.max(0) as u64,
             })
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
     }
 }

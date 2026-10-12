@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
     ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReconciliation,
     ReviewReservation, ReviewResetDecision,
@@ -341,7 +342,7 @@ impl ReviewStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if let Some(raw) = existing {
                 if raw == encoded {
                     return Ok(());
@@ -364,7 +365,7 @@ impl ReviewStoreBackend for Store {
                     certificate.issued_at.to_rfc3339()
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -382,7 +383,7 @@ impl ReviewStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             raw.as_deref().map(decode).transpose()
         })
     }
@@ -398,14 +399,14 @@ impl ReviewStoreBackend for Store {
                 .prepare(
                     "SELECT certificate_json FROM review_certificates WHERE repository=?1 AND candidate_tree=?2 AND passed=1 ORDER BY issued_at DESC LIMIT ?3",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(
                     params![repository, final_candidate_tree, limit.clamp(1, 100)],
                     |row| row.get::<_, String>(0),
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            rows.map(|row| decode(&row.map_err(|error| OrbitError::Store(error.to_string()))?))
+                .map_err(sqlite_store_error)?;
+            rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
     }
@@ -422,7 +423,7 @@ impl ReviewStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if existing.is_some() {
                 // A landing is a fact about one commit; replay changes nothing.
                 return Ok(());
@@ -437,7 +438,7 @@ impl ReviewStoreBackend for Store {
                     landing.recorded_at.to_rfc3339()
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -448,11 +449,11 @@ impl ReviewStoreBackend for Store {
                 .prepare(
                     "SELECT landing_json FROM review_landings WHERE attempt_id=?1 ORDER BY recorded_at ASC LIMIT 100",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map([attempt_id], |row| row.get::<_, String>(0))
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            rows.map(|row| decode(&row.map_err(|error| OrbitError::Store(error.to_string()))?))
+                .map_err(sqlite_store_error)?;
+            rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
     }

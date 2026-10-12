@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::audit_events::ensure_audit_events_schema;
@@ -27,7 +28,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
             );
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
+    .map_err(sqlite_store_error)?;
     ensure_audit_events_schema(conn)?;
     for column in ["plugin_name", "plugin_version", "plugin_manifest_digest"] {
         add_column_if_missing(conn, "audit_events", column, "TEXT")?;
@@ -38,7 +39,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
             ON audit_events(plugin_name);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v30 `audit_plugin_secrets` migration: the names (JSON array) of the

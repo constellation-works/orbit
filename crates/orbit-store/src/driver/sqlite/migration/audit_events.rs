@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ACTOR_ALIAS_MAP_VERSION, canonical_actor_for_role_label};
 use rusqlite::Connection;
 
@@ -53,7 +54,7 @@ pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitE
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -69,7 +70,7 @@ pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitE
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -118,7 +119,7 @@ pub(super) fn apply_trusted_mcp_audit_provenance(conn: &Connection) -> Result<()
             ON audit_events(lease_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// Add transport-neutral invocation correlation to command-audit rows.
@@ -139,7 +140,7 @@ pub(super) fn apply_invocation_audit_context(conn: &Connection) -> Result<(), Or
             ON audit_events(trace_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v16 `audit_actor_identity` migration (ORB-10888): materialize the canonical
@@ -168,7 +169,7 @@ pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitE
             ON audit_events(actor_kind, actor_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     backfill_audit_actor_identity(conn)
 }
@@ -192,7 +193,7 @@ pub(super) fn apply_audit_self_reported_actor(conn: &Connection) -> Result<(), O
             ON audit_events(self_reported_actor);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v18 `audit_actor_alias_v2` migration: the alias map moved `fable` from a
@@ -219,12 +220,12 @@ pub(crate) fn backfill_audit_actor_identity(conn: &Connection) -> Result<(), Orb
                 "SELECT DISTINCT role FROM audit_events \
                  WHERE actor_alias_version IS NULL OR actor_alias_version != ?1",
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([ACTOR_ALIAS_MAP_VERSION], |row| row.get::<_, String>(0))
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .map_err(sqlite_store_error)?
     };
 
     for label in labels {
@@ -243,7 +244,7 @@ pub(crate) fn backfill_audit_actor_identity(conn: &Connection) -> Result<(), Orb
                 label,
             ],
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     Ok(())
@@ -279,7 +280,7 @@ pub(super) fn apply_audit_machine_name_columns(conn: &Connection) -> Result<(), 
             &format!("ALTER TABLE audit_events RENAME COLUMN {old} TO {new}"),
             [],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     Ok(())
 }
@@ -290,7 +291,7 @@ pub(super) fn apply_audit_tool_call_index(conn: &Connection) -> Result<(), Orbit
         "CREATE INDEX IF NOT EXISTS idx_audit_events_command_subcommand_timestamp
          ON audit_events(command, subcommand, timestamp);",
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// Extend the v2 event-type index with `ts`, so one index serves a read of one
@@ -302,5 +303,5 @@ pub(super) fn apply_v2_audit_event_type_ts_index(conn: &Connection) -> Result<()
          ON v2_audit_events(workspace_id, event_type, ts);
          DROP INDEX IF EXISTS idx_v2_audit_events_ws_event_type;",
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

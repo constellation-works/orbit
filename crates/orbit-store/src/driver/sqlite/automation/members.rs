@@ -2,6 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
     members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState, StateTriggerKind},
@@ -266,7 +267,7 @@ pub(super) fn release_misread_pilot_failures(conn: &Connection) -> Result<(), Or
             [],
             |row| row.get::<_, bool>(0),
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     if !states_exist {
         return Ok(());
     }
@@ -297,11 +298,11 @@ fn misread_apply(conn: &Connection, run_id: &str) -> Result<bool, OrbitError> {
                  JOIN job_runs r ON r.workspace_id = s.workspace_id AND r.run_id = s.run_id \
                  WHERE s.run_id = ?1 AND r.job_id = 'task_pilot_pipeline'",
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         statement
             .query_map([run_id], |row| row.get::<_, String>(0))
             .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .map_err(sqlite_store_error)?
     };
     Ok(!states.is_empty()
         && states.iter().all(|raw| {
@@ -323,7 +324,7 @@ fn release_failures(
     let rows = {
         let mut statement = conn
             .prepare("SELECT consumer, generation, state_json FROM automation_consumers")
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         statement
             .query_map([], |row| {
                 Ok((
@@ -333,7 +334,7 @@ fn release_failures(
                 ))
             })
             .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .map_err(sqlite_store_error)?
     };
 
     for (consumer, generation, raw) in rows {
@@ -365,7 +366,7 @@ fn release_failures(
             "UPDATE automation_consumers SET generation=?1, state_json=?2 WHERE consumer=?3 AND generation=?4",
             params![state.generation, encode(&state)?, consumer, generation],
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     Ok(())
 }

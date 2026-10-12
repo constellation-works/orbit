@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_has_column};
@@ -26,7 +27,7 @@ pub(super) fn ensure_tools_schema(conn: &Connection) -> Result<(), OrbitError> {
             "#,
             [],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     if table_has_column(conn, "tools", "is_builtin")? {
@@ -40,24 +41,24 @@ pub(super) fn ensure_tools_schema(conn: &Connection) -> Result<(), OrbitError> {
             "#,
             [],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     conn.execute(
         "UPDATE tools SET parameters_json = '[]' WHERE parameters_json = ''",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     conn.execute(
         "UPDATE tools SET created_at = datetime('now') WHERE created_at = ''",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     conn.execute(
         "UPDATE tools SET updated_at = datetime('now') WHERE updated_at = ''",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }

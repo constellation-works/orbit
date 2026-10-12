@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_exists, table_has_column};
@@ -56,7 +57,7 @@ pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), Orbit
             ON tool_calls(tool_name);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v20 `invocations_ts_index`: cover the accounting window filters and the
@@ -74,7 +75,7 @@ pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitE
             ON invocations(ts DESC, id DESC);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v36 `invocation_workspace_scope`: record the workspace each invocation
@@ -113,7 +114,7 @@ pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), 
                 WHERE workspace_id IS NULL;
             "#
         ))
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     conn.execute_batch(
@@ -122,7 +123,7 @@ pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), 
             ON invocations(workspace_id, job_run_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v40 `provider_limit_observations` [ORB-14695]: the host's provider usage
@@ -150,7 +151,7 @@ pub(super) fn apply_provider_limit_observations(conn: &Connection) -> Result<(),
             );
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v41 `provider_limit_readings` [ORB-14696]: a provider's own reading of a

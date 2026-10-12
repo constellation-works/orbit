@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::audit_events::ensure_audit_events_schema;
@@ -151,7 +152,7 @@ pub(super) fn apply_baseline_schema(conn: &Connection) -> Result<(), OrbitError>
             CREATE INDEX IF NOT EXISTS idx_adrs_owner ON adrs(owner);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     ensure_agent_sessions_schema(conn)?;
     ensure_tools_schema(conn)?;
@@ -207,7 +208,7 @@ fn ensure_agent_sessions_schema(conn: &Connection) -> Result<(), OrbitError> {
                 DROP TABLE agent_sessions_legacy;
             "#,
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     add_column_if_missing(conn, "agent_sessions", "identity_id", "TEXT")?;
@@ -317,5 +318,5 @@ pub(super) fn ensure_v2_state_consolidation_schema(conn: &Connection) -> Result<
             );
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }

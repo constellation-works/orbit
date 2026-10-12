@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::add_column_if_missing;
@@ -36,7 +37,7 @@ pub(super) fn apply_workspace_claim_scope(conn: &Connection) -> Result<(), Orbit
             ON task_reservations(workspace_id, scope, released_at);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -66,7 +67,7 @@ pub(super) fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), O
             ON task_reservations(workspace_orbit_dir, released_at);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "task_reservations", "workspace_id", "TEXT")?;
     add_column_if_missing(conn, "task_reservations", "owner_run_id", "TEXT")?;
@@ -86,7 +87,7 @@ pub(super) fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), O
             ON task_reservations(workspace_id, expires_at);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }

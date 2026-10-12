@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::params;
 
 use crate::Store;
@@ -56,7 +57,7 @@ impl Store {
                 row.get::<_, i64>(5)?,
             ))
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
     }
 
     pub fn get_audit_event_durations(
@@ -90,16 +91,14 @@ impl Store {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|b| b.as_ref()).collect();
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| row.get::<_, i64>(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Returns hourly buckets `(rfc3339_hour_start, count)` of audit events with
@@ -116,17 +115,15 @@ impl Store {
                    FROM audit_events WHERE timestamp >= ?1 \
                    GROUP BY bucket ORDER BY bucket ASC";
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![since.to_rfc3339()], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 }

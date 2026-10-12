@@ -9,6 +9,7 @@ use crate::{
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, params};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -105,7 +106,7 @@ pub(crate) fn reserve_files_in_tx(
                 params.owner_metadata_json.as_deref(),
             ],
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     Ok(TaskReservationReserveResult {
         reserved: true,
@@ -139,10 +140,7 @@ pub(super) fn expire_reservations_in_scope(
          ORDER BY expires_at ASC, reservation_id ASC",
         reservation_scope_clause(scope),
     );
-    let mut stmt = tx
-        .tx
-        .prepare(&sql)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(params![workspace_id, workspace_orbit_dir, now], |row| {
             Ok(ExpiredTaskReservation {
@@ -150,10 +148,10 @@ pub(super) fn expire_reservations_in_scope(
                 expired_at: row.get(1)?,
             })
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let expired_reservations = rows
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     if !expired_reservations.is_empty() {
         let sql = format!(
@@ -175,7 +173,7 @@ pub(super) fn expire_reservations_in_scope(
                     TaskReservationReleaseReason::TtlExpired.as_str(),
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
     }
 
     Ok(expired_reservations)
@@ -202,20 +200,16 @@ pub(super) fn find_reservation_conflicts(
          ORDER BY created_at ASC, reservation_id ASC",
         reservation_scope_clause(TaskReservationScope::Files),
     );
-    let mut stmt = tx
-        .tx
-        .prepare(&sql)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(params![workspace_id, workspace_orbit_dir, now], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut conflicts = Vec::new();
     for row in rows {
-        let (reservation_id, files_json) =
-            row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let (reservation_id, files_json) = row.map_err(sqlite_store_error)?;
         let reserved_files = parse_string_list(&files_json)?;
         for requested_file in &requested_files {
             if reserved_files
@@ -355,7 +349,7 @@ pub(super) fn load_reservation_row(
             reservation_row,
         )
         .optional()
-        .map_err(|error| OrbitError::Store(error.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 pub(super) fn load_active_reservations_by_owner(
@@ -374,18 +368,15 @@ pub(super) fn load_active_reservations_by_owner(
         select_reservation_columns(),
         reservation_scope_clause(TaskReservationScope::Files),
     );
-    let mut stmt = tx
-        .tx
-        .prepare(&sql)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(
             params![workspace_id, workspace_orbit_dir, owner_run_id],
             reservation_row,
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| OrbitError::Store(error.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 pub(super) fn find_owned_reservation_conflicts(
@@ -412,20 +403,17 @@ pub(super) fn find_owned_reservation_conflicts(
         select_reservation_columns(),
         reservation_scope_clause(TaskReservationScope::Files),
     );
-    let mut stmt = tx
-        .tx
-        .prepare(&sql)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(
             params![workspace_id, workspace_orbit_dir, now],
             reservation_row,
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut reservations = Vec::new();
     for row in rows {
-        let row = row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let row = row.map_err(sqlite_store_error)?;
         let reserved_files = parse_string_list(&row.files_json)?;
         let overlaps = requested_files.iter().any(|requested_file| {
             reserved_files

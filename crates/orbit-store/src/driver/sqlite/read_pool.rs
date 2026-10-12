@@ -24,8 +24,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::apply_default_pragmas;
+use orbit_common::storage::sqlite::{apply_default_pragmas, sqlite_error};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::Connection;
 
 use crate::driver::sqlite::connection::register_sql_functions;
@@ -91,11 +91,21 @@ impl ReadPool {
     }
 
     fn open_reader(&self) -> Result<Connection, OrbitError> {
-        let conn = Connection::open(&self.path)
-            .map_err(|e| OrbitError::Store(format!("open reader connection: {e}")))?;
+        let conn = Connection::open(&self.path).map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("open reader connection: {e}"),
+            )
+        })?;
         apply_default_pragmas(&conn)?;
-        conn.pragma_update(None, "query_only", "ON")
-            .map_err(|e| OrbitError::Store(format!("failed to set query_only: {e}")))?;
+        conn.pragma_update(None, "query_only", "ON").map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("failed to set query_only: {e}"),
+            )
+        })?;
         register_sql_functions(&conn)?;
         Ok(conn)
     }

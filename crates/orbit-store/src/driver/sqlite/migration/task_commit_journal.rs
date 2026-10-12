@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 /// v21 `task_commit_journal` (ORB-12528).
@@ -46,5 +47,5 @@ pub(super) fn apply_task_commit_journal(conn: &Connection) -> Result<(), OrbitEr
             ON task_coordination_rows(journal_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
