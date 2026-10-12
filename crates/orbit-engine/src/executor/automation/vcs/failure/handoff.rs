@@ -59,6 +59,7 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: recipe.to_string(),
+                operation_id: None,
             });
         }
         host.apply_task_automation_update(
