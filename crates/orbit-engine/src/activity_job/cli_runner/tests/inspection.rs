@@ -528,3 +528,87 @@ fn git(repo: &Path, args: &[&str]) -> String {
         .trim()
         .to_string()
 }
+
+// Security invariant at the private inspection boundary: every Git invocation,
+// including verification, disables fsmonitor and discards parent Git authority.
+// The shim observes the real child's effective config, then executes real Git.
+#[test]
+fn inspection_git_ignores_parent_locale_and_config() {
+    const TEST: &str = "activity_job::cli_runner::tests::inspection::inspection_git_ignores_parent_locale_and_config";
+    const REPO: &str = "ORBIT_TEST_INSPECTION_POLICY_REPO";
+    if let Some(repo) = std::env::var_os(REPO) {
+        let repo = Path::new(&repo);
+        let revision = std::env::var("ORBIT_TEST_INSPECTION_POLICY_REVISION").unwrap();
+        let blob = std::env::var("ORBIT_TEST_INSPECTION_POLICY_BLOB").unwrap();
+        assert_permanent(
+            SourceInspection::from_input(
+                &json!({"inspection_revision": blob}),
+                Some(repo),
+                Some("reviewer"),
+            ),
+            "does not name a commit",
+        );
+        let inspection = SourceInspection::from_input(
+            &json!({"inspection_revision": revision}),
+            Some(repo),
+            Some("reviewer"),
+        )
+        .unwrap()
+        .unwrap();
+        inspection.verify().unwrap();
+        return;
+    }
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let revision = init_repo(&repo);
+    let blob = git(&repo, &["rev-parse", "HEAD:README"]);
+    let stub_dir = temp.path().join("bin");
+    fs::create_dir(&stub_dir).unwrap();
+    let real_git = serde_json::to_string(&real_git_path()).unwrap();
+    write_executable(
+        &stub_dir.join("git"),
+        &format!(
+            r#"#!/usr/bin/env python3
+import os, subprocess, sys
+assert os.environ.get('LC_ALL') == 'C', os.environ.get('LC_ALL')
+assert 'LANGUAGE' not in os.environ
+assert 'GIT_DIR' not in os.environ
+assert not any(k == 'GIT_CONFIG' or k.startswith('GIT_CONFIG_') for k in os.environ)
+args = sys.argv[1:]
+i = 0
+while i < len(args) and args[i] == '-c':
+    i += 2
+config = subprocess.check_output([{real_git}, *args[:i], 'config', '--get', 'core.fsmonitor'], text=True)
+assert config.strip() == 'false', config
+os.execv({real_git}, [{real_git}, *args])
+"#
+        ),
+    );
+    let mut paths = vec![stub_dir];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    for locale in ["C", "de_DE.UTF-8"] {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", TEST, "--nocapture"])
+            .env(REPO, &repo)
+            .env("ORBIT_TEST_INSPECTION_POLICY_REVISION", &revision)
+            .env("ORBIT_TEST_INSPECTION_POLICY_BLOB", &blob)
+            .env("PATH", std::env::join_paths(&paths).unwrap())
+            .env("LANG", locale)
+            .env("LC_ALL", locale)
+            .env("LANGUAGE", "de")
+            .env("GIT_DIR", temp.path().join("absent-gitdir"))
+            .env("GIT_CONFIG", "absent-config")
+            .env("GIT_CONFIG_GLOBAL", "absent-global-config")
+            .env("GIT_CONFIG_SYSTEM", "absent-system-config")
+            .env("GIT_CONFIG_PARAMETERS", "malformed")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+            .env("GIT_CONFIG_VALUE_0", "true")
+            .env("GIT_CONFIG_FUTURE_OVERRIDE", "must-be-scrubbed");
+        let output = run_child_test(&mut child, TEST, temp.path());
+        assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+    }
+}

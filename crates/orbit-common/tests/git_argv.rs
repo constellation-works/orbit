@@ -57,6 +57,7 @@ fn program_running_argv_is_refused_before_git_runs() {
     let upload_pack = format!("--upload-pack={touch};");
     let abbreviated = format!("--upload-p={touch};");
     let hooks_path = format!("core.hooksPath={}", hooks.display());
+    let fsmonitor = format!("core.fsmonitor={touch}");
     let alias = format!("alias.ran=!{touch}");
     let ssh = format!("core.sshCommand={touch};");
     let template_arg = format!("--template={}", template.path().display());
@@ -83,6 +84,9 @@ fn program_running_argv_is_refused_before_git_runs() {
             "-m",
             "x",
         ],
+        vec!["-c", "core.fsmonitor=true", "status"],
+        vec!["-c", &fsmonitor, "status"],
+        vec!["-c", "core.fsmonitor", "status"],
         vec!["-c", &alias, "ran"],
         vec!["-C", ".", "-c", &alias, "ran"],
         vec!["-c", &ssh, "fetch", "ssh://example.invalid/repo"],
@@ -115,6 +119,8 @@ fn orbit_plumbing_argv_still_runs() {
     let pinned = [
         "-c",
         "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
         "-c",
         "gc.auto=0",
         "-c",

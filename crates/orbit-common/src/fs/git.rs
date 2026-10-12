@@ -261,6 +261,7 @@ fn looks_like_remote_auth_or_network_failure(stderr_lower: &str) -> bool {
 /// run, and `core.hooksPath` is admitted only when it disables hooks.
 const ADMITTED_CONFIG_OVERRIDES: &[(&str, Option<&str>)] = &[
     ("core.hooksPath", Some("/dev/null")),
+    ("core.fsmonitor", Some("false")),
     ("gc.auto", None),
     ("protocol.file.allow", None),
     ("user.name", None),
@@ -389,6 +390,9 @@ pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput,
 /// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
 /// the workspace: a timeout is never an exit status, so a caller cannot read
 /// it as Git's answer.
+/// Children use the C locale without `LANGUAGE` so stderr classification is
+/// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
+/// select repositories and admitted configuration explicitly through argv.
 pub fn run_git_within(
     workspace_path: &Path,
     args: &[&str],
@@ -399,7 +403,17 @@ pub fn run_git_within(
     command
         .args(&admitted)
         .current_dir(workspace_path)
+        .env("LC_ALL", "C")
+        .env_remove("LANGUAGE")
         .env("GIT_TERMINAL_PROMPT", "0");
+    for (name, _) in std::env::vars_os() {
+        if name == "GIT_DIR"
+            || name == "GIT_CONFIG"
+            || name.to_string_lossy().starts_with("GIT_CONFIG_")
+        {
+            command.env_remove(name);
+        }
+    }
     let output =
         run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
             |error| match error {

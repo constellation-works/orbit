@@ -8,9 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_common::fs::file_lock::FileLockOptions;
-use orbit_common::fs::git::{git_common_dir, git_fetch_lock_target};
+use orbit_common::fs::git::{git_common_dir, git_fetch_lock_target, is_git_ref_update_contention};
 use orbit_common::fs::io::with_exclusive_file_lock_options;
-use orbit_common::test_env::canonical_temp_dir;
+use orbit_common::test_env::{assert_child_test_passed, canonical_temp_dir, run_child_test};
 use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
 
 use super::super::git::{
@@ -170,4 +170,68 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
         error.contains(TRANSIENT_FAILURE_MARKER),
         "a stalled remote stays a transient failure: {error}"
     );
+}
+
+// Security invariant: the private host runner must fix Git's effective locale
+// before stderr-based retry decisions. An isolated child supplies the parent
+// locale without racing other tests; the public engine does not expose this runner.
+#[test]
+fn host_git_classifies_failures_in_the_c_locale() {
+    const TEST: &str =
+        "executor::automation::vcs::tests::git::host_git_classifies_failures_in_the_c_locale";
+    const CHILD: &str = "ORBIT_TEST_HOST_GIT_LOCALE";
+    if std::env::var_os(CHILD).is_some() {
+        let repo = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+        git_ok(repo.path(), &["init", "-q", "--template=", "."]);
+        let args = [
+            "-c",
+            "alias.child-locale=!printf '%s\\n' \"$LC_ALL\" \"${LANGUAGE-unset}\"",
+            "child-locale",
+        ];
+        let outcome = git_run(repo.path(), &args).unwrap();
+        assert!(outcome.success, "{}", outcome.stderr);
+        assert_eq!(outcome.stdout, "C\nunset\n");
+        let bytes = git_run_bytes(repo.path(), &args, None).unwrap();
+        assert!(bytes.success, "{}", bytes.stderr);
+        assert_eq!(bytes.stdout, b"C\nunset\n");
+        git_ok(
+            repo.path(),
+            &[
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@orbit.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "--no-verify",
+                "-q",
+                "-m",
+                "base",
+            ],
+        );
+        // Force contention directly rather than relying on host timing.
+        fs::write(repo.path().join(".git/refs/heads/fixture.lock"), "held").unwrap();
+        let failed = git_run(repo.path(), &["update-ref", "refs/heads/fixture", "HEAD"]).unwrap();
+        assert!(!failed.success && !failed.timed_out);
+        assert!(
+            is_git_ref_update_contention(&failed.stderr),
+            "{}",
+            failed.stderr
+        );
+        return;
+    }
+    let output_dir = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+    for locale in ["C", "de_DE.UTF-8"] {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1")
+            .env("LANG", locale)
+            .env("LC_ALL", locale)
+            .env("LANGUAGE", "de");
+        let output = run_child_test(&mut child, TEST, output_dir.path());
+        assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+    }
 }
