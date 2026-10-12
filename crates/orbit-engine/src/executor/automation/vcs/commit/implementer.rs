@@ -3,6 +3,7 @@
 
 use orbit_common::OrbitError;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, refuses_implementer_writes};
+use orbit_types::workflow::handoff::{ALREADY_RESOLVED_FIELD, AlreadyResolved};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -15,12 +16,28 @@ use super::scope::{NewPathPolicy, task_candidate_paths};
 /// needs scratch artifact references because only the commit step can import
 /// its evidence to the owner. This checks presence, not the report's truth;
 /// the existing clean-tree verifier remains the delivery authority.
+///
+/// [ORB-15747] An already-resolved outcome is a claimed leaf's, whose claim
+/// host replays its tests; its selectors are admitted here, before commit,
+/// and again where they run.
 pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     output: &Value,
 ) -> Result<(), OrbitError> {
-    if input.get("claimed").and_then(Value::as_bool) != Some(true)
+    let claimed = input.get("claimed").and_then(Value::as_bool) == Some(true);
+    if let Some(declared) =
+        AlreadyResolved::from_output(output).map_err(OrbitError::InvalidInput)?
+    {
+        if !claimed {
+            return Err(OrbitError::InvalidInput(format!(
+                "`{ALREADY_RESOLVED_FIELD}` is a claimed leaf's outcome, whose claim host replays \
+                 its tests; on this run, run the tests and report a clean-tree outcome without it"
+            )));
+        }
+        declared.admit().map_err(OrbitError::InvalidInput)?;
+    }
+    if !claimed
         || output
             .get("no_diff_artifacts")
             .and_then(Value::as_array)

@@ -167,6 +167,13 @@ owner then refuses a pull claim from any other machine with a reason naming
 the machine; its own drain may start the task. A requirement on any other
 machine stays a `utility_warnings` finding for an operator to arrange.
 
+A claimed leaf that finds its base already resolves such a task hands off
+`NoDiff` with an `already_resolved` outcome naming `cargo test -p <crate>
+--test <target> [<filter>]` selectors. Its claim host replays each on the base
+outside the agent sandbox and pins the passing logs for the owner, so the task
+settles without a PR; a failing replay fails the claim with its output, and an
+empty list or a selector that runs no test is refused.
+
 Only typed findings route work: a host requirement stated in warning prose does
 not. Platform mentions, cross-compilation targets, mocked checks, negative
 tests and measurements any host could repeat are not findings.

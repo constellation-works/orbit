@@ -340,6 +340,72 @@ pub struct NoDiffCheck {
     pub log_artifact: String,
 }
 
+/// A claimed implementer's outcome that its unchanged base already resolves
+/// the task, naming the tests that show it [ORB-15747]. Those tests run only
+/// outside the agent sandbox, so the claim host replays each on the base
+/// before the NoDiff handoff: a failing replay fails the claim, and a
+/// declaration that names nothing, or a selector that runs no test, never
+/// settles done. It travels in the implementer's output as
+/// [`ALREADY_RESOLVED_FIELD`], beside the clean-tree report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlreadyResolved {
+    /// `cargo test -p <crate> --test <target> [<filter>]` selectors.
+    pub selectors: Vec<String>,
+}
+
+/// The implementer output field that carries an [`AlreadyResolved`].
+pub const ALREADY_RESOLVED_FIELD: &str = "already_resolved";
+
+impl AlreadyResolved {
+    /// The declaration in an implementer's `output`, if it makes one.
+    pub fn from_output(output: &serde_json::Value) -> Result<Option<Self>, String> {
+        match output.get(ALREADY_RESOLVED_FIELD) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(value) => serde_json::from_value(value.clone())
+                .map(Some)
+                .map_err(|error| {
+                    format!(
+                        "`{ALREADY_RESOLVED_FIELD}` must be `{{\"selectors\": [\"cargo test -p \
+                         <crate> --test <target> [<filter>]\", ...]}}`: {error}"
+                    )
+                }),
+        }
+    }
+
+    /// Admit every selector as one integration test target in the closed
+    /// [`HostSandboxCommand`](super::HostSandboxCommand) grammar, since each
+    /// runs on the claim host outside any agent sandbox. An exact required
+    /// command is not a selector: validation already runs it, and it need not
+    /// run a test.
+    pub fn admit(&self) -> Result<Vec<super::HostSandboxCommand>, String> {
+        if self.selectors.is_empty() {
+            return Err(format!(
+                "`{ALREADY_RESOLVED_FIELD}` names no test selectors, so nothing would show the \
+                 base resolves the task"
+            ));
+        }
+        let mut admitted: Vec<super::HostSandboxCommand> = Vec::new();
+        for selector in &self.selectors {
+            let command = super::HostSandboxCommand::admit(selector, &[]).map_err(|refusal| {
+                format!(
+                    "`{ALREADY_RESOLVED_FIELD}` selector `{selector}` is not admitted ({}): {}; \
+                     a selector is `cargo test -p <crate> --test <target> [<filter>]`",
+                    refusal.reason.as_str(),
+                    refusal.detail
+                )
+            })?;
+            if admitted.contains(&command) {
+                return Err(format!(
+                    "`{ALREADY_RESOLVED_FIELD}` names selector `{selector}` twice"
+                ));
+            }
+            admitted.push(command);
+        }
+        Ok(admitted)
+    }
+}
+
 pub fn already_landed_scope(
     task: &crate::task::Task,
     comments: &[crate::task::TaskComment],

@@ -1,9 +1,12 @@
 //! Clean-base delivery for claimed leaves. The report is the existing verifier's
 //! checkpoint, not an agent's skip flag; the owner rechecks it on its own base.
+//! An already-resolved outcome's named tests replay here on the base, outside
+//! the agent sandbox, after the required commands [ORB-15747].
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::workflow::HostSandboxCommand;
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, TaskHandoff,
 };
@@ -16,6 +19,7 @@ use super::super::git::{
     BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
 };
 use super::super::review_gate::revision;
+use super::already_resolved;
 use super::delivery::repository;
 use super::input::refused;
 use super::observe::{observe_with, require_clean_candidate};
@@ -220,6 +224,9 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    // Refused before anything runs: a declaration naming nothing, or a
+    // selector outside the grammar, never reaches the host.
+    let resolved = already_resolved::declared(input)?;
     let report = claimed_clean_base_checkpoint(input)
         .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?;
     require_checkpoint_identity(report, &context.task_id, &context.run_id)?;
@@ -244,15 +251,26 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     require_clean_candidate(workspace, &candidate)?;
     let replays = claimed_deferred_replays(host, input)?;
     let commands = with_replays(context.required_commands.clone(), &replays);
-    let (results, validation_env) = run_claimed_commands(
+    let (mut results, validation_env) = run_claimed_commands(
         host, context, workspace, input, &candidate, &commands, &replays,
     )?;
+    let resolved = resolved.unwrap_or_default();
+    results.extend(already_resolved::replay(
+        host, context, workspace, &candidate, &resolved,
+    )?);
+    require_clean_candidate(workspace, &candidate)?;
     // Commands may have changed task artifacts too; recheck the checkpoint.
     verify_leaf(host, context, workspace, &evidence)?;
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
     let mut output = passed_output(context, &candidate, &references, results, validation_env)?;
     output["no_diff_evidence"] =
         serde_json::to_value(evidence).map_err(|error| OrbitError::Execution(error.to_string()))?;
+    output["already_resolved"] = json!(
+        resolved
+            .iter()
+            .map(HostSandboxCommand::host_command)
+            .collect::<Vec<_>>()
+    );
     Ok(output)
 }
 

@@ -166,6 +166,7 @@ impl RedCheck {
 struct CleanLeaf {
     pair: Pair,
     gate: Option<Gate>,
+    drain: String,
     leaf: String,
     task: String,
     bound: OrbitRuntime,
@@ -245,7 +246,7 @@ impl CleanLeaf {
         report: bool,
         gated: Option<GateOn>,
     ) -> Self {
-        Self::build_requiring(already_landed, completion, tags, report, gated, CHECK)
+        Self::build_requiring(already_landed, completion, tags, report, gated, CHECK, "")
     }
 
     /// A tagged clean leaf whose owner and follower require `red`'s command
@@ -258,7 +259,18 @@ impl CleanLeaf {
             false,
             None,
             &red.command(),
+            "",
         )
+    }
+
+    /// An untagged clean leaf whose implementer reports `no-diff.json` and
+    /// names `selectors` as its already-resolved outcome, on a follower whose
+    /// validation PATH resolves `cargo` to `replay` [ORB-15747].
+    fn resolved(replay: &Replay, selectors: &[&str]) -> Self {
+        let mut fixture =
+            Self::build_requiring(false, "done", &[], true, None, CHECK, &replay.config());
+        fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
+        fixture
     }
 
     fn build_requiring(
@@ -268,6 +280,7 @@ impl CleanLeaf {
         report: bool,
         gated: Option<GateOn>,
         required: &str,
+        follower_config: &str,
     ) -> Self {
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{required}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
@@ -284,7 +297,7 @@ impl CleanLeaf {
             _ => config.clone(),
         };
         let owner_config = naming(gated.is_some_and(GateOn::owner));
-        let config = naming(gated.is_some_and(GateOn::follower));
+        let config = naming(gated.is_some_and(GateOn::follower)) + follower_config;
         let pair = Pair::with_owner_config(&owner_config, &[None]);
         let task = pair.tasks[0].clone();
         let repo = &pair.owner_repo;
@@ -381,6 +394,7 @@ impl CleanLeaf {
         let mut fixture = Self {
             pair,
             gate,
+            drain,
             leaf,
             task,
             bound,
@@ -1962,4 +1976,298 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
             .all(|event| event["event"] != orbit_types::workflow::KNOWN_RED_VALIDATION_EVENT)
     );
     fixture.assert_no_blocked();
+}
+
+/// A stand-in `cargo` the follower's validation PATH resolves first, for an
+/// already-resolved replay [ORB-15747]. It records each argv and prints what
+/// it was last told to, from outside both checkouts so neither tree changes.
+struct Replay {
+    _dir: TempDir,
+    bin: PathBuf,
+    script: PathBuf,
+    runs: PathBuf,
+}
+
+impl Replay {
+    /// The incident's selector: a test that skips inside the agent sandbox.
+    const SELECTOR: &'static str =
+        "cargo test -p orbit-cli --test process cli_ctrl_c_during_proc_spawn_reports_interrupt";
+    const TEST: &'static str = "cli_ctrl_c_during_proc_spawn_reports_interrupt";
+
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let replay = Self {
+            bin: dir.path().join("bin"),
+            script: dir.path().join("replay.sh"),
+            runs: dir.path().join("replay.runs"),
+            _dir: dir,
+        };
+        std::fs::create_dir_all(&replay.bin).unwrap();
+        let cargo = replay.bin.join("cargo");
+        std::fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\nexec sh '{}'\n",
+                replay.runs.display(),
+                replay.script.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        replay.passes(1);
+        replay
+    }
+
+    /// The follower configuration that puts this `cargo` first.
+    fn config(&self) -> String {
+        format!(
+            "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
+            self.bin.display()
+        )
+    }
+
+    fn set(&self, body: &str) {
+        std::fs::write(&self.script, body).unwrap();
+    }
+
+    /// libtest's report of `tests` passing tests.
+    fn passes(&self, tests: u64) {
+        self.set(&format!(
+            "echo 'test {} ... ok'\necho 'test result: ok. {tests} passed; 0 failed; 0 ignored; \
+             0 measured; 0 filtered out; finished in 0.01s'\n",
+            Self::TEST
+        ));
+    }
+
+    /// The named test still fails natively.
+    fn fails(&self) {
+        self.set(&format!(
+            "echo 'test {test} ... FAILED'\necho 'interrupt was not reported'\necho 'test \
+             result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; \
+             finished in 0.01s'\nexit 101\n",
+            test = Self::TEST
+        ));
+    }
+
+    /// The test returns without exercising its path, even natively.
+    fn skips(&self) {
+        self.set(&format!(
+            "echo 'skipping: {} needs a terminal'\necho 'test result: ok. 1 passed; 0 failed; \
+             0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
+            Self::TEST
+        ));
+    }
+
+    /// Each argv the stand-in was run with.
+    fn runs(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.runs)
+            .map(|runs| runs.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// The command line the claim host runs for [`Self::SELECTOR`].
+    fn host_command() -> String {
+        format!("{} -- --nocapture", Self::SELECTOR)
+    }
+}
+
+/// [ORB-15747] A claimed leaf that finds its base already resolves the task,
+/// shown only by a test that skips inside the agent sandbox, names that test
+/// as its already-resolved outcome. Its claim host replays it on the base
+/// outside the agent sandbox, the passing log joins the handoff beside the
+/// required command's, and the owner completes the task without a PR.
+/// Before, an empty diff gave the affected-test gate nothing to run, and the
+/// task blocked until an operator ran the test by hand.
+#[test]
+fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr",
+    ) {
+        return;
+    }
+    for job in NO_DIFF_ROUTES {
+        let replay = Replay::new();
+        let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
+        let handoff = fixture.run_clean_pipeline(job);
+        assert_eq!(
+            replay.runs(),
+            vec![format!(
+                "test -p orbit-cli --test process {} -- --nocapture",
+                Replay::TEST
+            )],
+            "{job}: the named test replays once, through the host's grammar"
+        );
+        assert_eq!(handoff.candidate.candidate, handoff.candidate.base, "{job}");
+        assert_eq!(handoff.candidate.base.commit, fixture.base, "{job}");
+        assert_eq!(
+            fixture.owner_validated_commands(&handoff),
+            vec![CHECK.to_string(), Replay::host_command()],
+            "{job}: the replay is recorded beside the required command"
+        );
+        let artifacts =
+            RuntimeHost::get_task_artifacts(&fixture.pair.wire.owner, &fixture.task).unwrap();
+        let replayed = artifacts
+            .iter()
+            .find(|artifact| artifact.path == handoff.validation[1].path)
+            .expect("the owner holds the replay log the handoff pins");
+        let log: HandoffValidationLog = serde_json::from_slice(&replayed.content).unwrap();
+        assert_eq!(log.tested_head, fixture.base, "{job}");
+        assert!(
+            log.output.contains("test result: ok. 1 passed"),
+            "{job}: {log:?}"
+        );
+
+        let settled = fixture.settle(&handoff).expect("the owner accepts it");
+        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        let accepted = fixture
+            .pair
+            .wire
+            .owner
+            .accepted_task_handoff(&handoff.claim_id)
+            .unwrap();
+        engine_action(
+            &fixture.pair.wire.owner,
+            "handoff_land",
+            &json!({"handoff_id": accepted.handoff_id}),
+        )
+        .unwrap();
+        assert_eq!(fixture.pair.owner_status(&fixture.task), "done", "{job}");
+        fixture.assert_no_blocked();
+    }
+}
+
+/// [ORB-15747] A named test that still fails natively fails the step with
+/// its output, before any handoff, and the leaf's settlement blocks the task
+/// on the owner with that output; the full log is on the owner's task.
+#[test]
+fn a_failing_already_resolved_replay_blocks_the_task_with_its_output() {
+    if !isolated(
+        module_path!(),
+        "a_failing_already_resolved_replay_blocks_the_task_with_its_output",
+    ) {
+        return;
+    }
+    let replay = Replay::new();
+    replay.fails();
+    let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
+    let input = fixture.validate_input();
+    let error = engine_action(&fixture.bound, "claim_validate", &input).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::Execution(_))
+            && message.contains("test_failed")
+            && message.contains("interrupt was not reported"),
+        "{message}"
+    );
+    assert_eq!(replay.runs().len(), 1);
+    assert!(
+        fixture.pair.admission(&fixture.leaf).settlement.is_none(),
+        "a failed replay records no handoff"
+    );
+    let artifacts =
+        RuntimeHost::get_task_artifacts(&fixture.pair.wire.owner, &fixture.task).unwrap();
+    let failed = artifacts
+        .iter()
+        .find(|artifact| artifact.path.ends_with("/already-resolved-0.failed.json"))
+        .expect("the failed replay's log is on the owner's task");
+    assert!(message.contains(&failed.path), "{message}");
+    let log: Value = serde_json::from_slice(&failed.content).unwrap();
+    assert_eq!(log["exit_code"], 101, "{log}");
+    assert_eq!(log["tested_head"], fixture.base.as_str(), "{log}");
+    assert!(
+        log["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("interrupt was not reported")),
+        "{log}"
+    );
+
+    // The leaf ends on that step's failure, and its settlement blocks the task.
+    fixture.pair.leaf_fails_with(&fixture.leaf, &message);
+    let pass = fixture
+        .pair
+        .pass_over(&fixture.drain, json!({"window_expired": true}));
+    assert_eq!(
+        fixture.pair.owner_status(&fixture.task),
+        "blocked",
+        "{pass}"
+    );
+    let task = fixture.pair.owner_task(&fixture.task).to_string();
+    assert!(
+        task.contains("test result: FAILED. 0 passed; 1 failed"),
+        "the owner's task names the failing output: {task}"
+    );
+}
+
+/// [ORB-15747] An already-resolved outcome that would prove nothing is
+/// refused rather than settled: no selectors, a selector outside the `cargo
+/// test` grammar (refused before anything runs), a replay that runs no test
+/// or skips its path, and a declaration on a candidate that changes its base.
+#[test]
+fn an_already_resolved_claim_that_runs_no_named_test_is_refused() {
+    if !isolated(
+        module_path!(),
+        "an_already_resolved_claim_that_runs_no_named_test_is_refused",
+    ) {
+        return;
+    }
+    for (selectors, refusal) in [
+        (vec![], "names no test selectors"),
+        (vec!["make ci-test-affected"], "command_not_allowed"),
+        (
+            vec!["cargo test -p orbit-cli --test process x;touch ran"],
+            "shell_metacharacter",
+        ),
+        (vec![Replay::SELECTOR, Replay::SELECTOR], "twice"),
+    ] {
+        let replay = Replay::new();
+        let fixture = CleanLeaf::resolved(&replay, &selectors);
+        let input = fixture.validate_input();
+        let error = engine_action(&fixture.bound, "claim_validate", &input).unwrap_err();
+        assert!(
+            matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains(refusal),
+            "{selectors:?}: {error}"
+        );
+        assert!(replay.runs().is_empty(), "{selectors:?}: nothing replays");
+        let artifacts =
+            RuntimeHost::get_task_artifacts(&fixture.pair.wire.owner, &fixture.task).unwrap();
+        assert!(
+            artifacts
+                .iter()
+                .all(|artifact| !artifact.path.starts_with("validation/")),
+            "{selectors:?}: refused before any command runs"
+        );
+        assert!(fixture.pair.admission(&fixture.leaf).settlement.is_none());
+    }
+
+    for (behave, refusal) in [
+        (Replay::passes as fn(&Replay, u64), "no_tests_ran"),
+        (|replay: &Replay, _| replay.skips(), "self_skipped"),
+    ] {
+        let replay = Replay::new();
+        behave(&replay, 0);
+        let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
+        let input = fixture.validate_input();
+        let error = engine_action(&fixture.bound, "claim_validate", &input).unwrap_err();
+        assert!(
+            matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains(refusal),
+            "{refusal}: {error}"
+        );
+        assert_eq!(replay.runs().len(), 1, "{refusal}");
+        assert!(
+            fixture.pair.admission(&fixture.leaf).settlement.is_none(),
+            "{refusal}: no handoff"
+        );
+    }
+
+    // Off the NoDiff route, the candidate changed its base.
+    let replay = Replay::new();
+    let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
+    let error = engine_action(&fixture.bound, "claim_validate", &fixture.input).unwrap_err();
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains("changes it"),
+        "{error}"
+    );
+    assert!(replay.runs().is_empty());
 }

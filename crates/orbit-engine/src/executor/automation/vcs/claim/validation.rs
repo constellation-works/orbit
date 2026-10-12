@@ -23,8 +23,8 @@ use super::super::flaky::rerun_failed_tests;
 use super::super::git::normalize_base_branch;
 use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
 use super::input::{refused, required_workspace};
-use super::no_diff;
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
+use super::{already_resolved, no_diff};
 
 /// Run the owner's required commands on the exact candidate and attach one
 /// captured log per command to the owner's copy of the task.
@@ -72,6 +72,11 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 /// after the required commands, here outside the agent sandbox, and must
 /// report executed tests. The pre-publication output names it in
 /// `replayed`, which the pin step expects among the results.
+///
+/// [ORB-15747] An implementer's already-resolved outcome belongs to the
+/// NoDiff route, which replays its named tests on the base
+/// ([`super::already_resolved`]); a candidate that changes the base is
+/// refused for one.
 pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -92,6 +97,12 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     }
     if let Some(prevalidated) = input.get("prevalidated").filter(|value| !value.is_null()) {
         return pin_prevalidated(host, &context, &workspace_path, input, prevalidated);
+    }
+    if already_resolved::declared(input)?.is_some() {
+        return Err(refused(
+            "an already-resolved outcome hands off its unchanged base, but this candidate \
+             changes it; deliver the change without `already_resolved`, or revert it",
+        ));
     }
     let pending = context.ship_mode == "pr"
         && input
@@ -169,6 +180,19 @@ pub(super) struct ClaimedResult {
     known_red: Option<HandoffKnownRed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     flaky: Option<FlakyValidation>,
+}
+
+impl ClaimedResult {
+    /// A command that passed outright with `output`.
+    pub(super) fn passed(command: String, output: String) -> Self {
+        Self {
+            command,
+            output,
+            exit_code: 0,
+            known_red: None,
+            flaky: None,
+        }
+    }
 }
 
 /// Run `commands` on the observed candidate, in order, and return each
