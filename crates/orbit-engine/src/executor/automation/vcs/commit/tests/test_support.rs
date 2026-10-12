@@ -96,7 +96,7 @@ impl CommitTestHost {
     }
 }
 
-impl RuntimeHost for CommitTestHost {
+impl crate::test_support::NullRuntimeHost for CommitTestHost {
     fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         Ok(None)
     }

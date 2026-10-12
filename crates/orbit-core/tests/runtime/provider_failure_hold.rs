@@ -612,7 +612,7 @@ impl<'a> Pipeline<'a> {
 }
 
 #[cfg(unix)]
-impl RuntimeHost for Pipeline<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
     fn run_deterministic(
         &self,
         action: &str,

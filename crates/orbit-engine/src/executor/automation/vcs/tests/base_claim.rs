@@ -22,13 +22,11 @@ use super::super::baseline::{cached_base_check, known_red};
 #[cfg(unix)]
 use super::super::required_command::{VALIDATION_TIMEOUT_MS, run_required_command};
 #[cfg(unix)]
-use crate::RuntimeHost;
-
 #[cfg(unix)]
 struct Host;
 
 #[cfg(unix)]
-impl RuntimeHost for Host {}
+impl crate::test_support::NullRuntimeHost for Host {}
 
 // Fault injection [ORB-15590]: a small capture ceiling forces a genuine
 // supervisor stop without generating large output or load. Its process-wide

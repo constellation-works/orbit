@@ -222,7 +222,7 @@ impl RecoveryHost<'_> {
     }
 }
 
-impl RuntimeHost for RecoveryHost<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         RuntimeHost::final_recovery_log_tail(self.runtime, run_id)
     }

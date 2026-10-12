@@ -1197,7 +1197,7 @@ struct VerificationHost<'a> {
     applied: Mutex<Vec<Value>>,
 }
 
-impl RuntimeHost for VerificationHost<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for VerificationHost<'_> {
     fn run_deterministic(
         &self,
         action: &str,

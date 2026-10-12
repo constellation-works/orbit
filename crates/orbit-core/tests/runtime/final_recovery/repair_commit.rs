@@ -81,7 +81,7 @@ struct RepairPipeline<'a> {
     validations: Mutex<Vec<Value>>,
 }
 
-impl RuntimeHost for RepairPipeline<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
     fn list_run_tasks(&self, run: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
         self.fixture.runtime.list_run_tasks(run)
     }

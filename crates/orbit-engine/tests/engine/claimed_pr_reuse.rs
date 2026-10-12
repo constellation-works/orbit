@@ -20,7 +20,7 @@ use std::process::Command;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError, test_env};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
+use orbit_engine::{TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
@@ -628,7 +628,7 @@ impl Host {
     }
 }
 
-impl RuntimeHost for Host {
+impl orbit_engine::test_support::NullRuntimeHost for Host {
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         if task_id != TASK_ID {
             return Err(OrbitError::not_found(

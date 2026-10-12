@@ -206,7 +206,7 @@ struct RecordingHost {
     refuse_registration_after: Option<PathBuf>,
 }
 
-impl RuntimeHost for RecordingHost {
+impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -403,7 +403,7 @@ struct MissingWrapperHost {
     broker_starts: AtomicUsize,
 }
 
-impl RuntimeHost for MissingWrapperHost {
+impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -733,7 +733,7 @@ struct ProbeHost {
     unresolvable: bool,
 }
 
-impl RuntimeHost for ProbeHost {
+impl orbit_engine::test_support::NullRuntimeHost for ProbeHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -774,7 +774,7 @@ impl RuntimeHost for ProbeHost {
 /// A host that has not opted into executing deferral probes.
 struct UnsupportedProbeHost;
 
-impl RuntimeHost for UnsupportedProbeHost {
+impl orbit_engine::test_support::NullRuntimeHost for UnsupportedProbeHost {
     fn run_deterministic(
         &self,
         _action: &str,

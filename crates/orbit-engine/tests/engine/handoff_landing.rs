@@ -35,7 +35,7 @@ struct LandingHost {
     intents: Mutex<Vec<(DirectLandingRequest, String)>>,
 }
 
-impl RuntimeHost for LandingHost {
+impl orbit_engine::test_support::NullRuntimeHost for LandingHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
     }
@@ -178,7 +178,7 @@ struct ReconciliationHost {
     status: Value,
 }
 
-impl RuntimeHost for ReconciliationHost {
+impl orbit_engine::test_support::NullRuntimeHost for ReconciliationHost {
     fn handoff_landing_context(
         &self,
         _handoff_id: &str,
@@ -328,7 +328,7 @@ impl OpenPullRequestHost {
     }
 }
 
-impl RuntimeHost for OpenPullRequestHost {
+impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
     fn handoff_landing_context(
         &self,
         _handoff_id: &str,

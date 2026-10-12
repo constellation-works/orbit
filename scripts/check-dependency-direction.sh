@@ -38,7 +38,8 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-engine)
-      echo "orbit-agent orbit-common orbit-exec orbit-store orbit-tools orbit-types"
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-agent orbit-common orbit-engine orbit-exec orbit-store orbit-tools orbit-types"
       ;;
     orbit-automation)
       echo "orbit-common orbit-store orbit-types"
@@ -79,6 +80,11 @@ allowed_dev_only_deps() {
       ;;
     orbit-cli)
       echo "orbit-engine orbit-exec orbit-tools"
+      ;;
+    orbit-engine)
+      # Engine's own tests enable its `test-support` feature to build host
+      # doubles on the null host base; no other crate is reached.
+      echo "orbit-engine"
       ;;
     orbit-core)
       # Core's own integration tests enable its `test-support` feature to

@@ -1170,7 +1170,7 @@ impl ScriptHost {
         self
     }
 }
-impl RuntimeHost for ScriptHost {
+impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
     fn requires_claude_worker_credential(&self) -> bool {
         self.requires_claude_credential
     }

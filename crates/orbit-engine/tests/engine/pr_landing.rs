@@ -6550,7 +6550,7 @@ impl DeliveryHost {
     }
 }
 
-impl RuntimeHost for DeliveryHost {
+impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,
@@ -6882,7 +6882,7 @@ impl RuntimeHost for DeliveryHost {
             ship_mode: self.ship_mode.lock().unwrap().clone(),
             base_branch: BASE.to_string(),
             landing_branch: BASE.to_string(),
-            required_commands: self.required_validation_commands(),
+            required_commands: RuntimeHost::required_validation_commands(self),
         })
     }
 
@@ -6900,7 +6900,8 @@ impl RuntimeHost for DeliveryHost {
         task_id: &str,
         record: &orbit_types::workflow::FlakyValidation,
     ) -> Result<(), OrbitError> {
-        self.apply_task_automation_update(
+        RuntimeHost::apply_task_automation_update(
+            self,
             task_id,
             TaskAutomationUpdate {
                 append_history: vec![TaskHistoryEntry {
@@ -6929,7 +6930,10 @@ impl RuntimeHost for DeliveryHost {
             .unwrap()
             .clone()
             .unwrap_or_else(|| {
-                ValidationEnvironment::launcher(self.agent_subprocess_environment(&[]))
+                ValidationEnvironment::launcher(RuntimeHost::agent_subprocess_environment(
+                    self,
+                    &[],
+                ))
             })
     }
 
@@ -6941,7 +6945,7 @@ impl RuntimeHost for DeliveryHost {
         path: &str,
         content: Vec<u8>,
     ) -> Result<(), OrbitError> {
-        if self.get_task(task_id)?.job_run_id.as_deref() != Some(run_id) {
+        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
             return Err(OrbitError::PolicyDenied(format!(
                 "run {run_id} does not own {task_id}"
             )));

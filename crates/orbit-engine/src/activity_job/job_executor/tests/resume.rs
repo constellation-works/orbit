@@ -48,7 +48,7 @@ impl CheckpointHost {
     }
 }
 
-impl RuntimeHost for CheckpointHost {
+impl crate::test_support::NullRuntimeHost for CheckpointHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -60,8 +60,7 @@ impl RuntimeHost for CheckpointHost {
             .lock()
             .expect("inputs")
             .push((action.to_string(), input.clone()));
-        self.inner
-            .run_deterministic(action, config, input, tool_context)
+        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
     }
 
     fn checkpoint_step(

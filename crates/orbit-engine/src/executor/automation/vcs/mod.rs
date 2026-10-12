@@ -57,7 +57,10 @@ pub use worktree::{
     collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
 };
 
-pub(crate) fn run_private_operation(
+/// Run one engine-private VCS/PR operation against the real `git` and `gh`,
+/// outside the public tool registry. A host answers
+/// [`crate::RuntimeHost::run_private_vcs_operation`] with it.
+pub fn run_private_operation(
     operation: &str,
     input: &serde_json::Value,
 ) -> Result<serde_json::Value, orbit_common::OrbitError> {

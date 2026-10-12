@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_engine::{DispatchError, RuntimeHost, V2AuditWriter, execute_job_with_resume};
+use orbit_engine::{DispatchError, V2AuditWriter, execute_job_with_resume};
 use orbit_types::workflow::activity_job::{
     ActivityV2Spec, DeterministicSpec, JobV2, V2AuditEventKind,
 };
@@ -21,7 +21,7 @@ struct Host {
     inputs: Mutex<Vec<Value>>,
 }
 
-impl RuntimeHost for Host {
+impl orbit_engine::test_support::NullRuntimeHost for Host {
     fn run_deterministic(
         &self,
         action: &str,

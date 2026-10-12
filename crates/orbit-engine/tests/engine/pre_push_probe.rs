@@ -7,7 +7,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, execute_deterministic_action};
+use orbit_engine::execute_deterministic_action;
 use serde_json::{Value, json};
 
 use super::git_fixture;
@@ -15,7 +15,7 @@ use super::git_fixture;
 const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 struct Host;
-impl RuntimeHost for Host {}
+impl orbit_engine::test_support::NullRuntimeHost for Host {}
 
 #[test]
 fn a_timed_out_pre_push_probe_recovers_and_allows_publication() {

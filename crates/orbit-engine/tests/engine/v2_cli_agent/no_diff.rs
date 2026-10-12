@@ -14,9 +14,9 @@ struct NoDiffHost {
     committed: AtomicBool,
 }
 
-impl RuntimeHost for NoDiffHost {
+impl orbit_engine::test_support::NullRuntimeHost for NoDiffHost {
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        self.cli.resolve_cli_executor(provider)
+        RuntimeHost::resolve_cli_executor(&self.cli, provider)
     }
 
     fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
@@ -232,7 +232,7 @@ struct SummaryDeliveryHost {
     state: std::sync::Mutex<orbit_types::workflow::PipelineState>,
 }
 
-impl RuntimeHost for SummaryDeliveryHost {
+impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
     fn read_run_state(
         &self,
         _: &str,
@@ -257,7 +257,7 @@ impl RuntimeHost for SummaryDeliveryHost {
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        self.cli.resolve_cli_executor(provider)
+        RuntimeHost::resolve_cli_executor(&self.cli, provider)
     }
 
     fn get_task(&self, _: &str) -> Result<Task, OrbitError> {

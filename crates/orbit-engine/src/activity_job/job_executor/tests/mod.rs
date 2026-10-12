@@ -61,7 +61,7 @@ impl ScriptedHost {
     }
 }
 
-impl RuntimeHost for ScriptedHost {
+impl crate::test_support::NullRuntimeHost for ScriptedHost {
     fn run_deterministic(
         &self,
         action: &str,
