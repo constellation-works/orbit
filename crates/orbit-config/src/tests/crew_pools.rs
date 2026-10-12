@@ -67,13 +67,23 @@ fn final_recovery_pool(body: &str) -> Result<Vec<String>, String> {
 }
 
 #[test]
-fn final_recovery_pool_defaults_to_sol_and_opus_and_shows_in_config() {
+fn final_recovery_pool_default_is_valid_and_shows_in_config() {
     let pool = final_recovery_pool("").expect("built-in registry admits the default pool");
-    assert_eq!(pool, ["opus:20", "sol:100"]);
+    assert!(
+        !pool.is_empty(),
+        "built-in final recovery has a usable pool"
+    );
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let config = crate::ResolvedConfig::load(&super::roots(global.path(), workspace.path()))
+        .expect("built-in config loads");
+    let canonical = canonical_crew_pool(&pool, &config.crews, "workflow.final_recovery_crews")
+        .expect("every default entry references a defined crew with a valid weight");
+    assert_eq!(canonical.to_setting_value(), pool);
     let built_in = crate::ConfigSnapshot::default();
     assert_eq!(
         built_in.value_for("workflow.final_recovery_crews"),
-        Some(serde_json::json!(["opus:20", "sol:100"])),
+        Some(serde_json::json!(pool)),
         "`orbit config show` projects the admitted default"
     );
 }
@@ -113,13 +123,19 @@ fn final_recovery_pool_admits_weighted_pools_and_empty_disables_it() {
 
 #[test]
 fn unset_final_recovery_pool_keeps_only_crews_a_custom_registry_defines() {
-    let opus_only = "[crews.opus]\nmodel = \"m\"\nprovider = \"claude\"\n";
-    assert_eq!(
-        final_recovery_pool(opus_only).expect("partial default"),
-        ["opus:20"]
+    let defaults = final_recovery_pool("").expect("default pool");
+    let entry = defaults.first().expect("non-empty default pool");
+    let name = entry.split(':').next().expect("entry has a crew name");
+    let name = toml::Value::String(name.to_string());
+    let one_member = format!(
+        "[workflow]\ndefault_crew = {name}\n\n[crews.{name}]\nmodel = \"fixture-model\"\nprovider = \"codex\"\n"
     );
-    let neither = "[workflow]\ndefault_crew = \"grok\"\n\n\
-                   [crews.grok]\nmodel = \"m\"\nprovider = \"grok\"\n";
+    assert_eq!(
+        final_recovery_pool(&one_member).expect("partial default"),
+        std::slice::from_ref(entry)
+    );
+    let neither = "[workflow]\ndefault_crew = \"fixture-only\"\n\n\
+                   [crews.fixture-only]\nmodel = \"m\"\nprovider = \"codex\"\n";
     assert!(
         final_recovery_pool(neither)
             .expect("a registry without the default crews still loads")

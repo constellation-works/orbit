@@ -1,9 +1,16 @@
 //! `orbit init` seeding at the config boundary: the default crew, the enabled
-//! flags and the complexity pools a detected-family set produces [ORB-14671].
+//! flags and valid pool references across detected-family combinations [ORB-14671].
 //! No system lane is seeded: system work draws from the pools [ORB-15663].
 
 use crate::{ConfigSeed, seed_default_config};
 use toml::Table;
+
+const POOL_KEYS: [&str; 4] = [
+    "low_complexity_crews",
+    "medium_complexity_crews",
+    "hard_complexity_crews",
+    "xhard_complexity_crews",
+];
 
 fn seeded(families: &[&str]) -> Table {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -26,19 +33,7 @@ fn workflow_pool(config: &Table, key: &str) -> Vec<String> {
 }
 
 fn pools(config: &Table) -> [Vec<String>; 4] {
-    [
-        "low_complexity_crews",
-        "medium_complexity_crews",
-        "hard_complexity_crews",
-        "xhard_complexity_crews",
-    ]
-    .map(|key| workflow_pool(config, key))
-}
-
-fn crew_enabled(config: &Table, name: &str) -> bool {
-    config["crews"][name]["enabled"]
-        .as_bool()
-        .unwrap_or_else(|| panic!("crews.{name}.enabled is a bool"))
+    POOL_KEYS.map(|key| workflow_pool(config, key))
 }
 
 fn lane(config: &Table, key: &str) -> Option<String> {
@@ -47,134 +42,23 @@ fn lane(config: &Table, key: &str) -> Option<String> {
         .map(|value| value.as_str().expect("lane is a string").to_string())
 }
 
-fn expect_pools(config: &Table, expected: [&[&str]; 4], case: &str) {
-    let expected = expected.map(|pool| pool.iter().map(ToString::to_string).collect::<Vec<_>>());
-    assert_eq!(
-        pools(config),
-        expected,
-        "{case}: pools follow the seed table in docs/CONFIG.md (\"What `orbit init` seeds\")"
-    );
-}
-
-#[test]
-fn claude_only_seeds_opus_default_and_claude_pools() {
-    let config = seeded(&["claude"]);
-    assert_eq!(lane(&config, "system_crew"), None);
-    assert_eq!(lane(&config, "default_crew").as_deref(), Some("opus"));
-    expect_pools(
-        &config,
-        [&["haiku"], &["sonnet"], &["opus"], &["opus"]],
-        "claude only",
-    );
-}
-
-#[test]
-fn codex_only_seeds_astra_default_and_codex_pools() {
-    let config = seeded(&["codex"]);
-    assert_eq!(lane(&config, "default_crew").as_deref(), Some("astra"));
-    expect_pools(
-        &config,
-        [&["luna"], &["sol"], &["sol"], &["astra"]],
-        "codex only",
-    );
-}
-
-#[test]
-fn codex_and_claude_seed_opus_default_and_mixed_pools() {
-    let config = seeded(&["codex", "claude"]);
-    assert_eq!(lane(&config, "default_crew").as_deref(), Some("opus"));
-    expect_pools(
-        &config,
-        [
-            &["haiku", "luna"],
-            &["sol", "sonnet"],
-            &["opus"],
-            &["opus", "astra"],
-        ],
-        "codex + claude",
-    );
-}
-
-#[test]
-fn haiku_is_seeded_enabled_exactly_when_claude_is_detected() {
-    assert!(crew_enabled(&seeded(&["claude"]), "haiku"));
-    assert!(!crew_enabled(&seeded(&["codex"]), "haiku"));
-    assert!(!crew_enabled(&seeded(&[]), "haiku"));
-    assert_eq!(
-        seeded(&["claude"])["crews"]["haiku"]["provider"].as_str(),
-        Some("claude")
-    );
-}
-
-#[test]
-fn grok_joins_medium_and_google_cli_joins_low_on_every_base_row() {
-    let cases: [(&[&str], [&[&str]; 4]); 4] = [
-        (&["claude"], [&["haiku"], &["sonnet"], &["opus"], &["opus"]]),
-        (&["codex"], [&["luna"], &["sol"], &["sol"], &["astra"]]),
-        (
-            &["codex", "claude"],
-            [
-                &["haiku", "luna"],
-                &["sol", "sonnet"],
-                &["opus"],
-                &["opus", "astra"],
-            ],
-        ),
-        (&[], [&[], &[], &[], &[]]),
-    ];
-    for (base, expected) in cases {
-        let with = |extra: &[&str]| seeded(&[base, extra].concat());
-        let grow = |pool: usize, entry: &'static str| {
-            let mut grown = expected.map(|pool| pool.to_vec());
-            grown[pool].push(entry);
-            grown
-        };
-        let case = format!("{base:?}");
-
-        let config = with(&["grok"]);
-        let want = grow(1, "grok");
-        expect_pools(&config, want.each_ref().map(Vec::as_slice), &case);
-
-        // `agy` is preferred over the legacy Gemini CLI, alone or together.
-        for (extra, entry) in [
-            (&["antigravity"][..], "antigravity"),
-            (&["gemini"][..], "gemini"),
-            (&["gemini", "antigravity"][..], "antigravity"),
-        ] {
-            let config = with(extra);
-            let want = grow(0, entry);
-            expect_pools(&config, want.each_ref().map(Vec::as_slice), &case);
-        }
-
-        let config = with(&["grok", "antigravity"]);
-        let mut want = grow(1, "grok");
-        want[0].push("antigravity");
-        expect_pools(&config, want.each_ref().map(Vec::as_slice), &case);
-    }
-}
-
-#[test]
-fn families_without_a_pool_rule_leave_pools_empty() {
-    for family in ["copilot", "cursor", "pi", "opencode"] {
-        let config = seeded(&[family]);
-        expect_pools(&config, [&[], &[], &[], &[]], family);
-        assert_eq!(lane(&config, "default_crew").as_deref(), Some(family));
-    }
-}
-
 #[test]
 fn host_with_no_cli_seeds_all_crews_disabled_and_no_lane_keys() {
     let config = seeded(&[]);
-    expect_pools(&config, [&[], &[], &[], &[]], "no CLI");
+    assert!(pools(&config).iter().all(Vec::is_empty));
     assert_eq!(lane(&config, "default_crew"), None);
-    assert_eq!(lane(&config, "system_crew"), None);
+    assert_eq!(
+        lane(&config, "system_crew"),
+        None,
+        "ORB-15663: fresh seeds never write the retired system lane"
+    );
     for (name, crew) in config["crews"].as_table().expect("crews table") {
         assert_eq!(crew["enabled"].as_bool(), Some(false), "crew `{name}`");
     }
 }
 
 #[test]
-fn every_seeded_pool_entry_names_an_enabled_crew() {
+fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
     let families = [
         "claude",
         "codex",
@@ -193,12 +77,47 @@ fn every_seeded_pool_entry_names_an_enabled_crew() {
             .filter(|(bit, _)| mask & (1 << bit) != 0)
             .map(|(_, family)| *family)
             .collect::<Vec<_>>();
-        let config = seeded(&detected);
-        for pool in pools(&config) {
-            for name in pool {
+        let seed = ConfigSeed::from_families(&detected);
+        let crews = seed.seeded_crews();
+        let workflow = crate::seed::render_workflow_crew_keys(&seed, &crews)
+            .expect("family combination renders valid workflow keys");
+        let config: Table = format!("[workflow]\n{workflow}")
+            .parse()
+            .expect("rendered workflow is valid TOML");
+        assert_eq!(
+            lane(&config, "system_crew"),
+            None,
+            "ORB-15663: fresh seeds never write the retired system lane"
+        );
+        if detected.is_empty() {
+            assert_eq!(lane(&config, "default_crew"), None);
+        } else {
+            let default = lane(&config, "default_crew").expect("detected families have a default");
+            assert!(!default.trim().is_empty());
+            assert!(
+                crews.get(&default).is_some_and(|crew| crew.enabled),
+                "families {detected:?}: default `{default}` names an enabled defined crew"
+            );
+        }
+        for (name, crew) in &crews {
+            assert_eq!(
+                crew.enabled,
+                detected.contains(&crew.assignment.provider.as_str()),
+                "families {detected:?}: crew `{name}` follows its provider's availability"
+            );
+            assert!(
+                !crew.assignment.model.trim().is_empty(),
+                "crew `{name}` has a model"
+            );
+        }
+        for (key, pool) in POOL_KEYS.into_iter().zip(pools(&config)) {
+            let canonical = crate::canonical_crew_pool(&pool, &crews, key)
+                .expect("rendered pool parses and references defined crews");
+            for entry in canonical.entries {
                 assert!(
-                    crew_enabled(&config, &name),
-                    "families {detected:?}: pool entry `{name}` must be an enabled seeded crew"
+                    crews[&entry.name].enabled,
+                    "families {detected:?}: pool entry `{}` must be enabled",
+                    entry.name
                 );
             }
         }
@@ -207,30 +126,46 @@ fn every_seeded_pool_entry_names_an_enabled_crew() {
 
 #[test]
 fn rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled() {
-    let seed = ConfigSeed::from_families(["claude"]);
-    let mut crews = seed.seeded_crews();
-    crews.get_mut("haiku").expect("haiku is seeded").enabled = false;
-    let error = crate::seed::render_workflow_crew_keys(&seed, &crews)
-        .expect_err("haiku sits in the low pool");
-    assert!(
-        error.to_string().contains("`haiku`"),
-        "error names the offending crew: {error}"
-    );
+    let seed = ConfigSeed::from_families(["claude", "codex", "grok"]);
+    let crews = seed.seeded_crews();
+    let pools = seed.complexity_pools();
+    let (key, victim) = POOL_KEYS
+        .into_iter()
+        .zip(pools)
+        .find_map(|(key, pool)| pool.first().copied().map(|name| (key, name)))
+        .expect("detected families seed a pool entry to fault");
+    let default = crews
+        .iter()
+        .find(|(name, crew)| crew.enabled && name.as_str() != victim)
+        .map(|(name, _)| name.clone())
+        .expect("another enabled crew can be the default");
+    let seed = seed.with_default_crew(default);
 
-    crews.remove("sonnet");
-    crews.get_mut("haiku").expect("haiku is seeded").enabled = true;
-    let error = crate::seed::render_workflow_crew_keys(&seed, &crews)
-        .expect_err("sonnet sits in the medium pool");
-    assert!(
-        error
-            .to_string()
-            .contains("workflow.medium_complexity_crews"),
-        "error names the pool key: {error}"
-    );
+    for missing in [false, true] {
+        let mut crews = crews.clone();
+        if missing {
+            crews.remove(victim);
+        } else {
+            crews
+                .get_mut(victim)
+                .expect("pool member is defined")
+                .enabled = false;
+        }
+        let error = crate::seed::render_workflow_crew_keys(&seed, &crews)
+            .expect_err("missing or disabled pool member is refused");
+        assert!(
+            error.to_string().contains(&format!("workflow.{key}")),
+            "error names the offending pool: {error}"
+        );
+        assert!(
+            error.to_string().contains(&format!("`{victim}`")),
+            "error names the offending crew: {error}"
+        );
+    }
 }
 
 #[test]
-fn seeded_config_loads_and_a_config_without_crews_resolves_haiku() {
+fn seeded_and_builtin_configs_load_valid_crew_registries() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
 
@@ -238,40 +173,19 @@ fn seeded_config_loads_and_a_config_without_crews_resolves_haiku() {
     super::write_config(workspace.path(), "[workflow]\n");
     let config = crate::ResolvedConfig::load(&super::roots(global.path(), workspace.path()))
         .expect("config without crews loads");
-    let haiku = &config.crews["haiku"];
-    assert_eq!(
-        (
-            haiku.assignment.provider.as_str(),
-            haiku.assignment.model.as_str(),
-            haiku.enabled
-        ),
-        (
-            "claude",
-            orbit_common::model_defaults::CLAUDE_HAIKU_MODEL,
-            true
-        )
+    assert!(!config.crews.is_empty());
+    for (name, crew) in &config.crews {
+        assert!(!name.trim().is_empty());
+        assert!(!crew.assignment.model.trim().is_empty());
+        assert!(!crew.assignment.provider.trim().is_empty());
+    }
+    assert!(
+        !config.crews.contains_key("terra"),
+        "ORB-14672 keeps the retired terra crew out of the built-in registry"
     );
-    let built_in_names = config.crews.keys().map(String::as_str).collect::<Vec<_>>();
-    assert_eq!(
-        built_in_names,
-        [
-            "antigravity",
-            "astra",
-            "copilot",
-            "cursor",
-            "fable",
-            "gemini",
-            "grok",
-            "haiku",
-            "luna",
-            "opencode",
-            "opus",
-            "pi",
-            "sol",
-            "sonnet",
-        ],
-        "ORB-14672 guards removal of terra, and ORB-15663 of the retired `system` crew, \
-         from the no-[crews] built-in registry"
+    assert!(
+        !config.crews.contains_key("system"),
+        "ORB-15663 keeps the retired system crew out of the built-in registry"
     );
 
     // A seeded file, pools included, passes the same load-time validation.

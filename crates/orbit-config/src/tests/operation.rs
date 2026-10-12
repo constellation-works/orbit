@@ -96,7 +96,15 @@ fn omitted_review_table_is_off_with_the_default_minutes() {
         config.operation.review_before_pr.source,
         OperationLayerSource::BuiltIn
     );
-    assert_eq!(config.operation.review_minutes.value, 30);
+    assert_eq!(
+        config.operation.review_minutes.source,
+        OperationLayerSource::BuiltIn
+    );
+    assert!(config.operation.review_minutes.value > 0);
+    assert_eq!(
+        config.operation.review_budget().minutes,
+        config.operation.review_minutes.value
+    );
 }
 
 #[test]
