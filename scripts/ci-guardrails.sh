@@ -75,6 +75,7 @@ fi
 "$repo_root/scripts/test-website-workflow.py"
 "$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
+"$repo_root/scripts/test-refresh-dashboard-vendor.py"
 "$repo_root/scripts/check-test-shell-waits.py"
 "$repo_root/scripts/test-unit-test-inventory.py"
 "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"

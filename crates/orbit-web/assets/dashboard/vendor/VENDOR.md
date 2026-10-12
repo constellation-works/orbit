@@ -18,6 +18,10 @@ Do not edit the minified blobs by hand.
 2. From the repository root run `./scripts/refresh-dashboard-vendor.sh`.
    That recopies the npm dist files named in the manifest, rewrites SHA-256
    digests and version fields, and refreshes the lockfile.
+   Before copying an asset, it validates every tarball member and reads the
+   requested regular file directly without extracting the archive. Absolute
+   paths, parent traversal, links and special files cause the refresh to fail
+   on every supported Python version.
 3. Confirm `./scripts/check-dashboard-vendor.py` exits 0.
 4. Load the dashboard (`orbit web serve`) and check Markdown rendering.
 

@@ -35,7 +35,7 @@ import os
 import subprocess
 import sys
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1])
 work = Path(sys.argv[2])
@@ -78,18 +78,29 @@ for asset in manifest["assets"]:
         )
     filename = records[-1]["filename"]
     tarball = work / filename
-    extract = work / f"extract-{npm_package}"
-    extract.mkdir()
-    with tarfile.open(tarball, "r:gz") as archive:
-        try:
-            archive.extractall(extract, filter="data")
-        except TypeError:
-            archive.extractall(extract)
-    source = extract / "package" / asset["npm_file"]
     destination = vendor / asset["path"]
-    if not source.is_file():
-        raise SystemExit(f"refresh-dashboard-vendor: {spec} is missing {asset['npm_file']}")
-    destination.write_bytes(source.read_bytes())
+    with tarfile.open(tarball, "r:gz") as archive:
+        # Validate the entire untrusted archive before updating any asset.
+        # Reading just the requested regular file avoids filesystem extraction
+        # and works even on Python versions without tarfile's data filter.
+        for member in archive.getmembers():
+            name = PurePosixPath(member.name)
+            if name.is_absolute() or ".." in name.parts:
+                raise SystemExit(
+                    f"refresh-dashboard-vendor: {spec} has unsafe member {member.name!r}"
+                )
+            if not (member.isfile() or member.isdir()):
+                raise SystemExit(
+                    f"refresh-dashboard-vendor: {spec} has unsupported member {member.name!r}"
+                )
+        try:
+            member = archive.getmember(f"package/{asset['npm_file']}")
+        except KeyError:
+            raise SystemExit(f"refresh-dashboard-vendor: {spec} is missing {asset['npm_file']}")
+        if not member.isfile():
+            raise SystemExit(f"refresh-dashboard-vendor: {spec} is missing {asset['npm_file']}")
+        with archive.extractfile(member) as source:
+            destination.write_bytes(source.read())
     digest = hashlib.sha256(destination.read_bytes()).hexdigest()
     asset["version"] = version
     asset["sha256"] = digest
