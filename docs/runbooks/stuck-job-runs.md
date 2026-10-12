@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-06
+last_validated: 2026-10-12
 ---
 
 # Recover Stuck Job Runs
@@ -97,20 +97,21 @@ or `orbit run events <run_id> --type cli.invocation.process` for the raw audit e
 and return as soon as it is durable [ORB-10801]. A zero exit means validation,
 persistence, and worker startup succeeded — it says nothing about the run's eventual
 outcome, which is why every submission prints the run id and the inspection commands
-above. Add `--wait` to block on the run instead; that mode exits nonzero for a `failed`,
-`timeout`, `cancelled`, or `interrupted` terminal state and prints the diagnostic.
+above. Add `--wait` to block on the run instead; that mode exits nonzero for any
+non-success outcome, including a `held` run, and prints the diagnostic.
 
 A submission that reports `queued` is durable but has not started: the job is already at
 its `max_active_runs` limit and its worker is polling for a slot.
 
-If the submission itself fails (unknown job, invalid asset, worker that could not spawn),
-no run is left behind in a startable state — the persisted run is terminalized as
+An unknown job or invalid asset fails during submission without leaving a startable run. If a
+run was persisted but its detached worker could not start, Orbit terminalizes it as
 `interrupted` with a startup diagnostic and worker-log path.
 
 ## Interpret run states
 
-`pending → running → success | failed | timeout | cancelled | interrupted`
-(plus transient `retrying` and step-level `skipped`).
+`pending → running → success | failed | timeout | cancelled | interrupted | held`
+(plus transient `retrying` and step-level `skipped`). A `held` run is resumable through its
+specific recovery path; it is not an ordinary failed terminal run.
 
 `interrupted` means the run was orphaned: its owner process died through a crash, SIGKILL,
 or reboot without finalizing the run. A job that genuinely failed is `failed`;
@@ -216,10 +217,12 @@ persists only the selectors; `orbit run show` resolves the holder from the live 
 when it renders (`--json`: `waiting_on_lock_holders`), so a holder that has since released drops
 off the line. `orbit run readiness` reports the same holders as `blocked-by=`.
 
-A failed, timed-out, or interrupted run leaves its task `blocked`, which automation skips.
-An operator cancellation returns its task to `backlog` with the cancellation reason, preserving
-the candidate for a later resume. Pass `--block` to `orbit run cancel` when the existing manual
-recovery flow is preferred; the dashboard cancel uses the backlog default. `orbit task show
+A failed, timed-out, or interrupted run ordinarily leaves its task `blocked`, which automation
+skips. Typed holds use their own task states: a baseline-red or provider-failure hold returns the
+task to `backlog`, while a forge hold keeps it `in-progress` as described below. An operator
+cancellation returns its task to `backlog` with the cancellation reason, preserving the candidate
+for a later resume. Pass `--block` to `orbit run cancel` when the existing manual recovery flow is
+preferred; the dashboard cancel uses the backlog default. `orbit task show
 <task-id>` prints a `Next:` line for a blocked task: the exact `orbit job resume <run-id>` when
 that run is resumable (`failed`, `timeout`, `interrupted`), or the `orbit task update <task-id>
 --status backlog` command for other blocks. `--json` carries the same in `next_step`; it is

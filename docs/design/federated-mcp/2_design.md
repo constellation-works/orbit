@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -33,7 +33,7 @@ Direct SSH stdio to one chosen host remains the v1 remote path and is unchanged 
 
 ## 2. Host-qualified selector
 
-Every workspace-scoped federated call carries a **structured, caller-uninterpreted** host-qualified selector. Encoding `hm_<id>/ws_*` is normative. The token is addressing data. Callers copy the `selector` field from federated `orbit_workspace_list`; they must not parse it, construct it from `host_id`, or concatenate remembered identifiers. The gateway must not reinterpret it against its own local catalog.
+Every workspace-scoped federated call that supplies a workspace selector carries a **structured, caller-uninterpreted** host-qualified selector. Encoding `hm_<id>/ws_*` is normative. The token is addressing data. Callers copy the `selector` field from federated `orbit_workspace_list`; they must not parse it, construct it from `host_id`, or concatenate remembered identifiers. The gateway must not reinterpret it against its own local catalog. An id-only call to an id-routed task tool is the exception: it routes by task-id prefix to the host that holds the task.
 
 The stable key is `machine_id` (`hm_…`), not renameable `host_id`. Example form: `hm_<id>/ws_orbit`. A display host name such as `orbit-linux/ws_orbit` is not a valid selector.
 
@@ -120,6 +120,8 @@ The precedence above covers everything decidable **before** the destination sees
 **Two budgets, not one.** SSH setup, the MCP handshake, discovery, and `tools/list` share one probe budget, because a caller cannot tell those phases apart. The routed `tools/call` gets its own, larger budget, stamped when its request is written. A single session-wide deadline would spend the tool's execution time on the round trips that merely chose the destination, and would cap every routed tool — including `orbit.command.exec` and `orbit.workflow.ship` — at whatever classification left over.
 
 **A lost answer after dispatch is `outcome_unknown`, not `unreachable_destination`.** Once the request is on the wire the destination may have run and committed it, and killing the SSH child does not undo remote work. `unreachable_destination` means a delivery miss, which invites a retry; retrying a possibly-committed `orbit.task.add` or `orbit.workflow.ship` duplicates it. A loss *before* the request is written — including a failed write — is still `unreachable_destination`, because nothing was delivered. `outcome_unknown` is a post-dispatch outcome and does not enter the precedence ladder.
+
+A routed reply without usable `structuredContent` is also an unusable answer: `result: null`, `{}`, or missing/null `structuredContent` produce `outcome_unknown` because the destination may have committed the call. The mux does not automatically replay it.
 
 **Each budget covers the write as well as the answer.** A destination that stops draining stdin, or a stalled transport, would otherwise hold a large request's write forever, with the deadline consulted only afterwards. A write still blocked at its deadline kills the session so the write ends; it is `unreachable_destination` when the request line provably never fully left, and otherwise — for a routed `tools/call` — `outcome_unknown`. The deadline is also checked before each queued message is read, so a destination streaming unrelated messages cannot keep a read alive past it.
 
