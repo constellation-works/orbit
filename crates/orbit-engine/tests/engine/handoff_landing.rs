@@ -7,7 +7,8 @@
 //! [ORB-13894]. PR reconciliation resolves external uncertainty before stopping
 //! a mismatched delivery, so subsequent attempts see the settled state. A stop
 //! on a conflicting or stale base is marked repairable [ORB-14261]. A hosted
-//! check the review owed the owner gates the merge [ORB-15677].
+//! check the review owed the owner gates the merge, and only an explicit
+//! success counts [ORB-15677] [ORB-15812].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -389,11 +390,13 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
     }
 }
 
-/// [ORB-15677] A check the before-landing review owed the pull request's
-/// hosted CI gates the merge itself, even where branch protection does not
-/// require it: the landing merges only once that check passed on the pinned
-/// head, stops when it failed, and never merges while it is absent or still
-/// running. A local candidate, which no hosted CI runs, never lands with one.
+/// [ORB-15677] [ORB-15812] A check the before-landing review owed the pull
+/// request's hosted CI gates the merge itself, even where branch protection
+/// does not require it: the landing merges only once that check reports an
+/// explicit success on the pinned head, stops when it failed, and never
+/// merges while it is absent, still running, skipped, or neutral. A
+/// StatusContext success still passes. A local candidate, which no hosted CI
+/// runs, never lands with one.
 #[test]
 fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
     const OWED: &str = "CodeQL / Analyze (rust)";
@@ -408,8 +411,25 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
     };
     let other = json!({"__typename": "CheckRun", "name": "fast", "workflowName": "CI",
                        "status": "COMPLETED", "conclusion": "SUCCESS"});
+    let status_success = json!({
+        "__typename": "StatusContext",
+        "context": OWED,
+        "state": "SUCCESS",
+    });
     for (case, rollup, merges, stop_reason) in [
         ("passed", json!([other, check(Some("SUCCESS"))]), true, None),
+        (
+            "skipped",
+            json!([other, check(Some("SKIPPED"))]),
+            false,
+            Some("not yet passed"),
+        ),
+        (
+            "neutral",
+            json!([other, check(Some("NEUTRAL"))]),
+            false,
+            Some("not yet passed"),
+        ),
         (
             "failed",
             json!([other, check(Some("FAILURE"))]),
@@ -423,6 +443,12 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
             Some("not yet passed"),
         ),
         ("absent", json!([other]), false, Some("not yet passed")),
+        (
+            "status context passed",
+            json!([other, status_success]),
+            true,
+            None,
+        ),
     ] {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
