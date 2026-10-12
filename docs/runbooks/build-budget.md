@@ -133,8 +133,10 @@ step, when no step output was checkpointed. Live metrics refresh on the provider
 `orbit run readiness` and `orbit doctor` warn when a running local or pull drain's
 effective concurrency exceeds the host build slots, including a resized ceiling. The
 warning fires only in a checkout that ships `scripts/build-budget.py`, because only such
-a checkout's Make targets wait for a slot. In any other checkout, builds run without
-admission, so no mismatch is reported whatever `ORBIT_BUILD_SLOTS` or the `slots` file
+a checkout's Make targets wait for a slot. The wrapper must resolve to a file inside the
+checkout; a symbolic link to a file elsewhere does not count as shipped. In any other
+checkout, builds run without admission, so no mismatch is reported whatever
+`ORBIT_BUILD_SLOTS` or the `slots` file
 says. The warning names both counts, `ORBIT_BUILD_SLOTS` and the resolved `slots` file.
 These diagnostics do not change capacity or admission; a drain may deliberately
 run more agents than build slots. Disabled admission (`ORBIT_BUILD_BUDGET=0`) produces

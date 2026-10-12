@@ -165,6 +165,38 @@ fn readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper
 }
 
 #[test]
+fn readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout() {
+    if !isolated_run_observation(
+        "run_observation::build_budget::readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout",
+    ) {
+        return;
+    }
+    // A link into another directory is not a wrapper the checkout ships. Swapping
+    // it for a regular file shows the same drains do warn, so the silence comes
+    // from the containment check rather than from drains being missed.
+    let fixture = Fixture::init();
+    let outside = fixture.home.join("elsewhere-build-budget.py");
+    fs::write(&outside, "").unwrap();
+    fs::create_dir_all(fixture.work.join("scripts")).unwrap();
+    let wrapper = fixture.work.join("scripts/build-budget.py");
+    std::os::unix::fs::symlink(&outside, &wrapper).unwrap();
+    seed_running_drains(&fixture, 4);
+    let snapshot = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        snapshot["capacity"]["build_budget_warnings"],
+        serde_json::json!([]),
+        "{snapshot}"
+    );
+    fs::remove_file(&wrapper).unwrap();
+    fs::write(&wrapper, "").unwrap();
+    let snapshot = fixture.json(&["run", "readiness", "--json"]);
+    let warnings = snapshot["capacity"]["build_budget_warnings"]
+        .as_array()
+        .unwrap();
+    assert_eq!(warnings.len(), 2, "{snapshot}");
+}
+
+#[test]
 fn invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor() {
     if !isolated_run_observation(
         "run_observation::build_budget::invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor",

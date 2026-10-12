@@ -20,7 +20,18 @@ impl OrbitRuntime {
         // Read settings before the participation check, so an invalid setting
         // is still reported as an advisory error in every checkout.
         let budget = BuildBudgetCapacity::read()?;
-        if !self.paths().repo_root.join(ADMISSION_WRAPPER).is_file() {
+        // The wrapper counts only as a regular file inside the checkout, so a
+        // link that resolves elsewhere is not a shipped wrapper. `Path::starts_with`
+        // after canonicalize is CodeQL's rust/path-injection barrier, and a helper
+        // wrapping the check does not count, so the check stays here and `is_file`
+        // runs on the canonical path.
+        let (Ok(repo_root), Ok(wrapper)) = (
+            std::fs::canonicalize(&self.paths().repo_root),
+            std::fs::canonicalize(self.paths().repo_root.join(ADMISSION_WRAPPER)),
+        ) else {
+            return Ok(Vec::new());
+        };
+        if !wrapper.starts_with(&repo_root) || !wrapper.is_file() {
             return Ok(Vec::new());
         }
         let mut warnings = Vec::new();
