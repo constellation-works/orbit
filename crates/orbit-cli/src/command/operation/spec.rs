@@ -112,7 +112,6 @@ pub struct CommandOperation {
     pub task_owner_id: Option<String>,
     pub audit_meta: Option<CommandMeta>,
     pub json_error_preference: Option<bool>,
-    pub suppress_errors: bool,
     pub dispatch: CommandDispatch,
     /// The governed operation this invocation performs, when it performs one
     /// [ORB-10453].
@@ -149,7 +148,6 @@ impl CommandOperation {
         runtime_need: RuntimeNeed,
         audit_meta: Option<CommandMeta>,
         json_error_preference: Option<bool>,
-        suppress_errors: bool,
         dispatch: CommandDispatch,
     ) -> Self {
         Self {
@@ -157,7 +155,6 @@ impl CommandOperation {
             task_owner_id: None,
             audit_meta,
             json_error_preference,
-            suppress_errors,
             dispatch,
             governed: None,
             plugin_callback_entry_point: false,
@@ -478,7 +475,6 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             job_run_id: None,
         }),
         json_output,
-        false,
         runtime_dispatch!(Tool),
     )
     .plugin_callback_entry_point(matches!(&command.command, ToolSubcommand::Run(_)))

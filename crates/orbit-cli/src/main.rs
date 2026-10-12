@@ -575,7 +575,7 @@ fn run() {
         Ok(command::host_route::Preflight::Local) => {}
         Ok(command::host_route::Preflight::Remote(result)) => {
             let json_error_preference = cli.command.operation().json_error_preference;
-            finish_command(result, &sink, false, json_error_preference, None);
+            finish_command(result, &sink, json_error_preference, None);
             return;
         }
         Err(error) => {
@@ -592,7 +592,6 @@ fn run() {
         task_owner_id,
         audit_meta,
         json_error_preference,
-        suppress_errors,
         dispatch,
         governed,
         plugin_callback_entry_point: _,
@@ -728,7 +727,7 @@ fn run() {
                         workspace_selector.as_deref(),
                     ),
                 );
-                finish_command(result, &sink, suppress_errors, json_error_preference, None);
+                finish_command(result, &sink, json_error_preference, None);
                 return;
             }
             RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
@@ -775,9 +774,6 @@ fn run() {
     let runtime = match bootstrapped {
         Ok(runtime) => runtime,
         Err(err) => {
-            if suppress_errors {
-                return;
-            }
             print_error(&err, &sink, json_error_preference);
             orbit_common::observability::logging::exit(1);
         }
@@ -806,7 +802,7 @@ fn run() {
         .map(|meta| audit_middleware::AuditGuard::new(&runtime, meta));
     let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
 
-    finish_command(result, &sink, suppress_errors, json_error_preference, guard);
+    finish_command(result, &sink, json_error_preference, guard);
 }
 
 /// Refuse this invocation if a plugin backend is the caller [ORB-12876].
@@ -843,7 +839,6 @@ fn refuse_plugin_child_cli(
 fn finish_command(
     result: command::CommandOut,
     sink: &OutputSink,
-    suppress_errors: bool,
     json_error_preference: Option<bool>,
     mut guard: Option<audit_middleware::AuditGuard<'_>>,
 ) {
@@ -866,9 +861,6 @@ fn finish_command(
     // the complete render/stream outcome and duration before any exit below.
     drop(guard);
     if let Err(err) = rendered {
-        if suppress_errors {
-            return;
-        }
         print_error(&err, sink, json_error_preference);
         orbit_common::observability::logging::exit(1);
     }

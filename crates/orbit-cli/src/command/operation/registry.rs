@@ -11,7 +11,6 @@ impl Commands {
                 RuntimeNeed::Forbidden,
                 Some(admin_meta("init", None, Some("config"), None)),
                 None,
-                false,
                 dispatch_init,
             ),
             Commands::Workspace(command) => {
@@ -61,7 +60,6 @@ impl Commands {
                         None,
                     )),
                     None,
-                    false,
                     dispatch_workspace,
                 )
                 .governed_when(governed, "workspace", subcommand)
@@ -79,7 +77,6 @@ impl Commands {
                     RuntimeNeed::Required,
                     Some(admin_meta("config", Some(subcommand), Some("config"), None)),
                     None,
-                    false,
                     runtime_dispatch!(Config),
                 )
             }
@@ -102,7 +99,6 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    false,
                     dispatch_host,
                 )
             }
@@ -114,7 +110,6 @@ impl Commands {
                 },
                 Some(admin_meta("migrate", None, Some("workspace"), None)),
                 None,
-                false,
                 dispatch_migrate,
             ),
             Commands::Update(_) => CommandOperation::new(
@@ -124,7 +119,6 @@ impl Commands {
                 RuntimeNeed::Forbidden,
                 Some(admin_meta("update", None, Some("installation"), None)),
                 None,
-                false,
                 dispatch_update,
             ),
             Commands::Run(command) => {
@@ -237,7 +231,6 @@ impl Commands {
                     runtime_need,
                     Some(admin_meta("run", Some(subcommand), target_type, target_id)),
                     None,
-                    false,
                     dispatch_run,
                 )
             }
@@ -260,7 +253,6 @@ impl Commands {
                         Some(target),
                     )),
                     None,
-                    false,
                     runtime_dispatch!(Gc),
                 )
                 .governed_when(reaps, "gc", target)
@@ -284,7 +276,6 @@ impl Commands {
                         Some("host"),
                     )),
                     None,
-                    false,
                     dispatch_clock,
                 )
             }
@@ -297,7 +288,6 @@ impl Commands {
                     Some("host"),
                 )),
                 None,
-                false,
                 dispatch_sweep,
             ),
             Commands::Routine(command) => {
@@ -318,7 +308,6 @@ impl Commands {
                         None,
                     )),
                     None,
-                    false,
                     dispatch_routine,
                 )
             }
@@ -422,7 +411,6 @@ impl Commands {
                     runtime_need,
                     Some(admin_meta("task", Some(subcommand), target_type, target_id)),
                     None,
-                    false,
                     boxed_runtime_dispatch!(Task),
                 )
                 .with_task_owner_id(task_owner_id)
@@ -453,7 +441,6 @@ impl Commands {
                     None,
                 )),
                 None,
-                false,
                 runtime_dispatch!(Search),
             ),
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
@@ -476,7 +463,6 @@ impl Commands {
                         invocation.target_id(),
                     )),
                     None,
-                    false,
                     runtime_dispatch!(Friction),
                 )
             }
@@ -487,20 +473,13 @@ impl Commands {
                 // the authorization row the decision itself writes.
                 let prunes =
                     matches!(&command.command, AuditSubcommand::Prune(args) if args.confirm);
-                CommandOperation::new(
-                    RuntimeNeed::Required,
-                    None,
-                    None,
-                    false,
-                    runtime_dispatch!(Audit),
-                )
-                .governed_when(prunes, "audit", "prune")
+                CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
+                    .governed_when(prunes, "audit", "prune")
             }
             Commands::Log(_) => CommandOperation::new(
                 RuntimeNeed::Required,
                 Some(admin_meta("log", Some("tail"), Some("log_feed"), None)),
                 None,
-                false,
                 runtime_dispatch!(Log),
             ),
             Commands::Doctor(command) => {
@@ -529,7 +508,6 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    false,
                     runtime_dispatch!(Doctor),
                 )
             }
@@ -564,7 +542,6 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    false,
                     runtime_dispatch!(AutoTask),
                 )
             }
@@ -604,13 +581,7 @@ impl Commands {
                 } else {
                     RuntimeNeed::Required
                 };
-                CommandOperation::new(
-                    runtime_need,
-                    Some(meta),
-                    None,
-                    false,
-                    runtime_dispatch!(Job),
-                )
+                CommandOperation::new(runtime_need, Some(meta), None, runtime_dispatch!(Job))
             }
             Commands::Tool(command) => tool_operation(command),
             // `orbit <ns> <verb>` is `orbit tool run <ns>.<verb>` in another
@@ -637,7 +608,6 @@ impl Commands {
                         job_run_id: None,
                     }),
                     Some(args.pretty),
-                    false,
                     |command, context| match command {
                         Commands::PluginGroup(invocation) => {
                             (*invocation).execute(context.runtime()?)
@@ -702,7 +672,6 @@ impl Commands {
                         target_id.as_deref(),
                     )),
                     None,
-                    false,
                     runtime_dispatch!(Plugin),
                 )
             }
@@ -718,7 +687,6 @@ impl Commands {
                     RuntimeNeed::Forbidden,
                     Some(admin_meta("mcp", Some(subcommand), Some("mcp"), None)),
                     None,
-                    false,
                     dispatch_mcp,
                 )
                 // Only `serve`: a stdio server a backend starts for itself
@@ -737,7 +705,6 @@ impl Commands {
                     RuntimeNeed::Forbidden,
                     Some(admin_meta("web", Some(subcommand), Some("dashboard"), None)),
                     None,
-                    false,
                     dispatch_web,
                 )
             }
@@ -759,7 +726,6 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    false,
                     runtime_dispatch!(Skill),
                 )
             }
@@ -772,7 +738,6 @@ impl Commands {
                     Some(&command.run_id),
                 )),
                 None,
-                false,
                 runtime_dispatch!(Logs),
             ),
             Commands::Artifacts(command) => CommandOperation::new(
@@ -784,7 +749,6 @@ impl Commands {
                     Some(&command.id),
                 )),
                 None,
-                false,
                 runtime_dispatch!(Artifacts),
             ),
         }
