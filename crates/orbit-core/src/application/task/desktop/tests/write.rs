@@ -147,6 +147,7 @@ impl TaskPrForge for ReplayForge {
 
 /// A stand-in `gh`, first on `PATH` while the guard lives, that reports pull
 /// request #17 open at [`PR_HEAD`].
+#[cfg(unix)]
 fn provider_reports_pr_17() -> orbit_common::test_env::ScopedEnv {
     let bin = PathBuf::from(std::env::var("HOME").unwrap()).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -179,6 +180,7 @@ fn provider_reports_pr_17() -> orbit_common::test_env::ScopedEnv {
 /// Fault injection is necessary to stop exactly after the receipt commits,
 /// before its first post-lock read, without relying on process timing.
 #[test]
+#[cfg(unix)]
 fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
     if !enter_isolated_child(
         module_path!(),
