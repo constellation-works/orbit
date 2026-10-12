@@ -32,7 +32,10 @@ review-only run, or use a local shadow store. See
 
 - PR mode requires a verified merged PR before `done`.
 - Local mode requires merge and push before `done`.
-- Validated no-diff work may complete without a PR.
+- Completed `no-diff-expected` work may complete without a PR. It runs only
+  commands its own brief requires, with no workspace gates, required validation
+  commands, or `no-diff.json` and workspace validation logs, in owner or claimed
+  mode. No-op implementations without the tag still need validated no-diff evidence.
 - Auto completion covers every task admitted during the window, including
   tasks prepared after it starts. Do not use a whole-backlog drain when only
   named tasks were authorized.

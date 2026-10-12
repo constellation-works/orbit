@@ -148,6 +148,17 @@ spec:
     Complete the Orbit task with validated outputs, following acceptance
     criteria and workspace instructions. Propose only when requested.
 
+    No-diff-expected tasks
+
+    - In both owner and claimed mode, a task tagged `no-diff-expected` runs
+      no workspace gates or required validation commands and attaches no
+      `no-diff.json`, `already-landed.json`, or workspace validation logs.
+      Run only commands its own brief requires: a QA sweep may build and run
+      the product, and a review may reproduce a finding when its brief asks
+      for it. Record that work in the brief's evidence artifacts and the
+      execution summary. Leave the worktree clean; the pipeline hands off
+      on the tag. This exception applies throughout items 7, 10, and 12.
+
     Tool access and durable state
 
     - Use a granted `orbit.*` tool directly when wired; otherwise use
@@ -181,7 +192,8 @@ spec:
       - `comment`: any task comment or leftovers (item 11). A real blocker
         (item 8) is `result.blocker` `{kind, evidence}`, not a status write
         and not only this comment.
-    - In claimed mode, for a clean no-op or already-satisfied base, write the structured
+    - In claimed mode, for a clean no-op or already-satisfied base without
+      `no-diff-expected`, write the structured
       `no-diff.json` or `already-landed.json` report and every validation log
       under the checkout's `.orbit/tmp/`. Return `no_diff_artifacts` as
       `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}, ...]`,
@@ -189,10 +201,9 @@ spec:
       attaches these bytes through the claim and runs the existing verifier;
       the sandboxed implementer does not call owner artifact tools. This
       replaces the artifact-attachment requirement in item 12 for claimed mode.
-      A task tagged `no-diff-expected` needs no such report: leave the
-      worktree clean, and the commit step hands off on the tag.
-    - In claimed mode, when the base already resolves the task but the
-      tests that show it run only outside the agent sandbox (they skip or
+    - In claimed mode, for tasks without `no-diff-expected`, when the base
+      already resolves the task but the tests that show it run only outside
+      the agent sandbox (they skip or
       defer here, and an affected-test gate selects none on an unchanged
       base), also return `already_resolved` as
       `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
@@ -311,8 +322,9 @@ spec:
     7. Follow workspace validation policy. Check each acceptance criterion
        with appropriate evidence: source support for research,
        reproducibility for analysis, or behavior checks for software.
-       Run every check required by the workspace's AGENTS.md and required
-       validation commands before handoff; do not defer a workspace-required
+       For tasks without `no-diff-expected`, run every check required by the
+       workspace's AGENTS.md and required validation commands before handoff;
+       do not defer a workspace-required
        check to review. Read required validation commands from a supplied
        delivery manifest's `required_validation_commands` or
        `workflow.required_validation_commands`. If workspace guidance requires
@@ -397,8 +409,8 @@ spec:
        assumption, recurring failure, incident root cause, or non-obvious
        gotcha that took over 10 minutes.
     10. Review the deliverable and diff for accuracy, unintended changes, and
-        stale material; run required checks. Run-owned non-deliverable output
-        is only what `git status --short` adds to the
+        stale material; run required checks unless tagged `no-diff-expected`.
+        Run-owned non-deliverable output is only what `git status --short` adds to the
         item 3 baseline; ignored build output, caches, and sandbox-owned paths
         like `<worktree>/target` are not yours to remove and never block
         handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
@@ -428,6 +440,12 @@ spec:
         `orbit.task.update` (in claimed mode, return it as the output's
         `execution_summary` instead). Return a short result summary; include
         `diff` only when cheap and accurate.
+
+        For `no-diff-expected`, hand off the brief's outputs and execution
+        summary with a clean worktree; no no-diff report or workspace
+        validation logs are required in either owner or claimed mode. The
+        following already-landed and genuine no-op evidence requirements
+        apply only to tasks without that tag.
 
         If this task's or a sibling's merged commit covers the clean checkout,
         verify that commit and current acceptance checks. On first attempt or

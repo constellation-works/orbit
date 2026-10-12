@@ -94,10 +94,17 @@ orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","
 Follow the plan, inspecting files with the provider-native file-read tool.
 Verify transitive impact with `rg` or by reading callers directly. Run the
 repo-approved verification commands, honoring repo instructions if tests are
-forbidden.
+forbidden. For a task tagged `no-diff-expected`, in owner or claimed mode,
+run no workspace gates or required validation commands and attach no
+`no-diff.json`, `already-landed.json`, or workspace validation logs. Run only
+commands the task's own brief requires: a QA sweep may build and run the
+product, and a review may reproduce a finding when its brief asks for it.
+Keep the brief's evidence artifacts, persist the execution summary, and leave
+the worktree clean; the pipeline hands off on the tag.
 
-When a clean task checkout is already covered by this task's or a sibling
-task's landed commit, verify the current acceptance criteria and attach
+For tasks without `no-diff-expected`, when a clean task checkout is already
+covered by this task's or a sibling task's landed commit, verify the current
+acceptance criteria and attach
 `already-landed.json` plus captured validation logs with `orbit.task.artifact.put`
 in the current run, including the first attempt. The artifact names the current
 task and the covering task separately. `git_commit` checks the pinned HEAD,
@@ -123,7 +130,8 @@ what is needed to proceed. A clean baseline check is not feature validation.
 
 ### Verified no-change implementation
 
-When the implementation correctly needs no file changes, and all required
+This section applies only to tasks without `no-diff-expected`. When the
+implementation correctly needs no file changes, and all required
 validation passes, attach `no-diff.json` and one captured validation log per
 check with `orbit.task.artifact.put`. This is only for a genuine validated
 no-op; never use it to bypass failed validation or pending worktree changes.
