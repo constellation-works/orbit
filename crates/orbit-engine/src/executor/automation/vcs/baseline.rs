@@ -26,7 +26,9 @@
 //!   them, so it is not held, and the step records the known-red tests and
 //!   proceeds. Review settlement applies the same rule to a reviewer's
 //!   red-base claim [ORB-15546];
-//! - a base that passes leaves the failure the candidate's, rejected as before.
+//! - a comparable passing base allows one bounded candidate replay of only
+//!   the failed tests ([`super::flaky`]); tests passing that isolated replay
+//!   are recorded as flaky, and failures that remain are rejected as before.
 //!
 //! A base run that cannot be set up, or whose own result is a missing tool or
 //! a network failure, is inconclusive and also leaves the failure the
@@ -102,7 +104,8 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// Version 5 excludes capture-limit and signal stops: they are infrastructure
 /// failures, never conclusive base results.
 /// Version 6 records the failures the complete output names [ORB-15375].
-const CACHE_SCHEMA_VERSION: u32 = 6;
+/// Version 7 retains complete-output host coverage refusals for flaky admission.
+const CACHE_SCHEMA_VERSION: u32 = 7;
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
 const LEGACY_WORKTREES_DIR: &str = "worktrees";
@@ -223,6 +226,9 @@ pub struct BaseCommandResult {
     pub timed_out: bool,
     pub output: String,
     pub network_retries: u32,
+    /// Whether complete base output refused any host coverage.
+    #[serde(default)]
+    pub host_coverage_refused: bool,
     pub validation_env: Value,
     /// What the base run reported it tested [ORB-15131].
     #[serde(default)]
@@ -390,6 +396,7 @@ impl BaselineCheck {
                 "timed_out": base.timed_out,
                 "passed": base.passed,
                 "network_retries": base.network_retries,
+                "host_coverage_refused": base.host_coverage_refused,
                 "output": base.output,
                 "validation_env": base.validation_env,
                 "summary": base.summary,
@@ -634,6 +641,8 @@ fn compare_base<H: RuntimeHost + ?Sized>(
                 validation_env: run.environment_record(),
                 output: run.output,
                 network_retries: run.network_retries,
+                host_coverage_refused: run.host_output_refusal.is_some()
+                    || run.deferred_notice.is_some(),
                 summary: run.summary,
                 failures: run.failures,
                 recorded_at: Utc::now(),

@@ -6,7 +6,8 @@ use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffKnownRed, HandoffValidationLog,
 };
 use orbit_types::workflow::{
-    BaselineRedFailures, BaselineRedHold, KnownRedValidation, TRANSIENT_FAILURE_MARKER,
+    BaselineRedFailures, BaselineRedHold, FlakyValidation, KnownRedValidation,
+    TRANSIENT_FAILURE_MARKER,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,6 +19,7 @@ use super::super::baseline::{
     baseline_red_failure, candidate_failure, compare_with_base, run_validation_command,
 };
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
+use super::super::flaky::rerun_failed_tests;
 use super::super::git::normalize_base_branch;
 use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
 use super::input::{refused, required_workspace};
@@ -29,8 +31,9 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 ///
 /// The pull-request route validates before anything is published
 /// [ORB-14258]. With no `pull_request` yet, the step runs the commands and
-/// returns their results as `publication: pending`, attaching nothing: every
-/// log the owner accepts names the delivery, which does not exist yet. After
+/// returns their results as `publication: pending`, attaching no typed handoff
+/// logs: these name the delivery, which does not exist yet. Diagnostic logs
+/// for an initial failure and its base/replay may already be attached. After
 /// `pr_open`, the same activity given that output as `prevalidated` runs
 /// nothing. It re-observes the candidate with its pull request, refuses one
 /// that is not the commit and base the commands passed on, and attaches the
@@ -48,6 +51,11 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 /// `passed_with_known_red`, `known_red` names the tests for the pull request,
 /// and the next command runs. The owner accepts that log only after its own
 /// run of the base fails the same tests.
+///
+/// A comparable passing base also permits one bounded isolated failed-test
+/// candidate replay. A pass carries `flaky` evidence through publication and
+/// pinning; the owner records the tests and deduplicates their friction at
+/// handoff acceptance. A repeated failure is refused as before.
 ///
 /// An empty requirement list runs no command: the candidate is still observed
 /// and pinned, and the output records `skipped_no_required_commands` with no
@@ -121,12 +129,13 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     if pending {
         let known_red = known_red_records(&context, &candidate, &results);
         let mut output = json!({
-            "decision": decision(&known_red),
+            "decision": decision(&known_red, &results),
             "publication": "pending",
             "candidate": null,
             "validation": [],
             "commands": passed_commands(&results),
             "known_red": known_red,
+        "flaky": results.iter().filter_map(|result| result.flaky.as_ref()).collect::<Vec<_>>(),
             "results": results,
             "tested_head": candidate.candidate.commit,
             "validated_base": candidate.base.commit,
@@ -144,7 +153,8 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 }
 
 /// One required command's result on a claimed candidate: it passed, or it
-/// failed only with tests its base fails too, as `known_red` reports
+/// passed an isolated flaky-test replay, or failed only with tests its base
+/// fails too, as `known_red` reports
 /// [ORB-15427]. A pre-publication output carries these as `results`, and the
 /// pin attaches them as they were.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,12 +167,15 @@ pub(super) struct ClaimedResult {
     exit_code: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     known_red: Option<HandoffKnownRed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flaky: Option<FlakyValidation>,
 }
 
 /// Run `commands` on the observed candidate, in order, and return each
 /// command's result with the last run's validation environment. A failing
 /// command is judged by [`claim_failure`], which refuses it unless its
-/// failing tests are known red on the base and its host coverage ran. A
+/// failing tests are known red on the base or pass an isolated candidate
+/// replay, with host coverage executed. A
 /// passing one still must not have deferred a sandbox-confined path, and a
 /// command in `replays` must report executed tests before either continuation.
 /// Shared by the ordinary route and clean-base NoDiff
@@ -183,19 +196,20 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
         validation_env = run.environment_record();
         let commit = &candidate.candidate.commit;
         let replay = replays.contains(&run.command);
-        let known_red = if run.passed && run.coverage_failure(commit, replay).is_none() {
-            None
+        let (known_red, flaky) = if run.passed && run.coverage_failure(commit, replay).is_none() {
+            (None, None)
         } else {
-            Some(claim_failure(
-                host, context, input, candidate, index, &run, replay,
-            )?)
+            claim_failure(host, context, input, candidate, index, &run, replay)?
         };
         require_clean_candidate(workspace_path, candidate)?;
         results.push(ClaimedResult {
             command: run.command,
-            output: run.output,
-            exit_code: run.exit_code,
+            output: flaky
+                .as_ref()
+                .map_or_else(|| run.output.clone(), |flaky| flaky.rerun_output.clone()),
+            exit_code: if flaky.is_some() { 0 } else { run.exit_code },
             known_red,
+            flaky,
         });
     }
     Ok((results, validation_env))
@@ -277,6 +291,22 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
              candidate's base; rerun validation",
         ));
     }
+    if results.iter().any(|result| {
+        result.flaky.as_ref().is_some_and(|record| {
+            !record.valid()
+                || result.known_red.is_some()
+                || result.exit_code != 0
+                || record.command != result.command
+                || record.base_sha != candidate.base.commit
+                || record.tested_head != candidate.candidate.commit
+                || record.run_id != context.run_id
+                || record.rerun_output != result.output
+        })
+    }) {
+        return Err(refused(
+            "prevalidated flaky evidence does not match the pinned candidate",
+        ));
+    }
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
     let validation_env = prevalidated
         .get("validation_env")
@@ -308,6 +338,7 @@ pub(super) fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
             exit_code: result.exit_code,
             output: result.output.clone(),
             known_red: result.known_red.clone(),
+            flaky: result.flaky.clone(),
         };
         let content = serde_json::to_vec(&log)
             .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
@@ -331,13 +362,14 @@ pub(super) fn passed_output(
     let skipped = results.is_empty();
     let known_red = known_red_records(context, candidate, &results);
     let mut output = json!({
-        "decision": decision(&known_red),
+        "decision": decision(&known_red, &results),
         "candidate": serde_json::to_value(candidate)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
         "validation": serde_json::to_value(references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
         "commands": passed_commands(&results),
         "known_red": known_red,
+        "flaky": results.iter().filter_map(|result| result.flaky.as_ref()).collect::<Vec<_>>(),
         "tested_head": candidate.candidate.commit,
         "validated_base": candidate.base.commit,
         "validation_env": validation_env,
@@ -381,19 +413,22 @@ fn known_red_records(
         .collect()
 }
 
-/// `passed`, or `passed_with_known_red` when a command was known red.
-fn decision(known_red: &[KnownRedValidation]) -> &'static str {
-    if known_red.is_empty() {
-        "passed"
-    } else {
+/// A pass, with known-red or flaky-test evidence when applicable.
+fn decision(known_red: &[KnownRedValidation], results: &[ClaimedResult]) -> &'static str {
+    if !known_red.is_empty() {
         "passed_with_known_red"
+    } else if results.iter().any(|result| result.flaky.is_some()) {
+        "passed_with_flaky_tests"
+    } else {
+        "passed"
     }
 }
 
 /// Judge a claimed command that did not pass. A failure whose failing tests
 /// all fail on the candidate's base is known red [ORB-15427]: the report for
-/// its handoff log is returned and validation goes on. Any other failure is
-/// refused. One that is not a missing tool is rerun on the candidate's base,
+/// its handoff log is returned and validation goes on. A comparable passing
+/// base permits one bounded failing-test replay; a pass returns flaky evidence.
+/// Other failures are refused. One that is not a missing tool is rerun on the candidate's base,
 /// and both logs are attached to the owner's task before the step fails; a
 /// failure the base shares is typed `baseline_red`, and one that still could
 /// not reach the network after its retries is typed `transient`.
@@ -405,7 +440,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     index: usize,
     run: &RequiredCommandRun,
     replay: bool,
-) -> Result<HandoffKnownRed, OrbitError> {
+) -> Result<(Option<HandoffKnownRed>, Option<FlakyValidation>), OrbitError> {
     let commit = &candidate.candidate.commit;
     let workspace_path = required_workspace(input)?;
     let check = (!run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none())
@@ -422,12 +457,27 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     if let Some(check) = check.as_ref().filter(|_| coverage_failure.is_none())
         && let Some(failures) = check.known_red(run)
     {
-        return Ok(HandoffKnownRed {
-            base_sha: check.base_sha.clone(),
-            selection: run.selection().cloned(),
-            failures: failures.clone(),
-        });
+        return Ok((
+            Some(HandoffKnownRed {
+                base_sha: check.base_sha.clone(),
+                selection: run.selection().cloned(),
+                failures: failures.clone(),
+            }),
+            None,
+        ));
     }
+    let rerun = if coverage_failure.is_none() {
+        rerun_failed_tests(
+            host,
+            &workspace_path,
+            commit,
+            &context.run_id,
+            run,
+            check.as_ref(),
+        )?
+    } else {
+        None
+    };
     let red = check.as_ref().is_some_and(|check| check.reproduces(run));
     let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
     let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
@@ -450,7 +500,10 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             "detail": refusal.detail,
         })),
         "validation_env": run.environment_record(),
-        "failure_kind": if red {
+        "flaky": rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()),
+        "failure_kind": if rerun.as_ref().is_some_and(|rerun| rerun.flaky.is_some()) {
+            json!("flaky")
+        } else if red {
             json!("baseline_red")
         } else if check.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
             json!("environment")
@@ -465,7 +518,20 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     });
     // The logs are evidence for whoever reads the owner's task; failing to
     // deliver them must not hide the typed failure itself.
+    let rerun_path = format!("validation/{}/{index}.rerun.json", context.claim_id);
     let mut logs = vec![(&log_path, log)];
+    if let Some(rerun) = &rerun {
+        logs.push((
+            &rerun_path,
+            json!({
+                "schema_version": 1, "role": "candidate_rerun", "run_id": context.run_id,
+                "tested_head": commit, "command": rerun.run.command,
+                "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
+                "output": rerun.run.output, "summary": rerun.run.summary,
+                "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
+            }),
+        ));
+    }
     if let Some(check) = &check {
         logs.push((&base_path, check.log(&context.run_id)));
     }
@@ -480,11 +546,18 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             );
         }
     }
+    if let Some(record) = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()) {
+        require_clean_candidate(&workspace_path, candidate)?;
+        return Ok((None, Some(record.clone())));
+    }
     let evidence = format!(
-        "Candidate log: `{log_path}`; base log: {}.",
+        "Candidate log: `{log_path}`; base log: {}. Candidate rerun log: {}.",
         check
             .as_ref()
-            .map_or_else(|| "not run".to_string(), |_| format!("`{base_path}`"))
+            .map_or_else(|| "not run".to_string(), |_| format!("`{base_path}`")),
+        rerun
+            .as_ref()
+            .map_or_else(|| "not run".to_string(), |_| format!("`{rerun_path}`"))
     );
     let verdict = check
         .as_ref()

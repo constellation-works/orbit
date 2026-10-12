@@ -576,11 +576,13 @@ differs from the captured one as `review_contract_mismatch`. A missing field rea
 commands, so an older contract or certificate means what it meant when it was written; a leaf
 that does not carry the list cannot deliver a before-PR claim from an owner that lists any.
 
-The separate deterministic candidate validation still reads the executor's current
-`workflow.required_validation_commands`, and the owner verifies its exact-run, exact-head logs
-against the owner's current list at acceptance. Configure the executor to supply that evidence;
-its local config cannot replace the captured review requirements. For a before-PR claim, acceptance
-also requires the owner's current list and the certificate's list to match the admitted snapshot,
+Candidate validation can also carry `flaky` evidence on an exit-zero handoff log: the initial required-command failure, a comparable passing base, and one passing isolated candidate replay of at most three failed tests. The report pins the command, run, base and tested head; its `failing_tests` selection must match the named failures and its executed count must cover all of them. Acceptance refuses mismatched evidence, records `flaky_validation` in owner task history, and files each command/test signature once as a friction before dispatching landing. Pre-publication validation passes the same record to PR rendering and pinning. See [candidate-only flakes](../../../CONFIG.md#a-red-base-is-held-not-blocked).
+
+The separate deterministic candidate validation runs the owner's required commands captured
+at claim admission, and the owner verifies its exact-run, exact-head logs against its current
+list at acceptance. The executor's local configuration cannot replace those requirements.
+For a before-PR claim, acceptance also requires the owner's current list and the certificate's
+list to match the admitted snapshot,
 so owner-policy drift fails closed with fresh-claim guidance. An explicit empty required list runs
 no candidate-validation command and permits a handoff without validation logs; the other handoff checks still
 apply. Each captured log is attached to the owner's task as a digest-pinned artifact. The typed

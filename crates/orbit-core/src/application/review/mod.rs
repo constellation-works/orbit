@@ -26,6 +26,7 @@ mod admission;
 mod coverage;
 pub(crate) mod crew;
 pub(crate) mod evidence;
+pub(crate) mod flaky;
 mod fulfilment;
 mod gate;
 mod handoff;

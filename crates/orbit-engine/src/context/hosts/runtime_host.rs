@@ -420,6 +420,16 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability("attach_task_validation_log"))
     }
 
+    /// Record a passing isolated candidate replay in task history and file
+    /// each flaky signature once in the owner's workspace.
+    fn record_flaky_validation(
+        &self,
+        _task_id: &str,
+        _record: &orbit_types::workflow::FlakyValidation,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("record_flaky_validation"))
+    }
+
     // ── Config accessors (implementors provide these) ──────────────────
 
     /// Commands every delivered candidate must pass

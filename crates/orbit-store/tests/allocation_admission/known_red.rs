@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use serde_json::json;
+
 use orbit_types::workflow::handoff::HandoffKnownRed;
 use orbit_types::workflow::{BaselineRedFailures, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
 
@@ -19,6 +21,15 @@ impl Delivery {
     /// Replace the handoff's [`RED`] log with one that failed with
     /// `exit_code`, carrying `report`, persisted on the owner like the leaf's.
     fn red_log(&mut self, exit_code: i32, report: Option<HandoffKnownRed>) {
+        self.reported_log(exit_code, report, None);
+    }
+
+    fn reported_log(
+        &mut self,
+        exit_code: i32,
+        report: Option<HandoffKnownRed>,
+        flaky: Option<orbit_types::workflow::FlakyValidation>,
+    ) {
         let handoff = &self.handoff;
         let log = HandoffValidationLog {
             schema_version: 1,
@@ -31,8 +42,11 @@ impl Delivery {
             tested_head: handoff.candidate.candidate.commit.clone(),
             command: RED.into(),
             exit_code,
-            output: FAILURES.join("\n"),
+            output: flaky
+                .as_ref()
+                .map_or_else(|| FAILURES.join("\n"), |flaky| flaky.rerun_output.clone()),
             known_red: report,
+            flaky,
         };
         let artifact = TaskArtifact {
             path: format!("{RED}.known-red.json"),
@@ -196,4 +210,73 @@ fn a_known_red_log_is_accepted_only_when_the_owners_base_run_fails_its_tests() {
     delivery
         .approve()
         .expect("approval rechecks the accepted known-red log");
+}
+
+#[test]
+fn flaky_handoff_evidence_is_pinned_and_recorded_in_owner_history() {
+    if !isolated("known_red::flaky_handoff_evidence_is_pinned_and_recorded_in_owner_history") {
+        return;
+    }
+    use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
+    for case in [
+        "valid",
+        "base",
+        "head",
+        "run",
+        "selection",
+        "count",
+        "failed",
+    ] {
+        let mut delivery = Delivery::admit(owner_request("first").ship);
+        let mut record = FlakyValidation {
+            command: RED.into(),
+            base_sha: delivery.handoff.candidate.base.commit.clone(),
+            tested_head: delivery.handoff.candidate.candidate.commit.clone(),
+            run_id: delivery.handoff.run_id.clone(),
+            failures: failures(&FAILURES),
+            selection: json!({"failing_tests": ["suite::broken", "suite::flaky"]}),
+            original_exit_code: 100,
+            original_output: FAILURES.join("\n"),
+            base_output: "2 passed".into(),
+            rerun_output: "2 passed".into(),
+            rerun_tests_run: 2,
+            validation_env: json!({}),
+        };
+        match case {
+            "base" => record.base_sha = "e".repeat(40),
+            "head" => record.tested_head = "e".repeat(40),
+            "run" => record.run_id = "another-run".into(),
+            "selection" => record.selection = json!({"failing_tests": ["other::test"]}),
+            "count" => record.rerun_tests_run = 0,
+            _ => {}
+        }
+        delivery.reported_log(
+            if case == "failed" { 100 } else { 0 },
+            None,
+            Some(record.clone()),
+        );
+        let outcome = delivery.accept(None);
+        let history = delivery
+            .owner
+            .backends
+            .task
+            .history
+            .get_task_history(&delivery.claim.task_id)
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
+            .map(|entry| FlakyValidation::from_text(entry.note.as_deref().unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        if case == "valid" {
+            outcome.expect("passing isolated replay evidence is accepted");
+            assert_eq!(history, vec![record]);
+            delivery
+                .approve()
+                .expect("approval rechecks pinned flaky evidence");
+        } else {
+            assert!(outcome.is_err(), "{case} must be refused");
+            assert!(history.is_empty(), "{case} must not record a flaky pass");
+        }
+    }
 }
