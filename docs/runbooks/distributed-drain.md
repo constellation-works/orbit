@@ -1508,7 +1508,8 @@ whose owner is unreachable or unrouted stays, reported as
 output. A failed leaf keeps its uncommitted candidate in its worktree. Once its
 task is settled, GC removes that worktree after it confirms the candidate is
 recoverable: from the carry ref, from the published branch, or from a rescue
-patch that GC writes and verifies first
+patch that GC writes and verifies first, pinning that patch's base on a local
+ref so an unpublished HEAD survives branch deletion
 ([worktree-reclaim.md](worktree-reclaim.md#dirty-worktrees-of-settled-tasks)).
 Each kept worktree's declared build output is reclaimed on every sweep, and
 `orbit run show <gc-run>` lists every kept worktree with its reason and

@@ -345,6 +345,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     // Estimates (including doctor's probe) are read-only.
     if options.delete {
         git_success(repo_root, &["worktree", "prune"])?;
+        // A patch the operator removed no longer needs its base commit.
+        rescue::release_orphan_rescue_bases(repo_root)?;
     }
 
     reports.sort_by(|left, right| left.path.cmp(&right.path));
