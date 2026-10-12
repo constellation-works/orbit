@@ -13,9 +13,10 @@
 //! claimed leaf has since found unusable, and within the drain's
 //! `--allow-crew` restriction when it has one [ORB-14174]. The owner skips a
 //! task whose crew is not among them, so a follower never burns a claim it
-//! cannot run. The owner's before-PR reviewer is checked against the window
-//! without that restriction. Each request also declares this host's OS, and
-//! the owner skips a task whose `os:` tags that OS does not satisfy.
+//! cannot run. The owner's before-PR or before-landing reviewer is checked
+//! against the window without that restriction. Each request also declares
+//! this host's OS, and the owner skips a task whose `os:` tags that OS does
+//! not satisfy.
 //!
 //! A drain submitted without a window (`for_seconds` zero) is authorized for
 //! one admission pass [ORB-14174]. Its window is expired from the start, so
@@ -523,15 +524,12 @@ pub(crate) fn pull_refill(
             "host_suppressed: this drain claims no more work on this host for its window \
              because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"
         )
-    } else if crews
-        .as_ref()
-        .is_some_and(PullCrewWindow::held_by_provider_limit)
-    {
-        // [ORB-14697, ORB-14902] A usage limit lifts by itself, so this drain admits
-        // again once one does.
-        "no_runnable_crew: no crew this drain may run is free on this host right now, and at \
-         least one is held by a provider usage limit; see `crews.excluded`: each \
-         `provider_limit` exclusion lifts at its `until` and this drain admits again"
+    } else if crews.as_ref().is_some_and(PullCrewWindow::held_until_lift) {
+        // [ORB-14697, ORB-14902, ORB-15791] A usage limit and a capacity
+        // backoff lift by themselves, so this drain admits again once one does.
+        "no_runnable_crew: no crew this drain may run is free on this host right now, and each \
+         is held by a provider usage limit or a capacity backoff; see `crews.excluded`: each \
+         exclusion with an `until` lifts then and this drain admits again"
             .to_string()
     } else if crews
         .as_ref()
@@ -945,11 +943,12 @@ fn probe(
     })
 }
 
-/// Why this drain cannot run the before-PR review the owner's ship contract
-/// captured [ORB-13908]: the crew is unset, does not resolve here, or the
-/// drain's window cannot run it. Claiming anyway would only escalate the
-/// task at its gate, so the drain requests nothing until the owner or this
-/// host changes.
+/// Why this drain cannot run the before-PR or before-landing review the
+/// owner's ship contract captured [ORB-13908]: the crew is unset, does not
+/// resolve here, or the drain's window cannot run it. Claiming anyway would
+/// only escalate the task at its gate, so the drain requests nothing until the
+/// owner or this host changes, or until a capacity backoff on the crew lifts
+/// by itself [ORB-15791].
 fn reviewer_refusal(
     runtime: &OrbitRuntime,
     run_id: &str,
@@ -965,12 +964,17 @@ fn reviewer_refusal(
     else {
         return Ok(None);
     };
+    let timing = if ship.before_landing {
+        "before-landing"
+    } else {
+        "before-PR"
+    };
     // The window without its `--allow-crew` restriction: that selects the
     // claims' implementation crews, not the review each one owes.
     Ok(crew_window(runtime, run_id)?
         .reviewer_unrunnable_reason(crew)
         .map(|reason| {
-            format!("before_pr_reviewer_unavailable: the owner's before-PR review {reason}")
+            format!("before_pr_reviewer_unavailable: the owner's {timing} review {reason}")
         }))
 }
 

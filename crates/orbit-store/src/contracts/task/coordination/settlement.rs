@@ -167,7 +167,8 @@ impl ClaimSettlementEvidence {
 /// A claimed leaf ended because its crew's provider could not be used on the
 /// executing host (an authentication failure, for instance), not because the
 /// work failed. Its claim is released to the backlog and the crew is excluded
-/// for the rest of the executor's drain window.
+/// on the executor: for the rest of its drain window after an authentication
+/// failure, for a bounded backoff after a capacity failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderUnavailable {
     /// The crew the leaf ran as.

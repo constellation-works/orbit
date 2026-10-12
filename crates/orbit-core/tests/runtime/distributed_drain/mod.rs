@@ -62,6 +62,7 @@ mod before_landing;
 mod before_pr;
 mod cancel;
 mod candidate_carry;
+mod capacity_backoff;
 #[cfg(unix)]
 mod claimed_held_pull_request;
 #[cfg(unix)]
@@ -669,7 +670,11 @@ impl Pair {
     /// The leaf ends the way a leaf whose step failed ends: the step's error
     /// recorded, then the run terminal, with no settlement of its own.
     fn leaf_fails_with(&self, leaf: &str, error: &str) {
-        let now = Utc::now();
+        self.leaf_fails_at(leaf, error, Utc::now());
+    }
+
+    /// [`Self::leaf_fails_with`], the leaf ending at `now`.
+    fn leaf_fails_at(&self, leaf: &str, error: &str, now: chrono::DateTime<Utc>) {
         self.follower_jobs
             .complete_job_run_step(
                 leaf,

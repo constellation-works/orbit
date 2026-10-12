@@ -578,8 +578,11 @@ owns delivery:
   `Selected model is at capacity`, in its stderr, terminal error, or own failure frames) is a
   kind of unavailability [ORB-14149]: the runner stamps `[provider_capacity]`, which counts as
   `provider_unavailable` for the release, the failure class and recovery, so the leaf releases
-  its claim and that crew is excluded for the window. It does not exclude the provider's other
-  crews. Neither step recovery nor its post-recovery attempt reruns the same model, and
+  its claim and that crew is excluded. It does not exclude the provider's other crews, and
+  capacity is transient, so the exclusion is a backoff [ORB-15791]: it carries `until`, 10
+  minutes after the leaf ended, doubling with each further capacity failure of that crew in the
+  window up to an hour, and the crew is runnable again in the same window once it passes. While
+  it holds the owner's review crew, the drain's reviewer check refuses with that `until`. Neither step recovery nor its post-recovery attempt reruns the same model, and
   final recovery is skipped too. Capacity reported mid-turn on a turn that then finishes is not
   provider evidence. An authentication failure stamped `[provider_unavailable]` also skips step
   recovery and final recovery; the final-recovery skip is audited as
@@ -613,7 +616,8 @@ owns delivery:
   `operator_cancel` and `transient` exclude the leaf's crew for the rest of
   the drain's window (source `leaf_released`). `provider` uses source
   `provider_unavailable`: authentication excludes every configured crew of
-  that provider, and capacity excludes only the leaf's crew. A usage limit ([ORB-14695]) is a
+  that provider for the window, and capacity excludes only the leaf's crew,
+  until its backoff's `until`. A usage limit ([ORB-14695]) is a
   `provider` release with `failure.provider_limit` set and is not budgeted. After [ORB-14697]
   the release excludes no crew: each pass reads the follower's provider-limit store and excludes
   every crew whose provider reads at or over its threshold, with source `provider_limit` and an

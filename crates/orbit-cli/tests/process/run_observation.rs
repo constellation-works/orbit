@@ -35,6 +35,7 @@ use serde_json::Value;
 
 mod auth_exclusions;
 mod build_budget;
+mod capacity_backoff;
 #[cfg(target_os = "macos")]
 mod host_resources;
 #[cfg(unix)]
