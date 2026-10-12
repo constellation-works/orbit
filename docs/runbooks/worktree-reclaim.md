@@ -123,3 +123,20 @@ runs a cleanup command. `cargo clean` can honor a checkout's `build.target-dir`
 pointing outside the checkout; `make clean` and npm scripts can execute
 agent-written code. Declared paths let Orbit check confinement and Git content
 before deletion, without giving the checkout a host command execution path.
+
+## Relocated removal leftovers
+
+A full sweep also inventories trash directories left by timed-out removal.
+Their `.trash-<name>-<pid>-<timestamp>` name identifies an attempt, but does
+not by itself authorize removal. A registered trash checkout is retained as
+`skipped:registered_worktree`, regardless of its age or the deleter's liveness.
+An unregistered directory whose `.git` link still resolves (including to a
+different repository), or whose link cannot be verified, is retained as
+`skipped:not_registered_worktree`. Inspect it and use `git worktree repair`
+for a moved checkout. Relative gitdir links are resolved from that directory.
+
+Only an unregistered directory with no `.git` link or a well-formed link to
+an absent administrative directory is eligible for raw leftover removal.
+It is reclaimed once the deleter is dead or the removal timeout has expired;
+a live deleter within the timeout retains it as `skipped:deleter_alive`.
+Dry-run applies the same safety checks before reporting `would_remove`.

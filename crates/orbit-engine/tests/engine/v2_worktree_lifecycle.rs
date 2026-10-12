@@ -62,6 +62,7 @@ mod conflict_adoption;
 mod declared_reclaim;
 #[cfg(unix)]
 mod dirty_rescue;
+mod trash;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
