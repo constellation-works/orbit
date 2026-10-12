@@ -21,9 +21,6 @@ use crate::delivery::json_definition_epoch;
 
 mod validation;
 
-#[cfg(test)]
-mod tests;
-
 pub use validation::{
     SkippedCheck, ValidationContext, ValidationDefect, in_scope, mutation_targets,
     same_host_command, validation_evidence, validation_limitations, validation_role_counts,

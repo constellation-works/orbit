@@ -1,10 +1,10 @@
 //! Recovery keeps every obligation and never substitutes authorization for
 //! evidence [ORB-12295].
 
-use super::evidence::{Host, evaluate, now, revision, setup};
-use crate::{
+use super::delivery::{CONSUMER, Host, evaluate, evaluate_at, now, revision, setup};
+use orbit_automation::{
     AutomationError,
-    delivery::{self, Evaluation, recovery, reset},
+    delivery::{self, recovery, reset},
 };
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::{
@@ -12,8 +12,6 @@ use orbit_types::workflow::automation::recovery::{
 };
 use orbit_types::workflow::automation::*;
 use std::sync::atomic::Ordering;
-
-const CONSUMER: &str = "ws/qa";
 
 fn request(adopt: bool, reissue: bool) -> RecoveryRequest {
     RecoveryRequest {
@@ -68,19 +66,7 @@ fn stalled() -> (
     host.page(2, 2);
     host.failed.store(true, Ordering::SeqCst);
     evaluate(store.as_ref(), &host, &trigger, true);
-    delivery::evaluate(
-        store.as_ref(),
-        &host,
-        Evaluation {
-            consumer: CONSUMER,
-            epoch: "v1",
-            trigger: &trigger,
-            enabled: true,
-            dry_run: false,
-            now: now() + chrono::Duration::minutes(6),
-        },
-    )
-    .unwrap();
+    evaluate_at(store.as_ref(), &host, &trigger, true, 6).unwrap();
     let settled = evaluate(store.as_ref(), &host, &trigger, true)
         .state
         .unwrap()

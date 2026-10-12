@@ -2,16 +2,14 @@
 //! obligation retained, and every other edit still holds the consumer and
 //! names why [ORB-14033].
 
-use super::evidence::{Host, evaluate, landing, now, revision, setup};
-use crate::delivery::{self, DEFINITION_CHANGED, Evaluation};
+use super::delivery::{CONSUMER, Host, evaluate, landing, now, revision, setup};
+use orbit_automation::delivery::{self, DEFINITION_CHANGED, Evaluation};
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::members::MemberState;
 use orbit_types::workflow::automation::recovery::{AutomationStall, SYSTEM_ACTOR, refusal};
 use orbit_types::workflow::automation::*;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-
-const CONSUMER: &str = "ws/qa";
 
 fn tick(
     store: &dyn AutomationStoreBackend,
@@ -56,7 +54,7 @@ fn foreign_baseline(
     change: impl FnOnce(&mut AutomationState),
 ) -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let trigger = super::evidence::trigger();
+    let trigger = super::delivery::trigger();
     let mut state = AutomationState {
         members: None,
         consumer: CONSUMER.into(),
@@ -93,7 +91,7 @@ fn indebted() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     let trigger = DeliveryTrigger {
         coverage: CoverageClass::LandedCodeReviewV1,
         retries: 0,
-        ..super::evidence::trigger()
+        ..super::delivery::trigger()
     };
     assert_eq!(
         evaluate(store.as_ref(), &host, &trigger, true).reason,

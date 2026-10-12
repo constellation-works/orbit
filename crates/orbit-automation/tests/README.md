@@ -29,6 +29,35 @@ and whole-batch records (and one for a member the receipt certified), and that
 a checkpoint whose records carry their whole batch and omit the later defaulted
 `excluded` field resumes, commits a generation bump and is compacted.
 
+The remaining `scheduling/` modules run in process. They use in-memory stores,
+temporary definition roots and in-process fakes, and change no durable Orbit
+or process-wide state.
+`scheduling/definition_symlinks.rs` shows that auto-task and routine discovery
+refuses a symlinked definitions directory (including `routines/local`) and
+ignores a symlinked definition file.
+`scheduling/routine_sweep.rs` drives `run_sweep_core` with a scripted dispatch.
+A dispatch that overruns the tick deadline defers the next workspace without
+touching its cursor. An `overlap: forbid` slot whose run is marked interrupted
+stays held while the owner is alive, is released once the owner stopped, and is
+reclaimed at the policy timeout when liveness cannot be probed.
+`scheduling/member_consumers.rs` shows a disabled member consumer without
+state never probes its branch. It also shows the store refuses a checkpoint that
+resets a frozen attempt's budget, replaces its acknowledged action or drops a
+failure tombstone.
+`scheduling/delivery.rs` holds the delivery fixture: a scriptable
+`DeliveryHost` over an in-memory automation store. Its tests cover one admitted
+action under concurrent evaluators, adversarial evidence that cannot
+manufacture coverage, receipt failures that recover atomically and malformed
+evidence that settles and spends the retry budget.
+`scheduling/delivery_adopt.rs` shows a settings-only edit is adopted in the same
+pass with every obligation retained. Edits that change what the debt means,
+executing actions, consumers the evaluator cannot judge alone and hosts that do
+not adopt all stay at `definition_changed`.
+`scheduling/delivery_recovery.rs` covers operator recovery and reset. Refused
+changes leave state untouched, and only a stopped action without acceptable
+evidence is reissued. A terminal proof cannot reissue a concurrently admitted
+replacement.
+
 Materialization is owned by Core. Its migration coverage joins the existing
 [`workspace_sync`](../../orbit-cli/tests/workspace/workspace_sync.rs) module of the CLI `workspace` integration binary
 at the production CLI boundary, using the checked-in

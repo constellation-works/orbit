@@ -1,17 +1,26 @@
-use crate::{
-    AutomationError,
-    delivery::{self, ActionOutcome, DeliveryHost, Evaluation, evidence::EvidenceFacts},
-};
+//! The delivery evaluator through `delivery::evaluate` against an in-memory
+//! automation store and a scriptable [`DeliveryHost`]: one action per
+//! concurrent admission, evidence that cannot manufacture coverage, receipt
+//! failures that recover atomically and malformed evidence that settles.
+//! `delivery_adopt` and `delivery_recovery` share this fixture.
+
 use chrono::{TimeZone, Utc};
+use orbit_automation::AutomationError;
+use orbit_automation::delivery::{
+    self, ActionOutcome, DeliveryHost, Evaluation, evidence::EvidenceFacts,
+};
+use orbit_common::OrbitError;
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::*;
 use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
+
+pub(super) const CONSUMER: &str = "ws/qa";
 
 pub(super) fn revision(n: usize) -> SourceRevision {
     SourceRevision {
@@ -54,7 +63,7 @@ pub(super) fn landing(n: usize) -> Delivery {
 
 /// The paths each fixture delivery's diff changes: one source file and a
 /// lockfile that complete evidence skips with a reason.
-pub(super) fn changed_paths(delivery: &Delivery) -> Vec<String> {
+fn changed_paths(delivery: &Delivery) -> Vec<String> {
     vec![
         format!("src/{}.rs", delivery.after.commit),
         "Cargo.lock".into(),
@@ -72,9 +81,6 @@ pub(super) struct Host {
     pub(super) stopped: AtomicBool,
     pub(super) fail_admit: AtomicBool,
     pub(super) failed: AtomicBool,
-    pub(super) admission_deferred: AtomicBool,
-    pub(super) fail_head: AtomicBool,
-    pub(super) head_calls: AtomicUsize,
     /// Repository identity the configured branch resolves to.
     pub(super) repository: Mutex<String>,
     /// The host adopts compatible definition edits, as auto-tasks do.
@@ -103,9 +109,6 @@ impl Host {
             stopped: AtomicBool::new(false),
             fail_admit: AtomicBool::new(false),
             failed: AtomicBool::new(false),
-            admission_deferred: AtomicBool::new(false),
-            fail_head: AtomicBool::new(false),
-            head_calls: AtomicUsize::new(0),
             repository: Mutex::new("owner/repo".into()),
             adopts_settings: AtomicBool::new(true),
             adoptions: Mutex::new(vec![]),
@@ -171,18 +174,7 @@ impl Host {
 }
 
 impl DeliveryHost for Host {
-    fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
-        Ok(self
-            .admission_deferred
-            .load(Ordering::SeqCst)
-            .then(|| "open_instance".into()))
-    }
-
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
-        self.head_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_head.load(Ordering::SeqCst) {
-            return Err(AutomationError::Deferred("evidence_unavailable".into()));
-        }
         Ok((self.repository.lock().unwrap().clone(), revision(0)))
     }
 
@@ -252,25 +244,35 @@ impl DeliveryHost for Host {
     }
 }
 
+/// Evaluate the consumer under epoch `v1` at `now() + minutes`.
+pub(super) fn evaluate_at(
+    store: &dyn AutomationStoreBackend,
+    host: &Host,
+    trigger: &DeliveryTrigger,
+    enabled: bool,
+    minutes: i64,
+) -> Result<AutomationDiagnostic, AutomationError> {
+    delivery::evaluate(
+        store,
+        host,
+        Evaluation {
+            consumer: CONSUMER,
+            epoch: "v1",
+            trigger,
+            enabled,
+            dry_run: false,
+            now: now() + chrono::Duration::minutes(minutes),
+        },
+    )
+}
+
 pub(super) fn evaluate(
     store: &dyn AutomationStoreBackend,
     host: &Host,
     trigger: &DeliveryTrigger,
     enabled: bool,
 ) -> AutomationDiagnostic {
-    delivery::evaluate(
-        store,
-        host,
-        Evaluation {
-            consumer: "ws/qa",
-            epoch: "v1",
-            trigger,
-            enabled,
-            dry_run: false,
-            now: now(),
-        },
-    )
-    .unwrap()
+    evaluate_at(store, host, trigger, enabled, 0).unwrap()
 }
 
 pub(super) fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
@@ -282,6 +284,30 @@ pub(super) fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger
         "baselined"
     );
     (store, host, trigger)
+}
+
+#[test]
+fn concurrent_evaluators_admit_one_action() {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let host = Arc::new(host);
+    std::thread::scope(|scope| {
+        let handles = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let host = host.clone();
+                let trigger = &trigger;
+                scope.spawn(move || evaluate_at(store.as_ref(), host.as_ref(), trigger, true, 0))
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            let _ = handle.join().unwrap();
+        }
+    });
+    assert_eq!(host.actions.lock().unwrap().len(), 1);
+    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    assert_eq!(state.pending.len(), 2);
+    assert_eq!(state.covered, revision(0));
 }
 
 #[test]
@@ -405,4 +431,123 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
     facts.bytes = b"{}".to_vec();
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
+}
+
+/// A crash at the receipt transaction leaves both old C and the action replayable.
+struct ReceiptFailure {
+    inner: Arc<dyn AutomationStoreBackend>,
+    fail: AtomicBool,
+}
+
+impl AutomationStoreBackend for ReceiptFailure {
+    fn automation_state(&self, c: &str) -> Result<Option<AutomationState>, OrbitError> {
+        self.inner.automation_state(c)
+    }
+
+    fn automation_initialize(&self, s: &AutomationState) -> Result<bool, OrbitError> {
+        self.inner.automation_initialize(s)
+    }
+
+    fn automation_commit(
+        &self,
+        a: &AutomationState,
+        b: &AutomationState,
+        r: Option<&AcceptedCoverage>,
+    ) -> Result<bool, OrbitError> {
+        if r.is_some() && self.fail.swap(false, Ordering::SeqCst) {
+            return Err(OrbitError::Store("injected receipt failure".into()));
+        }
+        self.inner.automation_commit(a, b, r)
+    }
+
+    fn automation_receipts(&self, c: &str, n: usize) -> Result<Vec<AcceptedCoverage>, OrbitError> {
+        self.inner.automation_receipts(c, n)
+    }
+}
+
+#[test]
+fn receipt_failure_recovers_atomically() {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let state = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap();
+    host.evidence(&state.active.unwrap());
+    host.page(2, 2);
+    let failed = ReceiptFailure {
+        inner: store.clone(),
+        fail: AtomicBool::new(true),
+    };
+    assert!(evaluate_at(&failed, &host, &trigger, true, 0).is_err());
+    assert_eq!(
+        store.automation_state(CONSUMER).unwrap().unwrap().covered,
+        revision(0)
+    );
+    assert!(store.automation_receipts(CONSUMER, 20).unwrap().is_empty());
+    let recovered = evaluate(&failed, &host, &trigger, true);
+    assert_eq!(recovered.state.unwrap().covered, revision(2));
+    assert_eq!(recovered.receipts.len(), 1);
+}
+
+/// A review task that closed with malformed coverage once held its consumer
+/// `admitted` forever: the bytes could never change, so it never settled.
+#[test]
+fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget() {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let first = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    host.page(2, 2);
+    // The incident's shape: an object where the schema expects a string.
+    *host.raw_evidence.lock().unwrap() = Some(br#"{"schema_version":1,"batch_id":{}}"#.to_vec());
+
+    // While the task is open its executor can still re-put the file.
+    let open = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(open.state, BatchState::Admitted);
+    assert!(open.reason.unwrap().contains("malformed"));
+
+    host.stopped.store(true, Ordering::SeqCst);
+    let settled = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(settled.state, BatchState::Claimed);
+    assert_eq!(settled.attempt, 2);
+    assert!(settled.action_id.is_none());
+    assert!(
+        settled
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("invalid type: map, expected a string"),
+        "the parse error is recorded: {:?}",
+        settled.reason
+    );
+
+    // After the backoff the next fire admits a fresh action over the same debt.
+    let retried = evaluate_at(store.as_ref(), &host, &trigger, true, 6)
+        .unwrap()
+        .state
+        .unwrap();
+    let attempt = retried.active.unwrap();
+    assert_eq!(attempt.state, BatchState::Admitted);
+    assert_ne!(attempt.action_id, first.action_id);
+    assert_eq!(attempt.batch, first.batch);
+    assert_eq!(retried.covered, revision(0));
+
+    // The retry closes the same way: the budget is spent, nothing is covered.
+    let exhausted = evaluate_at(store.as_ref(), &host, &trigger, true, 7).unwrap();
+    assert_eq!(exhausted.reason, "needs_attention");
+    let state = exhausted.state.unwrap();
+    assert_eq!(state.active.unwrap().state, BatchState::Exhausted);
+    assert_eq!(state.covered, revision(0));
+    assert!(exhausted.receipts.is_empty());
 }

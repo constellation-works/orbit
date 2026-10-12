@@ -124,6 +124,13 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
             ],
         },
         Case {
+            name: "non-passing: the related required check failed",
+            records: vec![
+                superseded(ATTEMPT, Some("orbit-core-tests")),
+                required(CORRECTED, Some("orbit-core-tests"), false),
+            ],
+        },
+        Case {
             name: "non-passing: the related replacement is not a pass",
             records: vec![
                 superseded(ATTEMPT, Some("orbit-core-tests")),
