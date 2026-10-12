@@ -39,6 +39,7 @@ pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> Task
         from_status: None,
         to_status: None,
         operation_id: None,
+        decision: None,
     }
 }
 

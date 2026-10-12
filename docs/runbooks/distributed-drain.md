@@ -228,11 +228,22 @@ operator decision records one; a generic update event cannot prove a re-scope.
 An operator can release the hold through the trusted human task-update path
 with `task-pilot-admission: evaluated`, `clear`, or `approve-anyway` as the
 comment's first line and evidence below it (`evaluated` must reference a
-non-empty attached evaluation artifact). This records `host_operational_resolved`.
-A newer assessment supersedes the decision; a `selectors` or `verified_no_diff`
-assessment without another hold admits as before. `no-diff-expected` does not
-exempt host-operational work, even if an auto-task lane grants relevant tools.
-An operator decision releases admission only; task prose never grants tools.
+non-empty attached evaluation artifact). This records a `host_operational_resolved`
+history event that carries the decision as a typed field. Admission reads only
+that field: the same header in any other comment, an agent's included, decides
+nothing. A newer assessment supersedes the decision; a `selectors` or
+`verified_no_diff` assessment without another hold admits as before.
+`no-diff-expected` does not exempt host-operational work, even if an auto-task
+lane grants relevant tools. An operator decision releases admission only; task
+prose never grants tools.
+
+The same trusted path releases a `pilot_duplicate` or `pilot_already_landed`
+hold with `clear` or `approve-anyway`, recorded as a typed decision on a
+`pilot_admission_decided` history event. Two text forms from before typed
+decisions are still honoured when written before 2026-10-12: an operator
+comment carrying that header alone, and an auto drain's approval hold recorded
+as a `[drain-approval-held:<classification>]` marker in the pilot's history
+note. The same text written later is not a decision.
 
 Applied task-pilot `blocked_by` findings that name an unfinished task in the
 same workspace add a dependency in the assessment's atomic write. Proposed,
@@ -286,7 +297,8 @@ task, and a task whose own `os:` tags exclude a host keeps `host_os_mismatch`.
 The wait clears when the tag is added, the acceptance criteria are re-scoped, a
 newer assessment carries no finding, or an operator records an evidenced
 `task-pilot-admission: clear` or `approve-anyway` decision through
-`orbit.task.update` (history event `native_os_requirement_resolved`).
+`orbit.task.update` (history event `native_os_requirement_resolved`, carrying
+the typed decision).
 
 A trusted native-host decision remains valid across later pilot passes with the
 same acceptance-criteria digest, OS requirement set and machine requirement;

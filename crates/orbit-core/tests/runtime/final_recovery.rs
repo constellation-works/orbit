@@ -22,6 +22,7 @@ use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
 use serde_json::json;
 use tempfile::TempDir;
 
+mod recorded_decision;
 mod repair_commit;
 mod revision;
 mod terminalization;

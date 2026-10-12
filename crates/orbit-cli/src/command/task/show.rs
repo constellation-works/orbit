@@ -251,9 +251,10 @@ impl Execute for TaskShowArgs {
                     object.insert("next_step".to_string(), next.to_json());
                 }
             }
-            // The last automated final-recovery decision, from its audit
-            // comment. Additive in JSON.
-            if let Some(record) = FinalRecoveryRecord::last(&projection.comments) {
+            // The last automated final-recovery decision. Additive in JSON.
+            if let Some(record) =
+                FinalRecoveryRecord::last(&projection.history, &projection.comments)
+            {
                 let _ = writeln!(
                     out,
                     "{} {} ({}) by run {} at {}",

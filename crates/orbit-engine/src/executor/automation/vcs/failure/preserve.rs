@@ -70,6 +70,7 @@ fn held_history(held: &HeldCandidate) -> TaskHistoryEntry {
         from_status: None,
         to_status: None,
         operation_id: None,
+        decision: None,
     }
 }
 

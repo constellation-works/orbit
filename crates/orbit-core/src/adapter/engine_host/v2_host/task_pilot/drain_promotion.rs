@@ -6,9 +6,9 @@
 //! a live auto drain started with the flag, and it must have dispatched the
 //! very pilot run applying the results. A task that then passes the shared
 //! promotion findings is approved through the ordinary approve transition,
-//! with a note naming the drain; any other task stays `proposed` and carries a
-//! hold marker in its pilot history entry, so the next pass does not pilot it
-//! again until the task changes. The approval rechecks the opt-out tag and the
+//! with a note naming the drain; any other task stays `proposed` and its pilot
+//! history entry records the hold as its typed decision, so the next pass does
+//! not pilot it again until the task changes. The approval rechecks the opt-out tag and the
 //! pilot-assessed material under the task lock it writes under, so an operator
 //! edit racing the drain is never approved over.
 //!
@@ -20,12 +20,13 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity,
-    TaskStatus, readiness_gaps,
+    TaskDecision, TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::legacy_decisions;
 use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
 
 use super::admission::{PreparedTaskSnapshot, ValidatedTask};
@@ -34,7 +35,6 @@ use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_fin
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
 const PILOT_JOB: &str = "task_pilot_pipeline";
-const HELD_MARKER_PREFIX: &str = " [drain-approval-held:";
 
 /// Why a `proposed` task does not qualify for drain approval, before any
 /// pilot runs: a `no-auto-approve` tag excludes it outright; otherwise its
@@ -66,17 +66,17 @@ pub(in crate::adapter::engine_host::v2_host) fn approved_by_drain(
     note.starts_with(&approval_note(run_id))
 }
 
-fn held_marker(classification: &str) -> String {
-    format!("{HELD_MARKER_PREFIX}{classification}]")
-}
-
-/// The pilot classification a drain hold recorded in a `task_pilot_applied`
-/// history note.
-pub(in crate::adapter::engine_host::v2_host) fn held_classification(note: &str) -> Option<&str> {
-    let (_, marker) = note.split_once(HELD_MARKER_PREFIX)?;
-    marker
-        .split_once(']')
-        .map(|(classification, _)| classification)
+/// The pilot classification a drain hold recorded on a `task_pilot_applied`
+/// history entry. Its note is never read for one: the pilot agent's rationale
+/// is part of it.
+pub(in crate::adapter::engine_host::v2_host) fn held_classification(
+    entry: &TaskHistoryEntry,
+) -> Option<&str> {
+    match &entry.decision {
+        Some(TaskDecision::DrainApprovalHeld { classification }) => Some(classification),
+        Some(_) => None,
+        None => legacy_decisions::drain_held_classification(entry),
+    }
 }
 
 /// A verified drain authority record.
@@ -228,11 +228,14 @@ pub(super) fn assess(
     }))
 }
 
-/// The history marker a hold leaves on the pilot's own history entry.
-pub(super) fn hold_marker(admission: &Value) -> Option<String> {
+/// The typed decision a hold records on the pilot's own history entry.
+pub(super) fn hold_decision(admission: &Value) -> Option<TaskDecision> {
     (admission["decision"] == "withhold")
-        .then(|| admission["classification"].as_str().map(held_marker))
+        .then(|| admission["classification"].as_str())
         .flatten()
+        .map(|classification| TaskDecision::DrainApprovalHeld {
+            classification: classification.to_string(),
+        })
 }
 
 /// What the drain's approve step did with a promoted task.

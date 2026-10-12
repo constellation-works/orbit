@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
-    TaskRelation, TaskStatus, TaskType,
+    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
+    TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize};
@@ -149,6 +149,8 @@ pub struct AtomicTaskMutationParams {
     pub audit_note: String,
     /// Additional decision records committed before the operation receipt.
     pub append_history: Vec<TaskHistoryEntry>,
+    /// Typed decision recorded on the operation's own history event.
+    pub decision: Option<TaskDecision>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

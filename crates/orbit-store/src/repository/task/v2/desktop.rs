@@ -202,6 +202,7 @@ impl TaskV2Store {
                     from_status: Some(old_status),
                     to_status: Some(b.envelope.status),
                     operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &approval)?;
                 b.events.push(approval);
@@ -217,6 +218,7 @@ impl TaskV2Store {
                     from_status: entry.from_status,
                     to_status: entry.to_status,
                     operation_id: None,
+                    decision: entry.decision.clone(),
                 };
                 self.bundle_store.append_event(id, &event)?;
                 b.events.push(event);
@@ -232,6 +234,7 @@ impl TaskV2Store {
                 to_status: (!approval && old_status != b.envelope.status)
                     .then_some(b.envelope.status),
                 operation_id: None,
+                decision: None,
             };
             self.bundle_store.append_event(id, &event)?;
             b.events.push(event);

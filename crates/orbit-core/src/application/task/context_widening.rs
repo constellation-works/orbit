@@ -65,6 +65,7 @@ impl OrbitRuntime {
                                 from_status: None,
                                 to_status: None,
                                 operation_id: None,
+                                decision: None,
                             }],
                             ..Default::default()
                         },

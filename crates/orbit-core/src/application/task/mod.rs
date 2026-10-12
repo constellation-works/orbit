@@ -14,6 +14,7 @@ pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod finding_verification;
 mod helpers;
+pub(crate) mod legacy_decisions;
 mod lifecycle;
 mod lint;
 mod listing;

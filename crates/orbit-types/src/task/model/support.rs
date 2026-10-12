@@ -26,6 +26,9 @@ pub struct TaskHistoryEntry {
     /// through [`TaskHistoryEntry::receipt`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
+    /// The decision this event records, for the automation that acts on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<TaskDecision>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

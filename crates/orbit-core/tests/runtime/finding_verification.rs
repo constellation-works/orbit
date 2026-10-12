@@ -1163,6 +1163,7 @@ fn legacy_confirmation_is_readable_but_cannot_authorize_promotion() {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 }],
                 ..Default::default()
             },

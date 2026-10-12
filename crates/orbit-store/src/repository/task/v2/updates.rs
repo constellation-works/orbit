@@ -63,6 +63,7 @@ impl TaskV2Store {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: entry.decision.clone(),
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -78,6 +79,7 @@ impl TaskV2Store {
                 from_status: status_changed.then_some(bundle.envelope.status),
                 to_status: status_changed.then_some(fields.status),
                 operation_id: Some(fields.operation_id.clone()),
+                decision: fields.decision.clone(),
             };
             self.bundle_store.append_event(id, &event)?;
             bundle.events.push(event);
@@ -319,6 +321,7 @@ impl TaskV2Store {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -376,6 +379,7 @@ impl TaskV2Store {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -470,6 +474,7 @@ impl TaskV2Store {
                     from_status: entry.from_status,
                     to_status: entry.to_status,
                     operation_id: None,
+                    decision: entry.decision.clone(),
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -505,6 +510,7 @@ impl TaskV2Store {
                     from_status: status_transition.map(|(from, _)| from),
                     to_status: status_transition.map(|(_, to)| to),
                     operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);

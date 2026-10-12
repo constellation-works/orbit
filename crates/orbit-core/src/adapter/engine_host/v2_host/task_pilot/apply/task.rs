@@ -92,8 +92,8 @@ pub(super) fn settle_task(
         &admission,
         Some(Admission::CiSweep(decision)) if decision["decision"] == "promote"
     );
-    let history_marker = match &admission {
-        Some(Admission::Drain(decision)) => drain_promotion::hold_marker(decision),
+    let history_decision = match &admission {
+        Some(Admission::Drain(decision)) => drain_promotion::hold_decision(decision),
         _ => None,
     };
     let validated = ValidatedTask {
@@ -102,7 +102,7 @@ pub(super) fn settle_task(
         assessment: assessed.assessment,
         admission,
         promote,
-        history_marker,
+        history_decision,
         complexity: assessed.complexity,
         operation_id,
         required_os: assessed.required_os,

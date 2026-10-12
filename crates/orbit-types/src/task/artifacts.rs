@@ -311,6 +311,8 @@ pub struct TaskEventRowV2 {
     pub to_status: Option<TaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<super::TaskDecision>,
 }
 
 impl TaskEventRowV2 {

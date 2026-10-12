@@ -422,6 +422,7 @@ impl OrbitRuntime {
             from_status: None,
             to_status: None,
             operation_id: None,
+            decision: None,
         };
         if let Err(error) = self.append_system_history(&task.id, vec![entry]) {
             tracing::warn!(

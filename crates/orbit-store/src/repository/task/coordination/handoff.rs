@@ -718,6 +718,7 @@ impl TaskCommitBoundary {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 });
         }
         if candidate.base_branch != ship.base_branch
@@ -763,6 +764,7 @@ impl TaskCommitBoundary {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 });
         }
         for reference in &handoff.validation {
@@ -780,6 +782,7 @@ impl TaskCommitBoundary {
                         from_status: None,
                         to_status: None,
                         operation_id: None,
+                        decision: None,
                     });
             }
         }

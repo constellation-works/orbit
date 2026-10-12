@@ -46,7 +46,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
 use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{ArtifactManifestFileV2, Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    ArtifactManifestFileV2, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+};
 use orbit_types::workflow::{
     FinalRecoveryDecision, JobRun, JobRunState, JobRunTrigger, MAX_DECISION_TEXT_CHARS,
 };
@@ -57,6 +59,7 @@ use super::final_recovery::{
     FinalRecoveryTaskRevision,
 };
 use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
+use super::legacy_decisions;
 use super::retained_candidate::RetainedCandidate;
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
@@ -78,8 +81,6 @@ pub(crate) const ATTRIBUTION_SLACK_MS: i64 = 500;
 const EPISODE_KEY_FIELD: &str = "episode_key";
 /// Newest recovery runs the keyed admission and the tick look through.
 const RUN_SCAN_LIMIT: usize = 500;
-/// Prefix of the comment header the final-recovery applier writes.
-const DECISION_COMMENT_PREFIX: &str = "final_recovery run_id=";
 const TRIGGER_NAME: &str = "blocked-task-recovery";
 const TRIGGER_CONSUMER: &str = "clock-sweep";
 /// The `final_recovery` decisions the backstop applies. `resume` is absent: a
@@ -214,7 +215,7 @@ impl BlockEpisode {
 /// The last final-recovery decision recorded on a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalRecoveryRecord {
-    /// When the decision comment was written.
+    /// When the decision was recorded.
     pub at: DateTime<Utc>,
     /// The run the decision belongs to.
     pub run_id: String,
@@ -225,24 +226,45 @@ pub struct FinalRecoveryRecord {
 }
 
 impl FinalRecoveryRecord {
-    /// The newest decision comment among `comments`.
-    pub fn last(comments: &[TaskComment]) -> Option<Self> {
-        comments.iter().rev().find_map(Self::parse)
+    /// The newest decision recorded on a task with `history` and `comments`.
+    pub fn last(history: &[TaskHistoryEntry], comments: &[TaskComment]) -> Option<Self> {
+        Self::newest_since(history, comments, DateTime::<Utc>::MIN_UTC)
     }
 
-    fn parse(comment: &TaskComment) -> Option<Self> {
-        if comment.by != SYSTEM_ACTOR_LABEL {
+    /// The newest decision recorded at or after `since`: the applier's typed
+    /// decisions, and a legacy decision comment for a run none of them names.
+    fn newest_since(
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        since: DateTime<Utc>,
+    ) -> Option<Self> {
+        let typed = history.iter().filter_map(Self::typed).collect::<Vec<_>>();
+        let legacy = comments
+            .iter()
+            .filter_map(legacy_decisions::final_recovery_comment)
+            .filter(|legacy| !typed.iter().any(|typed| typed.run_id == legacy.run_id))
+            .collect::<Vec<_>>();
+        typed
+            .into_iter()
+            .chain(legacy)
+            .filter(|record| record.at >= since)
+            .max_by_key(|record| record.at)
+    }
+
+    fn typed(entry: &TaskHistoryEntry) -> Option<Self> {
+        let Some(TaskDecision::FinalRecovery {
+            run_id,
+            decision,
+            outcome,
+        }) = &entry.decision
+        else {
             return None;
-        }
-        let header = comment.message.lines().next()?;
-        if !header.starts_with(DECISION_COMMENT_PREFIX) {
-            return None;
-        }
-        Some(Self {
-            at: comment.at,
-            run_id: note_field(header, "run_id=")?.to_string(),
-            decision: note_field(header, "decision=")?.to_string(),
-            outcome: note_field(header, "outcome=").unwrap_or("-").to_string(),
+        };
+        (entry.by == SYSTEM_ACTOR_LABEL).then(|| Self {
+            at: entry.at,
+            run_id: run_id.clone(),
+            decision: decision.clone(),
+            outcome: outcome.as_str().to_string(),
         })
     }
 }
@@ -279,12 +301,7 @@ pub fn episode_disposition(
     artifacts: &[ArtifactManifestFileV2],
     now: DateTime<Utc>,
 ) -> EpisodeDisposition {
-    if let Some(record) = comments
-        .iter()
-        .rev()
-        .filter(|comment| comment.at >= episode.blocked_at)
-        .find_map(FinalRecoveryRecord::parse)
-    {
+    if let Some(record) = FinalRecoveryRecord::newest_since(history, comments, episode.blocked_at) {
         return EpisodeDisposition::Decided(record);
     }
     let later_actor = history
@@ -913,11 +930,12 @@ impl OrbitRuntime {
                 return Ok(false);
             }
         };
-        let comments = self.get_task_comments(&input.task_id)?;
-        if comments
-            .iter()
-            .filter(|comment| comment.at >= episode.blocked_at)
-            .any(|comment| FinalRecoveryRecord::parse(comment).is_some())
+        if FinalRecoveryRecord::newest_since(
+            &self.get_task_history(&input.task_id)?,
+            &self.get_task_comments(&input.task_id)?,
+            episode.blocked_at,
+        )
+        .is_some()
         {
             return Ok(false);
         }
@@ -977,7 +995,7 @@ fn with_line(text: &str, line: &str) -> String {
     format!("{kept}…\n{line}")
 }
 
-/// The `key=value` token in a history note or comment header.
+/// The `key=value` token in a history note.
 fn note_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let start = text.find(key)? + key.len();
     let value = text[start..].split([',', ' ', ';', '\n']).next()?;
