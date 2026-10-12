@@ -117,6 +117,7 @@ fn conflicting_output_formats_are_json_usage_errors_across_command_levels() {
 fn json_shorthand_preserves_the_local_audit_export_file_format() {
     let checkout = crate::git_repo::WorkCheckout::new();
     let path = checkout.work.join("audit.csv");
+    let export_path = path.to_str().expect("export path");
     let output = run(
         &checkout,
         &[
@@ -126,7 +127,7 @@ fn json_shorthand_preserves_the_local_audit_export_file_format() {
             "--format",
             "csv",
             "--output",
-            path.to_str().expect("export path"),
+            export_path,
         ],
     );
     assert_eq!(
@@ -135,17 +136,16 @@ fn json_shorthand_preserves_the_local_audit_export_file_format() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let mut csv = csv::Reader::from_path(path).expect("CSV export");
+    let mut csv = csv::Reader::from_path(&path).expect("CSV export");
     assert!(
         csv.headers()
             .expect("CSV header")
             .iter()
             .any(|name| name == "command")
     );
-    // This file-producing command retains its existing human confirmation.
-    assert!(
-        String::from_utf8(output.stdout)
-            .expect("export confirmation")
-            .starts_with("Exported ")
-    );
+    let confirmation: Value = serde_json::from_slice(&output.stdout)
+        .expect("--json renders the export confirmation as one JSON document");
+    assert_eq!(confirmation["action"], "export");
+    assert_eq!(confirmation["format"], "csv");
+    assert_eq!(confirmation["path"], export_path);
 }

@@ -9,7 +9,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 use super::ClockTickArgs;
-use crate::command::{CommandOut, CommandOutput, Payload};
+use crate::command::{CommandOut, Payload};
 use orbit_registry::workspace_registry;
 
 #[derive(Args)]
@@ -61,31 +61,57 @@ impl ClockCommand {
             ClockSubcommand::Pause => {
                 let global_root = selected_global_root(root_override)?;
                 let status = set_clock_enabled(&global_root, false)?;
-                println!(
+                let text = format!(
                     "host scheduler clock paused ({}); manual `orbit clock tick` remains available",
                     status.platform
                 );
-                Ok(CommandOutput::Silent)
+                Ok(Payload::detail(
+                    json!({
+                        "action": "pause",
+                        "enabled": status.enabled,
+                        "manual_tick_available": true,
+                        "platform": status.platform,
+                    }),
+                    text,
+                )
+                .into())
             }
             ClockSubcommand::Enable => {
                 let global_root = selected_global_root(root_override)?;
                 let status = set_clock_enabled(&global_root, true)?;
-                println!(
+                let text = format!(
                     "host scheduler clock enabled: runs every {} seconds ({})",
                     status.configured_cadence_seconds, status.platform
                 );
-                Ok(CommandOutput::Silent)
+                Ok(Payload::detail(
+                    json!({
+                        "action": "enable",
+                        "enabled": status.enabled,
+                        "configured_cadence_seconds": status.configured_cadence_seconds,
+                        "platform": status.platform,
+                    }),
+                    text,
+                )
+                .into())
             }
             ClockSubcommand::Repair => {
                 super::repair::execute(&selected_global_root(root_override)?)
             }
             ClockSubcommand::Set { cadence_seconds } => {
                 let global_root = selected_global_root(root_override)?;
-                set_clock_cadence(&global_root, cadence_seconds)?;
-                println!(
+                let report = set_clock_cadence(&global_root, cadence_seconds)?;
+                let text = format!(
                     "host scheduler clock cadence set to {cadence_seconds} seconds and reloaded"
                 );
-                Ok(CommandOutput::Silent)
+                Ok(Payload::detail(
+                    json!({
+                        "action": "set_cadence",
+                        "configured_cadence_seconds": cadence_seconds,
+                        "activated": report.activated,
+                    }),
+                    text,
+                )
+                .into())
             }
             ClockSubcommand::Tick(args) => {
                 args.execute_without_runtime(root_override, workspace_selector)

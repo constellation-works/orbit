@@ -58,6 +58,74 @@ impl Fixture {
         fixture_orbit(&self.work, &self.home)
     }
 
+    #[cfg(unix)]
+    fn orbit_with_fake_clock_manager(&self) -> Command {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = self._temp.path().join("clock-manager-bin");
+        fs::create_dir_all(&bin).expect("create fake clock manager directory");
+        let (program, script) = if cfg!(target_os = "macos") {
+            ("launchctl", "#!/bin/sh\nexit 0\n".to_string())
+        } else {
+            (
+                "systemctl",
+                "#!/bin/sh\n\
+                 case \"$*\" in\n\
+                   *\"is-enabled orbit-sweep.timer\"*)\n\
+                     if [ -f \"$HOME/.fake-clock-enabled\" ]; then printf 'enabled\\n'; exit 0; fi\n\
+                     printf 'disabled\\n' >&2; exit 1 ;;\n\
+                   *\"show orbit-sweep.service\"*)\n\
+                     printf 'ActiveState=inactive\\nExecMainStartTimestampMonotonic=0\\nResult=success\\nTimeoutStartUSec=10min\\nKillMode=mixed\\n'; exit 0 ;;\n\
+                   *\"show orbit-sweep.timer\"*)\n\
+                     if [ -f \"$HOME/.fake-clock-enabled\" ]; then\n\
+                       printf 'LoadState=loaded\\nActiveState=active\\nNextElapseUSecMonotonic=999999999999999999\\n'\n\
+                     else\n\
+                       printf 'LoadState=loaded\\nActiveState=inactive\\nNextElapseUSecMonotonic=\\n'\n\
+                     fi; exit 0 ;;\n\
+                   *\"enable orbit-sweep.timer\"*|*\"restart orbit-sweep.timer\"*)\n\
+                     touch \"$HOME/.fake-clock-enabled\"; exit 0 ;;\n\
+                   *) exit 0 ;;\n\
+                 esac\n"
+                    .to_string(),
+            )
+        };
+        let path = bin.join(program);
+        fs::write(&path, script).expect("write fake clock manager");
+        let mut permissions = fs::metadata(&path)
+            .expect("inspect fake clock manager")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("make fake clock manager executable");
+
+        let mut paths = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .collect::<Vec<_>>();
+        paths.insert(0, bin);
+        let mut command = self.orbit();
+        command.env(
+            "PATH",
+            std::env::join_paths(paths).expect("join fake manager PATH"),
+        );
+        command
+    }
+
+    #[cfg(unix)]
+    fn json_with_fake_clock_manager(&self, args: &[&str]) -> Value {
+        let output = self
+            .orbit_with_fake_clock_manager()
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "`orbit {}` must print one JSON document: {error}\nstdout:\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stdout)
+            )
+        })
+    }
+
     fn json(&self, args: &[&str]) -> Value {
         let output = self
             .orbit()
@@ -189,6 +257,149 @@ fn config_path_and_set_print_json_documents() {
         "json",
     ]);
     assert_eq!(value["value"], 45);
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_control_confirmations_are_json_and_keep_their_human_text() {
+    let platform = if cfg!(target_os = "macos") {
+        "launchd"
+    } else {
+        "systemd"
+    };
+    let cases: [(&[&str], &str, String); 3] = [
+        (
+            &["clock", "pause"],
+            "pause",
+            format!(
+                "host scheduler clock paused ({platform}); manual `orbit clock tick` remains available\n"
+            ),
+        ),
+        (
+            &["clock", "enable"],
+            "enable",
+            format!("host scheduler clock enabled: runs every 60 seconds ({platform})\n"),
+        ),
+        (
+            &["clock", "set", "--cadence-seconds", "1200"],
+            "set_cadence",
+            "host scheduler clock cadence set to 1200 seconds and reloaded\n".to_string(),
+        ),
+    ];
+
+    for (command_args, action, expected_text) in cases {
+        let fixture = Fixture::new();
+        fixture.init_machine_and_workspace();
+
+        let mut json_args = command_args.to_vec();
+        json_args.push("--json");
+        let json = fixture.json_with_fake_clock_manager(&json_args);
+        assert_eq!(json["action"], action);
+        match action {
+            "pause" => {
+                assert_eq!(json["enabled"], false);
+                assert_eq!(json["manual_tick_available"], true);
+                assert_eq!(json["platform"], platform);
+            }
+            "enable" => {
+                assert_eq!(json["enabled"], true);
+                assert_eq!(json["configured_cadence_seconds"], 60);
+                assert_eq!(json["platform"], platform);
+            }
+            "set_cadence" => {
+                assert_eq!(json["configured_cadence_seconds"], 1200);
+                assert_eq!(json["activated"], true);
+            }
+            _ => unreachable!("each case names a clock confirmation action"),
+        }
+
+        let output = fixture
+            .orbit_with_fake_clock_manager()
+            .args(command_args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("clock confirmation is UTF-8"),
+            expected_text
+        );
+    }
+}
+
+#[test]
+fn audit_json_export_renders_a_json_confirmation_and_preserves_csv_text() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+
+    let json_path = fixture._temp.path().join("audit.json");
+    let json_path_text = json_path.to_string_lossy().into_owned();
+    let exported = fixture.json(&[
+        "audit",
+        "export",
+        "--format",
+        "json",
+        "--output",
+        &json_path_text,
+    ]);
+    assert_eq!(exported["action"], "export");
+    assert_eq!(exported["format"], "json");
+    assert_eq!(exported["path"], json_path_text);
+    let event_count = exported["events_exported"]
+        .as_u64()
+        .expect("export count is an integer");
+    let rows: Vec<Value> = serde_json::from_slice(&fs::read(&json_path).expect("read JSON export"))
+        .expect("export file is a JSON array");
+    assert_eq!(rows.len() as u64, event_count);
+
+    let csv_path = fixture._temp.path().join("audit.csv");
+    let csv_path_text = csv_path.to_string_lossy().into_owned();
+    let output = fixture
+        .orbit()
+        .args([
+            "audit",
+            "export",
+            "--format",
+            "csv",
+            "--output",
+            &csv_path_text,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8(output.stdout).expect("CSV confirmation is UTF-8");
+    let details = text
+        .strip_prefix("Exported ")
+        .and_then(|text| text.strip_suffix('\n'))
+        .expect("CSV export keeps its human confirmation");
+    let (count, destination) = details
+        .split_once(" events to ")
+        .expect("human confirmation includes event count and destination");
+    let count: u64 = count.parse().expect("human confirmation count");
+    assert_eq!(destination, csv_path_text);
+    assert_eq!(
+        text,
+        format!("Exported {count} events to {csv_path_text}\n")
+    );
+    assert!(csv_path.is_file(), "CSV export file is written");
+
+    let default_path = fixture._temp.path().join("audit-default.json");
+    let default_path_text = default_path.to_string_lossy().into_owned();
+    let default_output = fixture
+        .orbit()
+        .args(["audit", "export", "--output", &default_path_text])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let default_text =
+        String::from_utf8(default_output.stdout).expect("default confirmation is UTF-8");
+    assert!(
+        default_text.starts_with("Exported ")
+            && default_text.ends_with(&format!(" to {default_path_text}\n")),
+        "the default file format keeps the human confirmation: {default_text:?}"
+    );
 }
 
 /// `config set` validates before it writes: an invalid value, an unknown key
