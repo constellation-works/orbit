@@ -84,6 +84,7 @@ let locating: Promise<Target> | null = null
 let inFlight = false
 let lastRefreshAt = 0
 let shipTimer: Timer | null = null
+let shipTimerRunId: string | null = null
 let shipPolling = false
 let refreshTimer: Timer | null = null
 
@@ -278,7 +279,7 @@ async function launch($: EngineInterface): Promise<void> {
     const ran = await orbit($, ['run', 'ship', ready.taskId, '--json'], 60_000)
     const runId = findRunId(ran.stdout)
     await update($, shipAtom, (prior): OrbitShip | null => (prior ? { ...prior, phase: 'flying', runId, message: runId ? null : 'Launched; Orbit reported no run id to follow.' } : prior))
-    if (runId !== null) watchShip($)
+    if (runId !== null) watchShip($, runId)
   } catch (thrown) {
     await update($, shipAtom, (prior): OrbitShip | null => (prior ? { ...prior, phase: 'failed', message: reason(thrown) } : prior))
   }
@@ -290,13 +291,23 @@ async function track($: EngineInterface, taskId: string, runId: string): Promise
   const now = await $.clock.now()
   const tracked: OrbitShip = { taskId, phase: 'flying', runId, checks: [], steps: PIPELINE.map(() => 'pending'), startedAt: now, finishedAt: null, message: null }
   await update($, shipAtom, () => tracked)
-  watchShip($)
+  watchShip($, runId)
   await pollShip($)
 }
 
-function watchShip($: EngineInterface): void {
+function watchShip($: EngineInterface, runId: string | null): void {
   shipTimer?.cancel()
-  shipTimer = $.clock.every(SHIP_POLL_MS, () => void pollShip($))
+  shipTimerRunId = runId
+  shipTimer = $.clock.every(SHIP_POLL_MS, () => {
+    if (shipTimerRunId === runId) void pollShip($)
+  })
+}
+
+function stopShipWatch(runId?: string | null): void {
+  if (runId !== undefined && shipTimerRunId !== runId) return
+  shipTimer?.cancel()
+  shipTimer = null
+  shipTimerRunId = null
 }
 
 /** Resolves only this launch's descendants, so an older task run cannot supply its steps. */
@@ -318,8 +329,7 @@ async function pollShip($: EngineInterface): Promise<void> {
   if (shipPolling) return
   const flying = await read($, shipAtom)
   if (flying === null || flying.runId === null || flying.phase !== 'flying') {
-    shipTimer?.cancel()
-    shipTimer = null
+    stopShipWatch()
     return
   }
   const runId = flying.runId
@@ -352,9 +362,9 @@ async function pollShip($: EngineInterface): Promise<void> {
           }
         : prior,
     )
-    if (isOver) {
-      shipTimer?.cancel()
-      shipTimer = null
+    const stillTracked = (await read($, shipAtom))?.runId === runId
+    if (isOver && stillTracked) {
+      stopShipWatch(runId)
       const verdict = outcome === 'landed' ? `✓ ${flying.taskId} landed` : isFailed ? `✗ ${flying.taskId} ship ${runState}` : `■ ${flying.taskId} ship ${runState}`
       $.ui.toast(`${verdict} · ${runId}`, { timeoutMs: 8000 })
       void refresh($)
@@ -443,7 +453,8 @@ export const register: Register = (on, options) => {
     // An error stored by an earlier load (another cwd, options since changed) is not this load's.
     await update($, errorAtom, () => null)
     void refresh($)
-    if (isInFlight(await read($, shipAtom))) watchShip($)
+    const ship = await read($, shipAtom)
+    if (isInFlight(ship)) watchShip($, ship?.runId ?? null)
     return started
   })
 
