@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
@@ -216,24 +216,24 @@ impl Workspace {
     /// A qualifying proposed task that will also create `file:src/new.rs`,
     /// declared the way an operator surface declares a creation target.
     fn creation_task(&self, title: &str) -> Task {
-        let context_files = vec!["file:README.md".to_string(), NEW_FILE.to_string()];
-        let context_creation = self
-            .runtime
-            .authorize_missing_context(&context_files)
-            .unwrap();
         self.runtime
-            .add_task(TaskAddParams {
-                title: title.into(),
-                description: format!("Ship {title}."),
-                acceptance_criteria: vec!["The change is in place.".into()],
-                plan: "Edit README.md and add src/new.rs.".into(),
-                status: Some(TaskStatus::Proposed),
-                context_files,
-                complexity: TaskComplexity::Low,
-                context_creation,
-                ..Default::default()
-            })
+            .add_task_screened(
+                TaskAddParams {
+                    title: title.into(),
+                    description: format!("Ship {title}."),
+                    acceptance_criteria: vec!["The change is in place.".into()],
+                    plan: "Edit README.md and add src/new.rs.".into(),
+                    status: Some(TaskStatus::Proposed),
+                    context_files: vec!["file:README.md".to_string(), NEW_FILE.to_string()],
+                    complexity: TaskComplexity::Low,
+                    ..Default::default()
+                },
+                &TaskWriteScreen::unbound(true),
+                None,
+                None,
+            )
             .unwrap()
+            .task
     }
 
     fn edit(&self, task: &Task, params: TaskUpdateParams) {

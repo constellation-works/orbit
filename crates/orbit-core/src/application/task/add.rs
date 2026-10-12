@@ -109,16 +109,40 @@ impl OrbitRuntime {
     ) -> Result<Task, OrbitError> {
         self.add_task_admitted_guarded(params, agent, model, action_key, None)
     }
+
+    /// [`Self::add_task_with_identity`], also returning the advisory
+    /// `required_tools` warnings its validation produced.
+    pub(super) fn add_task_reporting(
+        &self,
+        params: TaskAddParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<(Task, Vec<String>), OrbitError> {
+        self.add_task_validated(params, agent, model, None, None)
+    }
+
     pub(crate) fn add_task_admitted_guarded(
+        &self,
+        params: TaskAddParams,
+        agent: Option<String>,
+        model: Option<String>,
+        action_key: Option<&str>,
+        digest: Option<&str>,
+    ) -> Result<Task, OrbitError> {
+        self.add_task_validated(params, agent, model, action_key, digest)
+            .map(|(task, _)| task)
+    }
+
+    fn add_task_validated(
         &self,
         mut params: TaskAddParams,
         agent: Option<String>,
         model: Option<String>,
         action_key: Option<&str>,
         digest: Option<&str>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.validate_required_tools(&params.required_tools)?;
+        let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
 
         // [ORB-00417] Redact secrets at the single task-creation choke point
         // (shared by the dashboard POST, CLI `task add`, and the MCP task tool)
@@ -255,7 +279,7 @@ impl OrbitRuntime {
             Ok((task, event))
         })??;
 
-        Ok(task)
+        Ok((task, required_tool_warnings))
     }
 
     /// Append the `crew_assigned` history entry to a task just inserted.

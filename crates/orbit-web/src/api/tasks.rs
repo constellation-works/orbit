@@ -7,7 +7,9 @@ use axum::body::Body;
 use axum::extract::{Path, RawQuery};
 use axum::http::{HeaderName, HeaderValue, header};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{
+    ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen,
+};
 use orbit_core::{
     ExternalRef, OrbitRuntime, Task, TaskComplexity, TaskCreateStatus, TaskPriority, TaskStatus,
     TaskType,
@@ -43,7 +45,9 @@ enum TaskMutationFailure {
 }
 
 /// Apply a task mutation and render its response payload, both on the blocking
-/// pool rather than on the tokio worker serving the request.
+/// pool rather than on the tokio worker serving the request. The payload is
+/// the task, plus the write's `warnings` and `context_files_unverified`
+/// selectors when there are any.
 ///
 /// ORB-10988 / F2026-07-119: every mutation here descends into an exclusive,
 /// timeout-free `flock` on the task bundle, and the reads that build the
@@ -57,14 +61,27 @@ async fn task_mutation_response<F>(
     mutate: F,
 ) -> Response
 where
-    F: FnOnce(&OrbitRuntime) -> Result<Task, orbit_core::OrbitError> + Send + 'static,
+    F: FnOnce(&OrbitRuntime) -> Result<ScreenedTaskWrite, orbit_core::OrbitError> + Send + 'static,
 {
     let rendered = tokio::task::spawn_blocking(move || {
-        let task = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
+        let written = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
+        let task = &written.task;
         let status_by_id =
-            dashboard_status_index(&runtime, &task).map_err(TaskMutationFailure::Render)?;
-        task_to_json_with_sidecars(&runtime, &task, &status_by_id)
-            .map_err(TaskMutationFailure::Render)
+            dashboard_status_index(&runtime, task).map_err(TaskMutationFailure::Render)?;
+        let mut value = task_to_json_with_sidecars(&runtime, task, &status_by_id)
+            .map_err(TaskMutationFailure::Render)?;
+        if let Some(object) = value.as_object_mut() {
+            if !written.context_files_unverified.is_empty() {
+                object.insert(
+                    "context_files_unverified".to_string(),
+                    json!(written.context_files_unverified),
+                );
+            }
+            if !written.warnings.is_empty() {
+                object.insert("warnings".to_string(), json!(written.warnings));
+            }
+        }
+        Ok(value)
     })
     .await;
     match rendered {
@@ -130,7 +147,7 @@ pub(super) struct CreateTaskBody {
     /// is about to create, mirroring `orbit task add --allow-missing-context`
     /// and the `orbit.task.add` tool's `allow_missing_context` input. Each
     /// missing selector is recorded as durable creation intent; see
-    /// [`OrbitRuntime::authorize_missing_context`](orbit_core::OrbitRuntime::authorize_missing_context).
+    /// [`OrbitRuntime::add_task_screened`](orbit_core::OrbitRuntime::add_task_screened).
     #[serde(default)]
     allow_missing_context: bool,
     #[serde(default)]
@@ -611,13 +628,12 @@ pub(super) async fn create_task_action(
         context_creation: Default::default(),
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
-        let mut params = params;
-        if allow_missing_context {
-            params.context_creation = runtime.authorize_missing_context(&params.context_files)?;
-        } else {
-            runtime.ensure_context_selectors_exist(&params.context_files)?;
-        }
-        runtime.add_task_with_identity(params, None, model)
+        runtime.add_task_screened(
+            params,
+            &TaskWriteScreen::unbound(allow_missing_context),
+            None,
+            model,
+        )
     })
     .await
 }
@@ -667,7 +683,11 @@ pub(super) async fn update_task_action(
     }
     let model = body.model.as_deref().and_then(non_empty_string);
     let allow_missing_context = body.allow_missing_context;
-    let force = body.force;
+    let authority = if body.force {
+        TaskUpdateAuthority::Forced
+    } else {
+        TaskUpdateAuthority::Lifecycle
+    };
     let params = TaskUpdateParams {
         title: body.title,
         description: body.description,
@@ -698,19 +718,14 @@ pub(super) async fn update_task_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {
-        let mut params = params;
-        if let Some(candidates) = params.context_files.as_deref() {
-            params.context_creation = if allow_missing_context {
-                runtime.authorize_missing_context(candidates)?
-            } else {
-                runtime.ensure_context_selectors_exist_for_update(&id, candidates)?
-            };
-        }
-        if force {
-            runtime.force_update_task_with_identity(&id, params, None, model)
-        } else {
-            runtime.update_task_with_identity(&id, params, None, model)
-        }
+        runtime.update_task_screened(
+            &id,
+            params,
+            &TaskWriteScreen::unbound(allow_missing_context),
+            authority,
+            None,
+            model,
+        )
     })
     .await
 }
@@ -745,7 +760,9 @@ pub(super) async fn add_task_comment_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task comment", move |runtime| {
-        runtime.update_task_as_human(&id, params, author)
+        runtime
+            .update_task_as_human(&id, params, author)
+            .map(ScreenedTaskWrite::from)
     })
     .await
 }
@@ -785,7 +802,7 @@ pub(super) async fn approve_task_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task approval", move |runtime| {
-        runtime.approve_task(&id, body.note, body.comment)
+        runtime.approve_task_screened(&id, body.note, body.comment, None, None)
     })
     .await
 }
@@ -801,7 +818,9 @@ pub(super) async fn reject_task_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task rejection", move |runtime| {
-        runtime.reject_task(&id, body.note, body.comment)
+        runtime
+            .reject_task(&id, body.note, body.comment)
+            .map(ScreenedTaskWrite::from)
     })
     .await
 }

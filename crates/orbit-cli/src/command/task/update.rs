@@ -1,12 +1,12 @@
 use clap::{ArgAction, Args};
-use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::application::task::{TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
-use orbit_types::task::{TaskArtifact, backlog_footprint_warning};
+use orbit_types::task::TaskArtifact;
 use serde_json::{Map, Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::output::task_to_json_for_runtime;
+use super::output::screened_write_json;
 
 #[derive(Args)]
 pub struct TaskUpdateArgs {
@@ -180,16 +180,14 @@ impl Execute for TaskUpdateArgs {
         } = self;
 
         if approve {
-            let warnings = runtime
-                .task_pilot_blocker_warnings(&id)?
-                .into_iter()
-                .map(|text| format!("Task-pilot blocker: {text}"))
-                .collect::<Vec<_>>();
             let (agent, model) = super::mutation_identity(model);
-            let task = runtime.approve_task_with_identity(&id, note, comment, agent, model)?;
+            let written = runtime.approve_task_screened(&id, note, comment, agent, model)?;
             return Ok(Payload::detail(
-                written_task_json(runtime, &task, warnings)?,
-                format!("Approved task '{}' -> {}", task.id, task.status),
+                screened_write_json(runtime, &written)?,
+                format!(
+                    "Approved task '{}' -> {}",
+                    written.task.id, written.task.status
+                ),
             )
             .into());
         }
@@ -241,15 +239,6 @@ impl Execute for TaskUpdateArgs {
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
         let context_files = parse_replacement_list(context_files);
-        let context_creation = match context_files.as_deref() {
-            Some(candidates) if allow_missing_context => {
-                runtime.authorize_missing_context(candidates)?
-            }
-            Some(candidates) => {
-                runtime.ensure_context_selectors_exist_for_update(&id, candidates)?
-            }
-            None => Default::default(),
-        };
         let changes_nothing = title.is_none()
             && description.is_none()
             && acceptance_criteria.is_none()
@@ -277,9 +266,6 @@ impl Execute for TaskUpdateArgs {
                     .to_string(),
             ));
         }
-        if let Some(dependencies) = dependencies.as_deref() {
-            super::warn_unreadable_dependencies(runtime, dependencies);
-        }
         let (agent, model) = super::mutation_identity(model);
 
         let params = TaskUpdateParams {
@@ -302,46 +288,31 @@ impl Execute for TaskUpdateArgs {
             crew,
             orchestrator,
             context_files,
-            context_creation,
             upsert_artifacts,
             discard_candidate,
             allow_drop_system_tags,
             ..Default::default()
         };
-        let task = if force {
-            runtime.force_update_task_with_identity(&id, params, agent, model)?
+        let authority = if force {
+            TaskUpdateAuthority::Forced
         } else {
-            runtime.update_task_with_identity(&id, params, agent, model)?
+            TaskUpdateAuthority::Lifecycle
         };
+        let written = runtime.update_task_screened(
+            &id,
+            params,
+            &TaskWriteScreen::from_process(allow_missing_context),
+            authority,
+            agent,
+            model,
+        )?;
 
         Ok(Payload::detail(
-            written_task_json(runtime, &task, Vec::new())?,
-            format!("Updated task '{}'", task.id),
+            screened_write_json(runtime, &written)?,
+            format!("Updated task '{}'", written.task.id),
         )
         .into())
     }
-}
-
-/// The written task, with the warning a write that leaves it in the backlog
-/// with no footprint carries [ORB-15191], also printed to stderr.
-fn written_task_json(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-    mut warnings: Vec<String>,
-) -> Result<Value, OrbitError> {
-    let mut document = task_to_json_for_runtime(runtime, task)?;
-    if let Some(warning) = backlog_footprint_warning(task) {
-        warnings.push(warning);
-    }
-    for warning in &warnings {
-        eprintln!("warning: {warning}");
-    }
-    if !warnings.is_empty()
-        && let Some(object) = document.as_object_mut()
-    {
-        object.insert("warnings".to_string(), json!(warnings));
-    }
-    Ok(document)
 }
 
 impl TaskUpdateArgs {

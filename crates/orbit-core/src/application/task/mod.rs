@@ -27,6 +27,7 @@ mod record_json;
 mod records;
 mod resolves;
 mod retained_candidate;
+mod screened;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
@@ -81,6 +82,7 @@ pub use provider_limit::{
 };
 pub use pull_request_links::PullRequestLinks;
 pub use record_json::{task_record_json, task_show_field_json};
+pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
@@ -89,7 +91,7 @@ pub(crate) use lifecycle::{
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
 pub use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
-pub(crate) use paths::{compute_task_add_warnings, context_workspace_root};
+pub(crate) use paths::context_workspace_root;
 pub(crate) use update::admit_agent_artifact;
 
 #[cfg(test)]

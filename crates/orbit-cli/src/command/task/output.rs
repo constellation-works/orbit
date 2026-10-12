@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::application::task::{task_record_json, task_show_field_json};
+use orbit_core::application::task::{ScreenedTaskWrite, task_record_json, task_show_field_json};
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus, resolve_task_relations};
 use orbit_types::task::{
     TaskComment, TaskHistoryEntry, task_dependency_labels, task_show_record_field_json,
@@ -53,6 +53,37 @@ pub(crate) fn task_to_json_for_runtime(
 ) -> Result<Value, OrbitError> {
     let status_by_id = runtime.dependency_status_index([task])?;
     Ok(task_to_json_with_sidecars(runtime, task, &status_by_id)?.doc)
+}
+
+/// A screened write's task document, carrying the write's `warnings` and
+/// `context_files_unverified` selectors when there are any. Each warning is
+/// also printed to stderr so a text-mode caller sees it.
+pub(super) fn screened_write_json(
+    runtime: &OrbitRuntime,
+    written: &ScreenedTaskWrite,
+) -> Result<Value, OrbitError> {
+    let mut document = task_to_json_for_runtime(runtime, &written.task)?;
+    for warning in &written.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if !written.context_files_unverified.is_empty() {
+        eprintln!(
+            "warning: context selectors stored without a verified target: {}",
+            written.context_files_unverified.join(", ")
+        );
+    }
+    if let Some(object) = document.as_object_mut() {
+        if !written.context_files_unverified.is_empty() {
+            object.insert(
+                "context_files_unverified".to_string(),
+                json!(written.context_files_unverified),
+            );
+        }
+        if !written.warnings.is_empty() {
+            object.insert("warnings".to_string(), json!(written.warnings));
+        }
+    }
+    Ok(document)
 }
 
 pub(crate) struct TaskJsonWithSidecars {

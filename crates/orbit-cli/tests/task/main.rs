@@ -44,6 +44,7 @@ mod task_recheck_blocked_cli;
 mod task_registry_recovery;
 mod task_tags;
 mod task_trimmed_surface;
+mod write_preflight;
 
 #[test]
 fn task_git_fixtures_preserve_inherited_authority_decoy() {

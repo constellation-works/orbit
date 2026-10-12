@@ -112,8 +112,8 @@ fn a_screened_write_is_refused_when_the_grant_it_relied_on_changes() {
         })
         .expect("add task");
 
-    let screened = runtime
-        .ensure_context_selectors_exist_for_update(&task.id, &declared)
+    let (_, screened) = runtime
+        .ensure_context_selectors_exist_for_task_write(&task.id, None, &declared)
         .expect("the declared target passes the strict check");
     let revoke = vec!["file:src/main.rs".to_string()];
     runtime
@@ -121,8 +121,9 @@ fn a_screened_write_is_refused_when_the_grant_it_relied_on_changes() {
             &task.id,
             crate::application::task::TaskUpdateParams {
                 context_creation: runtime
-                    .ensure_context_selectors_exist_for_update(&task.id, &revoke)
-                    .expect("screen revocation"),
+                    .ensure_context_selectors_exist_for_task_write(&task.id, None, &revoke)
+                    .expect("screen revocation")
+                    .1,
                 context_files: Some(revoke.clone()),
                 ..Default::default()
             },
