@@ -24,6 +24,7 @@ fn identity(version: u32, writer_floor: u32) -> CompatibilityIdentity {
     };
     CompatibilityIdentity {
         store_schema: ledger(version, writer_floor),
+        task_registry: ledger(1, 0),
         workspace_layout: ledger(1, 0),
         features: BTreeMap::new(),
         feature_floors: BTreeMap::new(),

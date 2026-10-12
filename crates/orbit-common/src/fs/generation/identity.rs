@@ -1,9 +1,9 @@
 //! What makes two Orbit executables safe to run against one authority.
 //!
 //! A [`CompatibilityIdentity`] is compiled into every binary: for each state
-//! ledger it names the newest version the binary produces and the newest
-//! migration an older binary could not keep writing through
-//! (`writer_floor`) or reading (`reader_floor`). Each feature schema ledger
+//! ledger (store schema, task registry, workspace layout) it names the newest
+//! version the binary produces and the newest migration an older binary could
+//! not keep writing through (`writer_floor`) or reading (`reader_floor`). Each feature schema ledger
 //! names its version and its newest breaking migration ([`FeatureFloor`]):
 //! older binaries keep reading and writing across the additive and data-only
 //! migrations above it.
@@ -17,8 +17,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// One state ledger, as a binary compiled it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// One state ledger, as a binary compiled it. The default is a binary that
+/// knows no migration of the ledger.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LedgerCompatibility {
     /// Newest version this binary produces.
     pub version: u32,
@@ -58,6 +59,12 @@ impl LedgerCompatibility {
 pub struct CompatibilityIdentity {
     /// The SQLite store schema ledger.
     pub store_schema: LedgerCompatibility,
+    /// The host task registry ledger (`tasks/index.sqlite`). Absent from
+    /// identities recorded by binaries from before that ledger, which read as
+    /// version 0: they know none of its migrations, so any registry migration
+    /// that is not additive refuses them, as its `user_version` fence does.
+    #[serde(default)]
+    pub task_registry: LedgerCompatibility,
     /// The `.orbit/` workspace layout ledger.
     pub workspace_layout: LedgerCompatibility,
     /// Feature-owned schema ledgers by name, at the version this binary
@@ -106,11 +113,15 @@ impl fmt::Display for CompatibilityIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "store schema {} (writers from {}, readers from {}), workspace layout {} \
+            "store schema {} (writers from {}, readers from {}), task registry {} \
+             (writers from {}, readers from {}), workspace layout {} \
              (writers from {}, readers from {})",
             self.store_schema.version,
             self.store_schema.writer_floor,
             self.store_schema.reader_floor,
+            self.task_registry.version,
+            self.task_registry.writer_floor,
+            self.task_registry.reader_floor,
             self.workspace_layout.version,
             self.workspace_layout.writer_floor,
             self.workspace_layout.reader_floor,
@@ -224,6 +235,10 @@ impl LedgerEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Envelope {
     store_schema: LedgerEnvelope,
+    /// Absent when recorded by a binary from before the task registry ledger;
+    /// see [`Self::task_registry`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_registry: Option<LedgerEnvelope>,
     workspace_layout: LedgerEnvelope,
     /// The newest version of each feature admitted. Binaries that predate
     /// [`Self::feature_ledgers`] require their own features to equal this,
@@ -249,6 +264,7 @@ impl Envelope {
             .collect();
         Self {
             store_schema: LedgerEnvelope::of(identity.store_schema, access),
+            task_registry: Some(LedgerEnvelope::of(identity.task_registry, access)),
             workspace_layout: LedgerEnvelope::of(identity.workspace_layout, access),
             features: identity.features.clone(),
             feature_ledgers,
@@ -270,12 +286,25 @@ impl Envelope {
             .collect();
         Self {
             store_schema: self.store_schema.widened(identity.store_schema, access),
+            task_registry: Some(self.task_registry().widened(identity.task_registry, access)),
             workspace_layout: self
                 .workspace_layout
                 .widened(identity.workspace_layout, access),
             features,
             feature_ledgers,
         }
+    }
+
+    /// The task registry envelope. One recorded by a binary from before the
+    /// registry ledger admitted only such binaries, which know no registry
+    /// migration: version 0, writing whenever any of them wrote the store.
+    fn task_registry(&self) -> LedgerEnvelope {
+        if let Some(ledger) = self.task_registry {
+            return ledger;
+        }
+        let mut envelope = LedgerEnvelope::of(LedgerCompatibility::default(), Access::Write);
+        envelope.writer_min_version = self.store_schema.writer_min_version.map(|_| 0);
+        envelope
     }
 
     /// Every feature either the envelope or `identity` knows.
@@ -326,6 +355,12 @@ impl Envelope {
             return Some(format!("store schema: {reason}"));
         }
         if let Some(reason) = self
+            .task_registry()
+            .refusal(identity.task_registry, access, None)
+        {
+            return Some(format!("task registry: {reason}"));
+        }
+        if let Some(reason) = self
             .workspace_layout
             .refusal(identity.workspace_layout, access, None)
         {
@@ -350,6 +385,7 @@ impl Envelope {
     /// opposed to an older binary that must not displace newer ones.
     pub(super) fn is_superseded_by(&self, identity: &CompatibilityIdentity) -> bool {
         identity.store_schema.version >= self.store_schema.max_version
+            && identity.task_registry.version >= self.task_registry().max_version
             && identity.workspace_layout.version >= self.workspace_layout.max_version
             && self.feature_names(identity).all(|feature| {
                 identity.feature_ledger(feature).0.version

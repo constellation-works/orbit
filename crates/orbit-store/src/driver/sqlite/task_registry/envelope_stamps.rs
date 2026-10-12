@@ -5,10 +5,10 @@
 //! file with this stamp matched the index row with this fingerprint"; a reader
 //! trusts it only while the file still reports that stamp and the index row
 //! still has that fingerprint, so a stale, missing, or foreign row costs one
-//! parse and nothing else. It is created on first record rather than by schema
-//! setup, so the registry format (and the v6 recognition in `schema`) is
-//! unchanged for every registry that never recorded a stamp, and a read-only
-//! registry simply has none.
+//! parse and nothing else. The registry baseline (ledger v1) creates the
+//! table. Only a pre-ledger registry opened read-only may lack it, because
+//! binaries before the ledger created it on first record; it then has no
+//! stamps.
 
 use std::collections::HashMap;
 use std::sync::TryLockError;
@@ -24,30 +24,7 @@ use crate::contracts::EnvelopeStampRecord;
 
 const ENVELOPE_STAMPS_TABLE: &str = "task_envelope_stamps";
 
-/// Create the stamps table. Also applied to the reference schema when the
-/// registry being recognized already carries the table.
-pub(super) fn ensure_envelope_stamps(conn: &Connection) -> Result<(), OrbitError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS task_envelope_stamps (
-            task_id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            stamp TEXT NOT NULL,
-            fingerprint TEXT NOT NULL,
-            FOREIGN KEY(task_id) REFERENCES task_bundle_bindings(task_id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_task_envelope_stamps_workspace
-            ON task_envelope_stamps(workspace_id);",
-    )
-    .map_err(|e| {
-        sqlite_error(
-            StorageLayer::Store,
-            &e,
-            format!("ensure task envelope stamps: {e}"),
-        )
-    })
-}
-
-pub(super) fn has_envelope_stamps(conn: &Connection) -> Result<bool, OrbitError> {
+fn has_envelope_stamps(conn: &Connection) -> Result<bool, OrbitError> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
         [ENVELOPE_STAMPS_TABLE],
@@ -65,7 +42,7 @@ impl TaskRegistryStore {
     ) -> Result<HashMap<String, EnvelopeStampRecord>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
-        if !has_envelope_stamps(&conn)? {
+        if self.pre_ledger && !has_envelope_stamps(&conn)? {
             return Ok(HashMap::new());
         }
         let mut stmt = conn
@@ -141,7 +118,6 @@ fn write_envelope_stamps(
         }
         Err(error) => return Err(sqlite_store_error(error)),
     };
-    ensure_envelope_stamps(&tx)?;
     {
         let mut stmt = tx
             .prepare(

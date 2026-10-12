@@ -811,6 +811,7 @@
         "driver/sqlite/migration/tests/ledger.rs::legacy_db_adopts_versioned_ledger",
         "driver/sqlite/migration/tests/ledger.rs::resource_minute_tables_keep_an_older_binary_writing",
         "driver/sqlite/migration/tests/ledger.rs::store_schema_prefix_goldens",
+        "driver/sqlite/migration/tests/ledger.rs::task_registry_schema_prefix_goldens",
         "driver/sqlite/migration/tests/ledger.rs::v1_upgrade_and_fresh_database_have_identical_columns",
         "driver/sqlite/task_registry/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
         "driver/sqlite/task_registry/tests/relations.rs::relation_cycle_through_another_workspace_is_rejected",

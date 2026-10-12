@@ -70,7 +70,10 @@ pub use feature::{
     AppliedFeatureMigration, FeatureMigration, FeatureSchemaStatus, PendingFeatureMigration,
 };
 pub use ledger::{AppliedMigration, SUPPORTED_SCHEMA_VERSION};
-pub(crate) use ledger::{applied_migrations, current_schema_version};
+pub(crate) use ledger::{
+    LedgeredDatabase, Migration, applied_migrations, current_schema_version,
+    evaluate_newer_database, run_database_migrations,
+};
 
 /// Bring the store database up to the newest supported schema version,
 /// applying any pending versioned migrations (each transactional and

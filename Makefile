@@ -185,8 +185,8 @@ ci-lint:
 	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
-# MCP tools/list snapshot, CI/GitHub log fixtures, sandbox profiles, and store-ledger
-# schema prefixes. Compiles orbit-cli
+# MCP tools/list snapshot, CI/GitHub log fixtures, sandbox profiles, and store and
+# task-registry ledger schema prefixes. Compiles orbit-cli
 # tests plus the tools, exec, core and store golden binaries. UPDATE=1 regenerates.
 goldens:
 	$(BUILD_BUDGET) -- ./scripts/check-goldens.sh $(GOLDENS_FLAGS)

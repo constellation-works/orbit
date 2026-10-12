@@ -24,7 +24,7 @@ For tasks that deliver a diff, run these gates before implementation handoff or 
 make ci-fast           # MSRV compile check, formatting, script guardrails; no Rust tests
 make ci-test-affected  # complete test targets of changed crates and their workspace dependents
 make ci-lint           # clippy for production and all targets, then rustdoc
-make goldens           # CLI/MCP, CI log, sandbox and store-schema goldens; UPDATE=1 regenerates
+make goldens           # CLI/MCP, CI log, sandbox and SQLite ledger schema goldens; UPDATE=1 regenerates
 ```
 
 Tasks tagged `no-diff-expected` run no workspace gates or required validation

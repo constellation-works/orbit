@@ -87,6 +87,8 @@ impl MigrationCompatibility {
 pub enum StateComponent {
     WorkspaceLayout,
     StoreSchema,
+    /// The host task registry's ledger (`tasks/index.sqlite`).
+    TaskRegistry,
     /// A feature crate's namespaced schema ledger.
     FeatureSchema,
 }
@@ -97,6 +99,7 @@ impl StateComponent {
         match self {
             Self::WorkspaceLayout => "workspace layout",
             Self::StoreSchema => "store schema",
+            Self::TaskRegistry => "task registry",
             Self::FeatureSchema => "feature schema",
         }
     }

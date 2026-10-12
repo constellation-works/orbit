@@ -166,7 +166,7 @@ applies this rule.
 ## One versioned ledger per SQLite database, with frozen migration bodies
 
 **Recorded:** 2026-10-12 · [ORB-15729]
-**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/schema.rs::ensure_compatible_schema`, `crates/orbit-store/src/driver/sqlite/task_registry/envelope_stamps.rs::ensure_envelope_stamps`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
+**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_registry/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
 
 ### Context
 
@@ -191,10 +191,12 @@ and only the first can tell an older binary what it may do with the result:
    path also accepts the shipped PR1509 v6 by comparing the whole schema
    against an in-memory reference. A registry change must therefore be either
    invisible to v5 readers or a new number that every older binary refuses
-   outright.
+   outright. The registry now runs on its own ledger, adopted through its v1
+   baseline.
 3. **Tables created on first use**: `task_envelope_stamps` in the registry.
    Whether it exists varies from registry to registry, so the v6 recognition
-   mirrors it conditionally, and a read-only registry never gets it.
+   mirrors it conditionally, and a read-only registry never gets it. Registry
+   v1 now creates it; only a pre-ledger registry opened read-only may lack it.
 4. **Feature ledgers** (`FeatureMigration` in `feature_schema_meta`):
    automation (v1–v5), review (v1–v4) and local pull (v1). They are applied
    lazily when a feature store first opens, are numbered independently, and
