@@ -5,6 +5,7 @@
 //! request is audited against the run with the old and new deadline.
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimitOutcome};
 use orbit_core::{DrainWindowExtensionRequest, OrbitError, OrbitRuntime};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{AuditEventFilter, JobRunStoreBackend};
@@ -143,7 +144,11 @@ fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never
 
         let before = Utc::now();
         let change = drains.extend(&drain, Duration::hours(2), None).unwrap();
-        assert_eq!(change.outcome, "extended", "{job}");
+        assert_eq!(
+            change.outcome,
+            DrainWindowExtensionOutcome::Extended,
+            "{job}"
+        );
         assert_eq!(change.previous_deadline, stamped, "{job}");
         assert!(
             change.deadline >= before + Duration::hours(2)
@@ -170,7 +175,11 @@ fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never
 
         // A window ending before the one in force changes nothing, and says so.
         let shorter = drains.extend(&drain, Duration::minutes(1), None).unwrap();
-        assert_eq!(shorter.outcome, "unchanged", "{job}");
+        assert_eq!(
+            shorter.outcome,
+            DrainWindowExtensionOutcome::Unchanged,
+            "{job}"
+        );
         assert_eq!(shorter.previous_deadline, change.deadline);
         assert_eq!(shorter.deadline, change.deadline);
         assert_eq!(shorter.revision, 1, "a no-op consumes no revision");
@@ -221,7 +230,7 @@ fn a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_dra
     let pull = drains.running(PULL, 3600, lapsed, |_| {});
     assert_eq!(drains.window(&pull, lapsed)["expired"], true);
     let change = drains.extend(&pull, Duration::hours(1), None).unwrap();
-    assert_eq!(change.outcome, "extended");
+    assert_eq!(change.outcome, DrainWindowExtensionOutcome::Extended);
     assert_eq!(change.previous_deadline, lapsed);
     let answer = drains.window(&pull, lapsed);
     assert_eq!(answer["expired"], false, "{answer}");
@@ -253,9 +262,9 @@ fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() 
     for job in [PULL, OWNER] {
         let drain = drains.running(job, 3600, Utc::now() + Duration::minutes(10), |_| {});
         let change = drains.extend(&drain, Duration::hours(4), Some(5)).unwrap();
-        assert_eq!(change.outcome, "extended");
+        assert_eq!(change.outcome, DrainWindowExtensionOutcome::Extended);
         let limit = change.worker_limit.expect("the ceiling was retuned");
-        assert_eq!(limit.outcome, "updated");
+        assert_eq!(limit.outcome, DrainWorkerLimitOutcome::Updated);
         assert_eq!(limit.previous_max_active_leaf_runs, 2);
         assert_eq!(limit.max_active_leaf_runs, 5);
         let state = drains.state(&drain);
@@ -271,7 +280,7 @@ fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() 
         let again = drains
             .extend(&drain, Duration::minutes(1), Some(1))
             .unwrap();
-        assert_eq!(again.outcome, "unchanged");
+        assert_eq!(again.outcome, DrainWindowExtensionOutcome::Unchanged);
         assert_eq!(again.worker_limit.unwrap().max_active_leaf_runs, 1);
     }
 }

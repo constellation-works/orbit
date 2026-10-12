@@ -61,6 +61,34 @@ pub struct DrainWindowExtensionRequest<'a> {
     pub claim_token: Option<&'a str>,
 }
 
+/// Result of lengthening a live drain window.
+///
+/// Serialized as the existing snake_case response tokens. Unknown response
+/// tokens are rejected on deserialization; persisted audit records remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrainWindowExtensionOutcome {
+    Extended,
+    Unchanged,
+}
+
+impl DrainWindowExtensionOutcome {
+    /// The stable response and audit token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Extended => "extended",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+impl std::fmt::Display for DrainWindowExtensionOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Outcome of an accepted window extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainWindowExtensionChange {
@@ -68,7 +96,7 @@ pub struct DrainWindowExtensionChange {
     pub job_id: String,
     /// `extended` when the deadline moved, `unchanged` when the requested
     /// window ends no later than the one already in force. Both are audited.
-    pub outcome: &'static str,
+    pub outcome: DrainWindowExtensionOutcome,
     pub previous_deadline: DateTime<Utc>,
     pub deadline: DateTime<Utc>,
     /// Accepted-extension counter; zero while none has moved the deadline.
@@ -96,7 +124,7 @@ impl OrbitRuntime {
             Ok(change) => self.record_extension_completion(
                 request.run_id,
                 &request_id,
-                change.outcome,
+                change.outcome.as_str(),
                 json!({
                     "job_id": change.job_id,
                     "for_seconds": request.for_seconds,
@@ -235,7 +263,11 @@ impl OrbitRuntime {
         Ok(DrainWindowExtensionChange {
             run_id: run_id.to_string(),
             job_id: run.job_id,
-            outcome: if extended { "extended" } else { "unchanged" },
+            outcome: if extended {
+                DrainWindowExtensionOutcome::Extended
+            } else {
+                DrainWindowExtensionOutcome::Unchanged
+            },
             previous_deadline,
             deadline,
             revision,

@@ -1,5 +1,6 @@
 //! Deterministic first-checkpoint and terminalization races for admissions stop.
 
+use crate::application::job::DrainAdmissionsStopOutcome;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -57,7 +58,7 @@ fn admissions_stop_initialization_preserves_worker_checkpoint_and_merges_control
 
         let result = runtime.stop_workspace_auto_admissions(request()).unwrap();
         assert!(reached.get(), "force the NoState initialization window");
-        assert_eq!(result.outcome, "stopped");
+        assert_eq!(result.outcome, DrainAdmissionsStopOutcome::Stopped);
         assert_eq!(result.coordinators.len(), 1);
         let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
         let stop = state.drain_admissions_stop.as_ref().unwrap();
@@ -72,7 +73,10 @@ fn admissions_stop_initialization_preserves_worker_checkpoint_and_merges_control
             );
         }
         let repeated = runtime.stop_workspace_auto_admissions(request()).unwrap();
-        assert_eq!(repeated.coordinators[0].outcome, "unchanged");
+        assert_eq!(
+            repeated.coordinators[0].outcome,
+            DrainAdmissionsStopOutcome::Unchanged
+        );
         assert_eq!(runtime.read_run_state(&run.run_id).unwrap().unwrap(), state);
     }
 }

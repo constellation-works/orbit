@@ -16,6 +16,6 @@ pub use crew_window::PullCrewWindow;
 pub(crate) use entries::settlement_refusal_backoff;
 pub use entries::{
     ClaimedLeafStage, DrainClaimedLeaf, PendingPullSettlements, PullLeafClaim, PullSettlementEntry,
-    RefusedPullSettlement,
+    PullSettlementOutcome, RefusedPullSettlement,
 };
 pub(crate) use runtime::{is_owner_refusal, is_owner_transport_failure};

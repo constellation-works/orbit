@@ -2,6 +2,7 @@
 
 use chrono::SecondsFormat;
 use clap::Args;
+use orbit_core::application::job::DrainWindowExtensionOutcome;
 use orbit_core::{DrainWindowExtensionRequest, OrbitRuntime};
 use serde_json::json;
 
@@ -79,7 +80,7 @@ impl Execute for RunExtendArgs {
                 "revision": limit.revision,
             })),
         });
-        let mut text = if change.outcome == "unchanged" {
+        let mut text = if change.outcome == DrainWindowExtensionOutcome::Unchanged {
             format!(
                 "job run {} already admits until {deadline}; a shorter window does not shorten it",
                 change.run_id

@@ -52,10 +52,11 @@ pub use pipeline::{
 pub(crate) use run::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
-    ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopRequest,
-    DrainAdmissionsStopResult, DrainWindowExtensionChange, DrainWindowExtensionRequest,
-    DrainWorkerLimitChange, DrainWorkerLimitRequest, JobRunCancelResult, JobRunListParams,
-    JobRunOrder, RemainingDrainChild, RunIncident, UnstoppedChild, UnstoppedLeaf,
+    ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopOutcome,
+    DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWindowExtensionChange,
+    DrainWindowExtensionOutcome, DrainWindowExtensionRequest, DrainWorkerLimitChange,
+    DrainWorkerLimitOutcome, DrainWorkerLimitRequest, JobRunCancelOutcome, JobRunCancelResult,
+    JobRunListParams, JobRunOrder, RemainingDrainChild, RunIncident, UnstoppedChild, UnstoppedLeaf,
     fold_run_incidents, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };

@@ -2,6 +2,7 @@
 //! class, and the owner blocks the task only for the candidate's own failure
 //! or the task's; every other class releases it, within a per-task budget.
 
+use orbit_core::application::job::JobRunCancelOutcome;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_core::application::distributed::PullCrewWindow;
@@ -772,7 +773,7 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
             false,
         )
         .expect("cancel the leaf");
-    assert_eq!(cancel.outcome, "cancelled", "{cancel:?}");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled, "{cancel:?}");
     assert!(worker.stopped(), "the leaf's worker is stopped");
     assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
 
@@ -822,7 +823,7 @@ fn cancelling_a_launched_claimed_leaf_with_block_blocks_its_task() {
             true,
         )
         .expect("cancel the leaf");
-    assert_eq!(cancel.outcome, "cancelled", "{cancel:?}");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled, "{cancel:?}");
     assert!(worker.stopped(), "the leaf's worker is stopped");
 
     assert_eq!(pair.owner_status(&task), "blocked");

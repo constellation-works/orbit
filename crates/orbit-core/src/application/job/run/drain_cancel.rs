@@ -45,7 +45,7 @@ use super::actions::{CancellationRequest, cancellation_note, cancellation_result
 use super::owner::{
     RunOwnerLiveness, run_owner_liveness, run_owner_unstoppable_reason, signal_run_owner_confirmed,
 };
-use super::types::{JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
+use super::types::{JobRunCancelOutcome, JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
 
@@ -242,7 +242,7 @@ impl OrbitRuntime {
         }
         let mut result = cancellation_result(
             run,
-            "cancelling",
+            JobRunCancelOutcome::Cancelling,
             run.state,
             false,
             None,
@@ -501,7 +501,7 @@ impl OrbitRuntime {
             // Keep every child's failure in the result, including unreadable
             // or missing run records, and continue stopping its siblings.
             match self.cancel_job_run_cascading(&child, request, signal_run_owner_confirmed, 0) {
-                Ok(cancelled) if cancelled.outcome == "cancelled" => {
+                Ok(cancelled) if cancelled.outcome == JobRunCancelOutcome::Cancelled => {
                     result.forced_runs.push(child);
                 }
                 Ok(_) => {}

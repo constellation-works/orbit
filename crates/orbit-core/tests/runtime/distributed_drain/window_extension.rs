@@ -9,6 +9,7 @@
 use chrono::{DateTime, Duration, SecondsFormat};
 use orbit_core::DrainWindowExtensionRequest;
 use orbit_core::application::job::DrainWindowExtensionChange;
+use orbit_core::application::job::DrainWindowExtensionOutcome;
 
 use super::*;
 
@@ -84,7 +85,7 @@ fn an_extension_after_the_window_answer_keeps_the_drain_requesting() {
     assert_eq!(window(&pair, &drain, lapsed)["expired"], true);
 
     let change = extend(&pair.follower, &drain, None).unwrap();
-    assert_eq!(change.outcome, "extended");
+    assert_eq!(change.outcome, DrainWindowExtensionOutcome::Extended);
     assert_eq!(window(&pair, &drain, lapsed)["expired"], false);
 
     let pass = pair.pass_over(&drain, stale_expired());
@@ -124,7 +125,7 @@ fn an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive() {
     let pass = pair.pass_over(&drain, stale_expired());
 
     let accepted = accepted.lock().unwrap().take().expect("the operator acted");
-    assert_eq!(accepted.unwrap(), "extended");
+    assert_eq!(accepted.unwrap(), DrainWindowExtensionOutcome::Extended);
     assert_eq!(
         pass["unsettled"], 0,
         "the last settlement was delivered: {pass}"

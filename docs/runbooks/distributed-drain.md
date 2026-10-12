@@ -47,6 +47,12 @@ input; a string naming another workspace is denied as a worker binding mismatch.
 Explicit selectors may name the bound owner destination, its logical workspace
 ID, or the worker's current checkout path.
 
+Cancellation, admission-stop, window-extension, worker-limit, pull-settlement
+and receipt-lookup reports use typed outcome enums in the Rust API. Their JSON
+`outcome` values remain the documented snake_case strings. These response
+enums reject unknown tokens on deserialization; persisted audit and admission
+records retain their existing representations.
+
 ## Prerequisites and safety
 
 - **One control plane per repository.** Two independently initialized owners of

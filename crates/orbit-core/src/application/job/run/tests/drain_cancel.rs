@@ -1,6 +1,7 @@
 //! Deterministic stop-time interleavings: work persisted by the selected
 //! drain before its stop is confirmed must not escape forced cancellation.
 
+use crate::application::job::JobRunCancelOutcome;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -74,7 +75,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
         };
         let result = cancel();
         assert!(reached.get(), "force the NoState initialization window");
-        assert_eq!(result.outcome, "cancelling");
+        assert_eq!(result.outcome, JobRunCancelOutcome::Cancelling);
         assert_eq!(result.final_state, "running");
         assert!(!result.signal_attempted);
         let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
@@ -89,7 +90,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
         if let Some(checkpoint) = checkpoint {
             assert_worker_checkpoint_preserved(&state, &checkpoint);
         }
-        assert_eq!(cancel().outcome, "cancelling");
+        assert_eq!(cancel().outcome, JobRunCancelOutcome::Cancelling);
         assert_eq!(runtime.read_run_state(&run.run_id).unwrap().unwrap(), state);
     }
 }
@@ -142,7 +143,7 @@ fn graceful_cancel_initialization_refuses_concurrent_terminalization() {
                     false,
                 )
                 .unwrap();
-            assert_eq!(result.outcome, "already_terminal");
+            assert_eq!(result.outcome, JobRunCancelOutcome::AlreadyTerminal);
             assert_eq!(result.final_state, terminal.to_string());
             assert!(!result.signal_attempted);
             assert_eq!(
@@ -314,7 +315,7 @@ fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_lega
             |_| unreachable!("pending run must not signal its owner"),
         )
         .expect("cancel task leaf");
-    assert_eq!(cancelled.outcome, "cancelled");
+    assert_eq!(cancelled.outcome, JobRunCancelOutcome::Cancelled);
     let task = runtime.get_task(&task_id).expect("task after cancel");
     assert_eq!(task.status, TaskStatus::Backlog);
     assert_eq!(task.plan, "Resume the candidate after cancellation");
@@ -356,7 +357,7 @@ fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_lega
             |_| unreachable!("pending run must not signal its owner"),
         )
         .expect("cancel task leaf with block");
-    assert_eq!(cancelled.outcome, "cancelled");
+    assert_eq!(cancelled.outcome, JobRunCancelOutcome::Cancelled);
     let task = runtime.get_task(&task_id).expect("blocked task");
     assert_eq!(task.status, TaskStatus::Blocked);
     assert_eq!(
@@ -418,7 +419,7 @@ fn cancellation_policy_is_durable_before_the_owner_is_signalled() {
         )
         .expect("cancel run");
 
-    assert_eq!(cancelled.outcome, "already_terminal");
+    assert_eq!(cancelled.outcome, JobRunCancelOutcome::AlreadyTerminal);
     assert_eq!(cancelled.final_state, "cancelled");
     assert_eq!(
         runtime.get_task(&task_id).expect("task").status,
@@ -590,7 +591,7 @@ fn forced_pull_cancel_releases_admissions_persisted_during_stop_and_keeps_inheri
         )
         .unwrap();
 
-    assert_eq!(cancel.outcome, "cancelled");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled);
     assert_eq!(
         cancel.pull_settlements.len(),
         3,

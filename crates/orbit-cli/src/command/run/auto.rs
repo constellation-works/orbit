@@ -1,6 +1,7 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
+use orbit_core::application::job::DrainAdmissionsStopOutcome;
 use orbit_core::{
     CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
 };
@@ -347,11 +348,11 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
     let mut lines = Vec::new();
     for change in &result.coordinators {
         match change.outcome {
-            "cancelled_queued" => lines.push(format!(
+            DrainAdmissionsStopOutcome::CancelledQueued => lines.push(format!(
                 "Cancelled queued auto run {} before it started; it had not admitted any work.",
                 change.run_id
             )),
-            "unchanged" => lines.push(format!(
+            DrainAdmissionsStopOutcome::Unchanged => lines.push(format!(
                 "job run {} already has admissions stopped.",
                 change.run_id
             )),
@@ -361,7 +362,7 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
             )),
         }
         if change.remaining_children.is_empty() {
-            if change.outcome != "cancelled_queued" {
+            if change.outcome != DrainAdmissionsStopOutcome::CancelledQueued {
                 lines.push("No remaining children.".to_string());
             }
         } else {

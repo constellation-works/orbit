@@ -73,6 +73,36 @@ pub struct DrainProbeSession {
     pub remote: bool,
 }
 
+/// Result of reading an admission receipt.
+///
+/// Serialized as the existing snake_case response tokens. Unknown response
+/// tokens are rejected on deserialization; persisted audit records remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionReceiptLookupOutcome {
+    Found,
+    Expired,
+    NotFound,
+}
+
+impl AdmissionReceiptLookupOutcome {
+    /// The stable response and audit token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Found => "found",
+            Self::Expired => "expired",
+            Self::NotFound => "not_found",
+        }
+    }
+}
+
+impl std::fmt::Display for AdmissionReceiptLookupOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Outcome of one read-only receipt reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AdmissionReceiptLookup {
@@ -82,7 +112,7 @@ pub struct AdmissionReceiptLookup {
     /// Receipt namespace the lookup read: the original caller machine.
     pub machine_id: String,
     /// `found`, `expired`, or `not_found`.
-    pub outcome: String,
+    pub outcome: AdmissionReceiptLookupOutcome,
     /// The original receipt, byte-for-byte as admission stored it. The input it
     /// records is never rewritten to match the caller's current binary.
     pub receipt: Option<serde_json::Value>,
@@ -210,21 +240,21 @@ impl crate::OrbitRuntime {
                 receipt,
                 current_claim,
             } => (
-                "found",
+                AdmissionReceiptLookupOutcome::Found,
                 Some(serde_json::to_value(&*receipt).map_err(json_error)?),
                 current_claim
                     .map(|claim| serde_json::to_value(&*claim))
                     .transpose()
                     .map_err(json_error)?,
             ),
-            AdmissionLookup::Expired => ("expired", None, None),
-            AdmissionLookup::NotFound => ("not_found", None, None),
+            AdmissionLookup::Expired => (AdmissionReceiptLookupOutcome::Expired, None, None),
+            AdmissionLookup::NotFound => (AdmissionReceiptLookupOutcome::NotFound, None, None),
         };
         Ok(AdmissionReceiptLookup {
             lookup_schema: ADMISSION_RECEIPT_LOOKUP_SCHEMA,
             request_id: request_id.to_string(),
             machine_id,
-            outcome: outcome.to_string(),
+            outcome,
             receipt,
             current_claim,
             grants_execution_authority: false,
@@ -257,18 +287,18 @@ fn probe_session(session: &ToolSessionContext) -> DrainProbeSession {
     }
 }
 
-fn lookup_guidance(outcome: &str) -> &'static str {
+fn lookup_guidance(outcome: AdmissionReceiptLookupOutcome) -> &'static str {
     match outcome {
-        "found" => {
+        AdmissionReceiptLookupOutcome::Found => {
             "Historical evidence only. Launch authority comes from the current claim phase, and a \
              saved ship contract incompatible with this executor is preserved for explicit \
              recovery rather than rewritten."
         }
-        "expired" => {
+        AdmissionReceiptLookupOutcome::Expired => {
             "The receipt was compacted to a non-reusable tombstone. Replay returns \
              `request_expired`; it never yields a new task."
         }
-        _ => {
+        AdmissionReceiptLookupOutcome::NotFound => {
             "`not_found` is not proof that an earlier request cannot still arrive. Retry the \
              original request ID while it remains admissible, or quiesce old sends and reconcile \
              on the owner; do not mint a replacement ID."

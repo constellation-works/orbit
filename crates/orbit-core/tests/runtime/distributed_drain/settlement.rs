@@ -1,6 +1,7 @@
 //! Claim/bind replay and settlement delivery: lost replies, owner refusals and backoff, outages and the clock sweep.
 
 use super::*;
+use orbit_core::application::job::JobRunCancelOutcome;
 
 /// The session machine fences bind/settle even when the caller knows the
 /// claim and bound run. A refused attempt must leave the owner unchanged.
@@ -175,7 +176,7 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
             false,
         )
         .expect("cancel claimed leaf");
-    assert_eq!(cancelled.outcome, "cancelled");
+    assert_eq!(cancelled.outcome, JobRunCancelOutcome::Cancelled);
     assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
     assert_eq!(pair.owner_status(&task), "backlog");
     let settles = pair.wire.calls("orbit.drain.claim.settle");
@@ -520,7 +521,7 @@ fn a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends()
         .follower
         .cancel_job_run_with_options(&drain, "operator", "cli", None, false)
         .expect("cancel");
-    assert_eq!(cancel.outcome, "cancelling");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelling);
 
     pair.leaf_hands_off(&leaf);
     *pair.wire.unreachable.lock().unwrap() = true;

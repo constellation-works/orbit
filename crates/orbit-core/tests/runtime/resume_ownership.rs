@@ -9,6 +9,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use chrono::Utc;
+use orbit_core::application::job::JobRunCancelOutcome;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
@@ -394,7 +395,7 @@ fn checkpoint_resume_preserves_the_later_interrupted_review_repair() {
         // Repeated stop requests must not mint another repair or comment.
         assert_eq!(
             fx.runtime.cancel_job_run(&resumed.run_id).unwrap().outcome,
-            "already_terminal"
+            JobRunCancelOutcome::AlreadyTerminal
         );
         assert_eq!(
             fx.jobs

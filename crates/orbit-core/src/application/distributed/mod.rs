@@ -58,12 +58,14 @@ pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub use leaf_settlements::LeafSettlement;
-pub use probe::{AdmissionReceiptLookup, DrainProbeReport, DrainProbeSession};
+pub use probe::{
+    AdmissionReceiptLookup, AdmissionReceiptLookupOutcome, DrainProbeReport, DrainProbeSession,
+};
 pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
 pub use settlement::{
     ClaimedLeafStage, DrainClaimedLeaf, PendingPullSettlements, PullCrewWindow, PullLeafClaim,
-    PullSettlementEntry, RefusedPullSettlement,
+    PullSettlementEntry, PullSettlementOutcome, RefusedPullSettlement,
 };
 pub(crate) use settlement::{
     is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,
