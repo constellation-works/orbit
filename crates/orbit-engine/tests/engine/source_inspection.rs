@@ -89,6 +89,7 @@ fn unavailable_inspection_surface_is_a_typed_non_retryable_dispatch_error() {
     let calls = temp.path().join("calls");
     let cases = [
         (Provider::Gemini, "gemini", vec![], Some("reviewer")),
+        (Provider::Grok, "grok", vec![], Some("reviewer")),
         (
             Provider::Claude,
             "claude",

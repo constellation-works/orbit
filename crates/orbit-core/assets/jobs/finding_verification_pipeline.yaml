@@ -67,7 +67,7 @@ spec:
         max_tasks: "{{ input.max_tasks }}"
         max_partition_size: "{{ input.max_partition_size }}"
 
-    - id: verdict_results
+    - id: empty_verdict_results
       when: "{{ steps.prepare.output.partition_count }} == 0"
       fan_out:
         items: "[]"
@@ -77,7 +77,8 @@ spec:
           target: activity:verify_finding
       fan_in:
         join: { mode: all }
-        collect: verdicts
+        collect: verdict_results
+        errors: verdict_errors
 
     - id: verifiers
       when: "{{ steps.prepare.output.partition_count }} != 0"
@@ -100,12 +101,14 @@ spec:
         join:
           mode: any
         collect: verdict_results
+        errors: verdict_errors
 
     - id: apply
       target: activity:apply_finding_verification
       default_input:
         prepared: "{{ steps.prepare.output }}"
         results: "{{ steps.verdict_results.output }}"
+        partition_errors: "{{ steps.verdict_errors.output }}"
         workspace_path: "{{ steps.prepare.output.workspace_path }}"
 
     - id: escalation_verifiers
@@ -129,13 +132,15 @@ spec:
         join:
           mode: any
         collect: escalation_results
+        errors: escalation_errors
 
     - id: apply_escalations
       when: "{{ steps.apply.output.escalation_count }} != 0"
       target: activity:apply_finding_verification
       default_input:
         prepared: "{{ steps.apply.output.escalation_prepared }}"
-        results: "{{ steps.escalation_results.output }}"
+        results: "{{ steps.escalation_verifiers.output }}"
+        partition_errors: "{{ steps.escalation_errors.output }}"
         workspace_path: "{{ steps.prepare.output.workspace_path }}"
         carried_task_outcomes: "{{ steps.apply.output.task_outcomes }}"
 

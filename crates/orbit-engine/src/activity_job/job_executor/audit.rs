@@ -79,7 +79,9 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             );
         }
         V2AuditEventKind::StepFinished {
-            step_id, outcome, ..
+            step_id,
+            outcome,
+            error_message,
         } => {
             let success = outcome == "success";
             if success || outcome == "held" {
@@ -90,6 +92,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                     step_id = step_id.as_str(),
                     outcome = outcome.as_str(),
                     success = success,
+                    error_message = error_message.as_deref(),
                     "step finished",
                 );
             } else {
@@ -100,6 +103,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                     step_id = step_id.as_str(),
                     outcome = outcome.as_str(),
                     success = success,
+                    error_message = error_message.as_deref(),
                     "step finished",
                 );
             }

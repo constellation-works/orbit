@@ -75,7 +75,14 @@ A verifier returns one **report** per task:
 CONFIRMED also needs at least one evidence location. A report that does not
 parse, fails a rule, or cites a missing file or line leaves its task
 `unverified` with reason `invalid_verdict` or `invalid_evidence`. A verifier
-that returned nothing leaves `missing_verdict`.
+that completes successfully but omits a verdict leaves `missing_verdict`.
+The shipped job forwards the position-aligned `fan_in.errors` array to apply
+as `partition_errors`: a failed verifier leaves `verifier_failed`, with its
+partition, crew and dispatch diagnostic. Failed workers retain null output
+slots, so one failed partition cannot shift or discard successful siblings'
+verdicts. Gemini and Grok currently fail native pinned-source inspection
+before launch with `inspection_tools_unavailable`; Codex and Claude provide
+that inspection surface.
 
 The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 

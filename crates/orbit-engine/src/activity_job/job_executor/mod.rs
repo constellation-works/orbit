@@ -70,7 +70,7 @@ use self::step::*;
 use self::target::*;
 use self::templating::*;
 
-use self::execute::{fan_in_alias, panic_payload_message};
+use self::execute::panic_payload_message;
 
 pub use self::execute::{execute_job_with_resume, resolve_job_catalog_refs_for_execution};
 pub use self::validate::{validate_job, validate_job_deterministic_actions};

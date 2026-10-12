@@ -369,6 +369,10 @@ pub struct FanInSpec {
     /// Optional pipeline-context key to store the collected per-worker outputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collect: Option<String>,
+    /// Optional pipeline-context key for position-aligned worker errors.
+    /// Successful workers have null entries; failed workers have error strings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub errors: Option<String>,
 }
 
 /// Loop block (§4.2). Bounded iteration with optional value-break and a shared

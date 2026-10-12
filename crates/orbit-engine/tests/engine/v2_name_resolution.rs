@@ -419,6 +419,7 @@ fn validation_fan(id: &str, when: Option<&str>, collect: &str) -> JobV2Step {
             fan_in: FanInSpec {
                 join: JoinMode::All,
                 collect: Some(collect.to_string()),
+                errors: None,
             },
         },
     )
