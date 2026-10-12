@@ -319,8 +319,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search
-        | OrbitBuiltinAction::StateGet
-        | OrbitBuiltinAction::StateSet
         | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskEligible

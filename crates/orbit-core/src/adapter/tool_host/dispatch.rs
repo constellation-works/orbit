@@ -34,7 +34,7 @@ fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
 
 pub(super) fn execute(
     runtime: &OrbitRuntime,
-    task_scope: &OrbitTaskScope,
+    _task_scope: &OrbitTaskScope,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
@@ -126,8 +126,6 @@ pub(super) fn execute(
             super::pipeline_tools::wait(runtime, input, agent, model)
         }
         OrbitBuiltinAction::Search => super::search_tools::search(runtime, input),
-        OrbitBuiltinAction::StateGet => super::state_tools::get(task_scope, input),
-        OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
         OrbitBuiltinAction::TaskAdd => {
             let written = super::task_tools::add(
                 runtime,

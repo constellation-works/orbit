@@ -55,9 +55,6 @@ pub mod maintenance {
     }
 }
 
-/// Live JSON state-file operations used by the tool protocol adapter.
-pub use driver::file::run_state as state_io;
-
 pub mod skill_store {
     pub use crate::driver::file::skill_store::*;
 }

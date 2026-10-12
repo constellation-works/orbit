@@ -7,7 +7,6 @@
 pub(crate) mod executor_def_store;
 pub(crate) mod friction_store;
 pub(crate) mod policy_def_store;
-pub mod run_state;
 pub(crate) mod scoreboard;
 pub(crate) mod session_log_store;
 pub(crate) mod skill_store;
