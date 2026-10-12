@@ -13,13 +13,20 @@ fs.mkdirSync(evidence, { recursive: true });
 const now = Date.parse('2026-10-08T08:00:00Z');
 const ago = ms => new Date(now - ms).toISOString();
 const actors = Array.from({ length: 55 }, (_, index) => ({
-  actor: `${['codex/gpt-6.1-sol', 'claude/claude-sonnet-4.6', 'gemini/gemini-2.5-pro'][index % 3]}-${index + 1}`,
-  n: 100 + index, avg: 1272000 + index * 1000,
+  actor: `${['codex / gpt-6.1-sol', 'claude / claude-sonnet-4.6', 'gemini / gemini-2.5-pro'][index % 3]}-${index + 1}`,
+  n: 155 - index, avg: 1272000 + index * 1000,
   p50: 303000 + index * 1000, p95: 4920000 + index * 60000,
+  previous_avg: 1200000, trend: [1200000, null, 1300000 + index * 1000],
 }));
-const bands = ['low', 'medium', 'hard', 'expert', 'unset'].map((complexity, index) => ({
+const bands = ['low', 'medium', 'hard', 'xhard', 'unset'].map((complexity, index) => ({
   complexity, n: 1100, actors: actors.slice(index * 11, (index + 1) * 11),
 }));
+const trendWindow = url => ({
+  key: url.searchParams.get('since'), bucket_seconds: 3600,
+  since: ago(3 * 3600000), until: ago(0), previous_since: ago(6 * 3600000), previous_until: ago(3 * 3600000),
+});
+const stats = { n: 55, avg: 1300000, p50: 1250000, p95: 4900000 };
+const counts = { done: { total: 0, low: 0, medium: 0, hard: 0, other: 0 }, rejected: 0, archived: 0 };
 const runningRun = { run_id: 'jrun-duration-fixture', job_id: 'fixture', state: 'running', started_at: ago(125000), duration_ms: null };
 const steps = [
   { state: 'running', started_at: ago(61000), duration_ms: null },
@@ -34,8 +41,16 @@ function payloadFor(url) {
     case '/api/workspaces': return [{ id: 'ws_fixture', name: 'fixture', status: 'active', is_default: true }];
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
-    case '/api/diagnostics/implement_one': return { implement_one_by_complexity: bands };
-    case '/api/diagnostics/metrics': return [];
+    case '/api/diagnostics/implement_one': return {
+      window: trendWindow(url), truncated: false,
+      buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), all: stats, low: stats, medium: null, hard: null, other_runs: 0 })),
+      current: { all: stats, low: stats, medium: null, hard: null, xhard: null, unset: null },
+      previous: { all: stats, low: null, medium: null, hard: null, xhard: null, unset: null },
+      actors, slowest: [], implement_one_by_complexity: bands,
+    };
+    case '/api/diagnostics/completions': return {
+      window: trendWindow(url), buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), ...counts })), current: counts, previous: counts,
+    };
     case '/api/tasks/completion-by-complexity': return { by_complexity: [] };
     case '/api/job-runs': return list([runningRun]);
     case '/api/runs/jrun-duration-fixture': return { run: runningRun, steps };
@@ -72,27 +87,24 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`${origin}#diagnostics/metrics`);
-  await page.waitForFunction(() => document.querySelectorAll('#diag-implement-one-body tbody tr').length === 55);
+  await page.locator('#metrics-body .mx-actors tbody tr').first().waitFor();
+  await page.getByRole('button', { name: 'Show all 55 actors' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('#metrics-body .mx-actors tbody tr').length === 55);
   await page.evaluate(async () => { await document.fonts.ready; });
   for (const width of [1440, 1024]) {
     await page.setViewportSize({ width, height: 1100 });
-    const cells = await page.locator('#diag-implement-one-body tbody td.num').evaluateAll(nodes => nodes.map(node => {
+    // By actor: runs, avg, p50, p95 and Δ; within a complexity: runs, avg, p95.
+    const cells = await page.locator('#metrics-body .mx-table tbody td.num').evaluateAll(nodes => nodes.map(node => {
+      // A Δ cell wraps its text in a coloured span; measure the text itself.
       const range = document.createRange();
-      range.selectNodeContents(node);
+      range.selectNodeContents(node.querySelector('span') || node);
       return { text: node.textContent, rects: range.getClientRects().length, whiteSpace: getComputedStyle(node).whiteSpace };
     }));
-    assert.equal(cells.length, 220, '55 actor rows include counts and 165 durations');
+    assert.equal(cells.length, 55 * 5 + 11 * 3, '55 actor rows and 11 rows in the selected complexity');
     for (const cell of cells) assert.equal(cell.rects, 1, `numeric/duration text stays on one line at ${width}: ${JSON.stringify(cell)}`);
     assert.equal(await page.evaluate(() => document.scrollingElement.scrollWidth > innerWidth), false, 'table scrolling stays inside the card');
-    measurements.metrics.push({ width, durationCells: 165, cells });
+    measurements.metrics.push({ width, cells });
     await page.screenshot({ path: path.join(evidence, `metrics-${width}.png`), fullPage: true, animations: 'disabled' });
-    await page.locator('#diag-implement-one-body .card-body').evaluateAll(nodes => {
-      for (const node of nodes) node.scrollLeft = node.scrollWidth;
-    });
-    await page.screenshot({ path: path.join(evidence, `metrics-durations-${width}.png`), fullPage: true, animations: 'disabled' });
-    await page.locator('#diag-implement-one-body .card-body').evaluateAll(nodes => {
-      for (const node of nodes) node.scrollLeft = 0;
-    });
   }
 
   await page.setViewportSize({ width: 1440, height: 1100 });
@@ -152,7 +164,7 @@ try {
   measurements.runDetail.push(completed);
   assert.deepEqual(errors, [], 'the duration fixture reports no browser errors');
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ passed: true, ...measurements }, null, 2));
-  console.log('PASS: 165 duration cells and 55 count cells at 1440/1024; shared Automation formatting; live run and step durations, refresh and completion.');
+  console.log('PASS: Metrics actor and complexity duration cells on one line at 1440/1024; shared Automation formatting; live run and step durations, refresh and completion.');
 } catch (error) {
   await page?.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true });
   throw error;

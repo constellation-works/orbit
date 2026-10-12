@@ -798,10 +798,6 @@ async function assertNarrowTableLayouts(page) {
       ts: iso(index + 1), source: 'step_failed', job_run: `jrun-error-${index}`, provider: 'claude', step: 'implement',
       message: 'a long failure message that has to wrap onto several lines inside a phone-width card '.repeat(3),
     }));
-    const metrics = [0, 1, 2].map(index => ({
-      ts: iso(index + 1), step: `step-with-a-long-name-${index}`, actor_identity: 'claude-sonnet-5-5',
-      token_usage: 123456, tool_invocations: 77, step_duration_ms: 456000, retry_count: 1,
-    }));
     const olderAuditEvents = [{ ...events[0], id: 8998, timestamp: iso(3), target_id: 'TASK-OLDER' }];
     const auditPageRequests = [];
     const fixtureFetch = globalThis.fetch;
@@ -818,7 +814,6 @@ async function assertNarrowTableLayouts(page) {
           : response(events, 200, { 'x-audit-next-before': 'older-audit-page' });
       }
       if (url.pathname === '/api/diagnostics/errors') return response({ items: errors, since: iso(24 * 60), coverage_since: iso(24 * 60) });
-      if (url.pathname === '/api/diagnostics/metrics') return response(metrics);
       return fixtureFetch(path, options);
     };
   });
@@ -1004,33 +999,6 @@ async function assertNarrowTableLayouts(page) {
   await page.screenshot({ path: path.join(evidence, 'errors-375.png'), fullPage: true });
 
   // Still-scrolling tables: first column pinned, scroll edge painted.
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/metrics'));
-  await refresh();
-  await page.locator('#diag-body tbody tr').first().waitFor({ state: 'visible', timeout: 5000 });
-  for (const width of [375, 768]) {
-    await page.setViewportSize({ width, height: 900 });
-    const pinned = await page.evaluate(() => {
-      const wrap = document.getElementById('diag-body');
-      const table = wrap.querySelector('table.scoreboard-table');
-      const cell = table.querySelector('tbody tr td:first-child');
-      wrap.scrollLeft = wrap.scrollWidth;
-      const wrapRect = wrap.getBoundingClientRect();
-      const rect = cell.getBoundingClientRect();
-      const topmost = document.elementFromPoint(rect.left + 4, (rect.top + rect.bottom) / 2);
-      return {
-        scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
-        scrolled: wrap.scrollLeft > 0,
-        stays: Math.abs(rect.left - wrapRect.left) < 1.5,
-        painted: cell.contains(topmost),
-        edge: getComputedStyle(wrap).backgroundImage.includes('gradient'),
-      };
-    });
-    if (width === 375 && !pinned.scrolls) throw new Error('Metrics must still scroll sideways at 375px for this check to mean anything');
-    if (pinned.scrolls && !(pinned.scrolled && pinned.stays && pinned.painted && pinned.edge)) {
-      throw new Error(`Metrics first column or scroll edge missing at ${width}px: ${JSON.stringify(pinned)}`);
-    }
-    await page.screenshot({ path: path.join(evidence, `metrics-${width}.png`), fullPage: true });
-  }
   await page.setViewportSize({ width: 375, height: 900 });
   await page.evaluate(async () => {
     const { renderScoreboard } = await import('/js/scoreboard.js');
@@ -1395,27 +1363,29 @@ try {
       await page.evaluate(subtab => globalThis.showHealthEvidence(subtab), subtab);
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 900 });
-        const body = page.locator('#diag-body');
+        const body = page.locator(subtab === 'metrics' ? '#metrics-body' : '#diag-body');
         if (!(await body.isVisible())) throw new Error(`Health ${subtab} invisible at ${width}px`);
         if (subtab === 'metrics') {
-          const tables = await page.locator('#diag-implement-one-body table').evaluateAll(tables => tables.map(table => {
-            const rect = table.getBoundingClientRect();
-            const body = table.parentElement;
-            const title = body.previousElementSibling;
-            return { width: rect.width, available: body.clientWidth, scrollable: getComputedStyle(body).overflowX === 'auto',
-              titleCase: getComputedStyle(title).textTransform,
-              cells: [...table.querySelectorAll('td')].map(cell => ({ text: cell.textContent, clipped: cell.scrollWidth > cell.clientWidth + 1 })) };
-          }));
-          for (const table of tables) {
-            if (table.titleCase !== 'none' || table.cells.some(cell => cell.clipped) || (table.width > table.available + 1 && !table.scrollable)) {
-              throw new Error(`Diagnostics summary clips data at ${width}px: ${JSON.stringify(table)}`);
-            }
+          // The trend fills the panel, and a table wider than its card scrolls
+          // inside it instead of pushing the page sideways.
+          const layout = await page.evaluate(() => {
+            const metrics = document.getElementById('metrics-body');
+            return {
+              overflow: document.documentElement.scrollWidth > window.innerWidth,
+              cards: metrics.querySelectorAll('.mx-sc').length,
+              plot: metrics.querySelector('.mx-plot')?.getBoundingClientRect().width || 0,
+              clipped: [...metrics.querySelectorAll('.mx-table-wrap')]
+                .filter(wrap => wrap.scrollWidth > wrap.clientWidth + 1 && getComputedStyle(wrap).overflowX !== 'auto').length,
+            };
+          });
+          if (layout.overflow || layout.cards !== 4 || layout.plot < 200 || layout.clipped) {
+            throw new Error(`Metrics layout broken at ${width}px: ${JSON.stringify(layout)}`);
           }
         }
         await page.screenshot({ path: path.join(evidence, `health-${subtab}-${width}.png`), fullPage: true });
       }
     }
-    console.log("Health behavior and summary layout passed at 1440px and 390px.");
+    console.log("Health behavior and Metrics layout passed at 1440px and 390px.");
     await page.evaluate(() => globalThis.showDiagnosticsEvidence());
     // Hold a real visible panel in refresh, then inspect its rendered accessible
     // feedback and retry affordance at desktop and narrow widths.
@@ -1427,7 +1397,7 @@ try {
     });
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 900 });
-      const feedback = page.locator('#diag-body [role="status"]');
+      const feedback = page.locator('#metrics-body [role="status"]');
       if (!(await feedback.isVisible())) throw new Error(`Refresh feedback invisible at ${width}px`);
       if (!(await feedback.textContent()).includes('Refreshing')) throw new Error('Missing retained-data feedback');
       if (await feedback.getAttribute('aria-live') !== 'polite') throw new Error('Missing accessible live feedback');
@@ -1448,7 +1418,7 @@ try {
     });
     await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling and Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
   }

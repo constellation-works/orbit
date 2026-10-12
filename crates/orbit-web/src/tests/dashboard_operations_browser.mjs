@@ -110,7 +110,6 @@ try {
     const layout = await page.evaluate(() => {
       const main = document.getElementById('diagnostics-main');
       const panel = document.getElementById('diagnostics-panel');
-      const side = document.getElementById('diagnostics-side-col');
       const style = getComputedStyle(main);
       const mainBox = main.getBoundingClientRect();
       const panelBox = panel.getBoundingClientRect();
@@ -122,27 +121,29 @@ try {
         panelWidth: panelBox.width,
         panelLeft: panelBox.left,
         contentLeft: mainBox.left + paddingLeft,
-        sideVisible: getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0,
       };
     });
     if (layout.tracks !== 1 || Math.abs(layout.panelWidth - layout.contentWidth) > 1
-      || Math.abs(layout.panelLeft - layout.contentLeft) > 1 || layout.sideVisible) {
+      || Math.abs(layout.panelLeft - layout.contentLeft) > 1) {
       throw new Error(`Health ${subtab} should fill one column at ${width}px: ${JSON.stringify(layout)}`);
     }
   };
   for (const width of [1073, 1250]) {
     for (const subtab of ['incidents', 'errors']) await diagnosticLayout(subtab, width);
+    // ORB-15746: Metrics swaps the list out for its own full-width view.
     await page.click('#diag-subtabs .subtab[data-subtab="metrics"]');
     const metrics = await page.evaluate(() => {
-      const main = document.getElementById('diagnostics-main');
-      const side = document.getElementById('diagnostics-side-col');
+      const list = document.getElementById('diagnostics-main');
+      const main = document.getElementById('diagnostics-metrics-main');
+      const pane = main.parentElement.getBoundingClientRect();
       return {
-        tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
-        sideVisible: getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0,
+        listHidden: getComputedStyle(list).display === 'none',
+        width: main.getBoundingClientRect().width,
+        pane: pane.width,
       };
     });
-    if (metrics.tracks !== 2 || !metrics.sideVisible) {
-      throw new Error(`Health Metrics summary should remain beside the list at ${width}px: ${JSON.stringify(metrics)}`);
+    if (!metrics.listHidden || metrics.width < metrics.pane * 0.9) {
+      throw new Error(`Health Metrics should replace the list at full width at ${width}px: ${JSON.stringify(metrics)}`);
     }
   }
 

@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::envelope_cache::EnvelopeStamp;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
-use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity};
+use crate::contracts::{
+    EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity, TaskTerminalTransition,
+};
 use orbit_common::StorageLayer;
 use orbit_common::fs::io::hold_step;
 
@@ -41,6 +43,15 @@ impl TaskV2Store {
     pub(crate) fn task_complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
         self.ensure_complexity_indexed()?;
         self.registry.complexity_by_task_id(&self.workspace_id)
+    }
+
+    pub(crate) fn task_terminal_transitions(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<TaskTerminalTransition>, OrbitError> {
+        self.ensure_complexity_indexed()?;
+        self.registry
+            .terminal_transitions(&self.workspace_id, since)
     }
 
     /// One-time rebuild after `complexity` was added as a nullable column.

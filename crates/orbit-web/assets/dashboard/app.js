@@ -9,7 +9,8 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { renderDiagnostics } from './js/diagnostics.js';
+import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
@@ -105,7 +106,7 @@ let lastRuns = [];
 let lastRunsMeta = null;
 let lastRunsLoading = true;
 let lastRunSourcesUnavailable = [];
-let lastDiagnostics = { metrics: null, errors: null, incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
+let lastDiagnostics = { errors: null, incidents: null };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
 let activeDiagSubtab = "runs";
@@ -232,6 +233,7 @@ function routerContext() {
     // refresh tick (and without the aggregate-view guard the other diagnostics
     // fetches need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
+    fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
@@ -1084,7 +1086,7 @@ function renderAggregatePlaceholders() {
 function renderDiagnosticsPlaceholders() {
   renderPanelPlaceholder("diag-body");
   placeholdScoreboardAggregate();
-  renderPanelPlaceholder("diag-implement-one-body");
+  placeholdMetricsAggregate();
   const diagCount = $("diag-count");
   if (diagCount) diagCount.textContent = "—";
 }
@@ -1414,8 +1416,8 @@ function activeRefreshJobs() {
 
   if (activeTab === "diagnostics") {
     // Most diagnostics fetches are per-workspace. Runs has a bounded aggregate
-    // endpoint; metrics, errors, friction, implement_one and Scoreboard still
-    // require a concrete workspace and show placeholders without one.
+    // endpoint; Metrics, errors, friction and Scoreboard still require a
+    // concrete workspace and show placeholders without one.
     // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
     // ahead of the guard below rather than being placeheld with the rest.
@@ -1447,6 +1449,11 @@ function activeRefreshJobs() {
       add("Health › Scoreboard", fetchAndRenderScoreboard());
       return jobs;
     }
+    if (activeDiagSubtab === "metrics") {
+      // ORB-15746: trends follow the shared window like the Scoreboard.
+      add("Health › Metrics", fetchAndRenderMetrics());
+      return jobs;
+    }
     if (activeDiagSubtab === "runs") {
       add("Runs", fetchAndRenderRuns());
     } else {
@@ -1465,18 +1472,6 @@ function activeRefreshJobs() {
           && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
       }, "diag-count"));
     }
-
-    add("Health › Execution summary",
-      requestPanel("diag-implement-one-body", "implement-one", () => Promise.all([
-        fetchJson(`/api/diagnostics/implement_one`),
-        fetchJson(`/api/tasks/completion-by-complexity`),
-      ]), ([implOne, completion]) => {
-        lastDiagnostics.implement_one = implOne.implement_one_by_actor || [];
-        lastDiagnostics.implement_one_by_complexity = implOne.implement_one_by_complexity || [];
-        lastDiagnostics.completion_by_complexity = completion.by_complexity || [];
-        renderDiagnosticsSideCard(lastDiagnostics, diagnosticsContext());
-      })
-    );
   }
   return jobs;
 }
@@ -1814,7 +1809,7 @@ onWorkspaceChange(() => {
   lastRunsMeta = null;
   lastRunsLoading = true;
   lastRunSourcesUnavailable = [];
-  lastDiagnostics = { metrics: null, errors: null, incidents: null };
+  lastDiagnostics = { errors: null, incidents: null };
   for (const id of ["tasks-count", "diag-count", "task-filter-summary"]) {
     if ($(id)) $(id).textContent = "—";
   }

@@ -303,6 +303,7 @@ export function syncWindowSelectors() {
   const rel = reliabilityWindowFor(selected);
   for (const [id, target] of [
     ["scoreboard-window-selector", selected],
+    ["metrics-window-selector", selected],
     ["reliability-window-selector", rel.window],
   ]) {
     const selector = document.getElementById(id);

@@ -36,6 +36,13 @@ const pendingReads = [];
 const errorsRetentionStart = new Date(Date.now() - 30 * 3600000).toISOString();
 const longErrorMessage = `build failed: dependency unavailable. ${'details '.repeat(40)}`;
 const list = items => ({ items, total: items.length, limit: 50, truncated: false });
+function metricsWindow(url) {
+  return {
+    key: url.searchParams.get('since'), bucket_seconds: 3600,
+    since: '2026-10-11T10:00:00+00:00', until: '2026-10-11T12:30:00+00:00',
+    previous_since: '2026-10-11T07:30:00+00:00', previous_until: '2026-10-11T10:00:00+00:00',
+  };
+}
 function fixture(url) {
   const workspace = url.searchParams.get('workspace');
   switch (url.pathname) {
@@ -106,9 +113,35 @@ function fixture(url) {
         { event_id: 'other', message: 'unexpected tool crash', source: 'agent-stderr', target: 'codex_core::tools::router' },
       ] : [{ message: marker, source: 'fixture' }] };
     }
-    case '/api/diagnostics/metrics':
+    case '/api/diagnostics/implement_one': {
       healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
-      return healthFixture ? [{ ts: new Date().toISOString(), actor_identity: 'fixture', token_usage: 1379713 }] : [];
+      const stats = (n, avg) => (healthFixture ? { n, avg, p50: avg, p95: avg * 2 } : null);
+      const buckets = [0, 1, 2].map(i => ({
+        start: new Date(Date.UTC(2026, 9, 11, 10 + i)).toISOString(),
+        all: stats(4, 1500000 + i * 60000), low: stats(2, 1200000), medium: null, hard: stats(2, 1800000), other_runs: 0,
+      }));
+      const totals = (all) => ({ all, low: stats(6, 1200000), medium: null, hard: stats(6, 1800000), xhard: null, unset: null });
+      return {
+        window: metricsWindow(url),
+        truncated: false,
+        buckets,
+        current: totals(stats(12, 1560000)),
+        previous: totals(stats(9, 1200000)),
+        actors: healthFixture ? [{ actor: 'claude / claude-opus-5-5', n: 12, avg: 1560000, p50: 1500000, p95: 3000000, previous_avg: 1200000, trend: [1500000, 1560000, 1620000] }] : [],
+        slowest: [],
+        implement_one_by_complexity: [],
+      };
+    }
+    case '/api/diagnostics/completions': {
+      const counts = (total) => ({ done: { total, low: total, medium: 0, hard: 0, other: 0 }, rejected: 0, archived: 0 });
+      return {
+        window: metricsWindow(url),
+        buckets: [0, 1, 2].map(i => ({ start: new Date(Date.UTC(2026, 9, 11, 10 + i)).toISOString(), ...counts(healthFixture ? i : 0) })),
+        current: counts(healthFixture ? 3 : 0),
+        previous: counts(healthFixture ? 2 : 0),
+      };
+    }
+    case '/api/tasks/completion-by-complexity': return { by_complexity: [] };
     case '/api/audit/incidents': {
       const selectedClass = url.searchParams.get('class');
       const limit = Number(url.searchParams.get('limit'));
@@ -193,7 +226,7 @@ globalThis.fetch = async (path, options = {}) => {
   if (url.pathname === '/api/workflows/auto/readiness') readinessReads += 1;
   if (url.pathname === '/api/crews') crewReads += 1;
   if (networkDown) throw new TypeError('Fixture network unavailable');
-  if (metricsError && url.pathname === '/api/diagnostics/metrics') return response({ error: 'Metrics fixture failure' }, 500);
+  if (metricsError && url.pathname === '/api/diagnostics/implement_one') return response({ error: 'Metrics fixture failure' }, 500);
   const payload = fixture(url);
   if (url.pathname === heldPath) return new Promise((resolve, reject) => pendingReads.push({ payload, resolve, reject }));
   const headers = url.pathname === '/api/audit' && !url.searchParams.has('before')
@@ -541,7 +574,7 @@ metricsError = true;
 const priorSummaryReads = summaryReads;
 setActiveTab('diagnostics/metrics');
 await settle();
-check(text('diag-body').includes('Metrics fixture failure'), 'HTTP failure visible in Metrics panel');
+check(text('metrics-body').includes('Metrics fixture failure'), 'HTTP failure visible in Metrics panel');
 check(node('conn-status').className.includes('orange') && text('meta-text').includes('Metrics') && !text('meta-text').includes('offline'), 'one HTTP panel error is amber, names the failing panel, and does not imply offline');
 check(summaryReads > priorSummaryReads && text('rail-count-audit') === String(summaryReads), 'audit summary renders updated data independently of failed panel');
 networkDown = true;
@@ -560,7 +593,7 @@ for (const selectedWindow of ['24h', '7d']) {
   for (const subtab of ['metrics', 'errors']) {
     setActiveTab(`diagnostics/${subtab}`); await settle(); refresh(); await settle();
     check(healthQueries.at(-1).window === selectedWindow, `${subtab} requests selected window ${selectedWindow}`);
-    check(text('diag-count').includes(selectedWindow), `${subtab} header labels selected range`);
+    check(text(subtab === 'metrics' ? 'metrics-count' : 'diag-count').includes(selectedWindow), `${subtab} header labels selected range`);
   }
   const coverageLabel = `covers since ${formatDateTime(errorsRetentionStart)}`;
   check(text('diag-count').includes(coverageLabel) === (selectedWindow === '7d'),
@@ -612,7 +645,8 @@ for (const selectedWindow of ['24h', '7d']) {
 click(node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a')); await settle();
 check(window.location.hash === '#runs/jrun-health-fixture', 'Errors run link navigates to the run detail route');
 setActiveTab('diagnostics/metrics'); await settle();
-check(node('diag-body').querySelector('.c-token_usage').textContent === '1,379,713', 'tokens use thousands grouping');
+check(node('metrics-body').querySelectorAll('.mx-sc').length === 4 && node('metrics-body').querySelector('.mx-sc-value').textContent === '26.0m',
+  'Metrics renders the four series cards, All first with the window average');
 setActiveTab('diagnostics/incidents'); await settle();
 check(healthQueries.at(-1).class === 'unexpected', 'default incident request isolates unexpected failures before limit');
 const incidentRows = () => [...node('diag-body').querySelectorAll('.incident-row')];
@@ -664,7 +698,7 @@ globalThis.fetch = (_path, options) => new Promise((_resolve, reject) => {
   options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
 });
 refresh(); await settle();
-check(busy('diag-body') === 'false' && text('diag-body').includes('timed out'), 'hung request times out and clears busy state');
+check(busy('metrics-body') === 'false' && text('metrics-body').includes('timed out'), 'hung request times out and clears busy state');
 check(!node('refresh-btn').disabled, 'timeout leaves retry available');
 globalThis.setTimeout = realTimeout;
 globalThis.fetch = realFetch;
@@ -832,15 +866,6 @@ globalThis.showHealthEvidence = async subtab => {
   setActiveTab(`diagnostics/${subtab}`);
   refresh();
   await settle();
-  if (subtab === 'metrics') {
-    const { renderDiagnosticsSideCard } = await import('./js/diagnostics.js');
-    renderDiagnosticsSideCard({
-      completion_by_complexity: [{ complexity: 'unset', total: 999, statuses: [
-        { status: 'done', count: 532 }, { status: 'rejected', count: 17 }, { status: 'archived', count: 450 },
-      ] }],
-      implement_one_by_complexity: [{ complexity: 'unset', n: 532, actors: [{ actor: 'long-provider/model-name', n: 532, avg: 125000, p50: 90000, p95: 400000 }] }],
-    }, { fmtDuration: value => `${value / 1000}s` });
-  }
 };
 globalThis.loadingTestsPassed = true;
 console.log('Dashboard loading, ordering, empty, error and recovery scenarios passed.');

@@ -315,6 +315,24 @@ impl OrbitRuntime {
         self.stores().tasks().task_complexity_by_id()
     }
 
+    /// Terminal tasks the generated index dates at or after `since` (all of
+    /// them for `None`), oldest first; see
+    /// [`orbit_store::TaskTerminalTransition`] for what the time means.
+    pub fn task_terminal_transitions(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<orbit_store::TaskTerminalTransition>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner_request(
+                serde_json::json!({"_worker_read": "terminal_transitions", "since": since}),
+            );
+        }
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        self.stores().tasks().task_terminal_transitions(since)
+    }
+
     pub fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
             return self
