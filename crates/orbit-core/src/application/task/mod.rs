@@ -10,8 +10,6 @@ mod context_widening;
 mod desktop;
 mod provider_hold;
 pub(crate) mod provider_limit;
-mod provider_limit_ledger;
-mod provider_limit_view;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod finding_verification;
@@ -21,9 +19,7 @@ mod lint;
 mod listing;
 mod params;
 mod paths;
-mod pilot_admission;
-mod pilot_blockers;
-mod pilot_no_diff;
+mod pilot;
 mod pr_closure;
 mod pull_request_links;
 mod query;
@@ -72,14 +68,13 @@ pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
-pub(crate) use pilot_admission::{
-    HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement,
-    OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
-    operator_validation_requirements,
+pub(crate) use pilot::{
+    HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement, NoDiffClosure,
+    OperatorValidationHold, OperatorValidationRequirement, PILOT_VERIFIED_NO_DIFF,
+    PilotAdmissionHold, VerifiedNoDiff, normalize_pilot_self_blockers,
+    operator_validation_requirements, pilot_blocker_task_ids,
 };
-pub(crate) use pilot_blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
-pub(crate) use pilot_no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
-pub use provider_limit_view::{
+pub use provider_limit::{
     CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
     UngatedLaneLimit, short_time,
 };

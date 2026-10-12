@@ -54,7 +54,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 | Verifier activity | [verify_finding.yaml](../../../crates/orbit-core/assets/activities/verify_finding.yaml) | [ORB-15662] |
 | State trigger (`finding_unverified`) | [member_host.rs](../../../crates/orbit-core/src/application/automation/members/member_host.rs) | [ORB-15662] |
 | Seeded routine (disabled) | [finding_verification.yaml](../../../crates/orbit-core/assets/routines/finding_verification.yaml) | [ORB-15662] |
-| Admission hold | [pilot_admission.rs](../../../crates/orbit-core/src/application/task/pilot_admission.rs) | [ORB-15662] |
+| Admission hold | [pilot/admission.rs](../../../crates/orbit-core/src/application/task/pilot/admission.rs) | [ORB-15662] |
 
 ## Task References
 

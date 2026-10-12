@@ -35,7 +35,7 @@ use orbit_types::task::{
 use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, LandingObservationStatus};
 use serde_json::{Value, json};
 
-use super::TaskUpdateParams;
+use super::super::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::search::task_selectors_contain_path;
