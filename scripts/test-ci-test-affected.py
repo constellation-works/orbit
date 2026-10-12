@@ -13,6 +13,35 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parent
 
 
+def assert_phase_sums(testcase, summary):
+    """compile_ms and test_ms equal the sum of the per-package values that were measured."""
+    entries = summary["package_timings"]
+    if entries is None:
+        testcase.assertIsNone(summary["compile_ms"])
+        testcase.assertIsNone(summary["test_ms"])
+        return
+    testcase.assertIsInstance(entries, list)
+    names = [entry["package"] for entry in entries]
+    testcase.assertEqual(names, sorted(set(names)))
+    for entry in entries:
+        testcase.assertEqual(set(entry), {"package", "compile_ms", "test_ms"})
+        testcase.assertIsInstance(entry["package"], str)
+        testcase.assertTrue(entry["package"])
+    for key in ("compile_ms", "test_ms"):
+        parts = [entry[key] for entry in entries]
+        total = summary[key]
+        if total is None:
+            testcase.assertTrue(all(part is None for part in parts))
+            continue
+        testcase.assertIsInstance(total, int)
+        testcase.assertGreaterEqual(total, 0)
+        if all(part is not None for part in parts):
+            testcase.assertEqual(sum(parts), total)
+            testcase.assertTrue(all(isinstance(part, int) and part >= 0 for part in parts))
+        else:
+            testcase.assertTrue(all(part is None for part in parts))
+
+
 class AffectedTestGateTests(unittest.TestCase):
     """Exercise the gate against real Git diffs and a non-compiling Cargo fixture."""
 
@@ -67,10 +96,20 @@ class AffectedTestGateTests(unittest.TestCase):
             (self.root / path).write_text("fixture\n")
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
 import json, os, subprocess, sys
+from pathlib import Path
 arguments = sys.argv[1:]
+
+def emit_timings(units):
+    directory = Path(os.environ["GUARD_TEST_TIMING_DIR"])
+    directory.mkdir(parents=True, exist_ok=True)
+    report = directory / ("cargo-timing-%s.html" % os.getpid())
+    report.write_text("const UNIT_DATA = %s;\\n" % json.dumps(units))
+    print("Timing report saved to %s" % report, flush=True)
+
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(arguments) + "\\n")
-if os.environ.get("GUARD_TEST_PROBE_WORKER_MARKER") and arguments[:2] in (["nextest", "run"], ["test", "--no-fail-fast"]):
+if os.environ.get("GUARD_TEST_PROBE_WORKER_MARKER") and (
+        arguments[:2] == ["nextest", "run"] or (arguments[:1] == ["test"] and "--no-fail-fast" in arguments)):
     # Test processes lose only the worker-binding marker, not the rest of the run envelope.
     assert "ORBIT_WORKER_CONTEXT_REQUIRED" not in os.environ
     assert os.environ["ORBIT_RUN_ID"] == "jrun-fixture"
@@ -79,6 +118,13 @@ if arguments[0] == "metadata":
 elif arguments == ["nextest", "--version"]:
     sys.exit(int(os.environ.get("GUARD_TEST_NO_NEXTEST", "0")))
 elif "--doc" in arguments:
+    if os.environ.get("GUARD_TEST_TIMINGS"):
+        selected = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"]
+        emit_timings([{"name": name, "duration": 0.05} for name in selected if name in ("orbit-core", "orbit-cli")])
+        for name, seconds in (("orbit-core", "0.02"), ("orbit-cli", "0.03")):
+            if name in selected:
+                print(f"   Doc-tests {name}", flush=True)
+                print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in %ss" % seconds, flush=True)
     sys.exit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
 else:
     metadata = json.load(open(os.environ["GUARD_TEST_METADATA"]))
@@ -93,7 +139,16 @@ else:
         config = arguments[arguments.index("--tool-config-file") + 1].split(":", 1)[1]
         junit = json.loads(open(config).read().split("path = ", 1)[1])
         with open(junit, "w") as report:
-            report.write(f'<testsuites name="nextest-run" tests="{len(selected)}"/>')
+            if os.environ.get("GUARD_TEST_TIMINGS"):
+                seconds_for = {"orbit-cli": "0.01", "orbit-cmd": "0.02", "orbit-core": "0.03", "orbit-web": "0.04",
+                               "orbit-engine": "0.05", "orbit-tools": "0.06"}
+                suites = []
+                for name in selected:
+                    seconds = seconds_for.get(name, "0.01")
+                    suites.append('<testsuite name="%s" tests="1" time="%s"><testcase name="a" classname="%s" time="%s"/></testsuite>' % (name, seconds, name, seconds))
+                report.write('<testsuites name="nextest-run" tests="%d">%s</testsuites>' % (len(selected), "".join(suites)))
+            else:
+                report.write(f'<testsuites name="nextest-run" tests="{len(selected)}"/>')
     if os.environ.get("GUARD_TEST_NOTICE") and arguments[:2] == ["nextest", "run"]:
         print("    " + os.environ["GUARD_TEST_NOTICE"], flush=True)
         print("ordinary output", flush=True)
@@ -102,6 +157,12 @@ else:
         assert subprocess.run(["git", "-C", fixture, "rev-parse", "--is-inside-work-tree"],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
         assert os.environ["GUARD_TEST_EXISTING_CEILING"] in os.environ["GIT_CEILING_DIRECTORIES"].split(os.pathsep)
+    if os.environ.get("GUARD_TEST_TIMINGS"):
+        weights = {"orbit-cli": 0.1, "orbit-cmd": 0.2, "orbit-core": 0.3, "orbit-web": 0.4,
+                   "orbit-engine": 0.5, "orbit-tools": 0.6}
+        emit_timings([{"name": name, "duration": weights.get(name, 0.1)} for name in selected])
+        if arguments[0] == "test":
+            print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s", flush=True)
     sys.exit(int(os.environ.get("GUARD_TEST_EXIT", "0")))
 ''')
         self.write_executable(self.bin / "build-budget", '''#!/usr/bin/env python3
@@ -218,8 +279,8 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         package_flags = [argument for name in self.core_dependents for argument in ("-p", name)]
-        runtime = ["nextest", "run", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--lib", "--bins", "--tests"]
-        docs = ["test", "--no-fail-fast", *package_flags, "--doc"]
+        runtime = ["nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--lib", "--bins", "--tests"]
+        docs = ["test", "--timings", "--no-fail-fast", *package_flags, "--doc"]
         calls = self.calls()
         self.assertEqual(calls[1:], [["nextest", "--version"],
                                     ["build-budget", "--", "cargo", *runtime], runtime,
@@ -287,7 +348,8 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), selection=dict(
             packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"],
-            doctest_packages=self.core_dependents), command=None, base=self.base, exit_code=0, notices=[]))
+            doctest_packages=self.core_dependents), command=None, base=self.base, exit_code=0, notices=[],
+            compile_ms=None, test_ms=None, package_timings=None))
         # A failing run still reports what it selected and ran.
         result, failed = self.summarized(GUARD_TEST_EXIT="17")
         self.assertEqual(result.returncode, 17, result.stderr)
@@ -297,6 +359,48 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIsNone(fallback["tests_run"])
         self.assertEqual(fallback["selection"], summary["selection"])
+
+    def test_summary_records_phase_timings_that_sum_per_package(self):
+        # Nothing selected did no compile and no test work.
+        (self.root / "docs/guide.md").write_text("Changed docs\n")
+        result, summary = self.summarized()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((summary["compile_ms"], summary["test_ms"], summary["package_timings"]), (0, 0, []))
+        assert_phase_sums(self, summary)
+
+        self.touch_core()
+        directory = str(self.root / "target" / "cargo-timings")
+        timed = dict(GUARD_TEST_TIMINGS="1", GUARD_TEST_TIMING_DIR=directory)
+        result, summary = self.summarized(**timed)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert_phase_sums(self, summary)
+        self.assertEqual(summary["compile_ms"], 1100)
+        self.assertEqual(summary["test_ms"], 150)
+        self.assertEqual(summary["package_timings"], [
+            dict(package="orbit-cli", compile_ms=150, test_ms=40),
+            dict(package="orbit-cmd", compile_ms=200, test_ms=20),
+            dict(package="orbit-core", compile_ms=350, test_ms=50),
+            dict(package="orbit-web", compile_ms=400, test_ms=40),
+        ])
+        # A failing run still reports the timings of the tests it did run.
+        result, failed = self.summarized(GUARD_TEST_EXIT="17", **timed)
+        self.assertEqual(result.returncode, 17, result.stderr)
+        assert_phase_sums(self, failed)
+        self.assertEqual((failed["compile_ms"], failed["test_ms"]), (1000, 100))
+        self.assertEqual(sum(entry["compile_ms"] for entry in failed["package_timings"]), failed["compile_ms"])
+        self.assertEqual(sum(entry["test_ms"] for entry in failed["package_timings"]), failed["test_ms"])
+        # cargo test has no per-package test report. Compile units still sum.
+        metadata = json.loads(self.metadata.read_text())
+        for package in metadata["packages"]:
+            for target in package["targets"]:
+                target["doctest"] = False
+        self.metadata.write_text(json.dumps(metadata))
+        result, fallback = self.summarized(GUARD_TEST_NO_NEXTEST="1", **timed)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert_phase_sums(self, fallback)
+        self.assertEqual((fallback["compile_ms"], fallback["test_ms"]), (1000, 50))
+        self.assertTrue(all(entry["test_ms"] is None for entry in fallback["package_timings"]))
+        self.assertEqual(sum(entry["compile_ms"] for entry in fallback["package_timings"]), fallback["compile_ms"])
 
     def test_summary_records_what_a_deferral_handoff_derives_from(self):
         # [ORB-15516] Orbit derives an implementer's deferred-sandbox record
@@ -354,7 +458,8 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(handed), GUARD_TEST_EXIT="100")
         self.assertEqual(result.returncode, 100, result.stderr)
         self.assertEqual(replay, dict(schema_version=1, selection=handed, tests_run=2, command=None,
-                                      base=None, exit_code=100, notices=[]))
+                                      base=None, exit_code=100, notices=[],
+                                      compile_ms=None, test_ms=None, package_timings=None))
         [run] = [call for call in self.calls() if call[:2] == ["nextest", "run"]]
         self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
                          ["orbit-cli", "orbit-core"])
@@ -371,7 +476,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(bare), GUARD_TEST_NO_NEXTEST="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(replay["selection"], bare)
-        [run] = [call for call in self.calls() if call[:2] == ["test", "--no-fail-fast"]]
+        [run] = [call for call in self.calls() if call[:1] == ["test"] and "--doc" not in call]
         self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
                          self.core_dependents)
         self.assertEqual(run[run.index("--"):], ["--", "--exact", "suite::broken", "--test-threads", "1"])
@@ -504,8 +609,13 @@ class NextestOutputTransportTests(unittest.TestCase):
         self.assertEqual(self.summary["tests_run"], 3, output)
         handed = dict(self.summary["selection"], failing_tests=["suite::fixture inner::also_broken"])
         output = self.run_gate(body, returncode=100, selection=handed)
+        timings = {key: self.summary.pop(key) for key in ("compile_ms", "test_ms", "package_timings")}
         self.assertEqual(self.summary, dict(schema_version=1, selection=handed, tests_run=1, command=None,
                                             base=None, exit_code=100, notices=[]), output)
+        assert_phase_sums(self, timings)
+        self.assertIn("suite", {entry["package"] for entry in timings["package_timings"]})
+        self.assertIsInstance(timings["compile_ms"], int)
+        self.assertIsInstance(timings["test_ms"], int)
         self.assertIn("suite::fixture inner::also_broken", output)
         self.assertNotIn("suite::fixture broken", output)
 

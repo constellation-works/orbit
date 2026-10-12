@@ -306,6 +306,11 @@ raise SystemExit({17+index})
                                 cwd=self.root, env=self.env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAILED check-doc-links.py (exit 18)", result.stderr)
+        msrv = [line for line in result.stderr.splitlines() if line.startswith("ci-fast: MSRV check ")]
+        self.assertEqual(len(msrv), 1, result.stderr)
+        self.assertRegex(msrv[0], r"^ci-fast: MSRV check [0-9]+(?:\.[0-9]+)? s$")
+        self.assertNotIn("ci-guardrails:", msrv[0])
+        self.assertRegex(result.stderr, r"ci-guardrails: check-doc-links.py [0-9]+(?:\.[0-9]+)? s")
 
     def test_fast_does_not_enumerate_or_compile_tests(self):
         self.prepare_ci()

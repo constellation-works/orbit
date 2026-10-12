@@ -160,10 +160,11 @@ ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
 # Format and shared guardrails plus the MSRV compile check: no Rust tests.
+# The MSRV check's wall time is its own line, separate from each guardrail.
 # Full make ci runs on PRs.
 ci-fast:
 	./scripts/require-python.sh
-	$(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
+	@bash -c 'TIMEFORMAT="ci-fast: MSRV check %3R s"; time "$$@"' bash $(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 	./scripts/ci-guardrails.sh --fast
 
 # Full test targets of changed crates and all reverse workspace dependents.
