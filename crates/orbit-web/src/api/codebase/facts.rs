@@ -17,7 +17,7 @@ use orbit_core::{
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskHistoryEntry, TaskRelationType,
 };
-use orbit_types::workflow::{BUBBLEWRAP_NAMESPACE_REFUSAL, ProviderFailureClass};
+use orbit_types::workflow::{BUBBLEWRAP_NAMESPACE_REFUSALS, ProviderFailureClass};
 use serde_json::Value;
 
 /// Lock-conflict denials read per scan. Audit rows are pruned by retention,
@@ -393,17 +393,18 @@ fn infra_cause(text: &str) -> Option<&'static str> {
             })
         })
     };
-    if any(&[
-        BUBBLEWRAP_NAMESPACE_REFUSAL,
-        "sandbox_apply: Operation not permitted",
-        "sandbox-exec cannot apply a profile",
-        "trusted sandbox-exec not available at",
-        "Bubblewrap capability probe failed",
-        "trusted Bubblewrap not available at",
-        "bwrap: Creating new namespace failed:",
-        "Orbit linux-bwrap policy denied the attempted write",
-        "macOS sandbox hid the stored credential",
-    ]) {
+    if any(BUBBLEWRAP_NAMESPACE_REFUSALS)
+        || any(&[
+            "sandbox_apply: Operation not permitted",
+            "sandbox-exec cannot apply a profile",
+            "trusted sandbox-exec not available at",
+            "Bubblewrap capability probe failed",
+            "trusted Bubblewrap not available at",
+            "bwrap: Creating new namespace failed:",
+            "Orbit linux-bwrap policy denied the attempted write",
+            "macOS sandbox hid the stored credential",
+        ])
+    {
         return Some("sandbox");
     }
     if any(&[
