@@ -100,15 +100,15 @@ impl Fixture {
 
     /// Submit a child over `results` and wait on it, while `settle` acts on
     /// the submitted child from another thread. Returns the child's
-    /// `pipeline.child_wait` row.
+    /// `pipeline.child_wait` row and the activity's output.
     fn observe(
         &self,
         results: Value,
         timeout_seconds: u64,
         settle: impl FnOnce(&OrbitRuntime, &str) + Send,
-    ) -> (String, AuditEvent) {
+    ) -> (String, AuditEvent, Value) {
         let before = self.child_runs();
-        let child = std::thread::scope(|scope| {
+        let (child, output) = std::thread::scope(|scope| {
             let settler = scope.spawn(|| {
                 let child = self.await_new_child(&before);
                 // A second runtime on the same roots, as a worker opens.
@@ -117,7 +117,8 @@ impl Fixture {
                 settle(&runtime, &child);
                 child
             });
-            self.runtime
+            let output = self
+                .runtime
                 .run_deterministic(
                     "invoke_and_wait",
                     &json!({}),
@@ -139,7 +140,7 @@ impl Fixture {
                     },
                 )
                 .expect("the wait returns the child's settlement as data");
-            settler.join().unwrap()
+            (settler.join().unwrap(), output)
         });
         std::fs::write(self.root.path().join(format!("ran-{child}")), "").unwrap();
         let row = self
@@ -152,7 +153,7 @@ impl Fixture {
                     && event.target_id.as_deref() == Some(child.as_str())
             })
             .unwrap_or_else(|| panic!("no pipeline.child_wait row for {child}"));
-        (child, row)
+        (child, row, output)
     }
 
     fn child_runs(&self) -> Vec<String> {
@@ -215,7 +216,7 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
     // identity; a guard with one would echo that child's typed identity.
     // Held on a red base: the wait entry carries no error, so the reason
     // comes from the child's own hold step.
-    let (child, row) = fixture.observe(
+    let (child, row, _) = fixture.observe(
         json!([{"status": "failed", "error": baseline_red_text()}]),
         60,
         execute,
@@ -236,7 +237,7 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
     );
 
     // A genuine failure keeps the child's error and stays unexpected.
-    let (_, row) = fixture.observe(
+    let (_, row, _) = fixture.observe(
         json!([{"status": "failed", "error": "cargo test failed"}]),
         60,
         execute,
@@ -257,7 +258,7 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
     );
 
     // An operator cancel ends the parent cancelled, not failed.
-    let (child, row) = fixture.observe(json!([]), 60, |runtime, child| {
+    let (child, row, _) = fixture.observe(json!([]), 60, |runtime, child| {
         runtime.cancel_job_run(child).unwrap();
     });
     let recorded = payload(&row);
@@ -270,9 +271,12 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         "an operator cancel records no reason, so the row still names the child"
     );
 
-    // The wait's deadline projects a still-pending child as `timeout`.
-    let (child, row) = fixture.observe(json!([]), 1, |_, _| {});
+    // The wait's deadline projects a still-pending child as `timeout`. A
+    // caller that did not ask for it to be cancelled is told it is still
+    // live, so it frees nothing the child uses [ORB-15643].
+    let (child, row, output) = fixture.observe(json!([]), 1, |_, _| {});
     assert_eq!(payload(&row)["status"], "timeout");
+    assert_eq!(output["child_live"], true, "{output}");
     assert_eq!(row.status, AuditEventStatus::Failure);
     assert_eq!(
         row.error_message.as_deref(),

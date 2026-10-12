@@ -1178,6 +1178,28 @@ fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
     );
 }
 
+/// A candidate held when its parent stopped waiting for the run [ORB-15643]
+/// is resumed by the task's requeued run: the cancel judged nothing.
+#[test]
+fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
+    isolated(
+        "a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            preserved.preserve_decision("validate", "held_child_timeout");
+            preserved
+                .host
+                .set_required_commands(&["test -f feature.txt"]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            assert_resume_recorded(&preserved, "resumed_validated");
+        },
+    );
+}
+
 /// A candidate that conflicts with the advanced base is handed to the
 /// implementer as uncommitted work with the conflict markers and paths;
 /// validation does not run on a conflicted tree.

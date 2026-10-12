@@ -1,16 +1,31 @@
 //! `invoke_and_wait` hands its parent a bounded child summary, so a finished
 //! fan-out parent stores no copy of any child's pipeline [ORB-14587].
+//!
+//! A gate's wait that expires on its unfinished delivery child cancels it,
+//! keeping its candidate, unless the child settled after the wait's last look;
+//! the run graph never ends with terminal parents and a live child
+//! [ORB-15643]. The wait runs on an injected clock, so its 4 h deadline
+//! passes at once and the child can be settled between two of its polls.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
 
 use chrono::Utc;
-use orbit_engine::RuntimeHost;
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
+use orbit_types::workflow::{ChildDispatchPhase, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::invoke::invoke_and_wait_with;
 use super::super::pipeline_success_guard;
+use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_config;
+use crate::application::job::DEFAULT_JOB_FILES;
+use crate::application::job::pipeline::PipelineWaitClock;
+use crate::application::task::TaskAddParams;
 
 /// A finished four-pilot `ci_failure_sweep_pipeline` run in the encoding
 /// before compaction: each pilot's wait entry carries the child's whole
@@ -139,5 +154,318 @@ fn a_finished_ci_sweep_stores_child_summaries_and_no_resume_state() {
         lineage(&state),
         lineage(&recorded),
         "child lineage survives"
+    );
+}
+
+/// The gate's dispatch timeout and poll interval, as `task_gate_pipeline`
+/// passes them.
+const GATE_TIMEOUT_SECONDS: u64 = 14_400;
+const GATE_POLL_SECONDS: u64 = 3_600;
+
+/// A wait clock whose sleeps pass instantly, running `on_sleep` first.
+struct FakeClock<'a> {
+    elapsed: Cell<Duration>,
+    on_sleep: &'a dyn Fn(Duration),
+}
+
+impl PipelineWaitClock for FakeClock<'_> {
+    fn elapsed(&self) -> Duration {
+        self.elapsed.get()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        (self.on_sleep)(self.elapsed.get());
+        self.elapsed.set(self.elapsed.get() + duration);
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args([
+            "-c",
+            "user.name=Orbit Test",
+            "-c",
+            "user.email=orbit@example.invalid",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A running parent gate and a running child, both owned by this process, so
+/// cancelling the child signals nothing.
+fn running_run(runtime: &OrbitRuntime, job: &str, input: Option<Value>) -> String {
+    let jobs = runtime.stores().jobs();
+    let run = jobs
+        .insert_job_run(job, 1, Utc::now(), input, None)
+        .expect("insert run");
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start run");
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), job.to_string(), json!({})),
+        )
+        .expect("seed run state");
+    run.run_id
+}
+
+/// Run the gate's `dispatch_child` against `child`, its wait expiring at the
+/// gate's dispatch timeout unless `on_sleep` settles the child first.
+fn dispatch_child(
+    runtime: &OrbitRuntime,
+    parent: &str,
+    child: &str,
+    on_timeout: Option<&str>,
+    on_sleep: &dyn Fn(Duration),
+) -> (Value, Duration) {
+    let mut input = json!({
+        "job_name": "task_pr_pipeline",
+        "run_input": {},
+        "run_id": parent,
+        "step_id": "dispatch_child",
+        "timeout_seconds": GATE_TIMEOUT_SECONDS,
+        "poll_interval_seconds": GATE_POLL_SECONDS,
+    });
+    if let Some(on_timeout) = on_timeout {
+        input["on_timeout"] = json!(on_timeout);
+    }
+    let clock = FakeClock {
+        elapsed: Cell::new(Duration::ZERO),
+        on_sleep,
+    };
+    let summary = invoke_and_wait_with(
+        runtime,
+        "invoke_and_wait",
+        &input,
+        |_| Ok(json!({"run_id": child, "queued": false})),
+        |_| {
+            let result = runtime.wait_pipeline_runs_with_clock(
+                &[child.to_string()],
+                GATE_TIMEOUT_SECONDS,
+                GATE_POLL_SECONDS,
+                None,
+                &clock,
+            )?;
+            Ok(serde_json::to_value(result).expect("encode wait result"))
+        },
+    )
+    .expect("dispatch_child");
+    (summary, clock.elapsed.get())
+}
+
+/// The parent's dispatch record of `child`: its phase and the status it closed on.
+fn dispatch_record(
+    runtime: &OrbitRuntime,
+    parent: &str,
+    child: &str,
+) -> (ChildDispatchPhase, Option<String>) {
+    let state = runtime
+        .read_run_state(parent)
+        .expect("read parent")
+        .expect("parent state");
+    let dispatch = state
+        .child_dispatches
+        .iter()
+        .find(|dispatch| dispatch.child_run_id == child)
+        .expect("child dispatch record");
+    (dispatch.phase, dispatch.child_status.clone())
+}
+
+fn run_state(runtime: &OrbitRuntime, run_id: &str) -> JobRunState {
+    runtime
+        .get_job_run_backend(run_id)
+        .expect("read run")
+        .expect("run exists")
+        .state
+}
+
+#[test]
+fn an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate() {
+    let (root, runtime, repo) = runtime_with_workspace_config(None);
+    // The installed catalog the cancelled child's failure handoff comes from.
+    let jobs_dir = root.path().join("home/.orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("jobs dir");
+    let (_, delivery) = DEFAULT_JOB_FILES
+        .iter()
+        .find(|(name, _)| *name == "task_pr_pipeline")
+        .expect("shipped task_pr_pipeline");
+    std::fs::write(jobs_dir.join("task_pr_pipeline.yaml"), delivery).expect("install job");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), ".orbit/\n").expect("write ignore");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Deliver past the gate deadline".into(),
+            description: "A delivery still validating when its gate stops waiting.".into(),
+            acceptance_criteria: vec!["The candidate survives the timeout.".into()],
+            plan: "1. Implement.".into(),
+            complexity: TaskComplexity::Low,
+            task_type: Some(TaskType::Bug),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add task")
+        .id;
+    let worktree = root.path().join("worktree");
+    let branch = format!("orbit/{task}");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &branch,
+            worktree.to_str().expect("utf-8 path"),
+        ],
+    );
+
+    let parent = running_run(&runtime, "task_gate_pipeline", None);
+    let child = running_run(
+        &runtime,
+        "task_pr_pipeline",
+        Some(json!({"task_ids": [task]})),
+    );
+    runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(child.clone()),
+                ..Default::default()
+            },
+        )
+        .expect("bind task to the child");
+    // The child got as far as `validate`: everything before it recorded an
+    // output, and the implementation is still uncommitted in its worktree.
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(&child, &mut |_, state| {
+            state.pipeline = json!({
+                "worktree": {
+                    "workspace_path": worktree,
+                    "job_run_id": child,
+                    "branch": branch,
+                },
+                "review_preflight": {"skipped": true},
+                "resume_candidate": {"resumed": false},
+                "implement_bundle": [{"status": "success"}],
+                "commit": {"committed": false},
+                "prepare_branch": {"branch": branch},
+                "sync_base": {"synced": true},
+            });
+            Ok(())
+        })
+        .expect("seed child progress");
+    std::fs::write(worktree.join("fix.txt"), "the implementation\n").expect("dirty edit");
+
+    let (summary, waited) =
+        dispatch_child(&runtime, &parent, &child, Some("cancel_child"), &|_| {});
+
+    assert_eq!(
+        waited,
+        Duration::from_secs(GATE_TIMEOUT_SECONDS),
+        "the deadline is a hard ceiling: the wait is never extended"
+    );
+    assert_eq!(summary["status"], "timeout", "summary: {summary}");
+    let error = summary["error"].as_str().expect("error");
+    assert!(error.starts_with("child_timeout: "), "error: {error}");
+    assert_eq!(summary["child_cancelled"], true, "summary: {summary}");
+    assert!(
+        summary.get("child_live").is_none(),
+        "a cancelled child is not live: {summary}"
+    );
+    assert_eq!(run_state(&runtime, &child), JobRunState::Cancelled);
+    assert_eq!(
+        dispatch_record(&runtime, &parent, &child),
+        (ChildDispatchPhase::Terminal, Some("timeout".to_string()))
+    );
+
+    // The candidate is committed on the child's branch and recorded for the
+    // task's next run to resume.
+    let head = git(&worktree, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(&worktree, &["status", "--porcelain"]),
+        "",
+        "summary: {summary}"
+    );
+    assert_eq!(
+        git(&worktree, &["show", "HEAD:fix.txt"]),
+        "the implementation"
+    );
+    assert_eq!(summary["candidate"]["head_sha"], head.as_str());
+    assert_eq!(summary["candidate"]["decision"], "held_child_timeout");
+    assert!(
+        error.contains(&head),
+        "the error names the candidate: {error}"
+    );
+    let checkpoint = runtime
+        .read_run_state(&child)
+        .expect("read child")
+        .expect("child state")
+        .failure_activity_checkpoint
+        .expect("the handoff is recorded for candidate_resume");
+    assert_eq!(checkpoint.activity_name, "pr_failure_handoff");
+    assert_eq!(checkpoint.failed_step_id, "validate");
+    assert_eq!(checkpoint.output["decision"], "held_child_timeout");
+    assert_eq!(checkpoint.output["pr_created"], false);
+
+    // The task goes back to the backlog naming the timeout and the candidate.
+    let settled = runtime.get_task(&task).expect("task");
+    assert_eq!(settled.status, TaskStatus::Backlog);
+    let note = runtime
+        .get_task_history(&task)
+        .expect("history")
+        .into_iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Backlog))
+        .and_then(|entry| entry.note)
+        .expect("requeue note");
+    assert!(
+        note.contains("child_timeout") && note.contains(&head),
+        "the requeue names the timeout and the kept candidate: {note}"
+    );
+}
+
+#[test]
+fn a_child_that_finishes_as_the_wait_expires_reports_its_own_outcome() {
+    let (_root, runtime, _) = runtime_with_workspace_config(None);
+    let parent = running_run(&runtime, "task_gate_pipeline", None);
+    let child = running_run(&runtime, "task_pr_pipeline", None);
+    // The child settles on the last poll interval, after the wait's last
+    // look at it and before the parent acts on the deadline.
+    let on_sleep = |elapsed: Duration| {
+        if elapsed + Duration::from_secs(GATE_POLL_SECONDS)
+            >= Duration::from_secs(GATE_TIMEOUT_SECONDS)
+        {
+            runtime
+                .stores()
+                .jobs()
+                .finalize_job_run(&child, JobRunState::Success, Utc::now(), Some(1))
+                .expect("finish child");
+        }
+    };
+
+    let (summary, _) = dispatch_child(&runtime, &parent, &child, Some("cancel_child"), &on_sleep);
+
+    assert_eq!(summary["status"], "success", "summary: {summary}");
+    assert!(
+        summary.get("child_cancelled").is_none() && summary.get("child_live").is_none(),
+        "a finished child is neither cancelled nor live: {summary}"
+    );
+    assert_eq!(run_state(&runtime, &child), JobRunState::Success);
+    assert_eq!(
+        dispatch_record(&runtime, &parent, &child),
+        (ChildDispatchPhase::Terminal, Some("success".to_string()))
     );
 }

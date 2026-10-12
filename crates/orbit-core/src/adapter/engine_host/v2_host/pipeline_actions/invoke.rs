@@ -4,11 +4,12 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
-use orbit_types::workflow::ChildDispatchPhase;
+use orbit_types::workflow::{CHILD_TIMEOUT_ERROR_CODE, ChildDispatchPhase};
 use serde_json::Value;
 
 use super::super::child_dispatch;
 use crate::OrbitRuntime;
+use crate::application::job::{kept_candidate, kept_clause};
 
 use super::action_failed;
 use super::gate_admission::{gate_admission_stop, wait_success_status};
@@ -27,6 +28,10 @@ use super::gate_admission::{gate_admission_stop, wait_success_status};
 /// `pipeline_success_guard` sees exactly what it saw before. It returns a
 /// bounded summary of the wait entry, never the child's pipeline: the child's
 /// own run keeps that, and a reader fetches it by `run_id` [ORB-14587].
+///
+/// [ORB-15643] A caller passing `on_timeout: cancel_child` never outlives its
+/// child: a wait that expires on an unfinished child cancels it, keeping its
+/// candidate, and reports `timeout` with a `child_timeout` error.
 pub(in super::super) fn invoke_and_wait(
     runtime: &OrbitRuntime,
     action: &str,
@@ -157,6 +162,7 @@ where
     close_child_wait(
         runtime,
         action,
+        input,
         parent_run_id.as_deref(),
         &child_run_id,
         wait_result,
@@ -173,6 +179,7 @@ where
 fn close_child_wait(
     runtime: &OrbitRuntime,
     action: &str,
+    input: &Value,
     parent_run_id: Option<&str>,
     child_run_id: &str,
     wait_result: Result<Value, OrbitError>,
@@ -212,6 +219,15 @@ fn close_child_wait(
                 "status": "pending",
             })
         });
+    let unfinished = entry
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(is_unfinished);
+    let (entry, cancelled) = if unfinished && cancels_child_on_timeout(input) {
+        stop_unfinished_child(runtime, input, parent_run_id, child_run_id, entry)
+    } else {
+        (entry, None)
+    };
     let status = entry
         .get("status")
         .and_then(Value::as_str)
@@ -240,7 +256,122 @@ fn close_child_wait(
         error_message.as_deref(),
     )?;
 
-    Ok(child_result_summary(&entry))
+    let mut summary = child_result_summary(&entry);
+    // A child left running, or one whose cancel failed, is named live so the
+    // caller does not take it for settled.
+    if is_unfinished(&status) && child_is_live(runtime, child_run_id) {
+        summary["child_live"] = Value::Bool(true);
+    }
+    if let Some(cancelled) = cancelled {
+        summary["child_cancelled"] = Value::Bool(true);
+        if let Some(candidate) = cancelled.candidate {
+            summary["candidate"] = candidate;
+        }
+    }
+    Ok(summary)
+}
+
+/// A wait status that may name a child still pending or running: the wait's
+/// own deadline projects one as `timeout`.
+fn is_unfinished(status: &str) -> bool {
+    matches!(status, "timeout" | "pending" | "running")
+}
+
+/// Whether the caller asked that a child its wait leaves unfinished be
+/// cancelled rather than left running [ORB-15643]. Other callers keep the
+/// original contract: a `timeout` that may name a child still running.
+fn cancels_child_on_timeout(input: &Value) -> bool {
+    input.get("on_timeout").and_then(Value::as_str) == Some("cancel_child")
+}
+
+/// Whether `child_run_id` is still pending or running. An unreadable child
+/// counts as live: a caller is never told an unobserved child settled.
+fn child_is_live(runtime: &OrbitRuntime, child_run_id: &str) -> bool {
+    match runtime.get_job_run_backend(child_run_id) {
+        Ok(Some(run)) => !run.state.is_terminal(),
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(child_run_id, %error, "could not read the waited-on child");
+            true
+        }
+    }
+}
+
+/// A child the wait's expiry cancelled, with the candidate it kept.
+struct CancelledChild {
+    candidate: Option<Value>,
+}
+
+/// Settle a child the wait did not see finish, so the parent never ends with
+/// it still running [ORB-15643].
+///
+/// A live child is cancelled: its candidate is kept by its own failure
+/// handoff and its task goes back to the backlog naming the timeout. The
+/// entry stays `timeout`, with an error that leads with `child_timeout` and
+/// names what was kept. A child that finished after the wait's last look, or
+/// while it was being cancelled, reports its real outcome instead.
+fn stop_unfinished_child(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    parent_run_id: Option<&str>,
+    child_run_id: &str,
+    entry: Value,
+) -> (Value, Option<CancelledChild>) {
+    if !child_is_live(runtime, child_run_id) {
+        // The entry's `timeout` may be the wait's projection onto a child
+        // that settled after its last look; report what it settled as.
+        let settled = observe_settled_child(runtime, child_run_id).unwrap_or(entry);
+        return (settled, None);
+    }
+    let waited = match input.get("timeout_seconds") {
+        Some(Value::Number(seconds)) => format!("{seconds} s"),
+        Some(Value::String(seconds)) => format!("{seconds} s"),
+        _ => "its wait deadline".to_string(),
+    };
+    let reason = format!(
+        "{CHILD_TIMEOUT_ERROR_CODE}: parent run {} stopped waiting for child run {child_run_id} \
+         after {waited}",
+        parent_run_id.unwrap_or("-"),
+    );
+    let mut stopped = entry;
+    match runtime.cancel_timed_out_child(child_run_id, &reason) {
+        Ok(result) if result.outcome == "cancelled" => {
+            let handoff = runtime
+                .read_run_state(child_run_id)
+                .ok()
+                .flatten()
+                .and_then(|state| state.failure_activity_checkpoint)
+                .map(|checkpoint| checkpoint.output);
+            let kept = handoff
+                .as_ref()
+                .map_or_else(|| "it kept no candidate".to_string(), kept_clause);
+            stopped["status"] = Value::String("timeout".to_string());
+            stopped["error"] =
+                Value::String(format!("{reason}; the child was cancelled and {kept}"));
+            let candidate = handoff.as_ref().and_then(kept_candidate);
+            (stopped, Some(CancelledChild { candidate }))
+        }
+        // The child reached its own terminal state first.
+        Ok(_) => (
+            observe_settled_child(runtime, child_run_id).unwrap_or(stopped),
+            None,
+        ),
+        Err(error) => {
+            stopped["status"] = Value::String("timeout".to_string());
+            stopped["error"] =
+                Value::String(format!("{reason}; cancelling the child failed: {error}"));
+            (stopped, None)
+        }
+    }
+}
+
+/// The settled child's own wait entry, read without waiting.
+fn observe_settled_child(runtime: &OrbitRuntime, child_run_id: &str) -> Option<Value> {
+    runtime
+        .wait_pipeline_runs(&[child_run_id.to_string()], 0, 1, None)
+        .ok()
+        .and_then(|result| result.results.into_iter().next())
+        .and_then(|entry| serde_json::to_value(entry).ok())
 }
 
 /// The wait entry fields a parent step, guard or reader uses. The child's

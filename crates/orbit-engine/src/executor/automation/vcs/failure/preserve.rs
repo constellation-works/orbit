@@ -435,6 +435,80 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
     Ok(output)
 }
 
+/// Keep the candidate of a blocking child its parent stopped waiting for
+/// ([`CHILD_TIMEOUT_ERROR_CODE`](orbit_types::workflow::CHILD_TIMEOUT_ERROR_CODE)).
+///
+/// The parent's wait expired and it cancelled this run, so nothing judged the
+/// candidate. It is kept as an upgrade refusal keeps it: what the run left is
+/// committed on its branch, carried to its durable ref and recorded in the
+/// task's history, and no PR is opened. A review the cancel stopped is the
+/// exception: its reviewer's edits are the cancellation's own repair commit,
+/// so the candidate is the reviewed head and nothing else is committed. The
+/// task's status is not written here: the cancellation returns it to the
+/// backlog naming the timeout and this candidate, and its next run resumes it.
+pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    review_stopped: bool,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let (head_sha, committed_files) = if review_stopped {
+        let head = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+        (head.trim().to_string(), Vec::new())
+    } else {
+        commit_failure_candidate(host, run_id, workspace_path, task)?
+    };
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let held = carry_held_candidate(
+        host,
+        task,
+        run_id,
+        failed_step_id,
+        &branch,
+        &head_sha,
+        workspace_path,
+    )?;
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            append_history: vec![held_history(&held)],
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!(
+                    "## Wait timeout\n\nRun `{run_id}` was cancelled at `{failed_step_id}`: \
+                     {}. Nothing judged the candidate, so no repair or review budget was spent \
+                     and nothing was published. The candidate `{head_sha}` is committed on \
+                     branch `{branch}`, and the task's next run resumes it.\n\n{}",
+                    error_message.trim(),
+                    held_place(&held)
+                ),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+    let mut output = json!({
+        "phase": "failure_handoff",
+        "decision": "held_child_timeout",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "committed_files": committed_files,
+        "candidate_preserved": true,
+        "pr_created": false,
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    });
+    insert_carry(&mut output, &held);
+    Ok(output)
+}
+
 /// The failures a hold recorded, as a Markdown section of the hold comment
 /// [ORB-15374], or nothing for a hold that records none.
 fn failing_on_base(failures: &orbit_types::workflow::BaselineRedFailures) -> String {

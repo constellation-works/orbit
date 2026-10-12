@@ -308,6 +308,7 @@ fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_lega
                 source: "fixture",
                 reason: Some("preserve the candidate for later"),
                 block_task: false,
+                keep_candidate: false,
             },
             false,
             |_| unreachable!("pending run must not signal its owner"),
@@ -349,6 +350,7 @@ fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_lega
                 source: "fixture",
                 reason: Some("keep the old blocked behavior"),
                 block_task: true,
+                keep_candidate: false,
             },
             false,
             |_| unreachable!("pending run must not signal its owner"),
@@ -398,6 +400,7 @@ fn cancellation_policy_is_durable_before_the_owner_is_signalled() {
                 source: "fixture",
                 reason: Some("worker saw the cancel request"),
                 block_task: false,
+                keep_candidate: false,
             },
             false,
             |_| {
@@ -573,6 +576,7 @@ fn forced_pull_cancel_releases_admissions_persisted_during_stop_and_keeps_inheri
                 source: "fixture",
                 reason: None,
                 block_task: true,
+                keep_candidate: false,
             },
             true,
             |_| {
@@ -650,6 +654,7 @@ fn forced_pull_cancel_stops_a_late_launch_without_touching_another_live_drains_a
                 source: "fixture",
                 reason: None,
                 block_task: true,
+                keep_candidate: false,
             },
             true,
             |_| {
@@ -743,6 +748,7 @@ fn forced_local_cancel_handles_children_persisted_during_stop_and_preserves_othe
                 source: "fixture",
                 reason: None,
                 block_task: true,
+                keep_candidate: false,
             },
             true,
             |_| {
@@ -839,6 +845,7 @@ fn forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_a
                     source: "fixture",
                     reason: None,
                     block_task,
+                    keep_candidate: false,
                 },
                 true,
                 |_| {
@@ -921,6 +928,7 @@ fn cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child() 
                     source: "fixture",
                     reason: None,
                     block_task,
+                    keep_candidate: false,
                 },
                 false,
                 |_| Ok("confirmed_fixture_stop".into()),

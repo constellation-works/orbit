@@ -30,6 +30,11 @@ pub const REVIEW_DECISION_PENDING_ERROR_CODE: &str = "review_decision_pending";
 /// because a child it waited on was cancelled.
 pub const CHILD_CANCELLED_ERROR_CODE: &str = "child_cancelled";
 
+/// Error code of a blocking child its parent cancelled because the parent's
+/// wait on it expired. The child's failure handoff keeps its candidate under
+/// this code, and the parent's wait result leads its error with it.
+pub const CHILD_TIMEOUT_ERROR_CODE: &str = "child_timeout";
+
 /// The leaf failure a cascaded parent failure echoes.
 ///
 /// Every field is always serialized, null when unknown, so readers can rely
