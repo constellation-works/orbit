@@ -1,4 +1,4 @@
-//! Crew admission, optional-property diagnostics and workflow lane aliases.
+//! Crew admission, optional-property diagnostics and the workflow default lane.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,7 +18,6 @@ use super::compatibility::reject_retired_crew_backend;
 use super::config::ResolvedConfig;
 use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::raw::RawCrewEntry;
-use crate::registry::{DEFAULT_WORKFLOW_SYSTEM_CREW, LEGACY_WORKFLOW_SYSTEM_CREW};
 
 /// An optional per-crew setting that was present in `config.toml` but dropped
 /// at admission because it had no safe typed value.
@@ -65,19 +64,38 @@ impl IgnoredCrewProperty {
     }
 }
 
-/// A workflow lane key (`workflow.default_crew` / `workflow.system_crew`)
-/// that names a disabled crew. Loading still succeeds — unrelated commands
-/// keep working — but dispatch on that lane refuses, so `orbit doctor`
-/// reports it ahead of time.
+/// The crew name the retired system lane used [ORB-15663].
+///
+/// Shipped templates and job steps named `crew: system`, which an alias
+/// resolved onto `workflow.system_crew`. System work now draws from the
+/// complexity pools like every other task. While no `[crews.system]` table
+/// exists, a template, task or job step that still names it is routed
+/// through the complexity pool for its work and warned about with
+/// [`RETIRED_SYSTEM_CREW_WARNING`]; a configured `[crews.system]` is an
+/// ordinary crew.
+pub const RETIRED_SYSTEM_CREW: &str = "system";
+
+/// Warning logged whenever a retired `system` crew reference is routed
+/// through the complexity pools instead.
+pub const RETIRED_SYSTEM_CREW_WARNING: &str = "crew `system` is retired and routes through \
+     workflow.<tier>_complexity_crews for the work's complexity; remove the crew name, or \
+     name a configured crew";
+
+/// Whether `name` is the retired `system` crew rather than a crew `crews`
+/// defines.
+pub fn names_retired_system_crew(name: &str, crews: &BTreeMap<String, Crew>) -> bool {
+    name.trim() == RETIRED_SYSTEM_CREW && !crews.contains_key(RETIRED_SYSTEM_CREW)
+}
+
+/// `workflow.default_crew` naming a disabled crew. Loading still succeeds —
+/// unrelated commands keep working — but dispatch on that lane refuses, so
+/// `orbit doctor` reports it ahead of time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisabledLaneCrew {
     /// The `workflow.*` key that selects the crew.
     pub key: &'static str,
     /// Crew name the key resolves to.
     pub crew: String,
-    /// Crew table whose `enabled` flag turns the lane back on. Differs from
-    /// `crew` only when `system` mirrors another crew.
-    pub enable_target: String,
 }
 
 impl DisabledLaneCrew {
@@ -86,7 +104,7 @@ impl DisabledLaneCrew {
         format!(
             "{} names {}; dispatch on that lane is refused",
             self.key,
-            disabled_crew_subject(&self.crew, &self.enable_target)
+            disabled_crew_subject(&self.crew)
         )
     }
 
@@ -94,60 +112,40 @@ impl DisabledLaneCrew {
     pub fn remediation(&self) -> String {
         format!(
             "orbit config set crews.{}.enabled true (or point {} at an enabled crew)",
-            self.enable_target, self.key
+            self.crew, self.key
         )
     }
 }
 
 /// Refusal text for dispatching a disabled crew: names the crew, the crew
-/// table that disables it, and the one-line edit that enables it. `mirrors` is
-/// the crew the synthesized `system` entry copies, when it is one.
-pub fn disabled_crew_message(crew: &str, mirrors: Option<&str>) -> String {
-    let target = mirrors.unwrap_or(crew);
+/// table that disables it, and the one-line edit that enables it.
+pub fn disabled_crew_message(crew: &str) -> String {
     format!(
-        "{}; enable it with `orbit config set crews.{target}.enabled true` (or set \
-         `enabled = true` in [crews.{target}]), or select an enabled crew",
-        disabled_crew_subject(crew, target)
+        "{}; enable it with `orbit config set crews.{crew}.enabled true` (or set \
+         `enabled = true` in [crews.{crew}]), or select an enabled crew",
+        disabled_crew_subject(crew)
     )
 }
 
-fn disabled_crew_subject(crew: &str, target: &str) -> String {
-    if crew == target {
-        format!("crew `{crew}`, which is disabled ([crews.{crew}] enabled = false)")
-    } else {
-        format!(
-            "crew `{crew}`, which mirrors crew `{target}`; `{target}` is disabled \
-             ([crews.{target}] enabled = false)"
-        )
-    }
+fn disabled_crew_subject(crew: &str) -> String {
+    format!("crew `{crew}`, which is disabled ([crews.{crew}] enabled = false)")
 }
 
 impl ResolvedConfig {
     /// Lane keys whose crew is disabled. Only a crew this registry defines can
     /// be reported; an unknown name already fails elsewhere.
     pub fn disabled_lane_crews(&self) -> Vec<DisabledLaneCrew> {
-        [
-            ("workflow.default_crew", self.default_crew.as_deref()),
-            ("workflow.system_crew", Some(self.system_crew.as_str())),
-        ]
-        .into_iter()
-        .filter_map(|(key, name)| {
-            let crew = self.crews.get(name?)?;
-            if crew.enabled {
-                return None;
-            }
-            let enable_target = if crew.name == DEFAULT_WORKFLOW_SYSTEM_CREW {
-                self.system_crew_alias.clone()
-            } else {
-                None
-            };
-            Some(DisabledLaneCrew {
+        let key = "workflow.default_crew";
+        self.default_crew
+            .as_deref()
+            .and_then(|name| self.crews.get(name))
+            .filter(|crew| !crew.enabled)
+            .map(|crew| DisabledLaneCrew {
                 key,
                 crew: crew.name.clone(),
-                enable_target: enable_target.unwrap_or_else(|| crew.name.clone()),
             })
-        })
-        .collect()
+            .into_iter()
+            .collect()
     }
 }
 
@@ -168,13 +166,6 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
         ("pi", PI_DEFAULT_MODEL, "pi"),
         ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
-        // [ORB-10877] Shipped job steps name `system` directly, so the
-        // built-in set used by a config with no `[crews]` table must define it
-        // or those pipelines fail validation. A seeded config omits this table
-        // and names a real cheap-tier crew in `workflow.system_crew` instead;
-        // the claude tier here matches the family the built-in `default_crew`
-        // already assumes.
-        (DEFAULT_WORKFLOW_SYSTEM_CREW, CLAUDE_DEFAULT_WEAK, "claude"),
     ] {
         crews.insert(
             name.to_string(),
@@ -231,56 +222,6 @@ pub(crate) fn crews_from_raw(
         }
     }
     Ok((crews, ignored))
-}
-
-/// [ORB-10877] Shipped job steps name the `system` crew directly so the
-/// definition says which crew does the work. A seeded config has no
-/// `[crews.system]` table — `orbit init` names a real crew in
-/// `workflow.system_crew` instead — and neither does a config written before
-/// that key existed, so resolve the name rather than failing those hosts at
-/// dispatch.
-///
-/// `configured` is `workflow.system_crew`, which is how such a config already
-/// says where system work belongs. A defined configured crew wins. For the two
-/// names Orbit itself has used for this lane (`system` and legacy `qa`), fall
-/// back to `qa` and then the already-validated default crew. That final fallback
-/// keeps pre-system Gemini- and Grok-only configs portable: those versions never
-/// seeded `qa`, but they did seed their family default. Unknown custom names do
-/// not receive this compatibility fallback, so a typo still fails closed at
-/// dispatch. An explicit `[crews.system]` always wins.
-///
-/// Returns the name of the mirrored crew. The alias copies that crew's
-/// `enabled` flag, so a refusal can name the table that actually disables it.
-pub(super) fn alias_system_crew(
-    crews: &mut BTreeMap<String, Crew>,
-    configured: &str,
-    default_crew: Option<&str>,
-) -> Option<String> {
-    if crews.contains_key(DEFAULT_WORKFLOW_SYSTEM_CREW) {
-        return None;
-    }
-    let source = crews.get(configured).cloned().or_else(|| {
-        if !matches!(
-            configured,
-            DEFAULT_WORKFLOW_SYSTEM_CREW | LEGACY_WORKFLOW_SYSTEM_CREW
-        ) {
-            return None;
-        }
-        crews
-            .get(LEGACY_WORKFLOW_SYSTEM_CREW)
-            .or_else(|| default_crew.and_then(|name| crews.get(name)))
-            .cloned()
-    });
-    let source = source?;
-    let mirrored = source.name.clone();
-    crews.insert(
-        DEFAULT_WORKFLOW_SYSTEM_CREW.to_string(),
-        Crew {
-            name: DEFAULT_WORKFLOW_SYSTEM_CREW.to_string(),
-            ..source
-        },
-    );
-    Some(mirrored)
 }
 
 fn normalized_crew_description(raw: Option<&str>) -> Option<String> {

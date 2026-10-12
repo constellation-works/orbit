@@ -128,6 +128,12 @@ pub(super) fn historical_overrides(
         // The historical comparison above proves these differences are all
         // upstream body changes, rather than local edits.
         overrides.body_fields.clear();
+        // [ORB-15663] Shipped bodies once named the retired `system` crew;
+        // that default is an upstream change too, so the template now routes
+        // through its complexity pool. A settings-table crew still wins below.
+        if overrides.settings.crew.as_deref() == Some(orbit_config::RETIRED_SYSTEM_CREW) {
+            overrides.settings.crew = None;
+        }
         // Keep explicit table entries even if they equal today's default.
         if let Some(settings) = settings {
             overrides.settings.enabled = settings.enabled.or(overrides.settings.enabled);

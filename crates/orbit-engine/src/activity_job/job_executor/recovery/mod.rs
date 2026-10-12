@@ -21,3 +21,8 @@ pub(super) use retry::{StepFailure, recover_or_return_original};
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
+/// The pool step-failure and PR conflict recovery draw their crew from
+/// [ORB-15663]. Medium: recovery diagnoses a failure in work of any tier, so
+/// it is not low work, and the medium pool is the one an unassessed task is
+/// verified on.
+const RECOVERY_CREWS_KEY: &str = "workflow.medium_complexity_crews";

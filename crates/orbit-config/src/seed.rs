@@ -8,10 +8,10 @@
 //!
 //! A seeded file writes every built-in crew. Crews of a detected family get
 //! `enabled = true`; the rest get `enabled = false`, so turning a provider on
-//! later is a one-line edit rather than a re-seed. `workflow.default_crew` and
-//! `workflow.system_crew` each point at an enabled built-in crew; init never
-//! invents a `custom` or `system` crew table whose only purpose is to be
-//! pointed at.
+//! later is a one-line edit rather than a re-seed. `workflow.default_crew`
+//! points at an enabled built-in crew, and the complexity pools name enabled
+//! built-in crews; init never invents a `custom` crew table whose only
+//! purpose is to be pointed at.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -20,7 +20,6 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::write_text_with_parent;
 use orbit_types::identity::Crew;
 
-use crate::registry::DEFAULT_WORKFLOW_SYSTEM_CREW;
 use crate::resolved::default_crews;
 
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default-config.toml");
@@ -60,31 +59,6 @@ const DEFAULT_CREW_BY_FAMILY: &[(&str, &str)] = &[
     ("opencode", "opencode"),
 ];
 
-/// The cheapest built-in crew each family offers, in the order a seeded
-/// config prefers them for the bounded system lane: step-failure recovery,
-/// PR conflict recovery, and the read-only task pilot. That work is
-/// high-volume and low-judgment, so the first available entry becomes
-/// `workflow.system_crew` rather than the family's default crew — seeding a
-/// mid-tier crew there multiplies the cost of every unattended sweep for no
-/// gain.
-///
-/// The order is a preference list, not a strict price sort. Gemini Flash
-/// undercuts both Sonnet and Grok per token but sits later because observed
-/// runs have failed outright on quota; a crew that does not finish costs more
-/// than a pricier one that does. Adjust the order here rather than teaching
-/// callers to special-case a family.
-const SYSTEM_CREW_BY_FAMILY: &[(&str, &str)] = &[
-    ("codex", "luna"),
-    ("claude", "haiku"),
-    ("grok", "grok"),
-    ("antigravity", "antigravity"),
-    ("gemini", "gemini"),
-    ("copilot", "copilot"),
-    ("cursor", "cursor"),
-    ("pi", "pi"),
-    ("opencode", "opencode"),
-];
-
 /// Seeded `workflow.*_complexity_crews` pools, keyed by detected codex/claude
 /// presence: `(codex, claude, [low, medium, hard, xhard])`. A host with
 /// neither starts from empty pools; grok and the Google CLIs are layered on top
@@ -115,10 +89,10 @@ const POOL_KEYS: [&str; 4] = [
 /// Explicit, host-independent inputs for rendering a fresh `config.toml`.
 ///
 /// A seed says which provider families this machine can actually dispatch to
-/// and, optionally, which of the resulting crews an operator chose for the
-/// two workflow lanes. Everything else — the model tier per lane, the crew
-/// table layout, the recommended crew per lane — is config policy and stays
-/// in this crate.
+/// and, optionally, which of the resulting crews an operator chose as the
+/// default crew. Everything else — the crew table layout, the recommended
+/// default crew, the complexity pools — is config policy and stays in this
+/// crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigSeed {
     /// Provider families available on this host. An empty set seeds every
@@ -129,9 +103,6 @@ pub struct ConfigSeed {
     /// Operator-chosen `workflow.default_crew`, by seeded crew name. `None`
     /// takes [`Self::recommended_default_crew`].
     pub default_crew: Option<String>,
-    /// Operator-chosen `workflow.system_crew`, by seeded crew name. `None`
-    /// takes [`Self::recommended_system_crew`].
-    pub system_crew: Option<String>,
 }
 
 impl ConfigSeed {
@@ -149,7 +120,6 @@ impl ConfigSeed {
                 .filter(|family| CREW_FAMILY_PREFERENCE.contains(&family.as_str()))
                 .collect(),
             default_crew: None,
-            system_crew: None,
         }
     }
 
@@ -159,21 +129,12 @@ impl ConfigSeed {
         self
     }
 
-    /// Record the crew an operator chose as `workflow.system_crew`.
-    pub fn with_system_crew(mut self, name: impl Into<String>) -> Self {
-        self.system_crew = Some(name.into());
-        self
-    }
-
     /// The built-in crews this seed writes, keyed by crew name: every one of
-    /// them, enabled exactly when its provider family is available. The
-    /// built-in `system` alias is excluded because a seeded file names its
-    /// system crew through `workflow.system_crew` instead.
+    /// them, enabled exactly when its provider family is available.
     pub fn seeded_crews(&self) -> BTreeMap<String, Crew> {
         let available_families = self.available_families();
         default_crews()
             .into_iter()
-            .filter(|(name, _)| name != DEFAULT_WORKFLOW_SYSTEM_CREW)
             .map(|(name, mut crew)| {
                 crew.enabled = available_families.contains(&crew.assignment.provider.as_str());
                 (name, crew)
@@ -199,22 +160,6 @@ impl ConfigSeed {
                 .find(|(candidate, _)| candidate == family)
                 .map(|(_, crew)| *crew)
         })
-    }
-
-    /// Cheap-tier crews an operator may pick as `workflow.system_crew`, in
-    /// preference order; the first entry is the non-interactive choice.
-    pub fn system_crew_options(&self) -> Vec<&'static str> {
-        SYSTEM_CREW_BY_FAMILY
-            .iter()
-            .filter(|(family, _)| self.has_family(family))
-            .map(|(_, crew)| *crew)
-            .collect()
-    }
-
-    /// System crew name frozen into a newly seeded config when the operator
-    /// chose none.
-    pub fn recommended_system_crew(&self) -> Option<&'static str> {
-        self.system_crew_options().first().copied()
     }
 
     /// The seeded complexity pools `[low, medium, hard, xhard]`, derived from
@@ -258,12 +203,6 @@ impl ConfigSeed {
         self.default_crew
             .clone()
             .or_else(|| self.recommended_default_crew().map(str::to_string))
-    }
-
-    fn effective_system_crew(&self) -> Option<String> {
-        self.system_crew
-            .clone()
-            .or_else(|| self.recommended_system_crew().map(str::to_string))
     }
 }
 
@@ -311,44 +250,35 @@ fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<Str
     Ok(body)
 }
 
-/// The `[workflow]` keys a seed owns: the two lane crews, each naming a crew
-/// the same file defines, and the four complexity pools seeded from the
-/// detected families (empty when no pool rule applies, so an operator still
-/// finds them without reading the docs).
+/// The `[workflow]` keys a seed owns: the default crew, naming a crew the
+/// same file defines, and the four complexity pools seeded from the detected
+/// families (empty when no pool rule applies, so an operator still finds them
+/// without reading the docs).
 pub(crate) fn render_workflow_crew_keys(
     seed: &ConfigSeed,
     crews: &BTreeMap<String, Crew>,
 ) -> Result<String, OrbitError> {
     let mut rendered = String::new();
-    let lanes = [
-        ("default_crew", seed.effective_default_crew()),
-        ("system_crew", seed.effective_system_crew()),
-    ];
-    if lanes.iter().any(|(_, crew)| crew.is_some()) {
-        rendered.push_str(
-            "# `default_crew` runs every task that declares no crew of its own.\n\
-             # `system_crew` runs bounded system work (step-failure recovery, the task\n\
-             # pilot); shipped job steps that name `crew: system` resolve onto it unless\n\
-             # this file defines a crew table literally named `system`. Both name a\n\
-             # crew from the `[crews.<name>]` tables below.\n",
-        );
-    }
-    for (key, crew) in lanes {
-        let Some(name) = crew else {
-            continue;
-        };
+    if let Some(name) = seed.effective_default_crew() {
         if !crews.get(&name).is_some_and(|crew| crew.enabled) {
             return Err(OrbitError::InvalidInput(format!(
-                "workflow.{key} names crew `{name}`, which this host does not seed enabled"
+                "workflow.default_crew names crew `{name}`, which this host does not seed enabled"
             )));
         }
-        rendered.push_str(&format!("{key} = {}\n", toml::Value::String(name)));
+        rendered.push_str(
+            "# `default_crew` runs every task that declares no crew of its own and\n\
+             # whose complexity pool below is empty. It names a crew from the\n\
+             # `[crews.<name>]` tables below.\n",
+        );
+        rendered.push_str(&format!("default_crew = {}\n", toml::Value::String(name)));
     }
     rendered.push_str(
         "# Automatic crew pools by task complexity. Entries are crew names, written\n\
          # `name` or `name:weight` (all bare or all weighted). A task created without\n\
-         # a crew draws from the pool for its complexity; an empty pool routes that\n\
-         # complexity to `default_crew`.\n",
+         # a crew draws from the pool for its complexity, and so does system work:\n\
+         # auto-task templates by their complexity, the task pilot from `low`, and\n\
+         # step-failure and PR conflict recovery from `medium`. An empty pool routes\n\
+         # that complexity to `default_crew`.\n",
     );
     for (key, pool) in POOL_KEYS.into_iter().zip(seed.complexity_pools()) {
         if let Some(name) = pool

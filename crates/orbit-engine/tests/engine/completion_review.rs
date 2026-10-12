@@ -635,10 +635,6 @@ impl RuntimeHost for CompletionReviewHost {
         Ok(output)
     }
 
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        Some("system".to_string())
-    }
-
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }

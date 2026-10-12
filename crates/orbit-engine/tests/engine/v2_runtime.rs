@@ -1708,10 +1708,6 @@ impl RuntimeHost for ReviewerHost {
         }
     }
 
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        Some("system".to_string())
-    }
-
     fn record_reviewer_invocation(
         &self,
         request: &ReviewerInvocationRequest,

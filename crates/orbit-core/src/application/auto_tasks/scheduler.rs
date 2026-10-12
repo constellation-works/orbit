@@ -277,7 +277,7 @@ pub(super) fn mint_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Task, OrbitError> {
-    let mut params = template_params(definition);
+    let mut params = template_params(runtime, definition);
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
     // even after the plugin is removed (design §4.4).
@@ -297,7 +297,10 @@ pub(super) fn mint_task(
     runtime.add_task(params)
 }
 
-pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams {
+pub(crate) fn template_params(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> TaskAddParams {
     let template = &definition.template;
     let mut tags = template.tags.clone();
     tags.push(auto_task_tag(&definition.name));
@@ -318,7 +321,12 @@ pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams 
             .unwrap_or(orbit_types::task::TaskComplexity::Unassessed),
         task_type: Some(template.task_type),
         status: Some(template.status),
-        crew: template.crew.clone(),
+        // A template without a crew mints an unassigned task, which draws
+        // from the complexity pool for its complexity; so does one still
+        // naming the retired `system` crew [ORB-15663].
+        crew: runtime
+            .crew_unless_retired(template.crew.as_deref())
+            .map(str::to_string),
         system_created: true,
         ..TaskAddParams::default()
     }

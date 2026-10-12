@@ -23,7 +23,6 @@ fn configure_crews(fixture: &Fixture) {
         config["crews"][name]["model"] = value(model);
         config["crews"][name]["backend"] = value("cli");
     }
-    config["workflow"]["system_crew"] = value("opus");
     config["operation"]["review_crew"] = value("opus");
     fs::write(&path, config.to_string()).unwrap();
 }
@@ -229,16 +228,14 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         silent["message"],
         "gemini: no usage signal; Orbit learns limits from failures"
     );
-    for lane in ["workflow.system_crew", "operation.review_crew"] {
-        let row = doctor_row(&rows, &format!("provider-limits:{lane}"));
-        assert_eq!(row["status"], "warning", "{row}");
-        let message = row["message"].as_str().unwrap();
-        assert!(
-            message.starts_with(&format!("{lane} 'opus' uses claude"))
-                && message.contains("not gated"),
-            "{row}"
-        );
-    }
+    let lane = "operation.review_crew";
+    let row = doctor_row(&rows, &format!("provider-limits:{lane}"));
+    assert_eq!(row["status"], "warning", "{row}");
+    let message = row["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(&format!("{lane} 'opus' uses claude")) && message.contains("not gated"),
+        "{row}"
+    );
 
     // Doctor providers: the same rows under each provider's executor.
     let providers = fixture.json(&["doctor", "providers", "--json"]);
@@ -265,7 +262,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         .collect::<Vec<_>>();
     assert!(
         checks.contains(&("provider-limits:claude", "warning"))
-            && checks.contains(&("provider-limits:workflow.system_crew", "warning")),
+            && checks.contains(&("provider-limits:operation.review_crew", "warning")),
         "{claude}"
     );
     assert_eq!(

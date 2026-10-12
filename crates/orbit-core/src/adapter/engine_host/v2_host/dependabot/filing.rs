@@ -36,7 +36,6 @@ pub(super) const CODE_TITLE_PREFIX: &str = "[code-scanning-sweep] ";
 const SECRET_TAG: &str = "secret-scanning-sweep";
 pub(super) const SECRET_KEY_PREFIX: &str = "secret-scanning:";
 const SECRET_TITLE_PREFIX: &str = "[secret-scanning-sweep] ";
-pub(super) const SYSTEM_CREW: &str = "system";
 const DEFAULT_MAX_TASKS: u64 = 10;
 const MAX_TASKS: u64 = 50;
 
@@ -92,10 +91,6 @@ where
         .get("skip_when_dependabot_pr_open")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let system_crew = runtime
-        .validate_crew_name(Some(SYSTEM_CREW))
-        .is_ok()
-        .then(|| SYSTEM_CREW.to_string());
 
     let mut pending_tasks = Vec::new();
     let mut skipped_existing = Vec::new();
@@ -316,7 +311,6 @@ where
             snapshot,
             group,
             covered_siblings,
-            crew: system_crew.clone(),
         });
         pending_tasks.push(PendingTask {
             params,
@@ -376,7 +370,6 @@ where
                 "security".to_string(),
             ],
             required_tools: Vec::new(),
-            crew: system_crew.clone(),
             priority: if field(&alert, "validity").eq_ignore_ascii_case("active") {
                 TaskPriority::Critical
             } else {

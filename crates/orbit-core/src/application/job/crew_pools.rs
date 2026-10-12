@@ -304,10 +304,15 @@ impl OrbitRuntime {
                 "default".to_string(),
             ));
         }
-        if task.crew.as_deref().and_then(non_empty).is_some() {
+        // A task minted with the retired `system` crew routes like an
+        // unassigned one [ORB-15663].
+        if let Some(crew) = self
+            .crew_unless_retired(task.crew.as_deref())
+            .and_then(non_empty)
+        {
             return Ok((
                 vec![sole_candidate(
-                    self.resolve_crew_for_task(None, task.crew.as_deref())?,
+                    self.resolve_crew_for_task(None, Some(crew))?,
                 )],
                 "task.crew".to_string(),
             ));
@@ -562,22 +567,80 @@ impl OrbitRuntime {
 impl OrbitRuntime {
     /// The crew a `final_recovery` activity runs as: one draw from
     /// `workflow.final_recovery_crews`, frozen in the executing run's state.
-    /// Dispatch supplies that identity as `job_run_id` when an explicit
-    /// `run_id` names the originating failure; otherwise `run_id` is the
-    /// executing run. A follower's originating state need not exist here.
     ///
     /// The first dispatch draws over the enabled members this run's
-    /// `allowed_crews` permits and records the choice in the same run-state
-    /// transaction that reads it, so two racing dispatches cannot record
-    /// different crews. Every later dispatch of the key in this run, and every
-    /// resume seeded from it, reuses the record even if the pool has since
-    /// changed; the caller's allowlist gate still applies to the frozen crew.
+    /// `allowed_crews` permits. Every later dispatch of the key in this run,
+    /// and every resume seeded from it, reuses the record even if the pool
+    /// has since changed; the caller's allowlist gate still applies to the
+    /// frozen crew.
     pub(crate) fn final_recovery_crew(
         &self,
         input: &Value,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Crew, OrbitError> {
         let source = FINAL_RECOVERY_CREWS_KEY;
+        self.frozen_activity_crew(input, source, &mut |allowlist| {
+            let candidates = self.final_recovery_candidates()?;
+            let candidates = permitted_candidates(candidates, source, allowlist)?;
+            let selected = weighted_draw(&candidates, source, random)?;
+            Ok(activity_crew_draw(selected, source, &candidates))
+        })
+    }
+
+    /// The crew system work without a task runs as [ORB-15663]: the task
+    /// pilot, step-failure and PR conflict recovery name the complexity pool
+    /// they draw from as `workflow.<tier>_complexity_crews`, and draw once per
+    /// run, frozen under that key like a final-recovery draw.
+    ///
+    /// The draw keeps the pool's weights and skips disabled crews, then the
+    /// members this run's `allowed_crews` excludes. Crews at one of this
+    /// host's provider limits are skipped while any member is left; when every
+    /// member is limited the draw stays as it was and its source names the
+    /// limit. An empty or wholly disabled pool falls back to
+    /// `workflow.default_crew`, as an unassigned task does, and the frozen
+    /// record's source says so.
+    pub(crate) fn complexity_pool_activity_crew(
+        &self,
+        input: &Value,
+        complexity: TaskComplexity,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<Crew, OrbitError> {
+        let key = complexity_crews_key(complexity);
+        self.frozen_activity_crew(input, &key, &mut |allowlist| {
+            let (candidates, source) = match self.configured_complexity_pool(complexity)? {
+                Some(candidates) => (candidates, key.clone()),
+                None => {
+                    tracing::warn!(
+                        pool = %key,
+                        "the pool is empty or wholly disabled; this run's activity crew falls \
+                         back to workflow.default_crew",
+                    );
+                    (
+                        vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
+                        format!("workflow.default_crew ({key} is empty)"),
+                    )
+                }
+            };
+            let candidates = permitted_candidates(candidates, &source, allowlist)?;
+            let (candidates, source) = self.provider_unlimited_candidates(candidates, source);
+            let selected = weighted_draw(&candidates, &source, random)?;
+            Ok(activity_crew_draw(selected, &source, &candidates))
+        })
+    }
+
+    /// Run `draw` once per run and `key`, freezing its record in the executing
+    /// run's state. Dispatch supplies that identity as `job_run_id` when an
+    /// explicit `run_id` names an originating failure; otherwise `run_id` is
+    /// the executing run. A follower's originating state need not exist here.
+    ///
+    /// The first dispatch records its draw in the same run-state transaction
+    /// that reads it, so two racing dispatches cannot record different crews.
+    fn frozen_activity_crew(
+        &self,
+        input: &Value,
+        key: &str,
+        draw: &mut dyn FnMut(Option<&CrewAllowlist>) -> Result<ActivityCrewDraw, OrbitError>,
+    ) -> Result<Crew, OrbitError> {
         let run_id = input
             .get("job_run_id")
             .or_else(|| input.get("run_id"))
@@ -585,7 +648,7 @@ impl OrbitRuntime {
             .and_then(non_empty)
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
-                    "an activity crew drawn from `{source}` needs the input's executing \
+                    "an activity crew drawn from `{key}` needs the input's executing \
                      `job_run_id` or `run_id` to freeze the draw"
                 ))
             })?;
@@ -595,41 +658,54 @@ impl OrbitRuntime {
             .stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
-                if let Some(frozen) = state.activity_crew_draws.get(source) {
+                if let Some(frozen) = state.activity_crew_draws.get(key) {
                     drawn = Some(frozen.clone());
                     return Ok(());
                 }
-                let candidates = self.final_recovery_candidates()?;
-                let candidates = permitted_candidates(candidates, source, allowlist.as_ref())?;
-                let selected = weighted_draw(&candidates, source, random)?;
-                let draw = ActivityCrewDraw {
-                    crew: selected.crew.name.clone(),
-                    source: source.to_string(),
-                    eligible_pool: candidates
-                        .iter()
-                        .map(|candidate| ActivityCrewPoolMember {
-                            name: candidate.crew.name.clone(),
-                            weight: candidate.weight,
-                        })
-                        .collect(),
-                };
+                let record = draw(allowlist.as_ref())?;
                 state
                     .activity_crew_draws
-                    .insert(source.to_string(), draw.clone());
-                drawn = Some(draw);
+                    .insert(key.to_string(), record.clone());
+                drawn = Some(record);
                 Ok(())
             })?;
         if update != RunStateUpdate::Updated {
             return Err(OrbitError::InvalidInput(format!(
-                "run '{run_id}' has no persisted state to freeze its `{source}` draw in"
+                "run '{run_id}' has no persisted state to freeze its `{key}` draw in"
             )));
         }
         let draw = drawn.ok_or_else(|| {
             OrbitError::Execution(format!(
-                "`{source}` draw for run '{run_id}' did not run inside its state update"
+                "`{key}` draw for run '{run_id}' did not run inside its state update"
             ))
         })?;
         self.resolve_crew_for_task(Some(&draw.crew), None)
+    }
+
+    /// `candidates` without the crews at one of this host's provider limits,
+    /// with `source` naming the skipped crews. When every candidate is
+    /// limited, or none is, they are returned as they were.
+    fn provider_unlimited_candidates(
+        &self,
+        candidates: Vec<CrewCandidate>,
+        source: String,
+    ) -> (Vec<CrewCandidate>, String) {
+        let gate = self.provider_limit_gate(chrono::Utc::now());
+        let (limited, unlimited): (Vec<_>, Vec<_>) = candidates
+            .iter()
+            .cloned()
+            .partition(|candidate| gate.limit_for(&candidate.crew).is_some());
+        if limited.is_empty() {
+            return (candidates, source);
+        }
+        let detail = gate.skipped(limited.iter().map(|candidate| &candidate.crew));
+        if unlimited.is_empty() {
+            return (
+                candidates,
+                format!("{source}; provider limit, none skipped: {detail}"),
+            );
+        }
+        (unlimited, format!("{source}; provider limit: {detail}"))
     }
 
     /// The enabled members of `workflow.final_recovery_crews`, each with its
@@ -682,6 +758,38 @@ fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
 
 fn auto_task_id(input: &Value) -> Option<&str> {
     singular_task_id_from_input(input)
+}
+
+/// The configuration key of the complexity pool for `complexity`, as an
+/// activity's `crew_config_key` names it [ORB-15663].
+pub(crate) fn complexity_crews_key(complexity: TaskComplexity) -> String {
+    format!("workflow.{complexity}_complexity_crews")
+}
+
+/// The complexity whose pool `key` names, or `None` for any other key.
+pub(crate) fn complexity_of_crews_key(key: &str) -> Option<TaskComplexity> {
+    COMPLEXITIES
+        .into_iter()
+        .find(|complexity| complexity_crews_key(*complexity) == key)
+}
+
+/// The run-state record of an activity crew draw over `candidates`.
+fn activity_crew_draw(
+    selected: &CrewCandidate,
+    source: &str,
+    candidates: &[CrewCandidate],
+) -> ActivityCrewDraw {
+    ActivityCrewDraw {
+        crew: selected.crew.name.clone(),
+        source: source.to_string(),
+        eligible_pool: candidates
+            .iter()
+            .map(|candidate| ActivityCrewPoolMember {
+                name: candidate.crew.name.clone(),
+                weight: candidate.weight,
+            })
+            .collect(),
+    }
 }
 
 fn sole_candidate(crew: Crew) -> CrewCandidate {

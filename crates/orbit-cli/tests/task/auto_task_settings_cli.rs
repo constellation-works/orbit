@@ -210,7 +210,11 @@ fn settings_only_fork_migrates_and_a_body_fork_is_preserved_and_reported() {
     // the default and re-crewed it, colliding with the bundled name.
     let forked = bundled
         .replacen("enabled: false", "enabled: true", 1)
-        .replacen("crew: system", "crew: opus", 1);
+        .replacen(
+            "  complexity: low\n",
+            "  complexity: low\n  crew: opus\n",
+            1,
+        );
     assert_ne!(forked, bundled);
     fs::write(&settings_fork, &forked).unwrap();
     set_manifest_digest(&dir, "doc-duties", None);

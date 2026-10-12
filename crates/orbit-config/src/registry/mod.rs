@@ -17,16 +17,6 @@ const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const SECURITY_ALERT_SEVERITIES: &[&str] = &["low", "moderate", "high", "critical"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
-/// Built-in name of the bounded system lane and the default value of
-/// `workflow.system_crew`. Shipped job steps name this crew directly, and a
-/// seeded config defines no `[crews.system]` table — `orbit init` points
-/// `workflow.system_crew` at a real cheap-tier crew instead — so the name is
-/// resolved onto that crew at load; see `resolved::crew::alias_system_crew`.
-pub(crate) const DEFAULT_WORKFLOW_SYSTEM_CREW: &str = "system";
-/// The crew that carried the system lane before `system` existed. Still seeded
-/// in its own right; named here because a config written before ORB-10877
-/// defines only this one and must keep resolving system work.
-pub(crate) const LEGACY_WORKFLOW_SYSTEM_CREW: &str = "qa";
 const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
 const CONSTELLATION_DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
 

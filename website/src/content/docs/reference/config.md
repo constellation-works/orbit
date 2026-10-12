@@ -182,14 +182,14 @@ A crew table without `enabled` is enabled. A disabled crew:
   (`enabled` per crew, schema version 3), and the dashboard all show it;
 - is never drawn from a complexity pool. A pool whose members are all disabled
   acts as an empty pool, so the task gets `default_crew`;
-- is refused, never substituted, when a task's `crew`, an explicit crew,
-  `default_crew`, `system_crew`, or a job step's `crew: system` selects it. The
-  error names the crew and the `orbit config set … enabled true` command;
-- is reported by `orbit doctor` when `default_crew` or `system_crew` names it.
-  Config still loads.
+- is refused, never substituted, when a task's `crew`, an explicit crew, or
+  `default_crew` selects it. The error names the crew and the
+  `orbit config set … enabled true` command;
+- is reported by `orbit doctor` when `default_crew` names it. Config still
+  loads.
 
 With no supported agent CLI detected, every crew is seeded disabled and
-`default_crew` and `system_crew` stay unset, so nothing dispatches until you
+`default_crew` stays unset, so nothing dispatches until you
 enable a crew.
 
 `orbit init` also seeds the four `workflow.*_complexity_crews` pools from the
@@ -234,16 +234,22 @@ can still reject a value for a particular model.
 Choose capability with the model first, then use `effort` to tune the reasoning
 budget within it.
 
-### The system crew
+### System work
 
-`[workflow] system_crew` (default `system`) names the crew for system
-activities that Orbit creates at runtime, which have no job step to name a
-crew. The main one is step-failure recovery. `orbit init` points it at the
-cheapest enabled crew of the preferred detected family (`luna` when Codex is
-present, else `haiku`, `grok`, …); interactive init offers those crews by
-name. Shipped job steps that name `crew: system` run on this crew unless you
-define a `[crews.system]` table. System work never inherits a failed task's
-crew or the workspace default.
+Orbit's own work draws its crew from the complexity pools, like a task with no
+crew. Shipped auto-task templates name no crew, so each minted task draws from
+the pool for its complexity; a `template.crew` setting, an explicit template
+crew, and `operation.review_crew` for `delivery-code-review` still win. The
+task pilot draws from `low`, and step-failure and PR conflict recovery from
+`medium`. A run draws once per pool, keeping the pool's weights and skipping
+disabled and usage-limited crews, and records the draw in its state. An empty
+pool falls back to `default_crew`, and the recorded draw says so. Recovery
+never inherits a failed task's crew.
+
+`[workflow] system_crew` is deprecated: it still loads for one release with a
+warning, but is ignored. Orbit no longer defines a built-in `system` crew, so a
+template or job still naming `crew: system` routes through the pools with a
+warning. A `[crews.system]` table you define is an ordinary crew.
 
 ## Settable keys
 
@@ -253,10 +259,9 @@ crew or the workspace default.
 |---|---|
 | `workflow.base_branch` | string · **Default:** `main`<br>Base branch for ship, auto, and the task pilot when the registered workspace has none. |
 | `workflow.default_crew` | string · **Default:** See [Crews](#crews)<br>Crew for a task that names none and gets no override. |
-| `workflow.system_crew` | string · **Default:** `system`<br>Crew for system activities such as step-failure recovery and the task pilot. |
 | `workflow.auto_ship` | bool · **Default:** `false`<br>Opt this workspace in to `orbit run ship-sweep`. The seeded `ship-sweep` routine does not read it; its `enabled:` flag is its switch. |
-| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew. |
-| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew. |
+| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew, and for the task pilot. |
+| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for xhard-complexity tasks with no crew. |
 | `workflow.final_recovery_crews` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. |

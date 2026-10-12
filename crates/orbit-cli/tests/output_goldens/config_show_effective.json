@@ -57,36 +57,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "crews.system.description": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
-    "crews.system.enabled": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
-    "crews.system.model": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
-    "crews.system.provider": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
-    "crews.system.tags": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
     "execution.codex.approval_policy": {
       "scope": "built-in",
       "state": "unset",
@@ -408,12 +378,6 @@
       "shadowed_by": []
     },
     "workflow.resource_throttle.memory_resume_percent": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.system_crew": {
       "scope": "built-in",
       "state": "default",
       "path": null,

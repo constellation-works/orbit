@@ -4340,12 +4340,8 @@ impl RuntimeHost for LifecycleHost {
         })
     }
 
-    /// Conflict recovery dispatched by a job runs on the system route, whose
-    /// crew keeps the activity's inline provider settings.
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        Some("system".to_string())
-    }
-
+    /// Conflict recovery dispatched by a job draws from a complexity pool;
+    /// with no crew registry here it keeps the activity's inline settings.
     fn agent_crew_config_for_input(
         &self,
         _input: &Value,

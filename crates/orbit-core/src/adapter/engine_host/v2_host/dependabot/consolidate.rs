@@ -29,7 +29,7 @@ use super::code_groups::{
     CodeAlertGroup, CodeGroupTaskRequest, cause_key, code_group_task_params, group_alert_numbers,
     group_bounds, group_code_alerts, group_paths,
 };
-use super::filing::{CODE_KEY_PREFIX, CODE_TAG, SYSTEM_CREW, field};
+use super::filing::{CODE_KEY_PREFIX, CODE_TAG, field};
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::bounded_u64;
 
 const DEFAULT_MAX_GROUPS: u64 = 10;
@@ -80,13 +80,9 @@ pub(crate) fn consolidate_code_scanning_tasks(
     let scanned = sources.len();
     let (consolidations, unchanged) = plan(sources);
 
-    let crew = runtime
-        .validate_crew_name(Some(SYSTEM_CREW))
-        .is_ok()
-        .then(|| SYSTEM_CREW.to_string());
     let mut groups = Vec::new();
     for consolidation in consolidations.iter().take(max_groups) {
-        let params = replacement_params(consolidation, crew.clone());
+        let params = replacement_params(consolidation);
         let mut entry = describe(consolidation, &params);
         if apply {
             apply_one(runtime, consolidation, params, &mut entry)?;
@@ -295,13 +291,12 @@ fn apply_one(
     Ok(())
 }
 
-fn replacement_params(consolidation: &Consolidation, crew: Option<String>) -> TaskAddParams {
+fn replacement_params(consolidation: &Consolidation) -> TaskAddParams {
     let snapshot = json!({"repository": {"full_name": consolidation.repository}});
     let mut params = code_group_task_params(&CodeGroupTaskRequest {
         snapshot: &snapshot,
         group: &consolidation.group,
         covered_siblings: &[],
-        crew,
     });
 
     // The sources' own selectors are kept alongside the ones the alert paths

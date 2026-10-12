@@ -54,16 +54,15 @@
 # qualifying, warning-free proposed task.
 #
 # Crew resolution
-# - The pilot step names the `system` crew directly, so this definition states
-#   which crew does the work instead of deferring it to a config key. Config
-#   loading resolves that name onto whichever crew `workflow.system_crew`
-#   names — `orbit init` points it at the cheapest seeded crew of the
-#   detected family — so the name resolves on any host rather than pinning a
-#   family the way a `luna` or `sonnet` here would.
-# - Change the model behind these pilots with `workflow.system_crew`, or with
-#   an explicit `[crews.system]` table, which wins. A config written before
-#   that key existed resolves the name onto `qa` when that crew exists.
-# - There is deliberately no per-run `crew` job input: the step-level crew
+# - The pilot steps name `workflow.low_complexity_crews` as their
+#   `crew_config_key`: piloting reads tasks and writes a bounded proposal, so it
+#   is low work. The run draws one crew from that pool on the first pilot
+#   dispatch, keeping the pool's weights and skipping disabled and
+#   provider-limited crews, and every pilot and repair pilot of the run reuses
+#   it; `orbit run show` records the draw. An empty pool falls back to
+#   `workflow.default_crew`, and the recorded draw says so.
+# - Change the model behind these pilots by editing that pool.
+# - There is deliberately no per-run `crew` job input: the step-level pool key
 #   below already wins over run input during dispatch, so such an input could
 #   never take effect.
 
@@ -127,7 +126,7 @@ spec:
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
             # See the crew-resolution note at the top of this file.
-            crew: system
+            crew_config_key: workflow.low_complexity_crews
       fan_in:
         join:
           mode: any
@@ -161,7 +160,7 @@ spec:
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
-            crew: system
+            crew_config_key: workflow.low_complexity_crews
       fan_in:
         join:
           mode: any

@@ -501,7 +501,6 @@ template:
   acceptance_criteria: [Exercise affected user paths, Record coverage and verified findings]
   task_type: chore
   tags: [qa-sweep, no-diff-expected]
-  crew: system
   status: backlog
 ```
 
@@ -528,7 +527,6 @@ template:
   acceptance_criteria: [Examine captured obligations, Record range and verified findings]
   task_type: chore
   tags: [code-review, no-diff-expected]
-  crew: system
   status: backlog
 ```
 

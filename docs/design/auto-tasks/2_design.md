@@ -390,7 +390,7 @@ hardcoded `agent-main`). Each history entry also
 records its source integration commit, the original settings and body tags,
 and its `#` lines. The original tags, crew and complexity distinguish body
 edits from upstream changes; tag removal, clearing a shipped crew or complexity,
-and added notes remain body edits. Existing settings-table overrides take
+and added notes remain body edits. A historical copy's shipped `crew: system`, retired with the system lane [ORB-15663], is an upstream change: migration drops it rather than carrying it into the settings table, so the template draws from its complexity pool; an explicit settings-table crew still wins. Existing settings-table overrides take
 precedence and keep their edit stamp. A recognized historical copy upgrades
 to the current bundled body, and doctor calls it a **stale shipped body (will
 upgrade on sync)** rather than a body fork.
@@ -556,7 +556,7 @@ Rust API tests separately exercise the canonical handlers and persisted state.
 ## 6. Concerns & Honest Limitations
 
 The seeded `qa-sweep` definition is disabled by default. When enabled, its
-`50 * * * *` cron mints a backlog task for crew `system` at minute 50 each hour,
+`50 * * * *` cron mints a backlog task from the medium complexity pool at minute 50 each hour,
 dedupes while one remains open, and asks the executor to validate recent changes
 hands-on and file real findings through Orbit. Its `no-diff-expected` tag lets workflow handoff succeed when the
 validation correctly produces only task-side effects.

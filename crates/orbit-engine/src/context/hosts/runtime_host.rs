@@ -977,14 +977,6 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
-    /// Return the configured system crew for a dispatch. The engine injects
-    /// this value into system-activity input immediately before resolving its
-    /// explicit `crew`, rather than deriving a crew from a role or provider.
-    /// Hosts without a configuration layer return `None`.
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        None
-    }
-
     /// Resolve the crew selected for an activity dispatch. The engine passes
     /// rendered activity input when it contains an explicit `crew`; otherwise
     /// it passes the run input so the run's resolved crew is the fallback.

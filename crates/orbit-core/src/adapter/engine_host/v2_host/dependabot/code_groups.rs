@@ -71,7 +71,6 @@ pub(super) struct CodeGroupTaskRequest<'a> {
     pub(super) group: &'a CodeAlertGroup,
     /// Same-cause alerts left out of this task because open work owns them.
     pub(super) covered_siblings: &'a [CoveredAlert],
-    pub(super) crew: Option<String>,
 }
 
 /// The generated per-alert coverage key. This is the identity the sweep has
@@ -161,7 +160,6 @@ pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> Task
         context_files: Vec::new(),
         relations: covering_relations(request.covered_siblings),
         required_tools: Vec::new(),
-        crew: request.crew.clone(),
         priority: priority_for_rank(highest_severity_rank(alerts)),
         complexity: TaskComplexity::Unassessed,
         task_type: Some(TaskType::Bug),

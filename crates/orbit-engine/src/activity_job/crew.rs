@@ -27,7 +27,7 @@ pub struct ResolvedAgentSettings {
 /// selects the crew for a given activity.
 const ALLOWED_CREWS_KEY: &str = "allowed_crews";
 /// Activity input naming the configuration the host resolves the crew from
-/// (`workflow.system_crew`, `workflow.final_recovery_crews`).
+/// (a `workflow.<tier>_complexity_crews` pool, `workflow.final_recovery_crews`).
 const CREW_CONFIG_KEY: &str = "crew_config_key";
 
 /// Resolve one crew assignment for an activity. Explicit activity input wins —
@@ -55,10 +55,9 @@ pub fn resolve_crew_settings(
 
 /// Carry the run's crew allowlist onto whichever input selects the crew.
 ///
-/// [ORB-11242] An activity that names its own crew — including the
-/// `workflow.system_crew` injection below — would otherwise be resolved from
-/// an input that never saw the run's restriction, which is exactly how a
-/// system override reaches a provider the operator excluded. The run input is
+/// [ORB-11242] An activity that names its own crew or pool would otherwise be
+/// resolved from an input that never saw the run's restriction, which is
+/// exactly how an activity override reaches a provider the operator excluded. The run input is
 /// the authority and always overwrites, so an activity input cannot widen it.
 fn with_run_crew_allowlist(selected: &Value, run_input: &Value) -> Value {
     let Some(allowed) = run_input.get(ALLOWED_CREWS_KEY) else {
@@ -69,37 +68,6 @@ fn with_run_crew_allowlist(selected: &Value, run_input: &Value) -> Value {
         object.insert(ALLOWED_CREWS_KEY.to_string(), allowed.clone());
     }
     input
-}
-
-/// Add the configured system crew to an activity input that explicitly opts
-/// into the system route. The marker is asset data, while the crew is read
-/// from the runtime host for each dispatch.
-pub fn inject_system_crew_input(
-    host: &dyn RuntimeHost,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    if input.get("system_crew").and_then(Value::as_bool) != Some(true) {
-        return Ok(input.clone());
-    }
-    let crew = host.system_crew_for_dispatch().ok_or_else(|| {
-        DispatchError::JobValidation(
-            "system activity requests `workflow.system_crew`, but this runtime host does not provide that configuration"
-                .to_string(),
-        )
-    })?;
-    let mut input = input.clone();
-    let object = input.as_object_mut().ok_or_else(|| {
-        DispatchError::JobValidation(
-            "system activity requests `workflow.system_crew`, but its input must be an object"
-                .to_string(),
-        )
-    })?;
-    object.insert("crew".to_string(), Value::String(crew));
-    object.insert(
-        CREW_CONFIG_KEY.to_string(),
-        Value::String("workflow.system_crew".to_string()),
-    );
-    Ok(input)
 }
 
 fn explicit_crew(input: &Value) -> Option<&str> {

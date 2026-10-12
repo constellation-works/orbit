@@ -186,8 +186,9 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     }).collect()
 }
 
-/// The enabled crews normal workflow routing can select: the default and
-/// system lanes plus every weighted entry of a complexity pool. `Err` carries
+/// The enabled crews normal workflow routing can select: the default lane
+/// plus every weighted entry of a complexity pool, which system work draws
+/// from too. `Err` carries
 /// the row message when a pool cannot be resolved.
 pub(super) fn routed_crew_names(
     config: &ResolvedConfig,
@@ -197,9 +198,6 @@ pub(super) fn routed_crew_names(
         && routing_selects_crew(config, name)
     {
         names.insert(name.clone());
-    }
-    if routing_selects_crew(config, &config.system_crew) {
-        names.insert(config.system_crew.clone());
     }
     for (complexity, entries) in [
         ("low", &config.complexity_crews.low),

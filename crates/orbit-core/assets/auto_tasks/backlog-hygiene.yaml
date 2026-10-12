@@ -86,7 +86,6 @@ template:
   - orbit.search
   priority: medium
   complexity: medium
-  crew: system
   status: backlog
 dedupe: skip_if_open
 created_by: system

@@ -167,8 +167,7 @@ pub struct CrewProviderLimit {
 /// A lane admission does not gate whose crew's provider is at its limit.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UngatedLaneLimit {
-    /// The setting naming the lane's crew: `workflow.system_crew` or
-    /// `operation.review_crew`.
+    /// The setting naming the lane's crew: `operation.review_crew`.
     pub setting: &'static str,
     pub crew: String,
     pub provider: String,
@@ -186,8 +185,9 @@ pub struct ProviderLimitsView {
     pub providers: Vec<ProviderUsageStatus>,
     /// Each configured crew some live gating reading covers, by name.
     pub crews: Vec<CrewProviderLimit>,
-    /// The system and review lanes whose provider is gated; v1 does not gate
-    /// them, so their runs may fail until the limit lifts.
+    /// The review lane, when every member's provider is gated; v1 does not
+    /// gate it, so its runs may fail until the limit lifts. System work draws
+    /// from the complexity pools, which skip limited crews [ORB-15663].
     pub ungated_lanes: Vec<UngatedLaneLimit>,
     /// Why the store could not be read. Admission then gates nothing, and
     /// the view shows no reading.
@@ -203,13 +203,7 @@ impl ProviderLimitsView {
     ) -> Self {
         let settings = runtime.context.settings();
         let policy = settings.provider_limit();
-        // The synthesized `system` entry mirrors another crew; it is that
-        // crew, not a second one.
-        let crews = settings
-            .crews()
-            .values()
-            .filter(|crew| !(crew.name == "system" && settings.system_crew_alias().is_some()))
-            .collect::<Vec<_>>();
+        let crews = settings.crews().values().collect::<Vec<_>>();
         let mut readings = observations
             .iter()
             .filter_map(|observation| {
@@ -297,10 +291,6 @@ impl ProviderLimitsView {
                 until,
             })
         };
-        let mut ungated_lanes: Vec<UngatedLaneLimit> =
-            lane_limit("workflow.system_crew", settings.system_crew())
-                .into_iter()
-                .collect();
         // A review pool skips its limited members, so it is held only when
         // every member is [ORB-15195].
         let review_pool = &runtime.operation_policy().review_crew.value;
@@ -313,9 +303,11 @@ impl ProviderLimitsView {
                 lane_limit("operation.review_crew", name)
             })
             .collect();
-        if !review_pool.is_empty() && review_limits.len() == review_pool.len() {
-            ungated_lanes.extend(review_limits);
-        }
+        let ungated_lanes = if !review_pool.is_empty() && review_limits.len() == review_pool.len() {
+            review_limits
+        } else {
+            Vec::new()
+        };
 
         Self {
             as_of: now,

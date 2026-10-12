@@ -52,7 +52,7 @@ impl Workspace {
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
         std::fs::write(
             repo.join(".orbit/config.toml"),
-            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nsystem_crew = \"fixture\"\n",
+            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\n",
         )
         .unwrap();
         let git = |args: &[&str]| {

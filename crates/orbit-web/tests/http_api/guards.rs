@@ -308,7 +308,7 @@ fn effective_config_lists_every_crew_setting_and_enabled_auto_task() {
             let global_path = fixture.global.join("config.toml");
             let mut global = std::fs::read_to_string(&global_path).unwrap();
             global.push_str(concat!(
-                "\n[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"sol\"\n",
+                "\n[workflow]\ndefault_crew = \"opus\"\n",
                 "final_recovery_crews = [\"opus:20\", \"sol:100\"]\n",
                 "low_complexity_crews = [\"haiku\", \" haiku \"]\n",
                 "medium_complexity_crews = [\" sol : 2 \"]\n",
@@ -360,8 +360,7 @@ fn effective_config_lists_every_crew_setting_and_enabled_auto_task() {
                     "sol",
                     json!([
                         "workflow.final_recovery_crews",
-                        "workflow.medium_complexity_crews",
-                        "workflow.system_crew"
+                        "workflow.medium_complexity_crews"
                     ]),
                 ),
                 ("grok", json!(["auto-task skill-validation"])),

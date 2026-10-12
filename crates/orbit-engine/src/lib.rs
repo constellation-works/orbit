@@ -46,8 +46,8 @@ pub use activity_job::{
     DispatchError, DispatchOutcome, JobOutcome, LinuxRuntimeWriteAuthority, ResolvedCliExecutor,
     ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2AuditWriter, V2DispatchInput,
     V2SqliteSink, dispatch_error_to_orbit, dispatch_v2_activity, execute_job_with_resume,
-    inject_system_crew_input, load_activity_asset, resolve_crew_settings,
-    resolve_job_catalog_refs_for_execution, validate_job, validate_job_deterministic_actions,
+    load_activity_asset, resolve_crew_settings, resolve_job_catalog_refs_for_execution,
+    validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,

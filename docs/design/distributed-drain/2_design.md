@@ -257,7 +257,8 @@ the task or holds an unrelated record under the same id. Precedence matches a lo
 explicit run `crew`, then the task's crew, then the executor's `workflow.default_crew` only when
 the task names none. A task crew the executor does not configure, or has disabled, fails the leaf
 at run start with an error naming the crew, before `implement_one`. It never falls back to the
-default crew. System-crew activities such as the recovery hooks keep `workflow.system_crew`.
+default crew. Recovery activities such as the recovery hooks draw from the executor's complexity
+pools (`workflow.medium_complexity_crews`), falling back to its `workflow.default_crew`.
 
 **Claimed-mode implementation** ([ORB-13642]). The implementer writes no owner task state. Both
 claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:

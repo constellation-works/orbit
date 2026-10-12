@@ -257,9 +257,6 @@ template:
   - orbit.task.show
   priority: medium
   complexity: medium
-  # The portable system lane is seeded per machine and compatibility-aliased
-  # for configs written before that crew existed.
-  crew: system
   status: backlog
 dedupe: skip_if_open
 created_by: system

@@ -42,7 +42,6 @@ impl Fixture {
             r#"
 [workflow]
 default_crew = "medium_codex"
-system_crew = "medium_codex"
 low_complexity_crews = ["low_lane"]
 medium_complexity_crews = ["medium_codex", "medium_claude"]
 hard_complexity_crews = ["hard_lane"]

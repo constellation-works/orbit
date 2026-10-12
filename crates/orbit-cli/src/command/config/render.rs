@@ -516,7 +516,6 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
             .and_then(|entry| entry.value.as_str().map(str::to_string))
     };
     let default_crew = referenced("workflow.default_crew");
-    let system_crew = referenced("workflow.system_crew");
 
     let mut fields: BTreeMap<String, BTreeMap<String, (String, ConfigValueSourceKind)>> =
         BTreeMap::new();
@@ -558,9 +557,6 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
             let mut annotation = Vec::new();
             if default_crew.as_deref() == Some(name.as_str()) {
                 annotation.push("workflow.default_crew");
-            }
-            if system_crew.as_deref() == Some(name.as_str()) {
-                annotation.push("workflow.system_crew");
             }
             CrewRow {
                 enabled: cell("enabled"),

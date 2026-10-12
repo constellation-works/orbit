@@ -601,7 +601,9 @@ impl OrbitRuntime {
         // here too means CRUD never persists a schedule the scheduler would
         // reject at fire time.
         validate_schedule(&definition.schedule)?;
-        if let Some(crew) = definition.template.crew.as_deref() {
+        // A definition still naming the retired `system` crew stays editable;
+        // its mints route through the complexity pools [ORB-15663].
+        if let Some(crew) = self.crew_unless_retired(definition.template.crew.as_deref()) {
             self.validate_crew_name(Some(crew))?;
         }
         Ok(())

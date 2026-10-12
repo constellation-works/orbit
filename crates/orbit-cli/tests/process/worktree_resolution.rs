@@ -1951,7 +1951,6 @@ template:
   - candidate-probe
   priority: low
   complexity: low
-  crew: system
   status: backlog
 dedupe: skip_if_open
 created_by: system

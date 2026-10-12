@@ -13,7 +13,7 @@ use orbit_core::OrbitError;
 use orbit_registry::workspace_registry::global_orbit_dir;
 
 use super::agent_detect::{DetectedAgents, available_crew_families, detect};
-use super::agent_prompt::{Prompter, StdinPrompter, collect_default_crew, collect_system_crew};
+use super::agent_prompt::{Prompter, StdinPrompter, collect_default_crew};
 
 /// Probe the host and build the seed for `orbit init`.
 ///
@@ -51,8 +51,8 @@ fn config_would_be_written(root_override: Option<&Path>, force: bool) -> Result<
     Ok(force || !resolve_config_path(root_override)?.exists())
 }
 
-/// Prompt for the default crew and, when more than one cheap-tier family is
-/// detected, the system crew; both by seeded crew name. Does not prompt for QA.
+/// Prompt for the default crew by seeded crew name. System work draws from the
+/// seeded complexity pools, so there is no system crew to choose.
 fn collect_interactive_crew_choices(
     detected: &DetectedAgents,
     seed: ConfigSeed,
@@ -61,9 +61,6 @@ fn collect_interactive_crew_choices(
     let mut seed = seed;
     if let Some(default_crew) = collect_default_crew(detected, &seed, prompter)? {
         seed = seed.with_default_crew(default_crew);
-    }
-    if let Some(system_crew) = collect_system_crew(&seed, prompter)? {
-        seed = seed.with_system_crew(system_crew);
     }
     Ok(seed)
 }

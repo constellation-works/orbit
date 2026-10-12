@@ -48,8 +48,7 @@ assuming a value.
 |---|---|
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
-| `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). Shipped `crew: system` steps resolve onto it. |
-| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
+| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too: auto-task templates by complexity, the task pilot from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
 | `review.before_pr` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds (default `false`). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
 | `review.before_landing` | Before-landing review: open the PR first and review it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (default `false`). PR route only. Config load fails while it and `review.before_pr` are both on: one review layer before landing. |
@@ -104,7 +103,7 @@ tags = ["review"]
 ```
 
 Crews layer by name *and* field, so a workspace can override just the model of a
-globally defined crew. A `default_crew` or `system_crew` naming an undefined crew
+globally defined crew. A `default_crew` naming an undefined crew
 fails config load — deliberately, since the alternative is silently dispatching
 to the wrong model.
 
@@ -114,7 +113,7 @@ returns `enabled` per crew) but takes it out
 of execution. Omitting `enabled` means enabled, so older configs are unchanged.
 A disabled crew is never drawn from a complexity pool; a pool whose members are
 all disabled routes the task to `default_crew`, like an empty pool. A task
-`crew`, explicit crew, `default_crew`, `system_crew` or `crew: system` step that
+`crew`, explicit crew or `default_crew` that
 lands on a disabled crew refuses dispatch with an error naming the crew — no
 substitution. Config still loads; `orbit doctor` warns when a lane key names a
 disabled crew. Enable one with:
@@ -126,23 +125,19 @@ orbit config set crews.gemini.enabled true
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,
 Grok, Copilot, Cursor, Pi, OpenCode), with `enabled = true` on the crews whose
-agent CLI it detects and `enabled = false` on the rest, and points the two lane
-keys at enabled crews:
-`workflow.default_crew` is the preferred family's default (`opus` on a Claude
-host) and `workflow.system_crew` is the cheapest tier of the preferred family
-(`luna` when Codex is present, else `haiku`, `grok`, …). Interactive init
-offers those enabled crews by name; `--non-interactive` writes the
-recommendations. Init does not write a `custom` or `system` crew table: the
-`system` name shipped job steps use resolves onto `system_crew` at load, and an
-explicit user-authored `[crews.system]` table wins if one exists. The four
+agent CLI it detects and `enabled = false` on the rest, and points
+`workflow.default_crew` at the preferred family's default (`opus` on a Claude
+host). Interactive init offers the enabled crews by name; `--non-interactive`
+writes the recommendation. Init does not write a `custom` or `system` crew
+table, nor a system-crew key: system work draws from the pools. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
 (Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `sol` /
 `sol` / `astra`; both: `haiku, luna` / `sol, sonnet` / `opus` / `opus, astra`;
 grok joins `medium`, `antigravity` or else `gemini` joins `low`; other families
 leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
-work, run `orbit config set workflow.system_crew <crew>`. With no supported
-agent CLI, every crew is written disabled and no lane key is set, so nothing
+work, edit the complexity pool it draws from. With no supported
+agent CLI, every crew is written disabled and no default crew is set, so nothing
 dispatches until you enable a crew. Which provider CLIs
 this machine can launch, and each executor's sandbox mode:
 

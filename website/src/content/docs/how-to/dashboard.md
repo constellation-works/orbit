@@ -490,11 +490,10 @@ choice list, toggle, number field, or chip list. Each row saves on its own.
   rows are read-only.
 
 **Crews** shows one row per crew with its provider, model, effort, tags, and
-source layer. The crews named by `workflow.default_crew` and
-`workflow.system_crew` are marked. You can add, edit, and delete crews inline,
-with two refusals:
+source layer. The crew named by `workflow.default_crew` is marked. You can
+add, edit, and delete crews inline, with two refusals:
 
-- You cannot delete a crew that either key still names.
+- You cannot delete a crew that key still names.
 - A file that defines any `[crews.*]` table must resolve
   `workflow.default_crew` within itself, so adding the first crew to a file
   with no default crew is refused.

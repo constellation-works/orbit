@@ -33,11 +33,12 @@ enabled = true
 # Config fallback for ship/auto/pilot when no registered workspace
 # base_branch is bound. Override per-invocation with `--base <branch>`.
 base_branch = "main"
-# `orbit init` writes `default_crew`, `system_crew`, and the four
-# `*_complexity_crews` pools at the top of this table when it detects a
-# supported agent CLI, each naming a real crew from the crew tables it seeds.
-# Without those keys Orbit uses the built-in crew registry: `opus` for tasks
-# and its built-in `system` crew for system work.
+# `orbit init` writes `default_crew` and the four `*_complexity_crews` pools
+# at the top of this table when it detects a supported agent CLI, each naming
+# a real crew from the crew tables it seeds. Tasks and system work (auto-task
+# templates, the task pilot, step-failure and PR conflict recovery) draw from
+# the pool for their complexity. Without those keys Orbit uses the built-in
+# crew registry and runs everything on `opus`.
 #
 # Final recovery takes one last look at a task whose run failed after step
 # recovery, using one crew drawn per run from this weighted pool (`name` or

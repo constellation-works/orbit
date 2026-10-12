@@ -128,7 +128,6 @@ fn set_unresolvable_review_crew(fixture: &Fixture) {
 pub(super) fn enable_review_crew(fixture: &Fixture) {
     set_policy(fixture, "crews.sonnet.enabled", "true");
     set_policy(fixture, "workflow.default_crew", REVIEW_CREW);
-    set_policy(fixture, "workflow.system_crew", REVIEW_CREW);
     // Init seeds the complexity pools from the detected families, so doctor
     // would also probe every pooled provider CLI of this host [ORB-14671].
     let pooled = format!("[\"{REVIEW_CREW}\"]");

@@ -44,7 +44,7 @@ promoted a repair; inspect it before submitting anything manually.
 ## Provider limits change during a window
 
 The user excludes a provider from future work but leaves current workers alone.
-Inspect effective crews, including the pilot's explicit `system` crew. Update
+Inspect effective crews, including the complexity pools the pilot and recovery draw from. Update
 queued task crews only within the requested scope. `--allow-crew` permits its
 listed crews; it does not remap excluded tasks or stop workers already running.
 

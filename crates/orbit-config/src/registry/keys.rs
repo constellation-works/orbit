@@ -79,9 +79,10 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
 const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review settings live in \
      [review] (before_pr, before_landing, minutes) and operation.review_crew";
 
-/// Keys retired from the registry whose value is still honoured: loading
-/// translates each into its replacement and warns that it is deprecated
-/// ([`crate::operation`], `resolved::warn_compatibility_keys`), and
+/// Keys retired from the registry that still load: loading translates each
+/// into its replacement ([`crate::operation`]) or, where its note says so,
+/// ignores it, and warns that it is deprecated
+/// (`resolved::warn_compatibility_keys`), and
 /// `orbit config get`/`set` refuse it with this note. A later release makes
 /// them errors; move each to its replacement before then [ORB-13992].
 pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
@@ -96,6 +97,15 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
      delivery-code-review auto-task until its own enabled flag is set (`orbit auto-task \
      toggle delivery-code-review on|off`); none turns neither on. Set [review] before_pr \
      and the auto-task flag instead",
+    ),
+    // [ORB-15663] System work names no lane of its own: auto-task templates,
+    // the task pilot and step-failure / PR conflict recovery draw from the
+    // complexity pools. The key loads and warns, but no longer routes.
+    (
+        "workflow.system_crew",
+        "ignored: system work (auto-task templates, the task pilot, step-failure and PR \
+     conflict recovery) draws its crew from workflow.<tier>_complexity_crews for its \
+     complexity. Delete the key and set those pools instead",
     ),
 ];
 

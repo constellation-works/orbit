@@ -639,9 +639,10 @@ downgrades it to the nearest supported value, and `orbit config set` refuses
 to save a value that load would drop. The per-provider sets are in
 [Configuration](../../reference/config/#reasoning-effort).
 
-`[workflow] system_crew` is a separate crew for system activities Orbit
-creates at runtime, such as step-failure recovery. It never inherits a failed
-task's crew or the workspace default.
+System activities Orbit creates at runtime have no crew of their own. The task
+pilot draws from the `low` complexity pool, and step-failure and PR conflict
+recovery from `medium`, once per run; an empty pool falls back to the default
+crew. Recovery never inherits a failed task's crew.
 
 Moving work to another provider is always explicit: `orbit task update <id>
 --crew <name>`. Orbit never moves a task to a different provider on its own.

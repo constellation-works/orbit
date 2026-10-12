@@ -17,9 +17,10 @@ spec:
     lifecycle, dispatch, or scheduling grant.
   input_schema_json:
     type: object
-    # `crew` is optional here: the pipeline names `system` on the pilot step so
-    # the crew is readable in the job definition, while a direct invocation may
-    # omit it and inherit the run's resolved crew.
+    # `crew` and `crew_config_key` are optional here: the pipeline names
+    # `workflow.low_complexity_crews` on the pilot step so the crew's pool is
+    # readable in the job definition, while a direct invocation may omit both
+    # and inherit the run's resolved crew.
     required: [task_ids, workspace_path, base_branch, inspection_revision, partition_index]
     properties:
       task_ids:
@@ -46,6 +47,8 @@ spec:
       partition_index:
         type: number
       crew:
+        type: string
+      crew_config_key:
         type: string
       repair_attempt:
         type: boolean

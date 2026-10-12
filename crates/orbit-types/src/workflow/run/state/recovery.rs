@@ -36,7 +36,9 @@ pub struct ActivityCrewPoolMember {
 pub struct ActivityCrewDraw {
     /// Canonical crew name the draw selected.
     pub crew: String,
-    /// The configuration the pool came from (`workflow.final_recovery_crews`).
+    /// The configuration the pool came from (`workflow.final_recovery_crews`,
+    /// `workflow.<tier>_complexity_crews`), plus a note when the draw fell
+    /// back to `workflow.default_crew` or met a provider limit.
     pub source: String,
     /// The permitted members and weights the draw ran on, so `run show`
     /// can explain the choice.

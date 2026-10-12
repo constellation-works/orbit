@@ -183,7 +183,7 @@ impl ProviderLimitGate {
     }
 
     /// `<limit>[, <limit>...]; crews <list> skipped` for the limited `crews`.
-    fn skipped<'a>(&self, crews: impl IntoIterator<Item = &'a Crew>) -> String {
+    pub(crate) fn skipped<'a>(&self, crews: impl IntoIterator<Item = &'a Crew>) -> String {
         let mut names = BTreeSet::new();
         let mut limits = Vec::new();
         for crew in crews {
@@ -239,7 +239,10 @@ impl OrbitRuntime {
         {
             return Ok(false);
         }
-        Ok(task.crew.as_deref().and_then(non_empty).is_some())
+        Ok(self
+            .crew_unless_retired(task.crew.as_deref())
+            .and_then(non_empty)
+            .is_some())
     }
 
     /// What `gate` leaves of `task`'s draw over `candidates`, which `source`

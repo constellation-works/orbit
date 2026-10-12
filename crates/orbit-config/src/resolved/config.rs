@@ -12,7 +12,7 @@ use super::compatibility::{
     reject_retired_backend_overrides, reject_stale_agent_tables, removed_keys_present,
     validate_task_artifact_store_from_raw,
 };
-use super::crew::{IgnoredCrewProperty, alias_system_crew, crews_from_raw, default_crews};
+use super::crew::{IgnoredCrewProperty, crews_from_raw, default_crews};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
 use crate::layering::load_layered_resolved;
@@ -69,19 +69,10 @@ pub struct ResolvedConfig {
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).
     pub crews: BTreeMap<String, Crew>,
-    /// The crew the synthesized `system` entry mirrors when no `[crews.system]`
-    /// table exists (see `alias_system_crew`). `None` when `system` is its own
-    /// table or could not be resolved.
-    pub system_crew_alias: Option<String>,
     /// Crew used when a task declares none and no override is given.
     pub default_crew: Option<String>,
     /// Automatic admission pools; explicit task assignments take precedence.
     pub complexity_crews: crate::ComplexityCrewPools,
-    /// Crew used by system activities such as step-failure recovery and the
-    /// task pilot. Resolution of the named crew is deliberately
-    /// deferred to dispatch so a bad system crew does not stop unrelated
-    /// activity execution.
-    pub system_crew: String,
     /// Resolved review preferences with per-field provenance (built-in: no
     /// before-PR review) [ORB-11333] [ORB-13992].
     pub operation: OperationPolicy,
@@ -123,7 +114,6 @@ impl ResolvedConfig {
             workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
             crews: default_crews(),
-            system_crew_alias: None,
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
@@ -131,7 +121,6 @@ impl ResolvedConfig {
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
                 xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
-            system_crew: snapshot.workflow_system_crew.clone(),
             operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties: Vec::new(),
@@ -267,7 +256,7 @@ impl ResolvedConfig {
             &document,
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
-        let (mut crews, ignored_crew_properties) =
+        let (crews, ignored_crew_properties) =
             crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
         let snapshot = if scoped {
             ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
@@ -280,11 +269,6 @@ impl ResolvedConfig {
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
         let mut operation = OperationPolicy::resolve(&[(operation_layer_source, &operation_layer)]);
         operation.review_crew.value = snapshot.operation_review_crew.clone().unwrap_or_default();
-        let system_crew_alias = alias_system_crew(
-            &mut crews,
-            &snapshot.workflow_system_crew,
-            snapshot.workflow_default_crew.as_deref(),
-        );
 
         let compatibility_keys = CompatibilityKeys {
             deprecated_task_id_pattern: parsed
@@ -321,7 +305,6 @@ impl ResolvedConfig {
             workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
             crews,
-            system_crew_alias,
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
@@ -329,7 +312,6 @@ impl ResolvedConfig {
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
                 xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
-            system_crew: snapshot.workflow_system_crew.clone(),
             operation,
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties,

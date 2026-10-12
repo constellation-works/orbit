@@ -380,13 +380,7 @@ fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
     );
 
     let hold = fx.last_hold(&task);
-    // The synthesized `system` crew mirrors a Codex crew here, so it is
-    // excluded with them.
-    assert_eq!(
-        hold.excluded_crews,
-        ["luna", "sol", "system"],
-        "every Codex crew"
-    );
+    assert_eq!(hold.excluded_crews, ["luna", "sol"], "every Codex crew");
     assert!(!fx.admitted(&task, &[]));
     let deferred = fx.exclusion(&task, &[]);
     assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");

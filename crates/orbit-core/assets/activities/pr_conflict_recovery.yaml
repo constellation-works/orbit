@@ -6,8 +6,8 @@ spec:
   type: agent_loop
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
-    after PR publication during authorized completion. It uses the configured
-    system crew to resolve the live conflict files, with any companion edit
+    after PR publication during authorized completion. It uses a crew drawn
+    from the medium complexity pool to resolve the live conflict files, with any companion edit
     the resolution needs. The host executor then validates, stages, continues
     the stopped rebase, and carries the candidate onto the current base tip
     before one retry.
@@ -47,10 +47,8 @@ spec:
           type: object
       log_tail:
         type: string
-      crew:
-        type: string
       crew_config_key:
-        const: workflow.system_crew
+        const: workflow.medium_complexity_crews
       failed_step_id:
         type: string
       activity_name:
@@ -78,8 +76,6 @@ spec:
           type: string
       diagnostic:
         type: string
-      system_crew:
-        type: boolean
   # Advisory only. Neither this result nor any agent-returned flag authorizes
   # Git mutation; the host boundary and deterministic retry judge recovery.
   # Gate outcomes are reported here, never used as a stop condition.

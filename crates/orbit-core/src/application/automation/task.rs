@@ -22,7 +22,8 @@ pub(super) fn mint(
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
-    let mut params = crate::application::auto_tasks::scheduler::template_params(definition);
+    let mut params =
+        crate::application::auto_tasks::scheduler::template_params(runtime, definition);
     // [ORB-13896] After-landing review is reviewed by `operation.review_crew`,
     // one crew drawn per batch when it is a pool [ORB-15195].
     if let Some(crew) = super::after_landing::minted_review_crew(runtime, definition, attempt)? {

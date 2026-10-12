@@ -10,8 +10,7 @@ use serde_json::{Value as JsonValue, json};
 
 use super::super::{
     CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigKeyDescriptor,
-    ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, DEFAULT_WORKFLOW_SYSTEM_CREW,
-    SECURITY_ALERT_SEVERITIES,
+    ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
 };
 use super::resolve::{
     DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
@@ -486,12 +485,6 @@ define_config_settings! {
         description: "Host memory resume percentage (1..=100, default 85).",
         section: ConfigSection::Delivery, order: 136,
         resolve: |raw: Option<u8>| resolve_percent(raw, 85, "workflow.resource_throttle.memory_resume_percent"),
-    },
-    workflow_system_crew: String => String {
-        key: "workflow.system_crew", value_type: "string",
-        description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
-        section: ConfigSection::Delivery, order: 30,
-        resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_SYSTEM_CREW, "workflow.system_crew"),
     },
     workflow_task_pilot_freshness_material_fields: Vec<MaterialField> => Vec<MaterialField> {
         key: "workflow.task_pilot_freshness.material_fields", value_type: "array<string>",

@@ -1,5 +1,6 @@
-//! `orbit init` seeding at the config boundary: the lane crews, the enabled
+//! `orbit init` seeding at the config boundary: the default crew, the enabled
 //! flags and the complexity pools a detected-family set produces [ORB-14671].
+//! No system lane is seeded: system work draws from the pools [ORB-15663].
 
 use crate::{ConfigSeed, seed_default_config};
 use toml::Table;
@@ -56,9 +57,9 @@ fn expect_pools(config: &Table, expected: [&[&str]; 4], case: &str) {
 }
 
 #[test]
-fn claude_only_seeds_haiku_system_crew_and_claude_pools() {
+fn claude_only_seeds_opus_default_and_claude_pools() {
     let config = seeded(&["claude"]);
-    assert_eq!(lane(&config, "system_crew").as_deref(), Some("haiku"));
+    assert_eq!(lane(&config, "system_crew"), None);
     assert_eq!(lane(&config, "default_crew").as_deref(), Some("opus"));
     expect_pools(
         &config,
@@ -68,9 +69,8 @@ fn claude_only_seeds_haiku_system_crew_and_claude_pools() {
 }
 
 #[test]
-fn codex_only_seeds_luna_system_crew_and_codex_pools() {
+fn codex_only_seeds_astra_default_and_codex_pools() {
     let config = seeded(&["codex"]);
-    assert_eq!(lane(&config, "system_crew").as_deref(), Some("luna"));
     assert_eq!(lane(&config, "default_crew").as_deref(), Some("astra"));
     expect_pools(
         &config,
@@ -80,9 +80,8 @@ fn codex_only_seeds_luna_system_crew_and_codex_pools() {
 }
 
 #[test]
-fn codex_and_claude_keep_luna_system_crew_and_mixed_pools() {
+fn codex_and_claude_seed_opus_default_and_mixed_pools() {
     let config = seeded(&["codex", "claude"]);
-    assert_eq!(lane(&config, "system_crew").as_deref(), Some("luna"));
     assert_eq!(lane(&config, "default_crew").as_deref(), Some("opus"));
     expect_pools(
         &config,
@@ -207,24 +206,12 @@ fn every_seeded_pool_entry_names_an_enabled_crew() {
 }
 
 #[test]
-fn claude_only_interactive_choice_is_haiku_and_codex_hosts_also_offer_it() {
-    assert_eq!(
-        ConfigSeed::from_families(["claude"]).system_crew_options(),
-        ["haiku"]
-    );
-    assert_eq!(
-        ConfigSeed::from_families(["codex", "claude"]).system_crew_options(),
-        ["luna", "haiku"]
-    );
-}
-
-#[test]
 fn rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled() {
     let seed = ConfigSeed::from_families(["claude"]);
     let mut crews = seed.seeded_crews();
     crews.get_mut("haiku").expect("haiku is seeded").enabled = false;
     let error = crate::seed::render_workflow_crew_keys(&seed, &crews)
-        .expect_err("haiku sits in the low pool and the system lane");
+        .expect_err("haiku sits in the low pool");
     assert!(
         error.to_string().contains("`haiku`"),
         "error names the offending crew: {error}"
@@ -232,7 +219,6 @@ fn rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled() {
 
     crews.remove("sonnet");
     crews.get_mut("haiku").expect("haiku is seeded").enabled = true;
-    let seed = seed.with_system_crew("haiku");
     let error = crate::seed::render_workflow_crew_keys(&seed, &crews)
         .expect_err("sonnet sits in the medium pool");
     assert!(
@@ -283,9 +269,9 @@ fn seeded_config_loads_and_a_config_without_crews_resolves_haiku() {
             "pi",
             "sol",
             "sonnet",
-            "system",
         ],
-        "ORB-14672 guards removal of terra from the no-[crews] built-in registry"
+        "ORB-14672 guards removal of terra, and ORB-15663 of the retired `system` crew, \
+         from the no-[crews] built-in registry"
     );
 
     // A seeded file, pools included, passes the same load-time validation.
