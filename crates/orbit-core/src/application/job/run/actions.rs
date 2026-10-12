@@ -53,6 +53,10 @@ pub(super) struct CancellationRequest<'a> {
     pub source: &'a str,
     pub reason: Option<&'a str>,
     pub block_task: bool,
+    /// Keep the stopped run's candidate through its failure handoff, as a
+    /// parent whose wait expired asks for [ORB-15643]. Cascades with the
+    /// reason, so a timed-out gate's delivery child keeps its candidate too.
+    pub keep_candidate: bool,
 }
 
 impl OrbitRuntime {
@@ -128,6 +132,7 @@ impl OrbitRuntime {
             source,
             reason,
             block_task,
+            keep_candidate: false,
         };
         let mut result = self.cancel_job_run_cascading(run_id, request, signal, 0)?;
         result.pull_settlements = self.pull_settlements_after_cancel(run_id);
@@ -296,6 +301,9 @@ impl OrbitRuntime {
         // [ORB-15314] With the reviewer stopped, keep its uncommitted repair
         // before finalization settles the run on what it left.
         self.keep_interrupted_review(&after_signal, true);
+        if request.keep_candidate {
+            self.keep_timed_out_candidate(&after_signal, request);
+        }
         let now = chrono::Utc::now();
         let duration_ms = run
             .started_at
@@ -763,8 +771,9 @@ impl OrbitRuntime {
             CancellationRequest {
                 actor: request.actor,
                 source: CHILD_CASCADE_SOURCE,
-                reason: None,
+                reason: request.reason.filter(|_| request.keep_candidate),
                 block_task: request.block_task,
+                keep_candidate: request.keep_candidate,
             },
             signal_run_owner_process,
             depth + 1,

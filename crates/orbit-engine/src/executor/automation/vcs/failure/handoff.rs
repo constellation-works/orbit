@@ -14,6 +14,7 @@ use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
 use super::super::handoff::rebase_in_progress;
+use super::super::interrupted_review::review_in_flight;
 use super::super::pr::open_or_reuse_unchecked;
 use super::super::push::push_batch_changes_inner;
 use super::conflict::{
@@ -24,9 +25,9 @@ use super::ownership::{
     push_incomplete_landing_reviewer_commit, refuse_foreign_rebase, release_review_attempts,
 };
 use super::preserve::{
-    hold_baseline_red_candidate, hold_provider_failure_candidate, hold_upgrade_pending_candidate,
-    preserve_agent_blocked_candidate, preserve_validation_environment_candidate,
-    recorded_spec_digest,
+    hold_baseline_red_candidate, hold_child_timeout_candidate, hold_provider_failure_candidate,
+    hold_upgrade_pending_candidate, preserve_agent_blocked_candidate,
+    preserve_validation_environment_candidate, recorded_spec_digest,
 };
 use super::review_gate::preserve_review_gate_candidate;
 use super::{COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, REVIEW_GATE_STEPS};
@@ -209,6 +210,23 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             run_id,
             failed_step_id,
             error_message,
+            &workspace_path,
+        );
+    }
+
+    // [ORB-15643] The parent's wait on this run expired and it cancelled the
+    // run: nothing judged the candidate. Keep it like an upgrade refusal;
+    // the cancellation requeues the task naming the timeout. Checked before
+    // the review-gate branch, because a review can be what was stopped.
+    if error_code == orbit_types::workflow::CHILD_TIMEOUT_ERROR_CODE {
+        let review_stopped = input.get("pipeline").and_then(review_in_flight).is_some();
+        return hold_child_timeout_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            review_stopped,
             &workspace_path,
         );
     }

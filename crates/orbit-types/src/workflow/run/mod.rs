@@ -45,7 +45,8 @@ pub use provider_hold::{
     ProviderFailureHold, ProviderLimitFailure, failed_provider, provider_failure_text,
 };
 pub use root_cause::{
-    CHILD_CANCELLED_ERROR_CODE, HeldFailure, REVIEW_DECISION_PENDING_ERROR_CODE, RunRootCause,
+    CHILD_CANCELLED_ERROR_CODE, CHILD_TIMEOUT_ERROR_CODE, HeldFailure,
+    REVIEW_DECISION_PENDING_ERROR_CODE, RunRootCause,
 };
 pub use state::{
     ActivityCrewDraw, ActivityCrewPoolMember, ClaimFailureClass, CrewExclusion,

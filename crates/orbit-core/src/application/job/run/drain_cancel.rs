@@ -106,6 +106,7 @@ impl OrbitRuntime {
                 source,
                 reason,
                 block_task,
+                keep_candidate: false,
             },
             force,
             signal_run_owner_confirmed,

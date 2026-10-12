@@ -1688,6 +1688,37 @@ A QA auto-task tagged `no-diff-expected` finished its sweep, returned a full acc
 - `Cost:` the durable summary can now be text the agent produced but never committed to the task itself. The gate's contract is unchanged: it still reads only the task record, and the history event marks where the text came from.
 - `Cost:` local and PR pipelines depend on the `implement_one` step id and on the step checkpoint landing before commit. A custom job with another step id, or a failed checkpoint write, falls back to derivation as before.
 
+## A blocking wait that expires cancels its child
+
+**Recorded:** 2026-10-11 · [ORB-15643]
+**Amends:** the `timeout` contract of `invoke_and_wait` in [2_design.md](./2_design.md) §4, for callers that pass `on_timeout: cancel_child`
+**Paths:** `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/invoke.rs`, `crates/orbit-core/src/application/job/run/child_timeout.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/preserve.rs`, `crates/orbit-core/assets/jobs/task_gate_pipeline.yaml`, `crates/orbit-core/assets/jobs/task_auto_pipeline.yaml`
+
+### Context
+
+A gate's 14400-second wait on its delivery child expired while the child was still validating after a conflict, a conflict recovery and a final-recovery resume. The wait reported `timeout` and left the child running, as `invoke_and_wait` documented. The gate and its auto parent failed, the dispatch record was closed, the reservation was left to its TTL, and the task stayed `in-progress` under a live child whose parents were terminal. An operator cancel of the parent could not reach the child either: cancellation cascades only to dispatches still open.
+
+### Decision
+
+1. `invoke_and_wait` takes `on_timeout`. `cancel_child` cancels a child the wait leaves pending or running, before the dispatch record is closed. `leave_running`, the default, keeps the earlier contract for callers that supervise the child themselves.
+2. The cancel carries `keep_candidate`. After the child's worker is stopped and before it is finalized, the host runs the child job's `pr_failure_handoff` under `child_timeout`. It keeps the candidate as an unjudged candidate is kept: committed, carried to its durable ref, recorded for the task's next run, no PR. A blocking child of the cancelled child cascades with the same reason and keeps its candidate too.
+3. The task returns to the backlog. Its cancellation note names the timeout and the kept candidate, and `candidate_resume` resumes `held_child_timeout`.
+4. The parent reports `timeout`, not `cancelled`, with an error that leads with `child_timeout`. `pipeline_success_guard` therefore fails the gate rather than ending it cancelled, and the gate's terminal cleanup releases its reservation.
+5. `task_gate_pipeline` and `task_auto_pipeline` pass `cancel_child`. The dispatch timeout is the hard ceiling.
+
+### Rejected alternatives
+
+- *Extend the wait while the child shows progress, up to a ceiling.* The wait reads only durable run state; there is no progress signal to extend on, and the build-budget extension credits time queued for build slots, not progress. An extension would still need this cancel at its ceiling, so it adds a signal and a second budget without removing the cancel.
+- *Report the stopped child as `cancelled`.* The guard ends a parent whose children were all cancelled as cancelled, which reads as an operator decision and hides the timeout.
+- *Change the contract for every caller.* Other blocking callers can supervise a still-running child by run ID; the cancel is opt-in per call.
+
+### Consequences
+
+- A gate never ends with a live delivery child, and the work done before the deadline is kept for the task's next run instead of being discarded or orphaned.
+- `Cost:` a child that would have finished shortly after the deadline is stopped. Raise `dispatch_timeout_seconds` together with `ttl_seconds`, within the 21600-second wait ceiling, when that is the better trade.
+- `Cost:` the stopped step is the first top-level step whose output the child had not recorded. A step skipped by `when:` records nothing either, so it can name an earlier step than the one running; a resume then redoes work rather than skipping it.
+- `Cost:` a cancel that fails leaves the child live, the one case where a terminal gate outlives its child. The parent says so in its error and reports `child_live: true`, and the gate's terminal cleanup still releases its reservation.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1784,6 +1815,7 @@ A QA auto-task tagged `no-diff-expected` finished its sweep, returned a full acc
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
 - [ORB-14837] — derive a clean review batch's `execution_summary` from its accepted coverage evidence.
 - [ORB-15584] — persist the execution summary an implementer returned but did not write, attributed to the run's crew, before deriving one.
+- [ORB-15643] — cancel a blocking child whose parent's wait expired, keep its candidate for the task's next run, and report `child_timeout`.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.

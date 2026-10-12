@@ -13,6 +13,7 @@
 //! - `window_extension` — lengthening a live drain's window.
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
+//! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
@@ -20,6 +21,7 @@
 mod actions;
 mod admissions_stop;
 mod build_budget;
+mod child_timeout;
 mod conflict;
 mod deferral;
 mod delivery;
@@ -48,6 +50,7 @@ pub use admissions_stop::{
     DrainAdmissionsStopChange, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
     RemainingDrainChild,
 };
+pub(crate) use child_timeout::{kept_candidate, kept_clause};
 #[cfg(test)]
 pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub(crate) use owner::running_run_has_verified_owner;

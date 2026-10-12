@@ -3005,6 +3005,63 @@ fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
     );
 }
 
+/// A delivery its gate stopped waiting for [ORB-15643] is cancelled
+/// mid-validation. Nothing judged its candidate: the handoff commits what it
+/// left, carries it to its durable ref and opens no PR. The cancellation, not
+/// the handoff, returns the task to the backlog.
+#[test]
+fn a_child_its_parent_stopped_waiting_for_holds_its_candidate() {
+    isolated(
+        "a_child_its_parent_stopped_waiting_for_holds_its_candidate",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let head_before = fx.head();
+            let remote_before = fx.remote_tip(BRANCH);
+            fs::write(
+                fx.repo.join("src/wip.txt"),
+                "implementation under validation\n",
+            )
+            .unwrap();
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "validate",
+                    "error_code": "child_timeout",
+                    "error_message": "child_timeout: parent run jrun-parent stopped waiting for \
+                                      child run jrun-child after 14400 s",
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the timed-out child");
+
+            assert_eq!(handoff["decision"], "held_child_timeout");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(handoff["candidate_preserved"], true);
+            assert_ne!(fx.head(), head_before, "the unvalidated edit is committed");
+            assert_eq!(handoff["head_sha"], fx.head());
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(
+                fx.durable_candidate(&handoff),
+                fx.head(),
+                "the next run, on any host, can fetch the candidate"
+            );
+            assert_eq!(
+                host.status(TASK_ID),
+                TaskStatus::InProgress,
+                "the cancellation, not the handoff, settles the task"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A red base and network flakes [ORB-14258]
 // ---------------------------------------------------------------------------

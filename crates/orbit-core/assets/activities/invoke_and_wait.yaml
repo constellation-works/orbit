@@ -26,8 +26,17 @@ spec:
     child status. The returned `status` mirrors the child Run's terminal state:
     `success`,
     `failed`, `cancelled`, `interrupted`, or `timeout`. A `timeout` here means the
-    WAIT side of the activity exceeded `timeout_seconds`; the child
-    Run itself may still be running — callers that care must inspect
+    WAIT side of the activity exceeded `timeout_seconds`. What happens to a
+    child still pending or running then is the caller's `on_timeout`
+    choice. `cancel_child` cancels it, so the parent never ends with a live
+    child: the child's failure handoff keeps its candidate (committed,
+    carried to its durable ref, no PR) and its task returns to the backlog
+    naming the timeout and that candidate, so the task's next run resumes
+    it. The output is `timeout` with `child_cancelled: true`, the kept
+    `candidate`, and an `error` that leads with `child_timeout`. A child that
+    finished before it could be cancelled reports its own status instead.
+    `leave_running` (the default) leaves the child running and reports
+    `timeout` with `child_live: true`; callers that care must inspect
     `run_id` to decide follow-up. Gate workflows may pass
     `admission_task_ids` and `admission_workflow` to re-check workflow
     admission immediately before dispatch, so an admission granted before a
@@ -60,6 +69,9 @@ spec:
       poll_interval_seconds:
         type: number
         minimum: 1
+      on_timeout:
+        type: string
+        enum: [leave_running, cancel_child]
       priority:
         type: string
         enum: [low, medium, high, critical]
@@ -87,6 +99,12 @@ spec:
         minimum: 0
       error:
         type: string
+      child_live:
+        type: boolean
+      child_cancelled:
+        type: boolean
+      candidate:
+        type: object
       skipped:
         type: boolean
       reason:

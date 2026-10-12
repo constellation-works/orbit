@@ -43,6 +43,14 @@
 #   `ttl_seconds >= dispatch_timeout_seconds` when overriding
 #   these inputs; otherwise a second gate can reserve the same context before
 #   the first child pipeline finishes.
+# - `dispatch_timeout_seconds` is a hard ceiling, never extended
+#   (ORB-15643): a child still running when it expires is cancelled
+#   (`on_timeout: cancel_child`), so the gate never ends with a live child.
+#   The child's failure handoff keeps its candidate and its task returns to
+#   the backlog naming the `child_timeout` and that candidate; the task's
+#   next run resumes it. `dispatch_child` reports `timeout`, and
+#   `require_child_success` fails the gate; the gate's terminal cleanup
+#   releases the reservation.
 # - The dispatched child pipeline runs while the reservation is still valid;
 #   a fresh `orbit.task.locks.reserve` call from another bundle will either
 #   wait or surface `task.locks.reserve.denied`. `invoke_and_wait` re-checks
@@ -154,6 +162,7 @@ spec:
         admission_workflow: worktree_setup
         deferral: "{{ steps.starvation_check.output }}"
         timeout_seconds: "{{ input.dispatch_timeout_seconds }}"
+        on_timeout: cancel_child
 
     - id: release_reservation
       when: "{{ steps.starvation_check.output.deferred }} == false && {{ steps.dispatch_child.output.status }} != timeout && {{ steps.dispatch_child.output.status }} != pending && {{ steps.dispatch_child.output.status }} != running"

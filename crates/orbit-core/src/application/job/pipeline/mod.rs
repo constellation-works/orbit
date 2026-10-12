@@ -61,6 +61,8 @@ mod worker;
 pub(crate) use admission::input_hash;
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
+#[cfg(test)]
+pub(crate) use wait::PipelineWaitClock;
 pub use wait::{
     PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_held,
     pipeline_wait_status_is_success,

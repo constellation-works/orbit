@@ -12,7 +12,10 @@ spec:
     diagnostics for a safe completion retry. A `validation_environment`
     failure (required validation lacked a tool) blocks the task and keeps the
     unjudged candidate for `orbit job resume`, opening no PR and pushing
-    nothing. Every preserved candidate records the task's spec digest, so the
+    nothing. A `child_timeout` (the parent's wait on this run expired and it
+    cancelled the run) commits what the run left, carries it to its durable
+    ref and opens no PR, leaving the task's status to the cancellation.
+    Every preserved candidate records the task's spec digest, so the
     task's next run can resume it (`candidate_resume`).
   input_schema_json:
     type: object

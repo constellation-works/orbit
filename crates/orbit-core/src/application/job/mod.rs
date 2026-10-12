@@ -60,3 +60,4 @@ pub use run::{
     job_run_to_json_with_activity_provenance, run_error_step,
 };
 pub(crate) use run::{RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness};
+pub(crate) use run::{kept_candidate, kept_clause};
