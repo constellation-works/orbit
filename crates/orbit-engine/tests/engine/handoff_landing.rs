@@ -246,6 +246,8 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
             "baseRefName": context.candidate.base_branch,
             "headRefOid": context.candidate.candidate.commit,
             "mergeCommit": {"oid": "provider-merge"},
+            // Unknown to the typed answer; the evidence still quotes it.
+            "futureField": {"nested": [1, "x", null]},
         });
         status[field] = json!(replacement);
         let host = ReconciliationHost {
@@ -283,9 +285,17 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
         assert!(
             matches!(error, OrbitError::Execution(ref message) if message == &format!("handoff_land: {reason}"))
         );
-        let resolved: Value = serde_json::from_str(&updates[0].evidence).unwrap();
-        assert_eq!(resolved["provider_state"], host.status);
-        assert_eq!(resolved["delivery_error"], reason);
+        assert_eq!(
+            updates[0].evidence,
+            json!({
+                "reconciled": "pull_request_merged",
+                "pull_request": 42,
+                "provider_state": host.status,
+                "delivery_error": reason,
+            })
+            .to_string(),
+            "reconciliation evidence quotes the provider's answer byte for byte"
+        );
         assert!(
             host.handoff_landing_context("handoff-1")
                 .unwrap()

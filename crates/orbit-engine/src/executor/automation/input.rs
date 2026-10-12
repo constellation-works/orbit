@@ -72,11 +72,3 @@ pub(super) fn canonicalize_existing_dir(
         ))
     })
 }
-
-pub(super) fn json_number_to_string(value: &Value) -> Option<String> {
-    value
-        .as_i64()
-        .map(|number| number.to_string())
-        .or_else(|| value.as_u64().map(|number| number.to_string()))
-        .or_else(|| value.as_str().map(ToOwned::to_owned))
-}

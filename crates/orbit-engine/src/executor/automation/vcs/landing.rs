@@ -47,8 +47,8 @@ use super::super::input::input_string_field;
 use super::git::{fetch_remote_base, git_command_success, git_output};
 use super::operations;
 use super::pr::{
-    DeliveryPin, OwedHostedChecks, PrMergeState, classify_pr_state, owed_hosted_checks,
-    resolve_merge_capabilities,
+    DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus, classify_pr_state,
+    owed_hosted_checks, read_pr_status, resolve_permitted_merge,
 };
 use super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 
@@ -191,7 +191,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
                             let evidence = json!({
                                 "reconciled": "pull_request_merged",
                                 "pull_request": number,
-                                "provider_state": status,
+                                "provider_state": status.provider_state(),
                                 "delivery_error": error.to_string(),
                             });
                             delivery_error = Some(error);
@@ -391,7 +391,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Mergeable if intent.is_none() && owed == OwedHostedChecks::Passed => {
-                let capabilities = resolve_merge_capabilities(host, &workspace_path, &pr_number)
+                let capabilities = resolve_permitted_merge(host, &workspace_path, &pr_number)
                     .map_err(|error| {
                         OrbitError::Execution(format!(
                             "handoff_land: no permitted merge method for pull request \
@@ -666,7 +666,7 @@ fn land_no_diff<H: RuntimeHost + ?Sized>(
 fn observe_or_stop<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
-    status: Option<&Value>,
+    status: Option<&PullRequestStatus>,
     view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
     match observe_candidate(context, status, view) {
@@ -686,7 +686,7 @@ fn observe_or_stop<H: RuntimeHost + ?Sized>(
 /// accepted candidate for a checkout with no remote.
 fn observe_candidate(
     context: &HandoffLandingContext,
-    status: Option<&Value>,
+    status: Option<&PullRequestStatus>,
     view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
     let candidate = &context.candidate;
@@ -708,12 +708,12 @@ fn observe_candidate(
     }
     let (source_branch, base_branch) = match status {
         Some(status) => (
-            reported(status, "headRefName").ok_or_else(|| {
+            status.head_branch.clone().ok_or_else(|| {
                 OrbitError::Execution(
                     "handoff_land: pull request did not report its head branch".to_string(),
                 )
             })?,
-            reported(status, "baseRefName").ok_or_else(|| {
+            status.base_branch.clone().ok_or_else(|| {
                 OrbitError::Execution(
                     "handoff_land: pull request did not report its base branch".to_string(),
                 )
@@ -799,21 +799,6 @@ fn pin_for(candidate: &HandoffCandidate) -> DeliveryPin {
     )
 }
 
-fn read_pr_status<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    pr_number: &str,
-) -> Result<Value, OrbitError> {
-    let response = host.run_private_vcs_operation(
-        operations::PR_STATUS,
-        json!({
-            "pr": pr_number,
-            "workspace_path": workspace_path.to_string_lossy(),
-        }),
-    )?;
-    Ok(response.get("pull_request").cloned().unwrap_or(Value::Null))
-}
-
 fn record<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
@@ -888,10 +873,10 @@ fn record_stop<H: RuntimeHost + ?Sized>(
 
 /// Whether the provider reports the pull request's branch as behind its base,
 /// which branch protection refuses until the branch is brought up to date.
-fn behind_base(status: &Value) -> bool {
+fn behind_base(status: &PullRequestStatus) -> bool {
     status
-        .get("mergeStateStatus")
-        .and_then(Value::as_str)
+        .merge_state_status
+        .as_deref()
         .is_some_and(|state| state.eq_ignore_ascii_case("BEHIND"))
 }
 
@@ -905,13 +890,4 @@ fn describe(state: &PrMergeState) -> String {
         PrMergeState::Mergeable => "mergeable".to_string(),
         PrMergeState::Pending => "pending".to_string(),
     }
-}
-
-fn reported(status: &Value, field: &str) -> Option<String> {
-    status
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
