@@ -98,8 +98,8 @@ impl TaskListFilter {
     /// the index can also bound the selection with `LIMIT` and count the total.
     /// An explicit empty status set matches nothing and is left to `matches`.
     /// The index narrows a `parent_id` selection to the tasks its relation
-    /// rows name, but the freshness scan does not compare relations, so
-    /// `matches` still confirms each one from its envelope.
+    /// rows name after the freshness scan verifies every `child_of` target.
+    /// Parent selections still confirm each envelope before counting/limiting.
     pub(crate) fn is_fully_indexed(&self) -> bool {
         self.search.is_none()
             && self.task_type.is_none()
