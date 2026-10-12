@@ -561,10 +561,10 @@ export function restoreScopeFromUrl() {
   requestHostSwitch(query.get("host") || null, { fromHistory: true });
   const linked = query.get("workspace");
   if (linked === ALL_WORKSPACES_TOKEN) {
-    if (multiWorkspace) {
-      aggregateLinked = true;
-      setWorkspace(null);
-    }
+    // The workspace count still belongs to the host being left. Keep the
+    // address's intent until discovery decides whether this host can aggregate.
+    aggregateLinked = true;
+    setWorkspace(null);
   } else if (linked) {
     setWorkspace(linked);
   }
