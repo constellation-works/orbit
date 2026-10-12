@@ -50,8 +50,12 @@ impl Fixture {
 
         let selected_repo = temp.path().join("selected");
         let other_repo = temp.path().join("other");
-        init_git_repo(&selected_repo);
-        init_git_repo(&other_repo);
+        crate::git_repo::SeededRepo::new(&selected_repo)
+            .readme("# sweep workspace test\n")
+            .build();
+        crate::git_repo::SeededRepo::new(&other_repo)
+            .readme("# sweep workspace test\n")
+            .build();
 
         run_success(
             &selected_repo,
@@ -426,7 +430,7 @@ spec:
     let tree = repo
         .join(".orbit/state/worktrees")
         .join(format!("orbit-{run_id}"));
-    run_git(
+    crate::git_repo::run(
         repo,
         &[
             "worktree",
@@ -528,31 +532,4 @@ fn enable_seeded_routine(repo: &Path) {
         path.display()
     );
     fs::write(&path, enabled).expect("enable seeded routine");
-}
-
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# sweep workspace test\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

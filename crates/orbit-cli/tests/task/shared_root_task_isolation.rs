@@ -20,8 +20,12 @@ fn shared_explicit_root_keeps_task_bundles_isolated_by_selected_workspace() {
     for directory in [&home, &elsewhere] {
         fs::create_dir_all(directory).expect("fixture directory");
     }
-    init_git_repo(&alpha_repo);
-    init_git_repo(&beta_repo);
+    crate::git_repo::SeededRepo::new(&alpha_repo)
+        .host_default_branch()
+        .build();
+    crate::git_repo::SeededRepo::new(&beta_repo)
+        .host_default_branch()
+        .build();
     let root_arg = root.to_str().expect("utf8 root");
 
     run_orbit(
@@ -200,7 +204,9 @@ fn non_orb_task_accepts_valid_foreign_prefix_relation() {
     let root = temp.path().join("shared-root");
     let repo = temp.path().join("repo");
     fs::create_dir_all(&home).expect("fixture home");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .build();
     let root_arg = root.to_str().expect("utf8 root");
 
     run_orbit(
@@ -397,32 +403,4 @@ fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> assert_cmd::assert::Asse
 fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
     let assert = run_orbit(cwd, home, args).success();
     serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
-}
-
-fn init_git_repo(repo: &Path) {
-    fs::create_dir_all(repo).expect("create repo");
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# repo\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

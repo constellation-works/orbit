@@ -24,7 +24,9 @@ impl Fixture {
         let root = temp.path().join("custom-root");
         fs::create_dir_all(&home).expect("create empty home");
         fs::create_dir_all(&repo).expect("create repo");
-        init_git_repo(&repo);
+        crate::git_repo::SeededRepo::new(&repo)
+            .readme("# sweep root test\n")
+            .build();
 
         let root_arg = root.to_string_lossy().into_owned();
         run_success(
@@ -259,32 +261,5 @@ fn assert_home_empty(home: &Path) {
             .is_none(),
         "sweep touched isolated HOME at {}",
         home.display()
-    );
-}
-
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# sweep root test\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }

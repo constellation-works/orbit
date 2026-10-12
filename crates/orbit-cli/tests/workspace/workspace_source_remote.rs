@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -20,7 +19,7 @@ const NEW_REMOTE: &str = "ssh://github.com/example/orbit-renamed.git";
 fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
-    run_git(repo.path(), &["init"]);
+    crate::git_repo::run(repo.path(), &["init"]);
     initialize_workspace(repo.path(), home.path(), "first-origin-owner");
     let registry_path = home.path().join(".orbit/workspaces.json");
     let initial_registry = read_json(&registry_path);
@@ -54,7 +53,7 @@ fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() 
     let partition = home.path().join(".orbit/tasks/workspaces/ws_orbit");
     assert!(partition.join(task_id).is_dir());
 
-    run_git(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
+    crate::git_repo::run(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
     orbit(repo.path(), home.path())
         .args(["workspace", "init", "--name", "orbit"])
         .assert()
@@ -140,9 +139,9 @@ fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() 
         None,
     ] {
         if let Some(origin) = origin {
-            run_git(repo.path(), &["remote", "set-url", "origin", origin]);
+            crate::git_repo::run(repo.path(), &["remote", "set-url", "origin", origin]);
         } else {
-            run_git(repo.path(), &["remote", "remove", "origin"]);
+            crate::git_repo::run(repo.path(), &["remote", "remove", "origin"]);
         }
         force_init(repo.path(), home.path());
         let mut retried_registry = read_json(&registry_path);
@@ -168,7 +167,7 @@ fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() 
         );
     }
 
-    run_git(repo.path(), &["remote", "add", "origin", NEW_REMOTE]);
+    crate::git_repo::run(repo.path(), &["remote", "add", "origin", NEW_REMOTE]);
     assert_force_init_refused_without_writes(repo.path(), home.path(), "source-remote rebind");
     // An explicit rebind still refuses to rewrite an existing publication lineage.
     orbit(repo.path(), home.path())
@@ -207,7 +206,11 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
     ] {
         let home = tempdir().expect("home");
         let repo = tempdir().expect("repo");
-        init_git_repo(repo.path(), origin);
+        crate::git_repo::SeededRepo::new(repo.path())
+            .host_default_branch()
+            .no_commit()
+            .build();
+        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
         initialize_workspace(repo.path(), home.path(), "non-portable-origin-owner");
         let registry_path = home.path().join(".orbit/workspaces.json");
         let initial_registry = read_json(&registry_path);
@@ -260,7 +263,7 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
             );
         }
 
-        run_git(repo.path(), &["remote", "set-url", "origin", NEW_REMOTE]);
+        crate::git_repo::run(repo.path(), &["remote", "set-url", "origin", NEW_REMOTE]);
         assert_force_init_refused_without_writes(repo.path(), home.path(), "source-remote rebind");
     }
 }
@@ -269,13 +272,13 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
 fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
-    run_git(repo.path(), &["init"]);
+    crate::git_repo::run(repo.path(), &["init"]);
     initialize_workspace(repo.path(), home.path(), "invalid-origin-owner");
-    run_git(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
+    crate::git_repo::run(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
 
     for already_bound in [false, true] {
         if already_bound {
-            run_git(repo.path(), &["remote", "set-url", "origin", OLD_REMOTE]);
+            crate::git_repo::run(repo.path(), &["remote", "set-url", "origin", OLD_REMOTE]);
             force_init(repo.path(), home.path());
         }
         for (origin, error) in [
@@ -287,7 +290,7 @@ fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
             ("origin", "Git remote"),
             ("https://github.com", "Git remote"),
         ] {
-            run_git(repo.path(), &["remote", "set-url", "origin", origin]);
+            crate::git_repo::run(repo.path(), &["remote", "set-url", "origin", origin]);
             assert_force_init_refused_without_writes(
                 repo.path(),
                 home.path(),
@@ -305,11 +308,11 @@ fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
 fn force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
-    run_git(repo.path(), &["init"]);
+    crate::git_repo::run(repo.path(), &["init"]);
     initialize_workspace(repo.path(), home.path(), "authority-origin-owner");
     let registry_path = home.path().join(".orbit/workspaces.json");
     let initial_registry = read_json(&registry_path);
-    run_git(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
+    crate::git_repo::run(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
 
     assert_init_refused_without_writes(
         repo.path(),
@@ -346,7 +349,11 @@ fn force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner() {
 fn owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
-    init_git_repo(repo.path(), OLD_REMOTE);
+    crate::git_repo::SeededRepo::new(repo.path())
+        .host_default_branch()
+        .no_commit()
+        .build();
+    crate::git_repo::run(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
     initialize_workspace(repo.path(), home.path(), "remote-owner");
 
     let task = run_json(
@@ -482,7 +489,11 @@ fn owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind() {
 fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
-    init_git_repo(repo.path(), OLD_REMOTE);
+    crate::git_repo::SeededRepo::new(repo.path())
+        .host_default_branch()
+        .no_commit()
+        .build();
+    crate::git_repo::run(repo.path(), &["remote", "add", "origin", OLD_REMOTE]);
     initialize_workspace(repo.path(), home.path(), "remote-owner");
     let registry_path = home.path().join(".orbit/workspaces.json");
     let before = fs::read(&registry_path).expect("registry before rejection");
@@ -510,7 +521,7 @@ fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
 fn source_remote_help_names_inspection_dry_run_and_rebind() {
     let home = tempdir().expect("home");
     let cwd = tempdir().expect("cwd");
-    run_git(cwd.path(), &["init"]);
+    crate::git_repo::run(cwd.path(), &["init"]);
     orbit(cwd.path(), home.path())
         .args(["workspace", "source-remote", "--help"])
         .assert()
@@ -632,29 +643,4 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
         .env("USERPROFILE", home)
         .env_remove("ORBIT_HOME");
     command
-}
-
-fn init_git_repo(repo: &Path, remote: &str) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["remote", "add", "origin", remote]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let mut command = StdCommand::new("git");
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    let output = command
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed: {}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

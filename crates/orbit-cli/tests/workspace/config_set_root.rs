@@ -9,7 +9,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -33,7 +33,11 @@ impl Fixture {
         };
         fs::create_dir_all(&fixture.home).expect("home");
         fs::create_dir_all(&fixture.repo).expect("repo");
-        init_git_repo(&fixture.repo);
+        crate::git_repo::SeededRepo::new(&fixture.repo)
+            .branch("agent-main")
+            .identity("test", "test@example.invalid")
+            .empty_commit("init")
+            .build();
         let root = fixture.root.to_string_lossy().into_owned();
         fixture
             .orbit(&[
@@ -118,24 +122,4 @@ fn config_set_under_root_refuses_without_workspace_layer_and_names_global() {
         written.contains("agent-main"),
         "--global must apply the edit the refusal pointed at: {written}"
     );
-}
-
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    let status = crate::git_repo::command()
-        .args(["symbolic-ref", "HEAD", "refs/heads/agent-main"])
-        .current_dir(repo)
-        .status()
-        .expect("set fixture branch");
-    assert!(status.success());
-    let status = crate::git_repo::command()
-        .args(["commit", "--quiet", "--allow-empty", "-m", "init"])
-        .current_dir(repo)
-        .env("GIT_AUTHOR_NAME", "test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-        .env("GIT_COMMITTER_NAME", "test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-        .status()
-        .expect("git commit");
-    assert!(status.success());
 }
