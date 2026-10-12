@@ -11,7 +11,7 @@
 //! base's different content is refused and reaches the final-recovery agent.
 //!
 //! Nothing is left to deliver, so the `git_rebase` retry fails the step with
-//! [`CANDIDATE_ABSORBED_MARKER`] instead of the generic empty-branch refusal,
+//! [`OrbitError::CandidateAbsorbed`] instead of the generic empty-branch refusal,
 //! and the job's final recovery hands the host a deterministic
 //! `complete_no_diff` for the covering commit. The host applier keeps its own
 //! reachability check, the run's completion authority (`review` unless the
@@ -37,18 +37,10 @@ use super::freshness::recorded_workspace_matches;
 use super::git::{git_command_success, git_output, git_output_paths, git_output_raw};
 use super::handoff::rebase_in_progress;
 
-/// Leads a step failure whose candidate the pinned base already holds.
-pub(crate) const CANDIDATE_ABSORBED_MARKER: &str = "[candidate_absorbed]";
-
 /// The only step whose conflict recovery may end absorbed: the
 /// pre-publication base synchronization. A completion step has already
 /// published a reviewed PR, which this route does not settle.
 pub(crate) const ABSORBING_STEP: &str = "sync_base";
-
-/// Whether a step failure reports an absorbed candidate.
-pub(crate) fn is_candidate_absorbed(message: &str) -> bool {
-    message.contains(CANDIDATE_ABSORBED_MARKER)
-}
 
 /// Why a candidate left on its pinned base is not settled as absorbed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,18 +132,6 @@ pub(crate) struct AbsorbedCandidate {
     /// The base the branch sits on: the pin, or the tip recovery followed.
     pub(crate) base_sha: String,
     pub(crate) base_ref: String,
-}
-
-impl AbsorbedCandidate {
-    /// The step failure that hands this candidate to verified settlement.
-    pub(crate) fn failure_text(&self, head: &str) -> String {
-        format!(
-            "{CANDIDATE_ABSORBED_MARKER} git_rebase: conflict recovery left '{head}' on base \
-             '{}' with no candidate commit; covering commit {} on '{}' already carries the \
-             candidate's change, so verified no-diff settlement completes the task",
-            self.base_sha, self.covering_commit, self.base_ref
-        )
-    }
 }
 
 /// What a candidate means: its title, description and acceptance criteria.

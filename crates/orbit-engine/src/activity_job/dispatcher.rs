@@ -164,6 +164,14 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// A verified absorbed candidate. `message` retains the diagnostic's
+    /// deterministic-action or post-recovery context without losing its facts.
+    #[error("{message}")]
+    CandidateAbsorbed {
+        candidate: Box<orbit_common::CandidateAbsorbed>,
+        message: String,
+    },
+
     /// Pull request contracts differ. Retrying or recovery cannot repair the
     /// running binaries, so the drain must end visibly as failed.
     #[error("protocol_skew: {0}")]
@@ -603,6 +611,13 @@ fn run_deterministic(
                 OrbitError::RecoverableVcsConflict(conflict) => {
                     DispatchError::RecoverableVcsConflict(conflict)
                 }
+                OrbitError::CandidateAbsorbed(candidate) => DispatchError::CandidateAbsorbed {
+                    message: format!(
+                        "deterministic action `{}` failed: execution failed: {candidate}",
+                        spec.action
+                    ),
+                    candidate,
+                },
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
                 }

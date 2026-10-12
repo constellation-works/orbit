@@ -207,13 +207,7 @@ pub fn execute_job_with_resume(
                 break;
             }
             Err((error, unsuccessful)) => {
-                let verdict = attempt_final_recovery(
-                    job,
-                    &ctx,
-                    index,
-                    &error.to_string(),
-                    &mut final_recovery,
-                );
+                let verdict = attempt_final_recovery(job, &ctx, index, &error, &mut final_recovery);
                 if let FinalRecoveryVerdict::Resume(target, context) = verdict {
                     resume_context = Some(*context);
                     forget_step_outputs_from(&ctx, job, target);

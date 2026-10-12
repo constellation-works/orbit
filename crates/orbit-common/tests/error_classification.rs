@@ -108,3 +108,25 @@ fn quoted_refusal_wording_is_not_a_claim_refusal() {
         assert_eq!(quoted.claim_refusal(), None, "{kind:?}");
     }
 }
+
+#[test]
+fn absorbed_candidate_preserves_the_execution_display_and_wire_contract() {
+    let candidate = orbit_common::CandidateAbsorbed {
+        head: "candidate".into(),
+        base_sha: "base-sha".into(),
+        base_ref: "agent-main".into(),
+        covering_commit: "covering-sha".into(),
+    };
+    let legacy = OrbitError::Execution("[candidate_absorbed] git_rebase: conflict recovery left 'candidate' on base 'base-sha' with no candidate commit; covering commit covering-sha on 'agent-main' already carries the candidate's change, so verified no-diff settlement completes the task".into());
+    let typed = OrbitError::CandidateAbsorbed(Box::new(candidate));
+    assert_eq!(
+        typed.to_string(),
+        legacy.to_string(),
+        "persisted absorbed-candidate diagnostics are a compatibility contract"
+    );
+    assert_eq!(
+        serde_json::to_string(&typed).unwrap(),
+        serde_json::to_string(&legacy).unwrap(),
+        "the error wire shape must remain Execution(string)"
+    );
+}

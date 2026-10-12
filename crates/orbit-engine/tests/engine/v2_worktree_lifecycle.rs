@@ -3957,7 +3957,7 @@ struct LifecycleHost {
     /// Deterministically model an operator write immediately before landing.
     landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
     /// Scripted answers of host-run deterministic actions, by action name.
-    stubs: Mutex<BTreeMap<String, Result<Value, String>>>,
+    stubs: Mutex<BTreeMap<String, Result<Value, DispatchError>>>,
     /// Every stubbed action call, as (action, input), in order.
     stub_calls: Mutex<Vec<(String, Value)>>,
     /// Final recovery admissions requested, in order.
@@ -4412,10 +4412,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             .lock()
             .unwrap()
             .push((action.to_string(), input.clone()));
-        reply.map_err(|message| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message,
-        })
+        reply
     }
 
     /// Conflict recovery dispatched by a job draws from a complexity pool;
