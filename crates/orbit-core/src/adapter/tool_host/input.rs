@@ -1,73 +1,11 @@
-use std::path::PathBuf;
 use std::str::FromStr;
 
-use orbit_common::protocol::tool_input::{
-    optional_string, optional_string_alias, optional_u32_alias,
-};
-use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::state_io;
-use orbit_tools::OrbitTaskScope;
+use orbit_common::OrbitError;
 use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, TaskArtifact, TaskComplexity, TaskPriority, TaskRelation, TaskStatus,
     TaskType, media_type_for_artifact_path,
 };
-use serde_json::{Value, json};
-
-pub(super) fn resolve_state_dir(
-    scope: &OrbitTaskScope,
-    input: &Value,
-) -> Result<PathBuf, OrbitError> {
-    let orbit_root = scope
-        .orbit_root
-        .clone()
-        .or_else(|| std::env::var("ORBIT_ROOT").ok().map(PathBuf::from));
-    let orbit_root = orbit_root.ok_or_else(|| {
-        OrbitError::InvalidInput(
-            "cannot resolve active run path without orbit_root in the trusted runtime scope"
-                .to_string(),
-        )
-    })?;
-    // L-0037: run-scoped state tools must trust runtime scope before tool input.
-    let scoped_run_id = scope
-        .run_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    if let Some(state_dir) = optional_string_alias(input, &["state_dir", "stateDir", "state-dir"])?
-    {
-        let run_id = scoped_run_id.ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "`state_dir` requires an active run in the trusted runtime scope".to_string(),
-            )
-        })?;
-        return state_io::validate_active_run_state_dir(
-            &orbit_root,
-            &PathBuf::from(state_dir),
-            run_id,
-        );
-    }
-
-    let input_run_id = optional_string_alias(input, &["run_id", "runId", "run-id"])?;
-    let run_id = match (scoped_run_id, input_run_id.as_deref()) {
-        (Some(scoped), Some(input)) if scoped != input => {
-            return Err(OrbitError::InvalidInput(
-                "`run_id` must match the active run in the trusted runtime scope".to_string(),
-            ));
-        }
-        (Some(scoped), _) => scoped.to_string(),
-        (None, Some(input)) => input.to_string(),
-        (None, None) => {
-            return Err(OrbitError::InvalidInput(
-                "missing active run; provide `run_id` or call from a managed run context"
-                    .to_string(),
-            ));
-        }
-    };
-
-    state_io::resolve_active_run_state_dir(&orbit_root, &run_id)?
-        .ok_or(OrbitError::not_found(NotFoundKind::JobRun, run_id))
-}
+use serde_json::Value;
 
 /// Resolve the `limit` for a task listing: the caller-supplied value when
 /// present (accepting a JSON number or numeric string), otherwise the
@@ -103,55 +41,6 @@ pub(super) fn task_list_limit(input: &Value) -> Result<usize, OrbitError> {
         ));
     }
     Ok(limit)
-}
-
-pub(super) fn resolve_step_index(input: &Value) -> Result<u32, OrbitError> {
-    if let Some(step_index) = optional_u32_alias(input, &["step_index", "stepIndex", "step-index"])?
-    {
-        return Ok(step_index);
-    }
-    let raw = std::env::var("ORBIT_STEP_INDEX").map_err(|_| {
-        OrbitError::InvalidInput(
-            "missing `step_index`; provide `step_index` or set ORBIT_STEP_INDEX".to_string(),
-        )
-    })?;
-    raw.trim().parse::<u32>().map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "ORBIT_STEP_INDEX must be an unsigned integer: {error}"
-        ))
-    })
-}
-
-pub(super) fn resolve_state_payload(input: &Value) -> Result<Value, OrbitError> {
-    let data = input.get("data");
-    let key = optional_string(input, "key")?;
-    let value = input.get("value");
-    match (data, key, value) {
-        (Some(_), Some(_), _) => Err(OrbitError::InvalidInput(
-            "provide either `data` or `key`/`value`, not both".to_string(),
-        )),
-        (Some(data), None, None) => {
-            if !data.is_object() {
-                return Err(OrbitError::InvalidInput(
-                    "`data` must be a JSON object".to_string(),
-                ));
-            }
-            Ok(data.clone())
-        }
-        (None, Some(key), Some(value)) => Ok(json!({ key: value.clone() })),
-        (None, Some(_), None) => Err(OrbitError::InvalidInput(
-            "`value` is required when `key` is provided".to_string(),
-        )),
-        (None, None, Some(_)) => Err(OrbitError::InvalidInput(
-            "`key` is required when `value` is provided".to_string(),
-        )),
-        (None, None, None) => Err(OrbitError::InvalidInput(
-            "provide either `data` or `key`/`value`".to_string(),
-        )),
-        (Some(_), None, Some(_)) => Err(OrbitError::InvalidInput(
-            "provide either `data` or `key`/`value`, not both".to_string(),
-        )),
-    }
 }
 
 pub(super) fn parse_artifacts(input: &Value) -> Result<Vec<TaskArtifact>, OrbitError> {

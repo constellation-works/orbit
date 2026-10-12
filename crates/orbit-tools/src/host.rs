@@ -105,8 +105,6 @@ pub enum OrbitBuiltinAction {
     PipelineInvoke,
     PipelineWait,
     Search,
-    StateGet,
-    StateSet,
     TaskAdd,
     TaskArtifactGet,
     TaskDelete,
