@@ -1,3 +1,7 @@
+# Source-defined validators use whole-call ReturnValue barriers; field-only
+# barriers do not stop body flow in CodeQL 2.27.1. See codeql-local.md and the
+# real-CodeQL fixture in scripts/test-codeql-path-barriers.py. Error payloads
+# remain diagnostics, never paths used by filesystem operations.
 extensions:
   - addsTo:
       pack: codeql/rust-all
@@ -5,13 +9,13 @@ extensions:
     data:
       - [
           "orbit_core::runtime::plugin::paths::validated_pin_file_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_core::bootstrap::global_defaults::validated_stamp_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -41,37 +45,31 @@ extensions:
         ]
       - [
           "orbit_registry::workspace_registry::io::validated_registry_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::application::docs::walk::validated_docs_root_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "orbit_core::application::job::pipeline::worker::log::pipeline_worker_file_name",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::application::job::pipeline::pipeline_worker_file_name",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "orbit_core::application::job::pipeline::worker::log::validated_pipeline_worker_log_directory",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::application::job::pipeline::validated_pipeline_worker_log_directory",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "orbit_core::application::routines::clock::settings::validated_clock_settings_path",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::application::routines::clock::validated_clock_settings_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
-          "path-injection",
-          "manual",
-        ]
-      - [
-          "orbit_core::application::routines::clock::validated_sweep_log_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "orbit_core::application::routines::clock::install::validated_sweep_log_path",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -83,13 +81,13 @@ extensions:
         ]
       - [
           "orbit_core::adapter::engine_host::v2_host::sandbox::provider_state::validated_linux_provider_state_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_core::adapter::engine_host::v2_host::sandbox::runtime_paths::validated_linux_runtime_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -101,25 +99,25 @@ extensions:
         ]
       - [
           "orbit_common::storage::sqlite::validated_sqlite_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_automation::auto_tasks::loader::validated_auto_tasks_dir",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_automation::routines::loader::validated_routines_origin_dir",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_common::fs::io::atomic::validated_atomic_target",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -133,61 +131,61 @@ extensions:
         ]
       - [
           "orbit_config::store::validated_config_store_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_config::validated_machine_settings_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_registry::machine_identity::validated_host_toml_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_cmd::diagnostics::validated_diagnostics_category_dir",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_cmd::diagnostics::validated_diagnostics_month_dir",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_store::driver::file::friction_store::validated_friction_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_cmd::diagnostics::validated_diagnostics_file_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_store::driver::sqlite::audit_event_store::insert::validated_audit_append_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_store::driver::file::scoreboard::common::validated_scoreboard_file_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::runtime::recovery_authority::validated_authority_global_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "orbit_core::runtime::recovery_authority::root::validated_authority_global_root",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -211,19 +209,19 @@ extensions:
         ]
       - [
           "orbit_common::fs::generation::paths::validated_generation_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_common::fs::generation::paths::validated_generation_record_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_common::fs::generation::paths::contained_under_parent",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -260,7 +258,7 @@ extensions:
       extensible: barrierGuardModel
     data:
       - [
-          "orbit_core::application::job::pipeline::pipeline_worker_log_directory_input_is_valid",
+          "orbit_core::application::job::pipeline::worker::log::pipeline_worker_log_directory_input_is_valid",
           "Argument[0]",
           "true",
           "path-injection",
