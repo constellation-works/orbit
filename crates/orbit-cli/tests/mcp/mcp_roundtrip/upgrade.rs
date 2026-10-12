@@ -652,24 +652,20 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (ChildGuard, u16) {
-    let port = TcpListener::bind(("127.0.0.1", 0))
-        .expect("ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port();
-    let child = McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home)
-        .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(ChildGuard::new)
-        .expect("spawn dashboard");
-    test_env::wait_until("the dashboard to listen", || {
-        TcpStream::connect(("127.0.0.1", port)).is_ok()
-    });
-    (child, port)
+fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (BoundServer, u16) {
+    let mut child = BoundServer::spawn(
+        McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home)
+            .args(["web", "serve", "--port", "0", "--no-open"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        Announcement::Dashboard,
+    )
+    .expect("spawn dashboard");
+    let addr = child
+        .wait_for_address(RESPONSE_TIMEOUT)
+        .expect("dashboard bind announcement");
+    (child, addr.port())
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -687,7 +683,7 @@ fn http_get(port: u16, path: &str) -> String {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn stop(child: &mut ChildGuard) {
+fn stop(child: &mut BoundServer) {
     // Safety: SIGTERM to this test's own child, as a service manager would.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -749,10 +745,7 @@ fn refusal_during_concurrent_calls_and_after_discarded_mutation_reply_never_repl
 #[test]
 fn listener_retains_admission_until_process_exit() {
     let workspace = McpWorkspace::init();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("free port");
-    let addr = listener.local_addr().expect("address");
-    drop(listener);
-    let mut client = workspace.listen(addr);
+    let (mut client, _) = workspace.listen();
     assert_refused(&preflight(&workspace));
     // The listener is never handed over, so even a candidate cannot admit it.
     let refused = candidate_preflight(&workspace, Path::new(env!("CARGO_BIN_EXE_orbit")));

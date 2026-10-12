@@ -11,9 +11,8 @@ leak-timeout = { period = "5s", result = "fail" }
 #
 # Nextest already runs every test in its own process, and
 # `orbit_common::test_env::ScopedEnv` guards the tests that touch ambient state.
-# These groups are a further layer for the two cases where a test's blast
-# radius reaches past its own process: a mutation of process-global state, and
-# a claim on a machine-global resource.
+# This group adds a further layer for tests whose mutation of process-global
+# state reaches past their own process.
 #
 # Keep them narrow. The filters below name modules, not packages. The previous
 # filter was `package(orbit-cli) | package(orbit-core)`, which pinned 2,351
@@ -28,18 +27,8 @@ leak-timeout = { period = "5s", result = "fail" }
 # `set_current_dir`, directly or through one of the shared env guards. A new
 # test module that does any of that belongs in the matching filter below.
 stateful-runtime = { max-threads = 1 }
-# Claims a machine-global resource. `free_port()` binds :0, reads the port back
-# and drops the listener before handing the number to a spawned server, so two
-# of these running at once can be assigned the same port.
-ephemeral-port = { max-threads = 1 }
 
 # orbit-core unit tests that mutate the process environment or cwd.
 [[profile.default.overrides]]
 filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::tool_host::tests::(command_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::tests::global_defaults::|runtime::task::tests::locks::|runtime::tests::(authorization|config_path|run_input)::|runtime::workspace::tests::claim::)/)'
 test-group = 'stateful-runtime'
-
-# The `web_serve_root` and `web_serve_shutdown` modules of the `process` binary
-# both pick a port with `free_port()` and spawn `orbit web serve` on it.
-[[profile.default.overrides]]
-filter = 'package(orbit-cli) & binary(process) & test(/^web_serve_/)'
-test-group = 'ephemeral-port'

@@ -10,6 +10,8 @@
 
 orbit_common::isolate_test_process!();
 
+#[path = "../support/bound_server.rs"]
+mod bound_server;
 #[path = "../support/child_guard.rs"]
 mod child_guard;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
