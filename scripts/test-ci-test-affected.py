@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import subprocess
@@ -689,6 +690,227 @@ class ObservedPipeDrainTests(unittest.TestCase):
 
     DEADLINE_SECONDS = 10
 
+    def test_executor_sigterm_stops_the_separate_child_session(self):
+        scratch = SCRIPTS.parent / ".orbit" / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            root = Path(temporary)
+            helper = root / "sigterm.py"
+            helper.write_text(textwrap.dedent(r'''
+                import importlib.util, json, os, signal, subprocess, sys
+                from pathlib import Path
+                spec = importlib.util.spec_from_file_location("affected", sys.argv[1])
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                root = Path(sys.argv[2])
+                children = []
+                real_popen = subprocess.Popen
+                def recording_popen(*args, **kwargs):
+                    child = real_popen(*args, **kwargs)
+                    children.append(child)
+                    (root / "child.pid").write_text(str(child.pid))
+                    return child
+                module.subprocess.Popen = recording_popen
+                previous = signal.getsignal(signal.SIGTERM)
+                try:
+                    module.run_observed([sys.executable, "-u", "-c",
+                        "import os, signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                        "os.write(1, b'ready\\n'); signal.pause()"], os.environ)
+                except SystemExit as caught:
+                    (root / "result.json").write_text(json.dumps({
+                        "code": caught.code, "returncode": children[0].poll(),
+                        "signal_restored": signal.getsignal(signal.SIGTERM) == previous}))
+            ''').lstrip("\n"))
+            proc = subprocess.Popen(
+                [sys.executable, str(helper), str(SCRIPTS / "ci-test-affected.py"), str(root)],
+                start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                ready, _, _ = select.select([proc.stdout], [], [], self.DEADLINE_SECONDS)
+                self.assertTrue(ready, "observed child did not become ready")
+                self.assertEqual(proc.stdout.readline(), b"ready\n")
+                proc.send_signal(signal.SIGTERM)
+                _, stderr = proc.communicate(timeout=5)
+                self.assertEqual(proc.returncode, 0, stderr.decode(errors="replace"))
+                result = json.loads((root / "result.json").read_text())
+                self.assertEqual(result, {"code": 128 + signal.SIGTERM,
+                                          "returncode": -signal.SIGKILL, "signal_restored": True})
+            finally:
+                # A helper that exited early may still have a live child in
+                # its separate session. Clean that session regardless of the
+                # helper's status before discarding its PID record.
+                pid_path = root / "child.pid"
+                if pid_path.exists():
+                    try:
+                        os.killpg(int(pid_path.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.communicate()
+
+    def test_relay_failures_stop_backpressured_child_and_pipe_holding_grandchild(self):
+        scratch = SCRIPTS.parent / ".orbit" / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            root = Path(temporary)
+            fixture = root / "relay_failure.py"
+            fixture.write_text(textwrap.dedent(r'''
+                import fcntl, importlib.util, io, json, os, signal, subprocess, sys, time
+                from pathlib import Path
+                from types import SimpleNamespace
+
+                role = sys.argv[1]
+                if role == "grandchild":
+                    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                    os.write(int(sys.argv[2]), b"ready")
+                    signal.pause()
+                    raise SystemExit("grandchild unexpectedly survived")
+
+                if role == "child":
+                    fd, ack, ready = map(int, sys.argv[2:5])
+                    root = Path(sys.argv[5])
+                    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                    read_ready, write_ready = os.pipe()
+                    grandchild = subprocess.Popen(
+                        [sys.executable, __file__, "grandchild", str(write_ready)],
+                        pass_fds=(write_ready,))
+                    (root / "grandchild.pid").write_text(str(grandchild.pid))
+                    os.close(write_ready)
+                    assert os.read(read_ready, 5) == b"ready"
+                    os.close(read_ready)
+                    os.write(fd, b"trigger\n")
+                    assert os.read(ack, 1) == b"!"
+                    # The relay is waiting here, so its reader cannot drain
+                    # this pipe. Measure/fill that exact pipe without load or
+                    # timing assumptions, then attempt one byte past capacity.
+                    os.set_blocking(fd, False)
+                    filled = 0
+                    while True:
+                        try:
+                            filled += os.write(fd, b"X" * 4096)
+                        except BlockingIOError:
+                            break
+                    assert filled > 0
+                    if hasattr(fcntl, "F_GETPIPE_SZ"):
+                        assert filled == fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
+                    (root / "backpressure.json").write_text(json.dumps(
+                        {"filled": filled, "attempted": filled + 1}))
+                    os.set_blocking(fd, True)
+                    os.write(ready, b"!")
+                    os.write(fd, b"X")
+                    raise SystemExit("abandoned pipe unexpectedly drained")
+
+                spec = importlib.util.spec_from_file_location("affected", sys.argv[2])
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                root, stream, operation, cleanup_error = Path(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
+                # Reap orphaned grandchildren ourselves on Linux, even on a
+                # host whose init does not reap them. Other hosts use init.
+                if sys.platform == "linux":
+                    import ctypes
+                    assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
+                ack_read, ack_write = os.pipe()
+                ready_read, ready_write = os.pipe()
+                original = BrokenPipeError("injected relay " + operation)
+                children = []
+                real_popen = subprocess.Popen
+                def recording_popen(*args, **kwargs):
+                    kwargs["pass_fds"] = (ack_read, ready_write)
+                    child = real_popen(*args, **kwargs)
+                    children.append(child)
+                    (root / "child.pid").write_text(str(child.pid))
+                    return child
+                module.subprocess.Popen = recording_popen
+                real_killpg = os.killpg
+                def failing_cleanup(pid, sig):
+                    if sig == signal.SIGTERM:
+                        raise OSError("injected cleanup error")
+                    return real_killpg(pid, sig)
+                if cleanup_error == "yes":
+                    module.os.killpg = failing_cleanup
+
+                class Relay:
+                    def fail(self):
+                        os.write(ack_write, b"!")
+                        assert os.read(ready_read, 1) == b"!"
+                        raise original
+                    def write(self, raw):
+                        assert raw == b"trigger\n"
+                        if operation == "write":
+                            self.fail()
+                    def flush(self):
+                        if operation == "flush":
+                            self.fail()
+
+                module.sys.stdout = SimpleNamespace(buffer=Relay() if stream == "stdout" else io.BytesIO())
+                module.sys.stderr = SimpleNamespace(buffer=Relay() if stream == "stderr" else io.BytesIO())
+                previous_sigterm = signal.getsignal(signal.SIGTERM)
+                started = time.monotonic()
+                try:
+                    module.run_observed(
+                        [sys.executable, __file__, "child", "1" if stream == "stdout" else "2",
+                         str(ack_read), str(ready_write), str(root)], os.environ)
+                except BaseException as caught:
+                    elapsed = time.monotonic() - started
+                    result = {"same_exception": caught is original, "elapsed": elapsed,
+                              "returncode": children[0].poll(),
+                              "signal_restored": signal.getsignal(signal.SIGTERM) == previous_sigterm}
+                else:
+                    raise AssertionError("relay error was swallowed")
+                if sys.platform == "linux":
+                    grandchild_pid = int((root / "grandchild.pid").read_text())
+                    reaped, status = os.waitpid(grandchild_pid, 0)
+                    result["grandchild_killed"] = reaped == grandchild_pid and os.waitstatus_to_exitcode(status) == -signal.SIGKILL
+                (root / "result.json").write_text(json.dumps(result))
+                # Restore real streams before Python's final flush.
+                sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+            ''').lstrip("\n"))
+            for stream, operation, cleanup_error in (
+                    ("stdout", "write", "no"), ("stderr", "write", "no"),
+                    ("stdout", "flush", "no"), ("stdout", "write", "yes")):
+                with self.subTest(stream=stream, operation=operation, cleanup_error=cleanup_error):
+                    proc = subprocess.Popen(
+                        [sys.executable, str(fixture), "helper", str(SCRIPTS / "ci-test-affected.py"),
+                         str(root), stream, operation, cleanup_error],
+                        start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    try:
+                        stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        # The child's session is separate from the helper's.
+                        # Clean both before reporting a regression; this timer
+                        # is independent of the measured propagation latency.
+                        for pid_path in (root / "child.pid", root / "grandchild.pid"):
+                            if pid_path.exists():
+                                try:
+                                    os.killpg(int(pid_path.read_text()), signal.SIGKILL)
+                                except ProcessLookupError:
+                                    # The pre-repair implementation left the
+                                    # child in the helper's group. Kill it by
+                                    # PID so the helper can still reap it.
+                                    try:
+                                        os.kill(int(pid_path.read_text()), signal.SIGKILL)
+                                    except ProcessLookupError:
+                                        pass
+                        # Killing the child lets even the broken implementation
+                        # finish joining and the helper reap its grandchild.
+                        try:
+                            proc.communicate(timeout=self.DEADLINE_SECONDS)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                            proc.communicate()
+                        self.fail("run_observed hung after a relay failure with a full pipe")
+                    self.assertEqual(proc.returncode, 0, (stdout + stderr).decode(errors="replace"))
+                    result = json.loads((root / "result.json").read_text())
+                    self.assertTrue(result["same_exception"], result)
+                    self.assertLess(result["elapsed"], 5, result)
+                    self.assertEqual(result["returncode"], -signal.SIGKILL, result)
+                    self.assertTrue(result["signal_restored"], result)
+                    if sys.platform == "linux":
+                        self.assertTrue(result["grandchild_killed"], result)
+                    pressure = json.loads((root / "backpressure.json").read_text())
+                    self.assertGreater(pressure["filled"], 0)
+                    self.assertGreater(pressure["attempted"], pressure["filled"])
+
     def test_partial_stdout_and_stderr_past_pipe_capacity_preserve_status_and_streams(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -755,6 +977,12 @@ class ObservedPipeDrainTests(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("ci_test_affected", sys.argv[1])
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
+            real_popen = module.subprocess.Popen
+            def recording_popen(*args, **kwargs):
+                child = real_popen(*args, **kwargs)
+                Path(sys.argv[3]).with_suffix(".pid").write_text(str(child.pid))
+                return child
+            module.subprocess.Popen = recording_popen
             code, output = module.run_observed([sys.executable, "-u", sys.argv[2]], os.environ)
             Path(sys.argv[3]).write_text(json.dumps({"exit_code": code, "output": output}))
         ''').lstrip("\n"))
@@ -764,11 +992,22 @@ class ObservedPipeDrainTests(unittest.TestCase):
         try:
             stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:
+            pid_path = result_path.with_suffix(".pid")
+            if pid_path.exists():
+                pid = int(pid_path.read_text())
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            # Allow the helper to reap the separate child session first.
             try:
+                proc.communicate(timeout=self.DEADLINE_SECONDS)
+            except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.communicate()
+                proc.communicate()
             self.fail("run_observed blocked past its deadline on a partial stdout line "
                       "while stderr held more than a pipe of data")
         self.assertEqual(proc.returncode, 0, stderr.decode("utf-8", errors="replace"))

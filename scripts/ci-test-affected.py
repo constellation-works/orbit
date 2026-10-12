@@ -30,11 +30,13 @@ libtest time plus the doctest time.
 """
 
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -558,12 +560,25 @@ def run_observed(command, environment):
     own reader. A blocking line read waits only for that pipe, so a partial
     line cannot leave the other pipe unread while the child fills it. Lines
     are appended whole, so one stream's bytes never split a timing line.
+
+    A relay failure wakes the supervisor before it joins either reader. The
+    command owns a session so cleanup can stop descendants holding the pipes,
+    even after the command exits. SIGTERM also enters this cleanup path when
+    the surrounding executor stops the gate gracefully.
     """
-    with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE) as process:
+    process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    previous_sigterm = None
+    started = []
+    try:
+        if threading.current_thread() is threading.main_thread():
+            def interrupted(signum, frame):
+                raise SystemExit(128 + signum)
+
+            previous_sigterm = signal.signal(signal.SIGTERM, interrupted)
         lines = []
         errors = []
-        started = []
+        failed = threading.Event()
         lock = threading.Lock()
 
         def drain(pipe, dest):
@@ -580,27 +595,48 @@ def run_observed(command, environment):
                     dest.write(raw)
                     dest.flush()
             except BaseException as caught:
-                errors.append(caught)
+                with lock:
+                    errors.append(caught)
+                failed.set()
 
         threads = (
             threading.Thread(target=drain, args=(process.stdout, sys.stdout.buffer)),
             threading.Thread(target=drain, args=(process.stderr, sys.stderr.buffer)),
         )
-        try:
-            for thread in threads:
-                thread.start()
-                started.append(thread)
-            for thread in started:
-                thread.join()
-            if errors:
-                raise errors[0]
-            return process.wait(), b"".join(lines).decode("utf-8", errors="replace")
-        except BaseException:
-            process.terminate()
+        for thread in threads:
+            thread.start()
+            started.append(thread)
+        while any(thread.is_alive() for thread in started):
+            if failed.wait(0.05):
+                break
+        if errors:
+            raise errors[0]
+        return process.wait(), b"".join(lines).decode("utf-8", errors="replace")
+    except BaseException:
+        # Cleanup must not replace the original relay error. Always kill
+        # the group after the grace, including when its leader has exited:
+        # a descendant may ignore SIGTERM and still hold a reader's pipe.
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, signal.SIGTERM)
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            process.wait(timeout=0.1)
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+        with contextlib.suppress(OSError):
+            process.kill()
+        with contextlib.suppress(OSError):
             process.wait()
-            for thread in started:
-                thread.join()
-            raise
+        for thread in started:
+            thread.join()
+        raise
+    finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+        for pipe in (process.stdout, process.stderr):
+            with contextlib.suppress(OSError):
+                pipe.close()
 
 
 def main():
