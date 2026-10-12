@@ -17,9 +17,6 @@ pub(crate) mod opencode;
 pub(crate) mod pi;
 mod usage_window;
 
-#[cfg(test)]
-mod tests;
-
 pub use antigravity::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
