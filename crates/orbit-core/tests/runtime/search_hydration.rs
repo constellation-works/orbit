@@ -1,6 +1,7 @@
 //! Lexical search hydrates its hits from the task documents alone: a cold
 //! search over a workspace whose matching bundles carry megabytes of
-//! artifacts neither reads nor verifies those payloads.
+//! artifacts neither reads nor verifies those payloads. Friction search reads
+//! bounded pages and stops after its matching truncation lookahead.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use orbit_common::test_env::{self, FixtureProgress};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitError, OrbitRuntime};
+use orbit_store::friction_store::{FrictionAddParams, FrictionStore};
 use serde_json::json;
 use tempfile::TempDir;
 use tracing_subscriber::{Layer, layer::Context};
@@ -19,6 +21,178 @@ const TASKS: usize = 40;
 const MATCHING: usize = 20;
 const ARTIFACT_BYTES: usize = 1_000_000;
 const TERM: &str = "quasarbeacon";
+
+/// Deterministic store order, independent of allocation time or ID ordering.
+fn seed_frictions(runtime: &OrbitRuntime, tags: &[Vec<String>]) -> (FrictionStore, Vec<String>) {
+    let store = FrictionStore::open(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        runtime.data_root().join("frictions"),
+    )
+    .unwrap();
+    let ids = tags
+        .iter()
+        .enumerate()
+        .map(|(index, tags)| {
+            store
+                .add(FrictionAddParams {
+                    model: "codex".into(),
+                    title: Some(format!("Fixture {index} {TERM}")),
+                    body: format!("Friction body {index}"),
+                    tags: tags.clone(),
+                    status: orbit_types::record::FrictionStatus::Open,
+                    during_task: None,
+                    created_at: chrono::DateTime::from_timestamp(1_800_000_000 + index as i64, 0)
+                        .unwrap(),
+                })
+                .unwrap()
+                .record
+                .id
+        })
+        .collect();
+    (store, ids)
+}
+
+/// A read beyond the expected pages must fail decoding, rather than silently
+/// passing a result-count assertion while hydrating the entire corpus.
+fn poison_friction(runtime: &OrbitRuntime, id: &str) {
+    let conn = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    assert_eq!(
+        conn.execute(
+            "UPDATE friction_records SET tags_json = '[1]' \
+             WHERE workspace_id = ?1 AND friction_id = ?2",
+            rusqlite::params![runtime.workspace_id().unwrap(), id],
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn friction_search_and_listing_bound_store_reads() {
+    if !super::dispatch_admission::isolated(
+        "search_hydration::friction_search_and_listing_bound_store_reads",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let (store, ids) = seed_frictions(&runtime, &vec![vec!["tooling".into()]; 8]);
+    // Limit two plus one lookahead may decode only the first three records.
+    poison_friction(&runtime, &ids[3]);
+    assert!(
+        store.show(&ids[3]).is_err(),
+        "negative control: corrupt row"
+    );
+    for query in [None, Some(TERM.to_string())] {
+        let listing = query.is_none();
+        let response = runtime
+            .global_search(GlobalSearchParams {
+                query: query.clone(),
+                kind: GlobalSearchKind::Friction,
+                limit: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        let found: Vec<_> = response
+            .results
+            .iter()
+            .map(|hit| hit.id.as_ref().unwrap())
+            .collect();
+        assert_eq!(found, ids[..2].iter().collect::<Vec<_>>());
+        assert_eq!(
+            !response.notes.is_empty(),
+            listing,
+            "listing reports truncation"
+        );
+        for (index, hit) in response.results.iter().enumerate() {
+            assert_eq!(
+                hit.snippet.as_deref(),
+                Some(format!("Friction body {index}").as_str())
+            );
+            assert_eq!(hit.record.is_some(), listing);
+        }
+        assert!(
+            runtime
+                .global_search(GlobalSearchParams {
+                    query,
+                    kind: GlobalSearchKind::Friction,
+                    limit: 3,
+                    ..Default::default()
+                })
+                .is_err(),
+            "widening the page reaches the corrupt lookahead"
+        );
+    }
+}
+
+#[test]
+fn friction_tag_pages_fill_limit_and_check_matching_lookahead() {
+    if !super::dispatch_admission::isolated(
+        "search_hydration::friction_tag_pages_fill_limit_and_check_matching_lookahead",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let mut tags = vec![vec!["tooling".into()]; 14];
+    for index in [4, 7, 8] {
+        tags[index].push("other".into());
+    }
+    let (store, ids) = seed_frictions(&runtime, &tags);
+    let search = |limit, tags| {
+        runtime.global_search(GlobalSearchParams {
+            kind: GlobalSearchKind::Friction,
+            tags,
+            limit,
+            ..Default::default()
+        })
+    };
+    let both_tags = vec!["TOOLING".into(), "OTHER".into()];
+    for limit in [2, 3, 4] {
+        let response = search(limit, both_tags.clone()).unwrap();
+        let found: Vec<_> = response
+            .results
+            .iter()
+            .map(|hit| hit.id.as_ref().unwrap())
+            .collect();
+        let expected: Vec<_> = [4, 7, 8]
+            .iter()
+            .take(limit)
+            .map(|index| &ids[*index])
+            .collect();
+        assert_eq!(
+            found, expected,
+            "all tags match across pages, in store order"
+        );
+        assert_eq!(
+            !response.notes.is_empty(),
+            limit == 2,
+            "only excess matching records truncate"
+        );
+    }
+    let rejected = search(2, vec!["absent".into()]).unwrap();
+    assert!(rejected.results.is_empty());
+    assert!(rejected.notes.is_empty());
+    // Three pages of three rows reach the third match at index eight. The
+    // fourth page must not be decoded after that matching lookahead.
+    poison_friction(&runtime, &ids[9]);
+    assert!(
+        store.show(&ids[9]).is_err(),
+        "negative control: corrupt tail"
+    );
+    let response = search(2, both_tags).unwrap();
+    assert_eq!(response.results.len(), 2);
+    assert!(!response.notes.is_empty());
+}
 
 #[test]
 fn cold_search_hits_skip_artifact_payloads() {
