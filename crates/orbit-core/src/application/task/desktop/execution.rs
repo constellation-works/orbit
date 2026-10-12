@@ -214,7 +214,12 @@ pub(super) fn handoff_pull_request(
     Ok(HandoffPullRequest {
         number,
         url: url.to_string(),
-        state: status.state.clone().unwrap_or_default(),
+        state: status
+            .state
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
         head,
         merge_commit: status.merge_commit.clone(),
     })

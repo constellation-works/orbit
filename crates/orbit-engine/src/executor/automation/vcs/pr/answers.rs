@@ -18,12 +18,15 @@ use super::super::operations;
 /// One pull request as `pr.status` (or, with fewer fields, `pr.view`)
 /// reports it.
 ///
-/// A text field is trimmed, and one that is absent, empty or not a string
-/// reads as `None`; every reader already treated those alike.
+/// Identity and evidence text is trimmed to preserve the existing readers.
+/// State tokens and the few exact comparisons retain provider whitespace;
+/// normalizing those would change merge authorization or output.
 #[derive(Clone, Debug)]
 pub struct PullRequestStatus {
     /// The pull request number.
     pub number: Option<u64>,
+    /// The engine historically also accepts signed and string PR selectors.
+    pub(in crate::executor::automation::vcs) number_selector: Option<String>,
     /// The pull request's web URL.
     pub url: Option<String>,
     /// The provider's state: `OPEN`, `CLOSED` or `MERGED`.
@@ -36,6 +39,10 @@ pub struct PullRequestStatus {
     pub base_branch: Option<String>,
     /// The commit a merged pull request landed as.
     pub merge_commit: Option<String>,
+    /// Exact strings used by the original lease, supersede and merge readers.
+    pub(in crate::executor::automation::vcs) exact_head_branch: Option<String>,
+    pub(in crate::executor::automation::vcs) exact_head_sha: Option<String>,
+    pub(in crate::executor::automation::vcs) exact_merge_commit: Option<String>,
     pub(crate) merged_at: Option<String>,
     pub(crate) merge_state_status: Option<String>,
     pub(crate) review_decision: ReviewDecision,
@@ -68,16 +75,29 @@ impl PullRequestStatus {
 
     fn parse(pull_request: Value) -> Self {
         let text = |field: &str| reported(pull_request.get(field));
+        let exact = |field: &str| {
+            pull_request
+                .get(field)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        };
         Self {
             number: pull_request.get("number").and_then(Value::as_u64),
+            number_selector: pull_request.get("number").and_then(number_selector),
             url: text("url"),
-            state: text("state"),
+            state: exact("state"),
             head_branch: text("headRefName"),
             head_sha: text("headRefOid"),
             base_branch: text("baseRefName"),
             merge_commit: reported(pull_request.pointer("/mergeCommit/oid")),
             merged_at: text("mergedAt"),
-            merge_state_status: text("mergeStateStatus"),
+            merge_state_status: exact("mergeStateStatus"),
+            exact_head_branch: exact("headRefName"),
+            exact_head_sha: exact("headRefOid"),
+            exact_merge_commit: pull_request
+                .pointer("/mergeCommit/oid")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             review_decision: ReviewDecision::parse(pull_request.get("reviewDecision")),
             status_checks: pull_request
                 .get("statusCheckRollup")
@@ -176,7 +196,7 @@ impl StatusCheck {
 /// One pull request as `pr.list` reports it.
 #[derive(Clone, Debug)]
 pub(in crate::executor::automation::vcs) struct PullRequestSummary {
-    pub(in crate::executor::automation::vcs) number: Option<u64>,
+    pub(in crate::executor::automation::vcs) number: Option<String>,
     /// The head branch exactly as reported: an empty name is a branch that
     /// does not match, while an absent one is unreadable.
     pub(in crate::executor::automation::vcs) head_branch: Option<String>,
@@ -199,7 +219,7 @@ impl PullRequestSummary {
         Ok(pull_requests
             .iter()
             .map(|pull_request| Self {
-                number: pull_request.get("number").and_then(Value::as_u64),
+                number: pull_request.get("number").and_then(number_selector),
                 head_branch: pull_request
                     .get("headRefName")
                     .and_then(Value::as_str)
@@ -312,4 +332,14 @@ fn reported(value: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Preserve the engine's accepted PR selector representations without changing
+/// the desktop's stricter unsigned-number identity check.
+fn number_selector(value: &Value) -> Option<String> {
+    value
+        .as_i64()
+        .map(|number| number.to_string())
+        .or_else(|| value.as_u64().map(|number| number.to_string()))
+        .or_else(|| value.as_str().map(ToOwned::to_owned))
 }

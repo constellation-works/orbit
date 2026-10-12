@@ -379,13 +379,19 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
 /// conflicting or stale base. A protection refusal stays an operator's call.
 #[test]
 fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
-    for (merge_state, repairable) in [("DIRTY", true), ("BEHIND", true), ("DRAFT", false)] {
+    for (merge_state, repairable) in [
+        ("DIRTY", true),
+        ("BEHIND", true),
+        ("DRAFT", false),
+        (" DIRTY ", false),
+    ] {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
         let host = OpenPullRequestHost::new(context, merge_state, json!([]));
 
-        land(&host).expect_err("an unmergeable pull request stops the landing");
+        land_with(&host, json!({"max_wait_seconds": 0}))
+            .expect_err("an unmergeable pull request stops the landing");
 
         assert_eq!(
             *host.steps.lock().unwrap(),

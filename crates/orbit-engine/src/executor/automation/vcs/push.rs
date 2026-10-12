@@ -498,10 +498,12 @@ fn merged_at_lease<H: RuntimeHost + ?Sized>(
     if !matches!(classify_pr_state(&pull_request), PrMergeState::Merged) {
         return Ok(None);
     }
-    if pull_request.head_sha.as_deref().unwrap_or_default() != lease {
+    if pull_request.exact_head_sha.as_deref().unwrap_or_default() != lease {
         return Ok(None);
     }
-    Ok(pull_request.merge_commit)
+    Ok(pull_request
+        .exact_merge_commit
+        .filter(|oid| !oid.is_empty()))
 }
 
 /// Whether `merge_commit` is on `origin/<base>` after a fresh fetch.
