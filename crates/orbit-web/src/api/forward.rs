@@ -28,6 +28,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use super::audit::AUDIT_NEXT_BEFORE_HEADER;
 use super::host::{host_error_code, status_for};
 use super::routines::{action_capability, authorization_denied, authorized_caller};
 use crate::host_tunnels::{ForwardError, HostTarget, Lease, RemoteIdentity};
@@ -47,13 +48,15 @@ const FORWARDED_REQUEST_HEADERS: [HeaderName; 3] = [
 ];
 
 /// Response headers passed back. The remote's artifact sandbox CSP and
-/// attachment disposition survive; hop-by-hop headers do not, and this
-/// dashboard's own security and nosniff layers still apply.
-const FORWARDED_RESPONSE_HEADERS: [HeaderName; 4] = [
+/// attachment disposition survive, and so does the audit listing's
+/// continuation cursor; hop-by-hop headers do not, and this dashboard's own
+/// security and nosniff layers still apply.
+const FORWARDED_RESPONSE_HEADERS: [HeaderName; 5] = [
     header::CONTENT_TYPE,
     header::CONTENT_DISPOSITION,
     header::CONTENT_SECURITY_POLICY,
     header::CACHE_CONTROL,
+    HeaderName::from_static(AUDIT_NEXT_BEFORE_HEADER),
 ];
 
 /// The host a request names: one of the serving host's registered remotes,

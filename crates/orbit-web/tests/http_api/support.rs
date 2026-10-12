@@ -515,6 +515,45 @@ pub(super) fn json_ok(response: Response) -> Value {
     value
 }
 
+/// Follows `x-audit-next-before` from `prefix` (`/api/audit`, or a forwarded
+/// `/api/on/<host>/audit`) until the server stops offering one. Each entry is
+/// one page's execution ids and the cursor that page carried, so two walks can
+/// be compared page by page.
+pub(super) fn walk_audit_pages(
+    get: impl Fn(&str) -> Response,
+    prefix: &str,
+    query: &str,
+    limit: usize,
+) -> Vec<(Vec<String>, Option<String>)> {
+    let mut pages = Vec::new();
+    let mut before: Option<String> = None;
+    loop {
+        let cursor = before
+            .as_deref()
+            .map(|value| format!("&before={value}"))
+            .unwrap_or_default();
+        let response = get(&format!(
+            "{prefix}?workspace=ws_http_fixture&since=24h&limit={limit}&{query}{cursor}"
+        ));
+        before = response
+            .headers()
+            .get("x-audit-next-before")
+            .map(|value| value.to_str().unwrap().to_string());
+        let page = json_ok(response);
+        let page = page.as_array().unwrap();
+        assert!(page.len() <= limit);
+        let ids = page
+            .iter()
+            .map(|event| event["execution_id"].as_str().unwrap().to_string())
+            .collect();
+        pages.push((ids, before.clone()));
+        assert!(pages.len() < 50, "cursor must make progress");
+        if before.is_none() {
+            return pages;
+        }
+    }
+}
+
 pub(super) fn serve_fixture() {
     if let Some(path) = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE") {
         // Count real store operations across the server's blocking threads.

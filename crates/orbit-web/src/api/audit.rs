@@ -206,7 +206,7 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
 /// just past this page. Absent once the window is exhausted. A bare array body
 /// cannot say whether a short page is the end or a capped scan, so the server
 /// states it.
-const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
+pub(super) const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
 
 struct AuditPage {
     events: Vec<orbit_core::AuditEvent>,

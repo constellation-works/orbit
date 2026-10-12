@@ -33,7 +33,7 @@ Each step runs before the next, and every refusal happens before any SSH process
 
 - The method, the still-encoded path, the query string (verbatim) and the body are passed through.
 - Request headers sent: `Accept`, `Content-Type`, `Last-Event-ID`. `Host` and `Origin` are set to the remote's own loopback authority (`localhost:<remote-port>`), so the remote's origin guard admits the request as same-origin. Cookies and other headers are not sent.
-- Response headers returned: `Content-Type`, `Content-Disposition`, `Content-Security-Policy`, `Cache-Control`. An artifact therefore keeps its sandbox CSP and attachment disposition. Hop-by-hop headers are dropped, and the serving dashboard's own security and `nosniff` headers still apply.
+- Response headers returned: `Content-Type`, `Content-Disposition`, `Content-Security-Policy`, `Cache-Control`, and `x-audit-next-before`, the continuation cursor of the audit listing (present only when the remote sends it, including on a short page from a capped scan). An artifact therefore keeps its sandbox CSP and attachment disposition. Hop-by-hop headers are dropped, and the serving dashboard's own security and `nosniff` headers still apply.
 - The remote status and body come back unchanged. Bodies are streamed, never buffered.
 - One loopback HTTP/1.1 connection per request, to the tunnel's local port.
 
