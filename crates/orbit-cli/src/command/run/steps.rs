@@ -160,6 +160,7 @@ pub(crate) struct RunStepRecord {
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     finished_at: Option<chrono::DateTime<chrono::Utc>>,
     duration_ms: Option<u64>,
+    lock_wait_ms: Option<u64>,
     exit_code: Option<i32>,
     agent_response_json: Option<Value>,
     state: String,
@@ -176,6 +177,7 @@ impl RunStepRecord {
             started_at: step.started_at,
             finished_at: step.finished_at,
             duration_ms: step.duration_ms,
+            lock_wait_ms: step.lock_wait_ms,
             exit_code: step.exit_code,
             agent_response_json: step.agent_response_json.clone(),
             state: step.state.to_string(),
@@ -217,6 +219,7 @@ impl RunStepRecord {
             started_at: step.started_at,
             finished_at: step.finished_at,
             duration_ms,
+            lock_wait_ms: step.lock_wait_ms,
             exit_code: None,
             agent_response_json: None,
             state: step.state.unwrap_or_else(|| "running".to_string()),
@@ -422,18 +425,25 @@ pub(crate) fn run_display_steps(run: &JobRun, audit_steps: Vec<RunAuditStep>) ->
 pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::table::Table {
     use crate::output::table::{Column, Table};
     // `orbit run show <run_id> -s <step>` prints one step's untruncated record.
-    let mut table = Table::new(vec![
+    let mut columns = vec![
         Column::new("#").number(),
         Column::new("TARGET"),
         Column::new("STATE").fixed(),
         Column::new("DURATION").number(),
         Column::new("ERROR CODE").fixed(),
         Column::new("ERROR MESSAGE"),
-    ])
-    .empty_message("no steps recorded in the run record or its audit trail");
+    ];
+    let show_lock_wait = steps
+        .iter()
+        .any(|step| step.lock_wait_ms.unwrap_or_default() > 0);
+    if show_lock_wait {
+        columns.insert(4, Column::new("LOCK WAIT (ms)").number());
+    }
+    let mut table =
+        Table::new(columns).empty_message("no steps recorded in the run record or its audit trail");
     for step in steps {
         use comfy_table::Cell;
-        table.add_row(vec![
+        let mut cells = vec![
             // One-based, as the dashboard numbers them; `step_index` stays
             // zero-based in `--json`.
             Cell::new(step.step_index + 1),
@@ -442,7 +452,19 @@ pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::tabl
             Cell::new(format_duration(step.duration_ms)),
             Cell::new(step.error_code.as_deref().unwrap_or("-")),
             Cell::new(summarize_error_message(step.error_message.as_deref())),
-        ]);
+        ];
+        if show_lock_wait {
+            cells.insert(
+                4,
+                Cell::new(
+                    step.lock_wait_ms
+                        .filter(|ms| *ms > 0)
+                        .map(|ms| ms.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+            );
+        }
+        table.add_row(cells);
     }
     table
 }
@@ -504,6 +526,9 @@ pub(crate) fn step_record_payload(
             step.error_message.as_deref().unwrap_or("-")
         ),
     ];
+    if let Some(wait) = step.lock_wait_ms.filter(|ms| *ms > 0) {
+        lines.push(format!("{} {wait}ms", bold("Lock wait:")));
+    }
     if let Some(output) = doc.get("step_output").filter(|value| !value.is_null()) {
         lines.push(bold("Step Output:").to_string());
         lines.push(
@@ -523,6 +548,7 @@ pub(crate) fn run_step_record_to_json(step: &RunStepRecord) -> Value {
         "started_at": step.started_at.map(|t| t.to_rfc3339()),
         "finished_at": step.finished_at.map(|t| t.to_rfc3339()),
         "duration_ms": step.duration_ms,
+        "lock_wait_ms": step.lock_wait_ms,
         "exit_code": step.exit_code,
         "agent_response_json": step.agent_response_json,
         "error_code": step.error_code,
@@ -539,6 +565,7 @@ pub(crate) fn legacy_step_to_json(step: &JobRunStep) -> Value {
         "started_at": step.started_at.map(|t| t.to_rfc3339()),
         "finished_at": step.finished_at.map(|t| t.to_rfc3339()),
         "duration_ms": step.duration_ms,
+        "lock_wait_ms": step.lock_wait_ms,
         "exit_code": step.exit_code,
         "error_code": step.error_code,
         "error_message": step.error_message,

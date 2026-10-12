@@ -44,6 +44,7 @@ fn seed_interrupted_run(fixture: &Fixture) {
                 "body_kind": body_kind,
                 "step_id": step_id,
                 "outcome": "success",
+                "lock_wait_ms": if index == 0 { Some(42) } else { Some(0) },
                 "ts": ts,
             });
             db.execute(
@@ -96,6 +97,14 @@ fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
     let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
     assert_eq!(json["run"]["duration_ms"], 13_191_607);
     assert_eq!(json["steps"][0]["step_index"], 0);
+    assert_eq!(json["steps"][0]["lock_wait_ms"], 42);
+    assert_eq!(json["steps"][1]["lock_wait_ms"], 0);
+    let table = shown(&fixture, &["--format", "table"]);
+    assert!(table.contains("LOCK WAIT (ms)"), "{table}");
+    let detail = shown(&fixture, &["--step", "worktree"]);
+    assert!(detail.contains("Lock wait: 42ms"), "{detail}");
+    let quiet = shown(&fixture, &["--step", "prepare"]);
+    assert!(!quiet.contains("Lock wait:"), "{quiet}");
 }
 
 #[test]

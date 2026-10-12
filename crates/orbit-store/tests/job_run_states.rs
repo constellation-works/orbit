@@ -262,3 +262,40 @@ fn only_runs_that_cannot_resume_drop_their_resume_state() {
         assert!(raw.get("compound_outputs").is_none(), "{finished}: {raw}");
     }
 }
+
+#[test]
+fn stored_step_wait_is_updated_and_hydrated_by_single_and_batched_reads() {
+    use orbit_store::JobRunStepParams;
+    use orbit_types::workflow::JobTargetType;
+    let store = Store::open_in_memory().unwrap();
+    let jobs = workspace_job_run_store(store, "timing");
+    let run = jobs
+        .insert_job_run("leaf", 1, Utc::now(), None, None)
+        .unwrap();
+    let mut step = JobRunStepParams {
+        step_index: 0,
+        target_type: JobTargetType::Activity,
+        target_id: "sync_base".into(),
+        started_at: Utc::now(),
+        finished_at: Utc::now(),
+        duration_ms: Some(100),
+        lock_wait_ms: Some(42),
+        exit_code: None,
+        agent_response_json: None,
+        state: JobRunState::Failed,
+        error_code: None,
+        error_message: None,
+    };
+    for expected in [Some(42), Some(0), None] {
+        step.lock_wait_ms = expected;
+        jobs.complete_job_run_step(&run.run_id, &step).unwrap();
+        assert_eq!(
+            jobs.get_job_run(&run.run_id).unwrap().unwrap().steps[0].lock_wait_ms,
+            expected
+        );
+        assert_eq!(
+            jobs.list_job_runs_filtered(&Default::default()).unwrap()[0].steps[0].lock_wait_ms,
+            expected
+        );
+    }
+}

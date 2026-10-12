@@ -77,6 +77,9 @@ pub enum V2AuditEventKind {
     },
     StepFinished {
         step_id: String,
+        /// Acquisition wait inside this synchronous step; absent in older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lock_wait_ms: Option<u64>,
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,

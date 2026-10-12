@@ -170,6 +170,7 @@ fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
             .complete_job_run_step(
                 &leaf.leaf,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index,
                     target_type: JobTargetType::Activity,
                     target_id: "claim_handoff".into(),
@@ -647,6 +648,7 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
         .complete_job_run_step(
             &leaf,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: "diagnostic".into(),

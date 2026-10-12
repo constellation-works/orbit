@@ -122,6 +122,7 @@ fn record_failing_step_with_message(runtime: &OrbitRuntime, run_id: &str, messag
         .complete_job_run_step(
             run_id,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: "agent_implement".to_string(),

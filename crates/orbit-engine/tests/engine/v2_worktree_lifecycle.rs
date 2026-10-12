@@ -2181,6 +2181,76 @@ fn git_rebase_decision_follows_the_checkout_state() {
         assert_eq!(conflict.target_base_sha, conflicted.target);
         assert_eq!(conflict.original_base_sha, conflicted.base_sha);
         assert_eq!(conflict.conflicting_paths, ["README.md"]);
+        assert_eq!(
+            conflict.conflicting_files,
+            vec![orbit_common::ConflictedFile {
+                path: "README.md".to_string(),
+                deterministically_resolvable: false,
+            }]
+        );
+        // Supply real unmerged index entries whose modes and IDs prove a
+        // trivial resolution. Re-entering git_rebase diagnoses the live stop
+        // without changing the index or authorizing a merge.
+        let stages = git(&conflicted.checkout.path, &["ls-files", "--unmerged"]);
+        let entries = stages
+            .lines()
+            .map(|line| {
+                let (entry, path) = line.split_once('\t').unwrap();
+                let fields = entry.split_whitespace().collect::<Vec<_>>();
+                (
+                    fields[0].to_string(),
+                    fields[1].to_string(),
+                    fields[2].to_string(),
+                    path.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for matching in [(2, 3), (1, 2), (1, 3)] {
+            use std::io::Write;
+            let input = entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let content = if index + 1 == matching.1 {
+                        &entries[matching.0 - 1]
+                    } else {
+                        entry
+                    };
+                    format!("{} {} {}\t{}\n", content.0, content.1, entry.2, entry.3)
+                })
+                .collect::<String>();
+            let mut command = Command::new("git")
+                .current_dir(&conflicted.checkout.path)
+                .args(["update-index", "--index-info"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            command
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            assert!(command.wait_with_output().unwrap().status.success());
+            let OrbitError::RecoverableVcsConflict(diagnosed) = conflicted.rebase().unwrap_err()
+            else {
+                panic!("expected the stopped rebase's structured conflict");
+            };
+            assert_eq!(
+                diagnosed.conflicting_files,
+                vec![orbit_common::ConflictedFile {
+                    path: "README.md".to_string(),
+                    deterministically_resolvable: true,
+                }]
+            );
+            assert_eq!(
+                git(&conflicted.checkout.path, &["ls-files", "--unmerged"]),
+                input.trim()
+            );
+        }
+
         assert!(rebase_in_progress(&conflicted.checkout.path));
         assert!(!git(&conflicted.checkout.path, &["ls-files", "-u"]).is_empty());
 

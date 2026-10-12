@@ -210,7 +210,7 @@ fn missing_no_diff_fields_fail_at_implementation_and_preserve_raw_response() {
                             .contains("no_diff_artifacts")
                     );
                     assert!(writer.events_snapshot().unwrap().iter().any(|event| matches!(
-                    &event.kind, V2AuditEventKind::StepFinished {step_id, outcome, error_message}
+                    &event.kind, V2AuditEventKind::StepFinished {step_id, outcome, error_message, ..}
                     if step_id == "implement_one" && outcome == "failed"
                         && error_message.as_deref().is_some_and(|message| message.contains("response_envelope_error"))
                 )), "{label}: attribute the failure to implement_one");

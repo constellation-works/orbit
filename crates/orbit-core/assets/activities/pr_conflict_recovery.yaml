@@ -74,6 +74,17 @@ spec:
         minItems: 1
         items:
           type: string
+      conflicting_files:
+        type: array
+        items:
+          type: object
+          required: [path, deterministically_resolvable]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            deterministically_resolvable:
+              type: boolean
       diagnostic:
         type: string
   # Advisory only. Neither this result nor any agent-returned flag authorizes

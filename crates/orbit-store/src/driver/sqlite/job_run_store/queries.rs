@@ -68,9 +68,7 @@ impl Store {
         run: &JobRun,
         pipeline_state: Option<&PipelineState>,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         // The run row and its state row commit together.
         let tx =
@@ -87,16 +85,14 @@ impl Store {
         step: &JobRunStep,
     ) -> Result<(), OrbitError> {
         let agent_response_json = optional_json(&step.agent_response_json, "agent response")?;
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
             r#"INSERT INTO job_run_steps(
                 workspace_id, run_id, step_index, target_type, target_id, state,
                 started_at, finished_at, duration_ms, exit_code, error_code,
-                error_message, agent_response_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                error_message, agent_response_json, lock_wait_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(workspace_id, run_id, step_index) DO UPDATE SET
                 target_type = excluded.target_type,
                 target_id = excluded.target_id,
@@ -107,7 +103,8 @@ impl Store {
                 exit_code = excluded.exit_code,
                 error_code = excluded.error_code,
                 error_message = excluded.error_message,
-                agent_response_json = excluded.agent_response_json"#,
+                agent_response_json = excluded.agent_response_json,
+                lock_wait_ms = excluded.lock_wait_ms"#,
             rusqlite::params![
                 workspace_id,
                 run_id,
@@ -122,6 +119,7 @@ impl Store {
                 step.error_code,
                 step.error_message,
                 agent_response_json,
+                step.lock_wait_ms.map(|value| value as i64),
             ],
         )
         .map_err(sqlite_store_error)?;
@@ -251,9 +249,7 @@ impl Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<bool, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
             "DELETE FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
@@ -582,7 +578,7 @@ pub(super) fn read_steps_for_runs(
             .prepare(&format!(
                 "SELECT run_id, step_index, target_type, target_id, state, started_at, \
                  finished_at, duration_ms, exit_code, error_code, error_message, \
-                 agent_response_json FROM job_run_steps \
+                 agent_response_json, lock_wait_ms FROM job_run_steps \
                  WHERE workspace_id = ?1 AND run_id IN ({placeholders}) \
                  ORDER BY run_id ASC, step_index ASC"
             ))
@@ -618,7 +614,7 @@ fn read_steps(
     let mut stmt = conn
         .prepare(
             "SELECT step_index, target_type, target_id, state, started_at, finished_at, \
-             duration_ms, exit_code, error_code, error_message, agent_response_json \
+             duration_ms, exit_code, error_code, error_message, agent_response_json, lock_wait_ms \
              FROM job_run_steps WHERE workspace_id = ?1 AND run_id = ?2 ORDER BY step_index ASC",
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -644,6 +640,9 @@ fn row_to_job_run_step_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::R
     let duration_ms: Option<i64> = row.get(offset + 6)?;
     let agent_response_json: Option<String> = row.get(offset + 10)?;
     Ok(JobRunStep {
+        lock_wait_ms: row
+            .get::<_, Option<i64>>(offset + 11)?
+            .map(|value| value as u64),
         step_index: step_index as u32,
         target_type: parse_job_target_type(&target_type_raw)?,
         target_id: row.get(offset + 2)?,

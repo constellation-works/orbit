@@ -67,16 +67,25 @@ pub struct DependencyNotDelivered {
     pub detail: String,
 }
 
+/// One unmerged index path and the conservative trivial-resolution classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictedFile {
+    pub path: String,
+    /// True only if index modes and object IDs prove identical sides or an unchanged side.
+    pub deterministically_resolvable: bool,
+}
+
 /// Structured evidence for a merge or rebase conflict that an explicitly
 /// configured recovery activity may repair. Keeping the classification typed
 /// prevents unrelated VCS diagnostics from launching a recovery agent based
 /// on message matching.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RecoverableVcsConflict {
     pub operation: String,
     pub original_base_sha: String,
     pub target_base_sha: String,
     pub conflicting_paths: Vec<String>,
+    pub conflicting_files: Vec<ConflictedFile>,
     pub diagnostic: String,
 }
 

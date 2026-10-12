@@ -753,6 +753,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 fixture.seed_run("jrun-skew", "workspace_pull_pipeline", JobRunState::Failed);
             let now = Utc::now();
             run.steps.push(orbit_types::workflow::JobRunStep {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: orbit_types::workflow::JobTargetType::Job,
                 target_id: run.job_id.clone(),

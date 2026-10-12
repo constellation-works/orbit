@@ -445,13 +445,16 @@ impl CompletionReviewHost {
             && *stops > 0
         {
             *stops -= 1;
-            return Err(DispatchError::RecoverableVcsConflict {
-                operation: "git_rebase".to_string(),
-                original_base_sha: "base-sha".to_string(),
-                target_base_sha: format!("rebased-base{}", round_suffix(index)),
-                conflicting_paths: vec!["src/lib.rs".to_string()],
-                diagnostic: format!("rebase stopped; {stops} later stops remain"),
-            });
+            return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                orbit_common::RecoverableVcsConflict {
+                    operation: "git_rebase".to_string(),
+                    original_base_sha: "base-sha".to_string(),
+                    target_base_sha: format!("rebased-base{}", round_suffix(index)),
+                    conflicting_paths: vec!["src/lib.rs".to_string()],
+                    conflicting_files: Vec::new(),
+                    diagnostic: format!("rebase stopped; {stops} later stops remain"),
+                },
+            )));
         }
         *completions += 1;
         let output = if index < self.rebases {

@@ -52,9 +52,7 @@ impl Store {
         workspace_id: &str,
         params: &InvocationInsertParams,
     ) -> Result<(), OrbitError> {
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction()

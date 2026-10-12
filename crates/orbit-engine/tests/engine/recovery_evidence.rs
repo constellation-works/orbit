@@ -38,13 +38,16 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
             return Ok(json!({}));
         }
         if self.activity == "pr_conflict_recovery" {
-            return Err(DispatchError::RecoverableVcsConflict {
-                operation: "git_rebase".to_string(),
-                original_base_sha: "original".to_string(),
-                target_base_sha: "target".to_string(),
-                conflicting_paths: vec!["src/lib.rs".to_string()],
-                diagnostic: "rebase stopped on an unmerged path".to_string(),
-            });
+            return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                orbit_common::RecoverableVcsConflict {
+                    operation: "git_rebase".to_string(),
+                    original_base_sha: "original".to_string(),
+                    target_base_sha: "target".to_string(),
+                    conflicting_paths: vec!["src/lib.rs".to_string()],
+                    conflicting_files: Vec::new(),
+                    diagnostic: "rebase stopped on an unmerged path".to_string(),
+                },
+            )));
         }
         Err(DispatchError::DeterministicActionFailed {
             action: action.to_string(),

@@ -843,6 +843,26 @@ impl RuntimeHost for OrbitRuntime {
         Ok(())
     }
 
+    fn checkpoint_step_diagnostic(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.record_pipeline_output(step_id, output.clone());
+                Ok(())
+            })
+            .map(|_| ())
+            .map_err(|error| {
+                DispatchError::JobExecution(format!(
+                    "persist step diagnostics (run {run_id}, step `{step_id}`): {error}"
+                ))
+            })
+    }
+
     fn checkpoint_failure_activity(
         &self,
         run_id: &str,

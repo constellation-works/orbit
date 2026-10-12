@@ -31,7 +31,7 @@ pub(super) fn attempt_recovery_activity(
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
         && !matches!(
             failure,
-            StepFailure::Error(DispatchError::RecoverableVcsConflict { .. })
+            StepFailure::Error(DispatchError::RecoverableVcsConflict(_))
         )
     {
         return RecoveryAdmission::Original;

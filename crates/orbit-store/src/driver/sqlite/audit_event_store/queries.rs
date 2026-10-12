@@ -188,9 +188,7 @@ impl Store {
     }
 
     pub fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
 
         let count = conn

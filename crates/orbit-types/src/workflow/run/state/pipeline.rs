@@ -442,8 +442,8 @@ impl PipelineState {
     /// Unlike [`Self::step_output`] this needs no step index, so a reader that
     /// only knows the step's id (the audit trail names steps by id and numbers
     /// them in first-started order, not by YAML position) cannot land on
-    /// another step's checkpoint. A step that was skipped, or has not
-    /// completed, has no entry.
+    /// another step's checkpoint. An incomplete step may carry diagnostic
+    /// output; that entry never marks the step completed for resume.
     pub fn pipeline_step_output(&self, step_id: &str) -> Option<&Value> {
         self.pipeline.get(step_id)
     }

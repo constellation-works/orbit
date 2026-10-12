@@ -285,6 +285,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0045".to_string(),
                 "host_resource_minutes".to_string()
             ),
+            (
+                "migration.v0046".to_string(),
+                "job_run_step_lock_wait".to_string()
+            ),
         ]
     );
 }

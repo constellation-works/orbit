@@ -532,6 +532,7 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
     jobs.complete_job_run_step(
         &leaf.run_id,
         &JobRunStepParams {
+            lock_wait_ms: None,
             step_index: 3,
             target_type: orbit_types::workflow::JobTargetType::Activity,
             target_id: "validate".into(),

@@ -108,6 +108,7 @@ fn record_upgrade_interruption_at(jobs: &dyn JobRunStoreBackend, run_id: &str, n
     jobs.complete_job_run_step(
         run_id,
         &JobRunStepParams {
+            lock_wait_ms: None,
             step_index: 1,
             target_type: JobTargetType::Activity,
             target_id: "upgrade-quiesce".to_string(),
@@ -201,6 +202,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         .complete_job_run_step(
             &run_other.run_id,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 1,
                 target_type: JobTargetType::Activity,
                 target_id: "diagnostic".to_string(),
