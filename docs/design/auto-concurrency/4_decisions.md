@@ -127,20 +127,23 @@ admission mechanism replaces the throttle; it can only be tightened.
 
 ### Context
 
-A task whose workspace or complexity has too few deliveries has no profile of
-its own. Treating it as free would let it fill a gap it does not fit.
+A task whose workspace, work class or complexity has too few deliveries has
+no profile of its own. Treating it as free would let it fill a gap it does
+not fit.
 
 ### Decision
 
-A task without a profile of its own gets a coarser one: first the
-workspace's profile for any complexity, then the heaviest profile on the
-host. Only a host with no profiles at all admits as today.
+A task without a profile of its own gets a coarser one. It first borrows
+within its work class: the same class at any complexity, then a template's
+base class, then the heaviest profile of that class on the host. Only then
+does it get the heaviest profile on the host. A host with no profiles at all
+admits as today.
 
 ### Consequences
 
 - The forecast never undercounts work it knows nothing about.
-- Cost: a new workspace or complexity runs at low concurrency until it has
-  enough deliveries, even when its tasks are light.
+- Cost: a new workspace, class or complexity runs at low concurrency until
+  it has enough deliveries, even when its tasks are light.
 
 ## The operator's ceiling is hard, and admission never cancels work
 

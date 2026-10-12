@@ -58,6 +58,11 @@ otherwise.
 8. **Can a task predict its own size?** The number of declared context
    files, the diff size of similar past tasks, or the pilot's estimate could
    pick a profile more precisely than the complexity label alone.
+9. **Are there more work classes?** Task type (bug, feature, refactor,
+   chore) and changes that touch only documentation may have shapes of their
+   own: a docs-only change validates without compiling. Each new class
+   divides the samples further, so a class should earn its place by a
+   visibly different profile in the report.
 
 ## 2. Prior Work
 

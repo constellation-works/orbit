@@ -7,7 +7,7 @@ status: Draft
 feature: auto-concurrency
 doc_role: overview
 type: design
-summary: Proposal for predictive admission — Orbit records each task's CPU and memory minute by minute, averages them into profiles per workspace and complexity, forecasts host load from the running tasks, and admits a task when its profile fits under the forecast.
+summary: Proposal for predictive admission — Orbit records each task's CPU and memory minute by minute, averages them into profiles per workspace, work class (code change, no-diff review, recurring auto-task) and complexity, forecasts host load from the running tasks, and admits a task when its profile fits under the forecast.
 tags: [auto-concurrency, drain, capacity, admission]
 paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/scope.rs"]
 related_features: [auto-concurrency, distributed-drain]
@@ -26,8 +26,10 @@ number:
 
 1. Orbit records how much CPU and memory each task uses, minute by minute,
    from admission to completion.
-2. It averages those records into **resource profiles** per workspace and
-   task complexity.
+2. It averages those records into **resource profiles** per workspace,
+   **work class** and complexity. Work class distinguishes code changes,
+   which build and test, from no-diff reviews, which don't, and from
+   recurring auto-task templates.
 3. Before admitting a task, the drain **forecasts** the host's load over the
    coming minutes. The forecast is the profiles of the tasks already running,
    each advanced to its current age, plus the load that isn't from tasks.
@@ -67,9 +69,12 @@ admission look ahead.
   It stays the operator's hard ceiling.
 - **Resource sample** — one task's CPU and memory for one minute of its life,
   read from its own Linux worker scope.
+- **Work class** — what kind of work a task does: `change`, `no-diff`
+  (tagged `no-diff-expected`, which must never compile or run tests), or one
+  recurring `auto-task:` template.
 - **Resource profile** — expected CPU and memory at each minute since
-  admission, for one workspace and complexity on one host, with the chance
-  that a task is still running at that minute.
+  admission, for one workspace, work class and complexity on one host, with
+  the chance that a task is still running at that minute.
 - **Load forecast** — the host's expected CPU and memory for each minute of
   the horizon: running tasks' profiles plus the load that isn't from tasks.
 - **Gap fit** — admitting a candidate because the forecast plus its profile

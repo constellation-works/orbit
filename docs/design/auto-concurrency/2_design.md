@@ -6,7 +6,7 @@ last_validated: 2026-10-11
 status: Draft
 feature: auto-concurrency
 doc_role: design
-summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, per-workspace-and-complexity resource profiles, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
+summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
 paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-config/src/registry/settings/machine.rs"]
 related_features: [auto-concurrency, distributed-drain]
@@ -80,6 +80,26 @@ only to tell a limit breach from other failures. A worker can locate its own
 scope (`WorkerScopeCgroup::of_current_process`). Nothing records CPU or memory
 use per task. macOS has no scopes, so its workers run uncontained.
 
+**No-diff work still builds today.** Owner-run pipelines skip validation
+for a `no-diff-expected` task with a clean tree: `task_pr_pipeline.yaml`'s
+`validate` step is gated on `skipped_no_diff_expected`. Two routes still
+build anyway:
+
+- **Claimed route.** It runs the owner's required validation commands on the
+  clean base (`task_claimed_pr_pipeline.yaml` `validate_no_diff`, then
+  `orbit-engine/src/executor/automation/vcs/claim/no_diff.rs`). The owner
+  refuses a handoff without those logs
+  (`orbit-store/src/repository/task/coordination/handoff.rs`). In ws_orbit
+  that means a full `cargo check` of the workspace for every claimed review.
+- **Instructions.** On every route, the implementer prompt
+  (`assets/activities/agent_implement.yaml`) and the repository gates tell
+  the agent to run every workspace check before handoff, with no exemption
+  for the tag.
+
+[ORB-15764] and [ORB-15765] fix those two. The CPU-light rule also counts
+build-heavy QA sweeps as light, because they carry the tag; [ORB-15766]
+fixes that.
+
 **History.** Each host keeps one SQLite database, `~/.orbit/orbit.db`, shared
 by its workspaces. The `job_runs` table holds each run's start, end and host.
 The task id is in `input_json`, and complexity is in the task index. No CPU
@@ -123,9 +143,51 @@ It is the ground truth for checking the forecast (§8).
 
 ## 3. Profiles
 
-A **resource profile** describes one key, `(host, workspace, complexity)`,
-built from that key's most recent completed deliveries: the last 50, within
-30 days.
+### 3.1 Work class
+
+Complexity says how big a task is, not what kind of work it does. A review
+or audit task reads and reports. It neither compiles nor runs tests. A code
+change does both, and its size scales with complexity. Averaging the two
+together would describe neither. Profiles are therefore keyed by **work
+class** first:
+
+| Work class | Derived from | Profile key |
+|---|---|---|
+| `auto-task:<template>` | the task's `auto-task:` tag | `(host, workspace, template)`; a recurring template does the same job every time, so complexity adds nothing |
+| `no-diff` | the `no-diff-expected` tag | `(host, workspace, no-diff, complexity)` |
+| `change` | everything else | `(host, workspace, change, complexity)` |
+
+The template is the most specific key, so it wins. A template whose tasks
+carry `no-diff-expected` falls back to `no-diff`, and any other template
+falls back to `change`.
+
+The class is read from the task's tags at admission and stored with the
+delivery's samples, so a later tag edit does not move history between
+profiles.
+
+### 3.2 No-diff work must not build
+
+The work class is a grouping key, not a promise about cost: a `no-diff`
+profile is measured like any other. A no-diff task that compiles or runs
+tests is a defect in the pipeline or the task's instructions. It is not a
+cost to learn. Its profile makes the defect visible.
+
+`orbit run profiles` flags every `no-diff` profile, and every template
+profile whose tasks are no-diff, that shows build-like load: more than one
+core sustained for two minutes. It names the deliveries behind the flag.
+Until [ORB-15764] and [ORB-15765] land, every claimed review will be flagged
+(§1). Templates that build by design, such as `qa-sweep`, are exempt from the
+flag. The
+existing CPU-light admission rule (`is_cpu_light` in
+`admission/cpu_light.rs`) trusts no-diff-expected only together with an
+auto-task tag. Its note: "an operator's claim about the diff, not about the
+work". Profiles need no such trust, because they record what the work
+actually used.
+
+### 3.3 The profile
+
+A **resource profile** for one key is built from that key's most recent
+completed deliveries: the last 50, within 30 days.
 
 For each minute `m` since admission, the profile holds:
 
@@ -143,11 +205,18 @@ the minute at which `alive` falls below 0.1, the 90th-percentile duration,
 capped at 120 minutes.
 
 Profiles are computed from the table when admission needs them and cached for
-the pass. A key with fewer than 10 deliveries falls back along this chain:
+the pass. A key with fewer than 10 deliveries falls back along this chain,
+stopping at the first key that has enough:
 
-1. `(host, workspace, any complexity)`;
-2. the heaviest profile on the host, so unknown work is assumed expensive;
-3. no profile at all, only on a host with no profiles: today's admission.
+1. drop complexity: `(host, workspace, class)`;
+2. for a template, its base class: `no-diff` or `change` in the same
+   workspace;
+3. the heaviest profile of the same class on the host;
+4. the heaviest profile on the host, so unknown work is assumed expensive;
+5. no profile at all, only on a host with no profiles: today's admission.
+
+The chain never crosses from `no-diff` to `change` until step 4. A new review
+task borrows another review profile before it is assumed to build.
 
 ## 4. The load forecast
 
@@ -266,7 +335,7 @@ the forecast.
 | `drain_last_pass` | an `admission_forecast` block: the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource, and whether the head is being protected |
 | `orbit run show` | an `Admission:` line, e.g. `forecast — skipped ORB-123 (cpu 94% at +6m)` |
 | `orbit run readiness` | the host's forecast peak, its headroom, and the profile source per waiting task |
-| `orbit run profiles` | the profiles per workspace and complexity: deliveries, horizon, peak CPU and memory, and when they occur. `--json` for the full series |
+| `orbit run profiles` | the profiles per workspace, work class and complexity: deliveries, horizon, peak CPU and memory, and when they occur. Flags no-diff profiles with build-like load (§3.2). `--json` for the full series |
 | Dashboard | later: the forecast curve against measured load, with running tasks stacked |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
@@ -278,7 +347,8 @@ first.
    admission. Profiles need a few days of deliveries.
 2. **Profiles report.** `orbit run profiles`. It shows whether profiles are
    stable enough to forecast with: how spread out each minute is, and how
-   spikes line up across deliveries.
+   spikes line up across deliveries. It also flags no-diff work that builds
+   (§3.2), so those defects get fixed before profiles absorb them.
 3. **Shadow.** `mode = shadow` computes forecasts and decisions every pass
    and records them, but admits as today. A report compares each forecast at
    +5, +10, +20 and +30 minutes with the measured host series, and the
@@ -291,26 +361,27 @@ first.
 
 ## 9. Concerns & Honest Limitations
 
-- **Averaging blurs spikes.** Tasks of one complexity differ in length, so the
-  validation build lands at different minutes. A per-minute average of
+- **Averaging blurs spikes.** Tasks of one class and complexity differ in
+  length, so the validation build lands at different minutes. A per-minute average of
   misaligned spikes is a lower, wider hump. The forecast then underestimates
   peaks and overestimates how long moderate load lasts. The 90th percentile
   for memory and the throttle backstop absorb part of this. Profiles aligned
   to pipeline steps instead of minutes would fix it
   ([3_vision.md §1](./3_vision.md#1-open-questions), question 1). The
   profiles report in step 2 shows how bad it is before anything enforces.
-- **Complexity is a coarse label.** It is set at filing or by the task
-  pilot, and is sometimes wrong. A mislabelled task carries the wrong
-  profile.
+- **Labels are coarse.** Complexity is set at filing or by the task pilot,
+  and is sometimes wrong. A code change filed without its real size, or a
+  task that writes code while tagged `no-diff-expected`, carries the wrong
+  profile until the outlier ages out of the window.
 - **The baseline is assumed flat.** Load that isn't from tasks, such as a
   manual build or an IDE indexing, can change during the horizon.
 - **Only CPU and memory.** Disk I/O and fsync stalls (the Mac), provider
   rate limits and base-branch conflicts are not forecast. The disk throttle,
   provider-limit exclusions and the conflict and footprint checks still
   apply.
-- **Profiles are per host and need warm-up.** A new host, workspace or
-  complexity is admitted pessimistically, using the heaviest profile, until
-  it has 10 deliveries.
+- **Profiles are per host and need warm-up.** A new host, workspace, class
+  or complexity is admitted pessimistically, borrowing the heaviest profile
+  of its class, until it has 10 deliveries.
 - **Linux only at first.** macOS has no worker scopes. Without
   `machine.worker_containment`, Linux records nothing either.
 - **Throughput is not measured.** The design fills headroom under the
@@ -331,5 +402,10 @@ first.
 ## Task References
 
 - [ORB-15757] — authored this proposal.
+- [ORB-15764] — filed to stop claimed `no-diff-expected` deliveries from
+  running the owner's required validation.
+- [ORB-15765] — filed to stop instructing `no-diff-expected` tasks to run
+  workspace gates.
+- [ORB-15766] — filed to stop counting build-heavy QA sweeps as CPU-light.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
