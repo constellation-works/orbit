@@ -166,6 +166,7 @@
         "process/tests/bounded.rs::bounded_run_enforces_deadline_while_a_stream_stays_readable",
         "process/tests/bounded.rs::bounded_run_returns_when_a_descendant_holds_either_pipe",
         "process/tests/bounded.rs::bounded_run_times_out_and_reaps_the_process_group",
+        "process/tests/bounded.rs::bounded_supervision_errors_kill_the_group_and_reap_the_leader",
         "process/tests/bounded.rs::flood_cleanup_preserves_unmarked_pids_and_other_group_members",
         "process/tests/bounded.rs::flood_cleanup_requires_every_nonempty_marker",
         "process/tests/bounded.rs::leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped",
