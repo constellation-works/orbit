@@ -532,6 +532,26 @@ fn probes_verify_status_code_over_finite_peer() {
             Some("bare"),
         ),
         (
+            b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+            true,
+            Some("hello"),
+        ),
+        (
+            b"HTTP/1.1 +200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+        (
+            b"HTTP/1.1 0200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+        (
+            b"HTTP/1.invalid 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+        (
             b"HTTP/1.1 not_a_number OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             false,
             None,
