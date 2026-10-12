@@ -166,6 +166,7 @@ pub struct ProfileSet {
     /// One profile per key, in key order.
     pub profiles: Vec<Arc<ResourceProfile>>,
     /// One profile per workspace and `no-diff` or `change` class, over every
-    /// complexity: the first fallback step.
+    /// complexity, including template deliveries of that base class: the
+    /// first fallback step, or the base-class step for templates.
     pub class_profiles: Vec<Arc<ResourceProfile>>,
 }
