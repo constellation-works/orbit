@@ -446,7 +446,8 @@ pub(super) fn rebase_conflict_error(
 }
 
 /// Only trivial per-path three-way resolutions are proved here. Distinct edits,
-/// renames, and absent or malformed index evidence remain for recovery to judge.
+/// renames, missing sides, and malformed index evidence remain for recovery to
+/// judge. An absent base can only prove identical add/add sides.
 fn conflicted_files(
     repo_root: &Path,
     paths: &[String],
@@ -477,10 +478,13 @@ fn conflicted_files(
         .iter()
         .map(|path| {
             let [base, ours, theirs] = entries.get(path.as_str()).copied().unwrap_or_default();
-            // A missing stage is a deletion, but two absent stages do not prove
-            // agreement. Require real matching entries on at least two sides.
+            // A missing side may be a rename/delete conflict, even when the
+            // remaining side matches the base. Both sides must exist before
+            // per-path equality can prove a trivial resolution.
             let identical = |left: Option<(&str, &str)>, right| left.is_some() && left == right;
             let deterministic = valid
+                && ours.is_some()
+                && theirs.is_some()
                 && (identical(ours, theirs) || identical(base, ours) || identical(base, theirs));
             orbit_common::ConflictedFile {
                 path: path.clone(),

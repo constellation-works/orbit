@@ -461,7 +461,9 @@ A stopped `git_rebase` (the delivery pipeline's `sync_base`) records
 `conflicting_paths` and `conflicting_files` in its checkpoint output before
 recovery, and supplies both to the recovery leaf. Each file carries
 `deterministically_resolvable`: true only when unmerged index object IDs and
-modes prove identical sides or a side unchanged from the base. Distinct edits,
-renames and missing evidence are conservatively false. This is diagnostic;
+modes prove identical sides or a side unchanged from the base, with both ours
+and theirs present. A missing ours or theirs stage is always false, including
+rename/delete conflicts; a missing base stage is true only for identical
+add/add sides. Distinct edits and malformed evidence are conservatively false. This is diagnostic;
 recovery still validates and resolves the stopped rebase under existing rules.
 On resume, an incomplete step retains only these two diagnostic fields outside the usable pipeline until it runs successfully; a new conflict supersedes them, and diagnostics neither skip execution nor expose failed outputs to templates.
