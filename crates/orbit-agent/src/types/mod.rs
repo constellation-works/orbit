@@ -2,8 +2,6 @@ mod request;
 mod response;
 
 pub use request::{AgentOperation, AgentRequest};
-#[cfg(test)]
-pub use response::parse_and_validate_response;
 pub use response::{AgentInvocationSpec, AgentResponseStatus};
 pub use response::{DeclaredResponseFailure, ParsedStdout};
 pub use response::{
@@ -11,6 +9,3 @@ pub use response::{
     provider_invocation_diagnostic, provider_usage_limit, provider_usage_limit_details,
     response_envelope_json_schema_arg,
 };
-
-#[cfg(test)]
-mod tests;

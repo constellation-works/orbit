@@ -143,6 +143,22 @@ Cargo links each top-level `crates/<crate>/tests/<name>.rs` file and each `crate
 
 - `orbit-engine`'s `claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes` (criterion 1, combinatorial pure ref selection) covers explicit modes, defaulting and claim ship-mode fallback together. The public claim action rejects invalid sync input during observation, before the red-base hold path, so it cannot expose the helper's former silent error-to-local fallback.
 
+## Provider response boundary
+
+`orbit-agent` keeps provider projection and response regressions in the existing
+[`provider_invocation/response.rs`](../../crates/orbit-agent/tests/provider_invocation/response.rs)
+integration module, with fixture cases grouped under `response/projection.rs`
+and `response/envelope.rs`. Exported `normalize_cli_stdout`,
+`project_cli_response`, `latest_assistant_message`,
+`antigravity_terminal_error_diagnostic`, and `ParsedStdout` accept the same
+crafted captures as the former sibling unit tests. Parser edge cases, failure
+synthesis, transcript disclosure and usage rollups therefore need no private
+test access or provider subprocess. Copilot prompt-echo fixtures obtain stdin
+from public `Agent::invoke`; the Antigravity timeout matrix and its non-target
+provider controls use exported `apply_antigravity_print_timeout` in
+[`provider_limit.rs`](../../crates/orbit-agent/tests/provider_limit.rs). These
+cases do not earn unit admission because the public boundary costs the same.
+
 ## Retiring a unit test
 
 You may delete a unit test when one of these holds:

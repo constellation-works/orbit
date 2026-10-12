@@ -1,28 +1,7 @@
 {
   "crates": {
     "orbit-agent": {
-      "test_function_paths": [
-        "providers/antigravity/tests/antigravity_cli.rs::antigravity_reports_the_print_timeout_it_put_in_argv",
-        "providers/antigravity/tests/antigravity_cli.rs::other_providers_get_no_print_timeout",
-        "providers/antigravity/tests/antigravity_output.rs::error_terminal_status_never_normalizes_to_success",
-        "providers/antigravity/tests/antigravity_output.rs::timeout_terminal_error_is_bounded_and_omits_response_transcript",
-        "providers/claude/tests/claude_output.rs::claude_stream_projection_answers_with_the_terminal_result_only",
-        "providers/codex/tests/codex_output.rs::command_execution_output_cannot_supply_the_assistant_answer",
-        "providers/copilot/tests/copilot_stream.rs::prompt_echo_is_never_read_as_completion_evidence",
-        "providers/cursor/tests/cursor_output.rs::failure_wrapper_never_normalizes_to_success",
-        "providers/cursor/tests/cursor_output.rs::missing_terminal_evidence_never_normalizes_to_success",
-        "providers/grok/tests/grok_output.rs::grok_final_failure_overrides_success_shaped_metadata",
-        "providers/grok/tests/grok_output.rs::grok_final_text_is_the_only_completion_authority",
-        "providers/opencode/tests/opencode_output.rs::a_malformed_text_frame_refuses_the_whole_stream",
-        "providers/opencode/tests/opencode_output.rs::a_terminal_error_frame_invalidates_prior_answer_text",
-        "providers/opencode/tests/opencode_output.rs::tool_and_reasoning_frames_are_never_read_as_completion_evidence",
-        "providers/pi/tests/pi_output.rs::a_later_failed_or_malformed_assistant_terminal_frame_invalidates_prior_text",
-        "providers/tests/mod.rs::the_newest_assistant_message_is_read_from_each_output_shape",
-        "types/tests/envelope.rs::exhausted_limits_do_not_synthesize_success",
-        "types/tests/response/structured_output.rs::claude_json_schema_wrapper_with_error_string_null_parses_as_success",
-        "types/tests/response/structured_output.rs::no_wrapper_signal_combination_can_synthesize_a_success",
-        "types/tests/response/sum.rs::claude_model_usage_is_not_added_on_top_of_sibling_usage"
-      ]
+      "test_function_paths": []
     },
     "orbit-automation": {
       "test_function_paths": [

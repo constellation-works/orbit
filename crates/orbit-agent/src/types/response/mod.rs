@@ -10,8 +10,6 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::ToolCallTrace;
 use serde_json::Value;
 
-#[cfg(test)]
-pub use envelope::parse_and_validate_response;
 pub use envelope::{DeclaredResponseFailure, ParsedStdout};
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::response_envelope_json_schema_arg;

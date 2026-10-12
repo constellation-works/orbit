@@ -1,3 +1,8 @@
+#[path = "response/envelope.rs"]
+mod envelope;
+#[path = "response/projection.rs"]
+mod projection;
+
 use orbit_agent::{AgentResponseStatus, ParsedStdout, normalize_cli_stdout, project_cli_response};
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;

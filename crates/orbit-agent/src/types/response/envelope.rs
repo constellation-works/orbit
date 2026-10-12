@@ -73,6 +73,23 @@ impl<'a> ParsedStdout<'a> {
         }
     }
 
+    /// Content-blind check that a provider's stdout *terminated with* a well-formed
+    /// Orbit response envelope.
+    ///
+    /// This is the step-completion protocol signal ([ORB-10449]), not a
+    /// judgement about the work: it reads only the envelope frame — that a
+    /// recognizable complete JSON envelope is present in stdout, that its
+    /// `schemaVersion` is supported, and that its `status` is one of the three
+    /// protocol tokens. It never reads `result` or `error`, and it does not care
+    /// *which* status was declared. An agent that reports `status: "failed"`
+    /// completed its invocation contract exactly as much as one that reports
+    /// success; an agent that yielded mid-turn emitted no envelope at all.
+    ///
+    /// Deliberately excludes exit alignment. Exit agreement is a
+    /// separate classification the CLI runner already performs, and folding it in
+    /// here would make a `status: "failed"` envelope indistinguishable from a
+    /// missing one — which is precisely the distinction this predicate exists to
+    /// draw.
     pub fn response_envelope_protocol_check(&self) -> Result<(), OrbitError> {
         validate_envelope_frame(&self.response_candidate()?)
     }
@@ -98,35 +115,8 @@ fn protocol_violation_message(error: OrbitError) -> String {
     }
 }
 
-#[cfg(test)]
-pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponseParseResult {
-    ParsedStdout::parse(&exec_result.stdout).parse_and_validate(exec_result)
-}
-
 pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
     exec_result.timed_out
-}
-
-/// Content-blind check that a provider's stdout *terminated with* a well-formed
-/// Orbit response envelope.
-///
-/// This is the step-completion protocol signal ([ADR-0258] / [ORB-10449]), not a
-/// judgement about the work: it reads only the envelope frame — that a
-/// recognizable complete JSON envelope is present in stdout, that its
-/// `schemaVersion` is supported, and that its `status` is one of the three
-/// protocol tokens. It never reads `result` or `error`, and it does not care
-/// *which* status was declared. An agent that reports `status: "failed"`
-/// completed its invocation contract exactly as much as one that reports
-/// success; an agent that yielded mid-turn emitted no envelope at all.
-///
-/// Deliberately excludes [`validate_exit_alignment`]. Exit agreement is a
-/// separate classification the CLI runner already performs, and folding it in
-/// here would make a `status: "failed"` envelope indistinguishable from a
-/// missing one — which is precisely the distinction this predicate exists to
-/// draw.
-#[cfg(test)]
-pub fn response_envelope_protocol_check(stdout: &str) -> Result<(), OrbitError> {
-    ParsedStdout::parse(stdout).response_envelope_protocol_check()
 }
 
 /// The invariant the [ORB-10449] completion guard is built on. Kept verbatim
@@ -233,15 +223,6 @@ fn parse_json_envelope(
 
     validate_exit_alignment(exec_result, &envelope)?;
     Ok((envelope, state, trace))
-}
-
-// Visible through the `response` module to sibling-layout tests; keeping this private
-// would require nesting tests back under `envelope`.
-#[cfg(test)]
-pub(in crate::types) fn synthesize_response(
-    exec_result: &ExecutionResult,
-) -> Option<(AgentResponseEnvelope, AgentResponseStatus, InvocationTrace)> {
-    synthesize_from_parsed(exec_result, &ParsedStdout::parse(&exec_result.stdout))
 }
 
 fn synthesize_from_parsed(
