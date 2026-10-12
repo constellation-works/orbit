@@ -1,18 +1,21 @@
 ---
 type: runbook
-summary: Run local Rust CodeQL once per delivery for every change touching Rust sources, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
+summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
 last_validated: 2026-10-11
 ---
 
-# Run local Rust CodeQL for every change touching Rust sources
+# Run local Rust CodeQL for code-scanning repairs and security changes
 
-Use this procedure to validate every change that touches Rust sources before
-handoff. For a code-scanning repair, check the identified rule at every affected
-location; for other Rust changes, run a relevant Rust query or suite. An
-extractor can exit zero after losing semantic analysis; a clean query against
-that database is invalid evidence.
+Hosted CodeQL analyses every pull request and `agent-main` push. Use this
+procedure before handoff only when the agent guide (`CLAUDE.md`, "Local Rust
+CodeQL checks") requires it: a code-scanning or CodeQL repair, a task tagged
+`security` or `security-review`, or a change to `.github/codeql/**` or
+`scripts/codeql-rust-local.sh`. For a code-scanning repair, check the
+identified rule at every affected location; in the other cases, run a relevant
+Rust query or suite. An extractor can exit zero after losing semantic analysis;
+a clean query against that database is invalid evidence.
 
 ## Prerequisites
 

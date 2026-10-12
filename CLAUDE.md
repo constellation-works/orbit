@@ -42,7 +42,19 @@ Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and 
 
 ## Local Rust CodeQL checks
 
-For Rust changes in this repository, follow the [local CodeQL runbook](docs/runbooks/codeql-local.md), which uses `scripts/codeql-rust-local.sh`. Its extraction checks are required evidence; a query result from incomplete semantic extraction cannot confirm a repair. Run it once per delivery, against the final candidate, in the foreground with a timeout of at least 45 minutes, and read that run's `results.sarif`; an interrupted run starts over. Only a Linux host can extract every module: elsewhere the script exits 3 without running, and the check is owed by a Linux run recorded as `codeql` external evidence (runbook, Non-Linux hosts).
+Hosted CodeQL (`.github/workflows/codeql.yml`) analyses every pull request and every `agent-main` push. A delivery therefore does not run CodeQL locally, and doesn't record it as owed, unless one of these applies:
+
+- the task repairs a code-scanning alert or another CodeQL finding;
+- the task is tagged `security` or `security-review`;
+- the change edits the CodeQL setup: `.github/codeql/**` or `scripts/codeql-rust-local.sh`.
+
+When one applies, follow the [local CodeQL runbook](docs/runbooks/codeql-local.md), which uses `scripts/codeql-rust-local.sh`.
+
+- Its extraction checks are required evidence. A query result from incomplete semantic extraction cannot confirm a repair.
+- Run it once per delivery, against the final candidate, in the foreground with a timeout of at least 45 minutes, and read that run's `results.sarif`. An interrupted run starts over.
+- Only a Linux host can extract every module. Elsewhere the script exits 3 without running, and the check is owed by a Linux run recorded as `codeql` external evidence (runbook, Non-Linux hosts).
+
+For any other change, hosted CodeQL on the pull request is the check, and an alert it raises after merge becomes a repair task.
 
 ## Orbit Workflow
 
