@@ -152,7 +152,7 @@ pub fn explain_workspace_auto_readiness(
         .map_or_else(|| json!({}), |drain| json!({"run_id": drain.run_id}));
     let pools = runtime.auto_crew_pools_for_input(&pool_input)?;
     let allowlist = runtime.crew_allowlist(allowed_crews)?;
-    let snapshot = backlog_snapshot(
+    let mut snapshot = backlog_snapshot(
         runtime,
         "explain_workspace_auto_readiness",
         allowlist.as_ref(),
@@ -172,6 +172,9 @@ pub fn explain_workspace_auto_readiness(
                 }
                 claims
             });
+    // A live leaf may carry a task that has since closed, and an explicit
+    // selection may name one; the snapshot holds only open work otherwise.
+    snapshot.include_tasks(runtime, claimed_by_task.keys().chain(task_ids))?;
     let admissions_stopped = active_drain
         .as_ref()
         .is_some_and(|drain| drain.admissions_stopped());

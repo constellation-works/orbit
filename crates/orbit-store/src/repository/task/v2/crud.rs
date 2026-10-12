@@ -395,7 +395,7 @@ impl TaskV2Store {
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
         let mut matches = Vec::new();
-        self.search_tasks_visit(query, tags, &|_| true, &mut |task| {
+        self.search_tasks_visit(query, tags, None, &|_| true, &mut |task| {
             matches.push(task);
             true
         })?;
@@ -405,10 +405,12 @@ impl TaskV2Store {
     /// Stream the tasks matching `query` in listing order (newest first) to
     /// `visit` until it returns `false`.
     ///
-    /// `admit` sees each candidate's envelope-only task before anything of it
-    /// is read, so tasks the caller would discard anyway (a status, tag or path
-    /// filter) cost no read, and stopping early costs none for the tasks that
-    /// were never reached. An admitted task is first pruned from its envelope
+    /// `statuses` and `tags` select candidates through the generated index,
+    /// so a task in another status costs no envelope read at all. `admit`
+    /// sees each candidate's envelope-only task before anything more of it is
+    /// read, so tasks the caller would discard anyway (a path filter) cost no
+    /// bundle read, and stopping early costs none for the tasks that were
+    /// never reached. An admitted task is first pruned from its envelope
     /// and search documents (no event log, no consistency checks); only a task
     /// that can match is read whole on the lightweight listing path, which
     /// decides the match. Artifact payloads stay unopened and only the manifest
@@ -424,6 +426,7 @@ impl TaskV2Store {
         &self,
         query: &str,
         tags: &[String],
+        statuses: Option<&[TaskStatus]>,
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
@@ -434,6 +437,7 @@ impl TaskV2Store {
         let candidates = self.task_candidates(
             &TaskListFilter {
                 tags: tags.to_vec(),
+                statuses: statuses.map(<[TaskStatus]>::to_vec),
                 ..Default::default()
             },
             usize::MAX,

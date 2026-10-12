@@ -18,13 +18,13 @@ use super::exclusions::{
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
+use super::population::admission_population;
 use super::{
     BacklogSnapshot, BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
     sort_tasks_for_automatic_dispatch,
 };
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
-use crate::application::task::list_task_metadata_in;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
     active_task_lock_holders, lock_holder_index, task_lock_overlaps,
@@ -67,17 +67,15 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
 ) -> Result<BacklogSnapshot, DispatchError> {
-    // The population is materialized once, by moving the listing into the
+    // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup: BTreeMap<String, Task> = list_task_metadata_in(runtime.stores().tasks())
-        .map_err(|err| DispatchError::DeterministicActionFailed {
+    let task_lookup = admission_population(runtime.stores().tasks()).map_err(|err| {
+        DispatchError::DeterministicActionFailed {
             action: action.to_string(),
             message: format!("list tasks: {err}"),
-        })?
-        .into_iter()
-        .map(|task| (task.id.clone(), task))
-        .collect();
+        }
+    })?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
     let status_by_id = runtime

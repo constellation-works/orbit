@@ -104,6 +104,12 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
             .into_iter()
             .flat_map(|run| run.task_ids)
             .collect::<BTreeSet<_>>();
+        snapshot
+            .include_tasks(runtime, &live_tasks)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("read live leaf tasks: {error}"),
+            })?;
         let mut wave = FootprintWave::new(FootprintGuard {
             enabled: max_tasks > 1,
             leaves_in_flight: !live_tasks.is_empty(),

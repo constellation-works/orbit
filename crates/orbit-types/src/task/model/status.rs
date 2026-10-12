@@ -170,6 +170,19 @@ impl FromStr for TaskStatus {
 }
 
 impl TaskStatus {
+    /// Every status, in declaration order.
+    pub const ALL: [TaskStatus; 9] = [
+        TaskStatus::Proposed,
+        TaskStatus::Backlog,
+        TaskStatus::InProgress,
+        TaskStatus::Review,
+        TaskStatus::Done,
+        TaskStatus::Blocked,
+        TaskStatus::Archived,
+        TaskStatus::Rejected,
+        TaskStatus::Someday,
+    ];
+
     pub fn cli_name(self) -> &'static str {
         match self {
             TaskStatus::Proposed => "proposed",

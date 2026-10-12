@@ -128,6 +128,15 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| self.automation_task_for_key(key))
     }
 
+    fn in_read_section(
+        &self,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        // The boundary's locks are re-entrant per thread, so each read inside
+        // `op` runs under this acquisition.
+        self.in_boundary(op)
+    }
+
     fn task_candidates(
         &self,
         filter: &crate::contracts::TaskListFilter,
@@ -236,10 +245,11 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
         query: &str,
         tags: &[String],
+        statuses: Option<&[TaskStatus]>,
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
-        self.in_boundary(|| self.search_tasks_visit(query, tags, admit, visit))
+        self.in_boundary(|| self.search_tasks_visit(query, tags, statuses, admit, visit))
     }
 
     fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {

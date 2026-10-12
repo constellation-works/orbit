@@ -2,9 +2,10 @@
 //!
 //! Listing validates the index against every registered envelope first
 //! (`repository::task::v2::index`), then lets SQL answer the predicates the
-//! composite indexes cover — status, priority, job run, tags, continuation —
-//! together with ordering and `LIMIT`, so a page costs the freshness scan plus
-//! the selected rows rather than every envelope in the workspace.
+//! composite indexes cover — status, priority, job run, tags, parent,
+//! continuation — together with ordering and `LIMIT`, so a page costs the
+//! freshness scan plus the selected rows rather than every envelope in the
+//! workspace.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -251,6 +252,14 @@ fn index_filter_sql(partition_id: &str, filter: &TaskIndexFilter) -> (String, Ve
                 WHERE t.task_id = task_bundle_index.task_id AND t.tag = ?)",
         );
         values.push(Value::Text(tag.clone()));
+    }
+    if let Some(parent_id) = &filter.parent_id {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM task_bundle_relations r
+                WHERE r.source_task_id = task_bundle_index.task_id
+                AND r.relation_type = 'child_of' AND r.target_task_id = ?)",
+        );
+        values.push(Value::Text(parent_id.clone()));
     }
     if let Some((created_at, task_id)) = &filter.scan_before {
         // The freshness scan proved each row's `created_at` is the envelope's

@@ -459,3 +459,86 @@ fn rejecting_filter_does_not_page_the_any_term_match_set() {
         );
     });
 }
+
+/// Counts acquisitions of the task store's partition commit lock: the file
+/// lock records one event per acquisition a caller paid for, and none for a
+/// re-entrant nested section.
+struct CommitLockAcquisitions(Arc<AtomicU64>);
+
+impl<S: tracing::Subscriber> Layer<S> for CommitLockAcquisitions {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        struct LockPath(String);
+        impl tracing::field::Visit for LockPath {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "lock_path" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        if event.metadata().target() != "orbit.common.fs.file_lock" {
+            return;
+        }
+        let mut path = LockPath(String::new());
+        event.record(&mut path);
+        if path.0.ends_with("/.task-commit.lock") {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// A search used to enter the task store's commit boundary once per
+/// hydrated hit, each entry taking the partition lock and writing a holder
+/// record. Every task read of one search now shares a single acquisition.
+#[test]
+fn one_search_takes_the_task_commit_lock_once() {
+    if !super::dispatch_admission::isolated(
+        "search_hydration::one_search_takes_the_task_commit_lock_once",
+    ) {
+        return;
+    }
+    use tracing_subscriber::prelude::*;
+
+    let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    for (index, status) in std::iter::repeat_n(orbit_core::TaskStatus::Done, 8)
+        .chain(std::iter::repeat_n(orbit_core::TaskStatus::Backlog, 6))
+        .enumerate()
+    {
+        runtime
+            .add_task(TaskAddParams {
+                title: format!("Fixture {index} {TERM}"),
+                description: "Search fixture".into(),
+                status: Some(status),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    drop(runtime);
+
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let acquisitions = Arc::new(AtomicU64::new(0));
+    let subscriber =
+        tracing_subscriber::registry().with(CommitLockAcquisitions(Arc::clone(&acquisitions)));
+    let response = tracing::subscriber::with_default(subscriber, || {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some(TERM.into()),
+                kind: GlobalSearchKind::Task,
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap()
+    });
+    assert_eq!(
+        response.results.len(),
+        6,
+        "the default search returns the open matches"
+    );
+    assert_eq!(
+        acquisitions.load(Ordering::Relaxed),
+        1,
+        "every task read of one search shares one commit-lock acquisition"
+    );
+}

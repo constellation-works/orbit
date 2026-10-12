@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
+    TaskStatus,
 };
 
 use orbit_store::RegisteredTaskResolution;
@@ -409,23 +410,29 @@ impl OrbitRuntime {
     }
 
     /// Stream tasks matching `query` to `visit` in listing order until it
-    /// returns `false`, as [`Self::search_tasks_filtered`] followed by `admit`
-    /// would yield them.
+    /// returns `false`, as [`Self::search_tasks_filtered`] followed by the
+    /// `statuses` filter and `admit` would yield them.
     ///
-    /// `admit` judges a task from its envelope alone, so the store skips the
-    /// body read for every task it rejects, and stopping early skips the rest.
-    /// A worker invocation reads through its owner, which answers whole
-    /// searches only, so it filters that answer instead.
+    /// The store selects `statuses` from its index, so a task in another
+    /// status costs no read. `admit` judges a task from its envelope alone,
+    /// so the store skips the body read for every task it rejects, and
+    /// stopping early skips the rest. A worker invocation reads through its
+    /// owner, which answers whole searches only, so it filters that answer
+    /// instead.
     pub(crate) fn search_tasks_visit(
         &self,
         query: &str,
         tags: &[String],
+        statuses: Option<&[TaskStatus]>,
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
         if self.worker_invocation().is_some() {
             for task in self.search_tasks_filtered(query, tags)? {
-                if admit(&task) && !visit(task) {
+                if statuses.is_none_or(|statuses| statuses.contains(&task.status))
+                    && admit(&task)
+                    && !visit(task)
+                {
                     break;
                 }
             }
@@ -436,7 +443,33 @@ impl OrbitRuntime {
         }
         self.stores()
             .tasks()
-            .search_tasks_visit(query, tags, admit, visit)
+            .search_tasks_visit(query, tags, statuses, admit, visit)
+    }
+
+    /// Run `op` as one read section of this workspace's task store: the task
+    /// reads it makes on this thread share one acquisition of the commit
+    /// boundary instead of each taking it
+    /// ([`orbit_store::TaskStoreBackend::in_read_section`]). For a read-only
+    /// surface whose reads are many and short; `op` must not admit work or
+    /// wait on another thread's task reads. A worker reads through its owner
+    /// and a replica checkout reads no local tasks, so both run `op` directly.
+    pub(crate) fn in_task_read_section<T>(
+        &self,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        if self.worker_invocation().is_some() || !self.coordination_task_reads_visible() {
+            return op();
+        }
+        let mut op = Some(op);
+        let mut output = None;
+        self.stores().tasks().in_read_section(&mut || {
+            if let Some(op) = op.take() {
+                output = Some(op()?);
+            }
+            Ok(())
+        })?;
+        output
+            .ok_or_else(|| OrbitError::Store("task read section did not run its operation".into()))
     }
 
     pub fn search_tasks_filtered(

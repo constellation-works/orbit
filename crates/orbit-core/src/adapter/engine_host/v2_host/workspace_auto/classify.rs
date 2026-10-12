@@ -165,7 +165,12 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     let allowlist = allowlist_from_input(runtime, action, input)?;
     // The same snapshot readiness reads, so the two cannot disagree about the
     // eligible population before they even reach the selection rule.
-    let snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
+    let mut snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
+    // A live leaf may carry a task that has since closed; its claim and its
+    // light slot still count.
+    snapshot.include_tasks(runtime, &claimed).map_err(|error| {
+        DispatchError::action_failed(action, format!("read claimed tasks: {error}"))
+    })?;
     // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
     let light_budget = LightBudget::new(
         runtime

@@ -1808,6 +1808,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
+ "tracing-subscriber",
  "yaml_serde",
 ]
 

@@ -88,6 +88,7 @@ impl TaskListFilter {
             priority: self.priority,
             job_run_id: self.job_run_id.clone(),
             tags: self.tags.clone(),
+            parent_id: self.parent_id.clone(),
             scan_before: self.scan_before.clone(),
             excluded_ids,
         }
@@ -96,6 +97,9 @@ impl TaskListFilter {
     /// Whether [`index_filter`](Self::index_filter) covers every predicate, so
     /// the index can also bound the selection with `LIMIT` and count the total.
     /// An explicit empty status set matches nothing and is left to `matches`.
+    /// The index narrows a `parent_id` selection to the tasks its relation
+    /// rows name, but the freshness scan does not compare relations, so
+    /// `matches` still confirms each one from its envelope.
     pub(crate) fn is_fully_indexed(&self) -> bool {
         self.search.is_none()
             && self.task_type.is_none()

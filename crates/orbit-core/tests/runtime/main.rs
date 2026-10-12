@@ -72,6 +72,7 @@ mod provider_failure_hold;
 mod provider_limit_admission;
 mod provider_limit_budget;
 mod provider_limit_hold;
+mod readiness_population;
 
 mod run_cli_invocations;
 mod run_history;

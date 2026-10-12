@@ -197,16 +197,20 @@ impl ReviewSwitches {
 /// share: both switches, each with its rendered `line`, and `healthy`. A
 /// switch that cannot be resolved reads as unhealthy with its `error`.
 /// `policy` is the review config to report; a long-lived caller passes one
-/// it just loaded, since the runtime's copy is the one it opened with.
+/// it just loaded, since the runtime's copy is the one it opened with. The
+/// task reads behind it — the after-landing consumer's open instance, wedged
+/// action and last batch — share one acquisition of the task store's commit
+/// boundary.
 pub fn review_switches_view(
     runtime: &OrbitRuntime,
     policy: &OperationPolicy,
     now: DateTime<Utc>,
 ) -> JsonValue {
-    let switches = match review_switches_under(runtime, policy, now) {
-        Ok(switches) => switches,
-        Err(error) => return json!({"healthy": false, "error": format!("unknown: {error}")}),
-    };
+    let switches =
+        match runtime.in_task_read_section(|| review_switches_under(runtime, policy, now)) {
+            Ok(switches) => switches,
+            Err(error) => return json!({"healthy": false, "error": format!("unknown: {error}")}),
+        };
     let mut view = serde_json::to_value(&switches).unwrap_or(JsonValue::Null);
     view["before_pr"]["line"] = JsonValue::String(switches.before_pr_line());
     view["before_landing"]["line"] = JsonValue::String(switches.before_landing_line());

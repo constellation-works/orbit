@@ -65,7 +65,7 @@ pub use listing::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListQuery, TaskPage,
     TaskRow,
 };
-pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
+pub(crate) use listing::{TaskEligibilityQuery, metadata_task};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;

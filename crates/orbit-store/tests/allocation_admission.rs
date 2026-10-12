@@ -1159,12 +1159,22 @@ impl Coordinated {
     }
 
     fn create_task_in(&self, title: &str, selectors: &[&str]) -> orbit_types::task::Task {
+        self.create_task_with_status(title, selectors, TaskStatus::Backlog, None)
+    }
+
+    fn create_task_with_status(
+        &self,
+        title: &str,
+        selectors: &[&str],
+        status: TaskStatus,
+        parent_id: Option<String>,
+    ) -> orbit_types::task::Task {
         self.backends
             .task
             .task
             .create_task(TaskCreateParams {
                 actor: "codex".to_string(),
-                parent_id: None,
+                parent_id,
                 title: title.to_string(),
                 description: "Detailed task description".to_string(),
                 acceptance_criteria: vec!["First criterion".to_string()],
@@ -1179,7 +1189,7 @@ impl Coordinated {
                 created_by: Some("codex".to_string()),
                 planned_by: None,
                 implemented_by: None,
-                status: TaskStatus::Backlog,
+                status,
                 priority: TaskPriority::High,
                 complexity: Some(TaskComplexity::Medium),
                 task_type: TaskType::Feature,
