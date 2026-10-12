@@ -64,10 +64,11 @@ pub use final_recovery::{
     MAX_DECISION_TEXT_CHARS,
 };
 pub use host_evidence::{
-    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, EvidenceHostOs,
-    HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord, HostEvidenceRefusal,
-    HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_REFUSAL, SEATBELT_APPLY_REFUSAL,
-    SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX, judge_host_test_output,
+    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, BUBBLEWRAP_NAMESPACE_REFUSALS,
+    EvidenceHostOs, HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord,
+    HostEvidenceRefusal, HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_REFUSAL,
+    SEATBELT_APPLY_REFUSAL, SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
+    is_bubblewrap_namespace_refusal, judge_host_test_output,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,

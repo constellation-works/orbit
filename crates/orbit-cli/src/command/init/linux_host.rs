@@ -364,7 +364,7 @@ fn require_command(host: &impl Host, path: &str) -> Result<(), OrbitError> {
 /// `ENOSPC` when a container caps `max_user_namespaces`). Ubuntu's AppArmor
 /// restriction instead lets the namespace exist and fails at the UID map.
 fn namespace_creation_denied(detail: &str) -> bool {
-    detail.contains("No permissions to create new namespace")
+    orbit_types::workflow::is_bubblewrap_namespace_refusal(detail)
         || detail.contains("Creating new namespace failed")
 }
 
