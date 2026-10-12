@@ -27,6 +27,7 @@ make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI log and sandbox profile goldens; UPDATE=1 regenerates
 ```
 
+- `make ci-fast` runs independent repository script checks in concurrent batches of eight, captures each script's output separately, prints per-script wall times, and names every failing script before returning the first failure's exit code. Fixture self-tests run sequentially only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
 - Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, `cargo test` / `nextest`) one at a time when they share a target directory, or give each its own `CARGO_TARGET_DIR`. Concurrent gates in one target can rebuild `target/debug/orbit` under running generation-bound fixtures and fail them.
 - Guardrails need Python 3.11+ for `tomllib`; stock macOS `/usr/bin/python3` is 3.9. [require-python.sh](../scripts/require-python.sh) runs first in `make ci-fast`, `make ci-lint` and `ci-guardrails.sh` and stops with the version it found. It installs nothing: put a newer `python3` first on `PATH`.
@@ -114,7 +115,7 @@ When a comparable base passes but the candidate names at most three failed tests
 
 ### Hosted CI
 
-Hosted CI runs the full `make ci` on open PRs. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes. `make ci-fast` runs `scripts/test-pr-state-workflows.py`, which replays each gate against recorded API responses.
+Hosted CI runs the full `make ci` on open PRs. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
 
 ## Filesystem writes
 
