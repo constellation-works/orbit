@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-09
+last_validated: 2026-10-11
 ---
 # Task/Reservation Commit Boundary
 
@@ -42,7 +42,13 @@ drain. Without that priority, a writer got the lock only at an instant when no r
 so a stream of overlapping ordinary sections held admissions past the 3 s warning (ORB-15107).
 A section nested inside another partition's section skips the turnstile. It already holds a
 partition that the queued writer may be waiting behind indirectly, and waiting behind that
-writer could close a cycle. A re-entrant acquisition never reaches either lock.
+writer could close a cycle. A status-only observation (routine status, through
+`TaskCommitBoundary::observe_for_status`) also skips it: it decides and writes nothing, and
+queueing each of its dozens of reads behind every admission and commit made one status pass
+take seconds under drain load. It still takes the shared locks and settles a pending commit
+first, so it never sees a half-applied transition and still waits for an exclusive holder; a
+queued writer may wait for the few reads it enters meanwhile. A re-entrant acquisition never
+reaches either lock.
 
 **One durable commit decision.** A journal row in the host store database:
 
