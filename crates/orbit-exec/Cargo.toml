@@ -15,7 +15,6 @@ workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 regex.workspace = true
-sha2.workspace = true
 tempfile.workspace = true
 wait-timeout.workspace = true
 
