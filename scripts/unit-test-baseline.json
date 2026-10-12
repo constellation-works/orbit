@@ -482,6 +482,7 @@
         "application/task/tests/final_recovery.rs::reject_archive_and_escalate_record_the_decision_with_the_run_id",
         "application/task/tests/final_recovery.rs::requeue_returns_to_backlog_until_the_window_bound_then_escalates",
         "application/task/tests/final_recovery.rs::shipped_final_recovery_activity_offers_exactly_the_typed_decisions",
+        "application/task/tests/final_recovery.rs::terminal_replay_finishes_side_effects_after_a_post_lock_read_failure",
         "application/task/tests/lifecycle.rs::guarded_update_writes_every_legal_edge_and_refuses_every_other_one",
         "application/task/tests/paths.rs::a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
         "application/task/tests/paths.rs::explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",

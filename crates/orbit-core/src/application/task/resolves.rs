@@ -3,10 +3,12 @@
 //! Only a transition into done resolves the frictions a task names. An update
 //! of a task that is already done (a comment, an artifact, a PR sync) must not
 //! resolve them again: a human may have reopened one because the fix was
-//! incomplete. The exception is a target whose side effect failed: the failure
-//! is recorded on the task as a [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] history
-//! entry, and every later write to the done task retries it until a
-//! [`RESOLVES_SIDE_EFFECT_RECOVERED_EVENT`] entry supersedes the failure.
+//! incomplete. The exception is a target whose side effect is pending or
+//! failed. Final recovery records pending targets with its decision so a crash
+//! before the post-lock effects leaves durable retry work. Failures are recorded
+//! as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] history entries. Later writes to the
+//! done task retry unfinished targets until a
+//! [`RESOLVES_SIDE_EFFECT_RECOVERED_EVENT`] entry settles them.
 
 use std::collections::BTreeSet;
 
@@ -26,8 +28,9 @@ const RELATION_RESOLVES: &str = "resolves";
 /// Task history event recording that resolving one `resolves` target failed
 /// after the task reached done. Its note's first line is `target=<id>`.
 pub(crate) const RESOLVES_SIDE_EFFECT_FAILED_EVENT: &str = "resolves_side_effect_failed";
-/// Task history event recording that a retry settled a target an earlier
-/// [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] left pending. Same note shape.
+const RESOLVES_SIDE_EFFECT_PENDING_EVENT: &str = "resolves_side_effect_pending";
+/// Task history event recording that a pending or failed target was settled.
+/// Same note shape as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`].
 pub(crate) const RESOLVES_SIDE_EFFECT_RECOVERED_EVENT: &str = "resolves_side_effect_recovered";
 const TARGET_NOTE_PREFIX: &str = "target=";
 const RESOLVES_LANDING_EVENT: &str = "friction_resolved_on_landing";
@@ -44,7 +47,7 @@ impl OrbitRuntime {
     ///
     /// `previous_status` is the status the write replaced. A transition into
     /// done resolves every target; a write to a task that was already done
-    /// only retries targets whose side effect failed earlier. The write is
+    /// only retries targets whose side effect is pending or failed. The write is
     /// already durable, so a failure here is logged and recorded on the task
     /// for a later retry, never returned to the caller.
     pub(crate) fn record_resolves_side_effects(&self, previous_status: TaskStatus, task: &Task) {
@@ -284,7 +287,7 @@ fn landing_resolution(history: &[TaskHistoryEntry]) -> Option<LandingResolution>
     })
 }
 
-/// Targets whose latest side-effect history entry records a failure.
+/// Targets whose latest side-effect history entry records unfinished work.
 fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeSet<String> {
     let mut pending = BTreeSet::new();
     for entry in history {
@@ -297,7 +300,7 @@ fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeSet<String> {
             continue;
         };
         match entry.event.as_str() {
-            RESOLVES_SIDE_EFFECT_FAILED_EVENT => {
+            RESOLVES_SIDE_EFFECT_PENDING_EVENT | RESOLVES_SIDE_EFFECT_FAILED_EVENT => {
                 pending.insert(target.to_string());
             }
             RESOLVES_SIDE_EFFECT_RECOVERED_EVENT => {
@@ -307,6 +310,16 @@ fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeSet<String> {
         }
     }
     pending
+}
+
+/// Retry work persisted with a final-recovery transition into done, before
+/// releasing its task lock or reading the task for the side effects.
+pub(super) fn pending_resolves_history(task: &Task) -> Vec<TaskHistoryEntry> {
+    resolves_targets(task)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|target| resolves_history_entry(RESOLVES_SIDE_EFFECT_PENDING_EVENT, target, None))
+        .collect()
 }
 
 fn resolves_history_entry(event: &str, target: &str, reason: Option<&str>) -> TaskHistoryEntry {
