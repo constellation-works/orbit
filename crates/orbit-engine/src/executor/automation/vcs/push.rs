@@ -20,7 +20,7 @@ use super::handoff::{
     load_handoff_context, record_failed_handoff,
 };
 use super::operations;
-use super::pr::{PrMergeState, classify_pr_state};
+use super::pr::{PrMergeState, classify_pr_state, read_pr_status};
 use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
@@ -494,30 +494,16 @@ fn merged_at_lease<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     lease: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let response = host.run_private_vcs_operation(
-        operations::PR_STATUS,
-        json!({
-            "pr": pr_number,
-            "workspace_path": workspace_path.to_string_lossy(),
-        }),
-    )?;
-    let pull_request = response.get("pull_request").cloned().unwrap_or(Value::Null);
+    let pull_request = read_pr_status(host, workspace_path, pr_number)?;
     if !matches!(classify_pr_state(&pull_request), PrMergeState::Merged) {
         return Ok(None);
     }
-    let head = pull_request
-        .get("headRefOid")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if head != lease {
+    if pull_request.exact_head_sha.as_deref().unwrap_or_default() != lease {
         return Ok(None);
     }
     Ok(pull_request
-        .get("mergeCommit")
-        .and_then(|commit| commit.get("oid"))
-        .and_then(Value::as_str)
-        .filter(|oid| !oid.is_empty())
-        .map(ToOwned::to_owned))
+        .exact_merge_commit
+        .filter(|oid| !oid.is_empty()))
 }
 
 /// Whether `merge_commit` is on `origin/<base>` after a fresh fetch.

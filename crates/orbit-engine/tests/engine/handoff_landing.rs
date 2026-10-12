@@ -246,6 +246,8 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
             "baseRefName": context.candidate.base_branch,
             "headRefOid": context.candidate.candidate.commit,
             "mergeCommit": {"oid": "provider-merge"},
+            // Unknown to the typed answer; the evidence still quotes it.
+            "futureField": {"nested": [1, "x", null]},
         });
         status[field] = json!(replacement);
         let host = ReconciliationHost {
@@ -283,9 +285,17 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
         assert!(
             matches!(error, OrbitError::Execution(ref message) if message == &format!("handoff_land: {reason}"))
         );
-        let resolved: Value = serde_json::from_str(&updates[0].evidence).unwrap();
-        assert_eq!(resolved["provider_state"], host.status);
-        assert_eq!(resolved["delivery_error"], reason);
+        assert_eq!(
+            updates[0].evidence,
+            json!({
+                "reconciled": "pull_request_merged",
+                "pull_request": 42,
+                "provider_state": host.status,
+                "delivery_error": reason,
+            })
+            .to_string(),
+            "reconciliation evidence quotes the provider's answer byte for byte"
+        );
         assert!(
             host.handoff_landing_context("handoff-1")
                 .unwrap()
@@ -369,13 +379,19 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
 /// conflicting or stale base. A protection refusal stays an operator's call.
 #[test]
 fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
-    for (merge_state, repairable) in [("DIRTY", true), ("BEHIND", true), ("DRAFT", false)] {
+    for (merge_state, repairable) in [
+        ("DIRTY", true),
+        ("BEHIND", true),
+        ("DRAFT", false),
+        (" DIRTY ", false),
+    ] {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
         let host = OpenPullRequestHost::new(context, merge_state, json!([]));
 
-        land(&host).expect_err("an unmergeable pull request stops the landing");
+        land_with(&host, json!({"max_wait_seconds": 0}))
+            .expect_err("an unmergeable pull request stops the landing");
 
         assert_eq!(
             *host.steps.lock().unwrap(),

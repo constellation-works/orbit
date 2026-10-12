@@ -7,13 +7,12 @@
 //! owner accepted from it. A run with the same id in this machine's own store
 //! is a different run and proves nothing about it.
 use orbit_common::OrbitError;
-use orbit_engine::RuntimeHost;
+use orbit_engine::{PullRequestStatus, RuntimeHost};
 use orbit_store::contracts::{ClaimInspection, ClaimRun, ExecutionClaimPhase};
 use orbit_types::{
     task::Task,
     workflow::handoff::{AcceptedHandoff, HandoffDelivery},
 };
-use serde_json::Value;
 
 use crate::OrbitRuntime;
 
@@ -149,7 +148,10 @@ impl OrbitRuntime {
     /// One pull request read from the provider by its exact identity, rather
     /// than found in a bounded recent-PR listing. A failed lookup names its
     /// cause.
-    pub(crate) fn read_pull_request_status(&self, selector: &str) -> Result<Value, OrbitError> {
+    pub(crate) fn read_pull_request_status(
+        &self,
+        selector: &str,
+    ) -> Result<PullRequestStatus, OrbitError> {
         let response = self
             .run_private_vcs_operation(
                 "pr.status",
@@ -163,7 +165,7 @@ impl OrbitRuntime {
                     "pull request {selector} could not be read from the provider: {error}"
                 ))
             })?;
-        Ok(response["pull_request"].clone())
+        Ok(PullRequestStatus::from_status_response(&response))
     }
 
     /// The accepted handoff's pull request, read by number. The provider's
@@ -182,15 +184,15 @@ impl OrbitRuntime {
 pub(super) fn handoff_pull_request(
     number: u64,
     accepted: &AcceptedHandoff,
-    status: &Value,
+    status: &PullRequestStatus,
 ) -> Result<HandoffPullRequest, OrbitError> {
     let candidate = &accepted.handoff.candidate;
-    let url = reported(status, "url");
-    let repository = url.as_deref().and_then(pull_repository);
+    let url = status.url.as_deref();
+    let repository = url.and_then(pull_repository);
     let (Some(url), true) = (
-        url.clone(),
-        status["number"].as_u64() == Some(number)
-            && url.as_deref().and_then(pull_number) == Some(number)
+        url,
+        status.number == Some(number)
+            && url.and_then(pull_number) == Some(number)
             && repository.is_some_and(|slug| slug.eq_ignore_ascii_case(&candidate.repository)),
     ) else {
         return Err(invalid(&format!(
@@ -199,29 +201,28 @@ pub(super) fn handoff_pull_request(
             candidate.repository
         )));
     };
-    if reported(status, "baseRefName").as_deref() != Some(candidate.landing_branch.as_str()) {
+    if status.base_branch.as_deref() != Some(candidate.landing_branch.as_str()) {
         return Err(invalid(&format!(
             "pull request #{number} no longer targets the handoff's landing branch {}",
             candidate.landing_branch
         )));
     }
-    let head = reported(status, "headRefOid")
+    let head = status
+        .head_sha
+        .clone()
         .ok_or_else(|| invalid(&format!("the provider reported no head for #{number}")))?;
     Ok(HandoffPullRequest {
         number,
-        url,
-        state: reported(status, "state").unwrap_or_default(),
+        url: url.to_string(),
+        state: status
+            .state
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
         head,
-        merge_commit: reported(&status["mergeCommit"], "oid"),
+        merge_commit: status.merge_commit.clone(),
     })
-}
-
-pub(super) fn reported(status: &Value, field: &str) -> Option<String> {
-    status[field]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 /// `https://github.com/<owner>/<repo>/pull/<n>` → `n`.

@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use super::super::super::input::input_string_field;
 use super::super::freshness::{branch_freshness_against_ref, commit_sha};
 use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
+use super::answers::{CheckState, PullRequestStatus, ReviewDecision};
 
 /// The candidate identity a completion-authorized run is allowed to deliver.
 ///
@@ -116,11 +117,21 @@ impl DeliveryPin {
     /// run waited never receives a merge request in the first place.
     pub(in crate::executor::automation::vcs) fn ensure_candidate_identity(
         &self,
-        status: &Value,
+        status: &PullRequestStatus,
         pr_number: &str,
     ) -> Result<(), OrbitError> {
-        self.ensure_matches(status, pr_number, "headRefName", self.head.as_deref())?;
-        self.ensure_matches(status, pr_number, "baseRefName", self.base.as_deref())
+        ensure_matches(
+            pr_number,
+            "headRefName",
+            status.head_branch.as_deref(),
+            self.head.as_deref(),
+        )?;
+        ensure_matches(
+            pr_number,
+            "baseRefName",
+            status.base_branch.as_deref(),
+            self.base.as_deref(),
+        )
     }
 
     /// The full pinned identity, including the head commit.
@@ -132,14 +143,14 @@ impl DeliveryPin {
     /// identity on every poll [ORB-12499].
     pub(in crate::executor::automation::vcs) fn ensure_pinned_candidate(
         &self,
-        status: &Value,
+        status: &PullRequestStatus,
         pr_number: &str,
     ) -> Result<(), OrbitError> {
         self.ensure_candidate_identity(status, pr_number)?;
-        self.ensure_matches(
-            status,
+        ensure_matches(
             pr_number,
             "headRefOid",
+            status.head_sha.as_deref(),
             self.candidate_sha.as_deref(),
         )
     }
@@ -150,18 +161,12 @@ impl DeliveryPin {
     /// commit and the head it merged is the candidate this run authorized.
     pub(in crate::executor::automation::vcs) fn ensure_delivered(
         &self,
-        status: &Value,
+        status: &PullRequestStatus,
         pr_number: &str,
     ) -> Result<DeliveryEvidence, OrbitError> {
-        self.ensure_candidate_identity(status, pr_number)?;
-        self.ensure_matches(
-            status,
-            pr_number,
-            "headRefOid",
-            self.candidate_sha.as_deref(),
-        )?;
+        self.ensure_pinned_candidate(status, pr_number)?;
 
-        let merge_commit = reported(status.pointer("/mergeCommit/oid")).ok_or_else(|| {
+        let merge_commit = status.merge_commit.clone().ok_or_else(|| {
             OrbitError::Execution(format!(
                 "pr_complete: pull request #{pr_number} reports a merged state without a merge \
                  commit, so this run has no evidence of what landed; the task stays in review"
@@ -170,43 +175,12 @@ impl DeliveryPin {
 
         Ok(DeliveryEvidence {
             pr_number: pr_number.to_string(),
-            merged_at: reported(status.get("mergedAt")).unwrap_or_default(),
-            head_ref: reported(status.get("headRefName")),
-            base_ref: reported(status.get("baseRefName")),
-            head_sha: reported(status.get("headRefOid")),
+            merged_at: status.merged_at.clone().unwrap_or_default(),
+            head_ref: status.head_branch.clone(),
+            base_ref: status.base_branch.clone(),
+            head_sha: status.head_sha.clone(),
             merge_commit,
         })
-    }
-
-    /// Compare one reported identity field against its pin.
-    ///
-    /// An unpinned field is not checked. A pinned field the provider does not
-    /// report is a refusal rather than a pass, because completion cannot claim
-    /// an identity it was unable to read.
-    fn ensure_matches(
-        &self,
-        status: &Value,
-        pr_number: &str,
-        field: &str,
-        pinned: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let Some(pinned) = pinned else {
-            return Ok(());
-        };
-        let Some(reported) = reported(status.get(field)) else {
-            return Err(OrbitError::Execution(format!(
-                "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
-                 the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
-            )));
-        };
-        if reported != pinned {
-            return Err(OrbitError::Execution(format!(
-                "delivery_evidence_stale: pull request #{pr_number} reports {field} '{reported}' \
-                 but this run published '{pinned}'; completion delivers only the candidate it \
-                 published, so the task stays in review"
-            )));
-        }
-        Ok(())
     }
 
     /// Explain whether red required checks describe the current candidate/base.
@@ -271,12 +245,34 @@ impl DeliveryEvidence {
     }
 }
 
-fn reported(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+/// Compare one reported identity field against its pin.
+///
+/// An unpinned field is not checked. A pinned field the provider does not
+/// report is a refusal rather than a pass, because completion cannot claim
+/// an identity it was unable to read.
+fn ensure_matches(
+    pr_number: &str,
+    field: &str,
+    reported: Option<&str>,
+    pinned: Option<&str>,
+) -> Result<(), OrbitError> {
+    let Some(pinned) = pinned else {
+        return Ok(());
+    };
+    let Some(reported) = reported else {
+        return Err(OrbitError::Execution(format!(
+            "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
+             the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
+        )));
+    };
+    if reported != pinned {
+        return Err(OrbitError::Execution(format!(
+            "delivery_evidence_stale: pull request #{pr_number} reports {field} '{reported}' \
+             but this run published '{pinned}'; completion delivers only the candidate it \
+             published, so the task stays in review"
+        )));
+    }
+    Ok(())
 }
 
 /// What GitHub's reported PR state means for a completion or landing attempt.
@@ -298,11 +294,11 @@ pub(in crate::executor::automation::vcs) enum PrMergeState {
 }
 
 pub(in crate::executor::automation::vcs) fn classify_pr_state(
-    pull_request: &Value,
+    pull_request: &PullRequestStatus,
 ) -> PrMergeState {
     let state = pull_request
-        .get("state")
-        .and_then(Value::as_str)
+        .state
+        .as_deref()
         .unwrap_or_default()
         .to_ascii_uppercase();
     if state == "MERGED" {
@@ -312,12 +308,7 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
     // report as merged is the shape F2026-09-102 recorded: an open PR that
     // nonetheless looks delivered. Only the authoritative `state` may close a
     // run, so the disagreement itself becomes the refusal.
-    let merged_at = pull_request
-        .get("mergedAt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(merged_at) = merged_at {
+    if let Some(merged_at) = &pull_request.merged_at {
         return PrMergeState::Contradictory(format!(
             "state '{state}' alongside merge timestamp {merged_at}"
         ));
@@ -327,8 +318,8 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
     }
 
     let merge_state = pull_request
-        .get("mergeStateStatus")
-        .and_then(Value::as_str)
+        .merge_state_status
+        .as_deref()
         .unwrap_or_default()
         .to_ascii_uppercase();
     match merge_state.as_str() {
@@ -351,41 +342,29 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
 /// GitHub also reports BLOCKED while required checks are still running. Wait
 /// only when the rollup proves that a check is in flight and no review gate or
 /// failed check is visible. An absent or unfamiliar provider shape refuses.
-fn classify_blocked_pr(pull_request: &Value) -> PrMergeState {
-    match pull_request.get("reviewDecision") {
-        Some(Value::String(decision))
+fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
+    match &pull_request.review_decision {
+        ReviewDecision::Reported(decision)
             if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
         {
             return PrMergeState::Blocked(format!("review is required ({decision})"));
         }
-        // No review decision applies: the GraphQL API reports null, and
-        // `gh pr view --json` serializes that same null as an empty string
-        // [ORB-13759]. Either only permits waiting on in-flight checks below;
-        // a field that is absent altogether stays unavailable.
-        Some(Value::Null) => {}
-        Some(Value::String(decision)) if decision.is_empty() => {}
-        Some(Value::String(decision)) if decision == "APPROVED" => {}
+        // No review decision applies. That only permits waiting on in-flight
+        // checks below; a field that is absent altogether stays unavailable.
+        ReviewDecision::NotApplicable => {}
+        ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
         _ => return PrMergeState::Blocked("review decision is unavailable".into()),
     }
 
-    let Some(checks) = pull_request
-        .get("statusCheckRollup")
-        .and_then(Value::as_array)
-    else {
+    let Some(checks) = &pull_request.status_checks else {
         return PrMergeState::Blocked("status check rollup is unreadable".into());
     };
     let mut pending = false;
     for check in checks {
-        let name = check
-            .get("name")
-            .or_else(|| check.get("context"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty());
-        let Some(name) = name else {
+        let Some(name) = &check.name else {
             return PrMergeState::Blocked("status check rollup is unreadable".into());
         };
-        match classify_check(check) {
+        match check.state {
             Some(CheckState::Failed) => {
                 return PrMergeState::Blocked(format!("status check '{name}' failed"));
             }
@@ -406,12 +385,6 @@ fn classify_blocked_pr(pull_request: &Value) -> PrMergeState {
     }
 }
 
-enum CheckState {
-    Pending,
-    Passed,
-    Failed,
-}
-
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
@@ -427,37 +400,28 @@ pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
 /// A rollup entry answers a name by its own name or as `<workflow> / <job>`,
 /// as the forge displays it. A name no entry answers has not reported yet.
 pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
-    pull_request: &Value,
+    pull_request: &PullRequestStatus,
     names: &[String],
 ) -> OwedHostedChecks {
     if names.is_empty() {
         return OwedHostedChecks::Passed;
     }
-    let checks = pull_request
-        .get("statusCheckRollup")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let checks = pull_request.status_checks.as_deref().unwrap_or_default();
     let mut waiting = Vec::new();
     for name in names {
         let mut answered = false;
         let mut pending = false;
         for check in checks {
-            let own = check
-                .get("name")
-                .or_else(|| check.get("context"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default();
+            let own = check.name.as_deref().unwrap_or_default();
             let qualified = check
-                .get("workflowName")
-                .and_then(Value::as_str)
-                .map(|workflow| format!("{} / {own}", workflow.trim()));
+                .workflow_name
+                .as_deref()
+                .map(|workflow| format!("{workflow} / {own}"));
             if own != name && qualified.as_deref() != Some(name.as_str()) {
                 continue;
             }
             answered = true;
-            match classify_check(check) {
+            match check.state {
                 Some(CheckState::Passed) => {}
                 Some(CheckState::Pending) => pending = true,
                 Some(CheckState::Failed) => {
@@ -478,28 +442,5 @@ pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
         OwedHostedChecks::Passed
     } else {
         OwedHostedChecks::Waiting(waiting)
-    }
-}
-
-/// `statusCheckRollup` contains both CheckRun (`status`/`conclusion`) and
-/// StatusContext (`state`) entries. Unknown values cannot authorize waiting.
-fn classify_check(check: &Value) -> Option<CheckState> {
-    if let Some(state) = check.get("state").and_then(Value::as_str) {
-        return match state {
-            "PENDING" | "EXPECTED" => Some(CheckState::Pending),
-            "SUCCESS" => Some(CheckState::Passed),
-            "FAILURE" | "ERROR" => Some(CheckState::Failed),
-            _ => None,
-        };
-    }
-    match check.get("status").and_then(Value::as_str)? {
-        "QUEUED" | "IN_PROGRESS" | "PENDING" | "REQUESTED" | "WAITING" => Some(CheckState::Pending),
-        "COMPLETED" => match check.get("conclusion").and_then(Value::as_str)? {
-            "SUCCESS" | "NEUTRAL" | "SKIPPED" => Some(CheckState::Passed),
-            "FAILURE" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
-            | "STALE" => Some(CheckState::Failed),
-            _ => None,
-        },
-        _ => None,
     }
 }

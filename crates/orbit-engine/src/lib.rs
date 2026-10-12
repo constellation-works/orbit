@@ -72,7 +72,7 @@ pub use executor::automation::vcs::git::BaseSyncMode;
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{
-    BaselineHoldStatus, ClaimedKnownRed, KnownRedUnconfirmed, WorktreeGcOptions,
+    BaselineHoldStatus, ClaimedKnownRed, KnownRedUnconfirmed, PullRequestStatus, WorktreeGcOptions,
     WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport, baseline_hold_status,
     collect_worktrees, fetch_remote_base, recorded_baseline_hold_status, run_deferral_probe,
     run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,

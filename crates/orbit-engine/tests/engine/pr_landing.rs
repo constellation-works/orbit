@@ -1144,6 +1144,47 @@ fn run_shipped_landing_push(
     }
 }
 
+/// Both creation's view and reuse's list/view retain the provider number
+/// representations the private PR reader already accepted.
+#[test]
+fn pr_open_preserves_provider_number_representations() {
+    isolated(
+        "pr_open_preserves_provider_number_representations",
+        |sandbox| {
+            for reuse in [false, true] {
+                for (number, expected) in [
+                    (json!(42), "42"),
+                    (json!(-1), "-1"),
+                    (json!("0042"), "0042"),
+                    (json!(u64::MAX), "18446744073709551615"),
+                ] {
+                    let fx = Fixture::new(sandbox);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    let input = fx.open_input(&fx.candidate, &fx.base_sha);
+                    if reuse {
+                        action(&host, "pr_open", &input).unwrap();
+                    }
+                    fs::write(fx.forge.join("pr-number-json"), number.to_string()).unwrap();
+                    let opened = action(&host, "pr_open", &input);
+                    if reuse && expected == "-1" {
+                        let error = opened.expect_err(
+                            "negative selectors remain invalid at the provider input boundary",
+                        );
+                        assert!(
+                            matches!(error, OrbitError::InvalidInput(ref message) if message.contains("invalid private automation VCS PR selector '-1'"))
+                        );
+                        continue;
+                    }
+                    let opened =
+                        opened.expect("the existing number representations remain readable");
+                    assert_eq!(opened["pr_number"], expected);
+                    assert_eq!(opened["pr_reused"], reuse);
+                }
+            }
+        },
+    );
+}
+
 /// A required check that fails, before or after a wait, or an outstanding
 /// required review, refuses completion before any merge request. The PR stays
 /// open, the remote base does not move, and the task stays in `review`.
@@ -6990,6 +7031,8 @@ set -eu
 forge=$(cat '__SANDBOX__/active-forge')
 remote="$forge/remote.git"
 url="https://github.com/orbit/test/pull/42"
+number_json=42
+if [ -f "$forge/pr-number-json" ]; then number_json=$(cat "$forge/pr-number-json"); fi
 export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
@@ -7192,7 +7235,7 @@ merge() {
 case "$1 ${2:-}" in
     "pr list")
         if [ -f "$forge/pr-head" ]; then
-            printf '[{"number":42,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$(cat "$forge/pr-head")"
+            printf '[{"number":%s,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")"
         else
             echo '[]'
         fi ;;
@@ -7200,7 +7243,7 @@ case "$1 ${2:-}" in
     "pr view")
         case "$*" in
             *mergeStateStatus*) status ;;
-            *) printf '{"number":42,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$(cat "$forge/pr-head")" "$url" ;;
+            *) printf '{"number":%s,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$number_json" "$(cat "$forge/pr-head")" "$url" ;;
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
     "api graphql")

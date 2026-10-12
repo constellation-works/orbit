@@ -11,9 +11,9 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use serde_json::Value;
 
 use super::super::remote_probe::remote_ref_output;
+use super::answers::PullRequestStatus;
 use super::delivery::DeliveryPin;
 
 const MAX_STALE_HEAD_REREADS: u32 = 3;
@@ -46,7 +46,7 @@ impl HeadLag {
     /// ends is refused here, because the caller does not read that ref.
     pub(super) fn poll_delay(
         &mut self,
-        status: &Value,
+        status: &PullRequestStatus,
         pin: &DeliveryPin,
         reviewed_head_sha: Option<&str>,
         workspace_path: &str,
@@ -60,10 +60,7 @@ impl HeadLag {
         if reviewed_head_sha.is_some_and(|reviewed| reviewed != candidate) {
             return Ok(None);
         }
-        let reported = status
-            .get("headRefOid")
-            .and_then(Value::as_str)
-            .map(str::trim);
+        let reported = status.head_sha.as_deref();
         let previous = pin.previous_candidate_sha();
         let stale = previous.is_some_and(|previous| {
             !previous.is_empty() && previous != candidate && reported == Some(previous)
@@ -101,7 +98,7 @@ impl HeadLag {
             }
             let branch = pin
                 .head()
-                .or_else(|| status.get("headRefName").and_then(Value::as_str))
+                .or(status.head_branch.as_deref())
                 .map(str::trim)
                 .filter(|branch| !branch.is_empty())
                 .ok_or_else(|| {

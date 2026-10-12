@@ -8,7 +8,7 @@ use orbit_types::{
 use crate::OrbitRuntime;
 use crate::application::review::reconciliation;
 
-use super::execution::{HandoffPullRequest, pull_number, reported};
+use super::execution::{HandoffPullRequest, pull_number};
 use super::validation::{bounded_text, criteria, invalid};
 
 /// The pull request a desktop review binds to, read from the provider by its
@@ -114,10 +114,10 @@ impl OrbitRuntime {
         match source {
             PullRequestSource::Reference { selector, url } => {
                 let status = self.read_pull_request_status(&selector)?;
-                let head = reported(&status, "headRefOid").ok_or_else(|| {
+                let head = status.head_sha.ok_or_else(|| {
                     invalid(&format!("the provider reported no head for {selector}"))
                 })?;
-                let reported_url = reported(&status, "url");
+                let reported_url = status.url;
                 if url.is_some() && reported_url != url {
                     return Err(invalid(
                         "the provider answered for a different pull request than the task links",

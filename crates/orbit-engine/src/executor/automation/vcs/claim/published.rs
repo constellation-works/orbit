@@ -3,12 +3,13 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
-use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
 use super::super::git::{git_command_success, git_output, git_success};
-use super::super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
+use super::super::pr::{
+    DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status,
+};
 use super::super::review_gate::revision;
 use super::input::refused;
 use super::slug;
@@ -87,14 +88,7 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
         ));
     };
     let pr_number = number.to_string();
-    let response = host.run_private_vcs_operation(
-        super::super::operations::PR_STATUS,
-        json!({
-            "pr": pr_number,
-            "workspace_path": workspace_path.to_string_lossy(),
-        }),
-    )?;
-    let status = response.get("pull_request").cloned().unwrap_or(Value::Null);
+    let status = read_pr_status(host, workspace_path, &pr_number)?;
 
     match classify_pr_state(&status) {
         PrMergeState::Closed => {
@@ -172,12 +166,12 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(HandoffCandidate {
         repository,
-        source_branch: reported(&status, "headRefName").ok_or_else(|| {
+        source_branch: status.head_branch.clone().ok_or_else(|| {
             refused(format!(
                 "pull request #{pr_number} did not report its head branch"
             ))
         })?,
-        base_branch: reported(&status, "baseRefName").ok_or_else(|| {
+        base_branch: status.base_branch.clone().ok_or_else(|| {
             refused(format!(
                 "pull request #{pr_number} did not report its base branch"
             ))
@@ -189,18 +183,9 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn reported(status: &Value, field: &str) -> Option<String> {
-    status
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 /// The repository a pull request URL names, when the provider reported one.
-fn published_repository(status: &Value) -> Option<String> {
-    let url = reported(status, "url")?;
+fn published_repository(status: &PullRequestStatus) -> Option<String> {
+    let url = status.url.as_deref()?;
     let trimmed = url.trim_end_matches('/');
     let (repository, _) = trimmed.rsplit_once("/pull/")?;
     slug(repository)

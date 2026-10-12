@@ -13,6 +13,7 @@ use super::super::super::input::{
 use super::super::freshness::ensure_branch_fresh_against_base;
 use super::super::git::{base_sync_mode_from_input, git_command_success, git_output};
 use super::super::operations;
+use super::answers::MergeCapabilities;
 use super::attribution::ship_done_attribution;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,10 +23,10 @@ pub(in crate::executor::automation::vcs) enum MergeStrategy {
     Merge,
 }
 
-/// Repository capabilities needed to request a permitted PR merge, with the
-/// provider's own name for the repository they belong to.
+/// The merge method this run may request, with the provider's own name for
+/// the repository it applies to.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::executor::automation::vcs) struct MergeCapabilities {
+pub(in crate::executor::automation::vcs) struct PermittedMerge {
     pub(in crate::executor::automation::vcs) strategy: MergeStrategy,
     pub(in crate::executor::automation::vcs) auto_merge_allowed: bool,
     /// `owner/name` as the provider reports it. The owner landing consumer
@@ -48,14 +49,14 @@ pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
 ) -> Result<MergeStrategy, OrbitError> {
-    Ok(resolve_merge_capabilities(host, workspace_path, pr_number)?.strategy)
+    Ok(resolve_permitted_merge(host, workspace_path, pr_number)?.strategy)
 }
 
-pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn resolve_permitted_merge<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
-) -> Result<MergeCapabilities, OrbitError> {
+) -> Result<PermittedMerge, OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::PR_MERGE_CAPABILITIES,
         json!({
@@ -63,40 +64,22 @@ pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: Runtim
             "workspace_path": workspace_path,
         }),
     )?;
-    let repository = response.get("repository").ok_or_else(|| {
-        OrbitError::Execution(
-            "merge strategy resolution: private VCS response omitted repository capabilities"
-                .to_string(),
-        )
-    })?;
-    let capability = |key: &str| {
-        repository.get(key).and_then(Value::as_bool).ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "merge strategy resolution: repository capabilities omitted boolean {key}"
-            ))
-        })
-    };
-    let squash = capability("allow_squash_merge")?;
-    let rebase = capability("allow_rebase_merge")?;
-    let merge = capability("allow_merge_commit")?;
-    let linear = capability("requires_linear_history")?;
-    let auto_merge_allowed = capability("allow_auto_merge")?;
-    let reported_repository = repository
-        .get("name_with_owner")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let capabilities = MergeCapabilities::from_response(&response)?;
+    let squash = capabilities.allow_squash_merge;
+    let rebase = capabilities.allow_rebase_merge;
+    let merge = capabilities.allow_merge_commit;
+    let linear = capabilities.requires_linear_history;
     let permitted = |strategy| {
-        let repository = reported_repository.ok_or_else(|| {
+        let repository = capabilities.repository.clone().ok_or_else(|| {
             OrbitError::Execution(
                 "merge strategy resolution: repository capabilities omitted name_with_owner"
                     .to_string(),
             )
         })?;
-        Ok(MergeCapabilities {
+        Ok(PermittedMerge {
             strategy,
-            auto_merge_allowed,
-            repository: repository.to_string(),
+            auto_merge_allowed: capabilities.allow_auto_merge,
+            repository,
         })
     };
 
@@ -110,10 +93,10 @@ pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: Runtim
         return permitted(MergeStrategy::Merge);
     }
 
-    let repository_name = reported_repository.unwrap_or("repository");
-    let base_branch = repository
-        .get("base_branch")
-        .and_then(Value::as_str)
+    let repository_name = capabilities.repository.as_deref().unwrap_or("repository");
+    let base_branch = capabilities
+        .base_branch
+        .as_deref()
         .unwrap_or("target branch");
     Err(OrbitError::Execution(format!(
         "no permitted merge method for pull request #{pr_number} in {repository_name}: \
