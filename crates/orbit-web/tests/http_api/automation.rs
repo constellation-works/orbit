@@ -337,14 +337,19 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
             );
             fs::write(&config, raw_config).unwrap();
 
-            // The run is created after the cron fire, as a later state-triggered fire is.
-            std::thread::sleep(std::time::Duration::from_millis(1100));
+            // newest_fire orders parsed created_at. started_at on the HTTP
+            // fire is that timestamp, so the state-triggered run is stamped
+            // strictly after the cron fire without waiting out a second.
+            let cron_started =
+                DateTime::parse_from_rfc3339(last_fire()["started_at"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
             let mut run = fixture.seed_run(
                 "jrun-state-fire",
                 "task_pilot_pipeline",
                 JobRunState::Success,
             );
-            run.created_at = Utc::now();
+            run.created_at = cron_started + Duration::milliseconds(1);
             let mut pipeline =
                 PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
             pipeline.trigger = Some(JobRunTrigger::state_routine("pilot", "consumer-fixture"));

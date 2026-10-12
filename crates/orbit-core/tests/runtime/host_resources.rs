@@ -3,9 +3,9 @@ use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::{
     DiskSample, HostResourceProbe, HostResourceSample, ResourceSeverity,
-    default_host_resource_probe,
 };
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A probe whose sample is `age` old when it is read.
@@ -81,7 +81,13 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
 fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
     let dir = tempfile::tempdir().unwrap();
     let paths = vec![dir.path().join("not-created/worktrees")];
-    let probe = default_host_resource_probe();
+    let offset_ms = Arc::new(AtomicU64::new(0));
+    let origin = std::time::Instant::now();
+    let clock = Arc::clone(&offset_ms);
+    let probe =
+        orbit_core::runtime::host_resource::host_resource_probe_with_clock(Arc::new(move || {
+            origin + std::time::Duration::from_millis(clock.load(Ordering::SeqCst))
+        }));
     let sample = probe.sample(&paths);
     assert!(
         sample.disks[0]
@@ -106,11 +112,17 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
     assert_eq!(probe.sample(&paths).sampled_at, sample.sampled_at);
     #[cfg(target_os = "macos")]
     {
-        // The first Mach observation establishes the tick baseline. A fresh
-        // sample must expose a usable aggregate CPU delta, not remain unknown.
-        std::thread::sleep(
-            orbit_core::runtime::host_resource::RESOURCE_CACHE_TTL
-                + std::time::Duration::from_millis(30),
+        // The first Mach observation establishes the tick baseline. Expiring
+        // the cache on the injected clock takes a fresh sample; Mach's own
+        // baseline window, not a test sleep, supplies a usable CPU delta.
+        offset_ms.store(
+            u64::try_from(
+                (orbit_core::runtime::host_resource::RESOURCE_CACHE_TTL
+                    + std::time::Duration::from_millis(1))
+                .as_millis(),
+            )
+            .unwrap(),
+            Ordering::SeqCst,
         );
         let fresh = probe.sample(&paths);
         assert!(fresh.sampled_at > sample.sampled_at);

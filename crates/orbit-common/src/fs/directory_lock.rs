@@ -3,7 +3,9 @@
 use std::fs::{self, File, FileTimes, Metadata, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -31,6 +33,61 @@ impl Default for DirectoryLockOptions {
             stale_after: Duration::from_secs(10),
             update_interval: Duration::from_secs(1),
         }
+    }
+}
+
+type DirectoryLockWaitObserver = Arc<dyn Fn(&Path) + Send + Sync>;
+
+static DIRECTORY_LOCK_WAIT_OBSERVER: Mutex<Option<DirectoryLockWaitObserver>> = Mutex::new(None);
+static DIRECTORY_LOCK_WAIT_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Notified when acquisition sees another holder and is about to wait.
+///
+/// Unset unless a test installs it. The callback runs on the acquiring thread,
+/// without this module's mutex held, and must not take the same directory lock.
+/// Dropping the guard removes the observer only when it is still the installed one.
+#[doc(hidden)]
+pub struct DirectoryLockWaitGuard {
+    observer: DirectoryLockWaitObserver,
+}
+
+#[doc(hidden)]
+pub fn observe_directory_lock_waits(
+    observer: impl Fn(&Path) + Send + Sync + 'static,
+) -> DirectoryLockWaitGuard {
+    let observer: DirectoryLockWaitObserver = Arc::new(observer);
+    *DIRECTORY_LOCK_WAIT_OBSERVER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&observer));
+    DIRECTORY_LOCK_WAIT_ARMED.store(true, Ordering::Release);
+    DirectoryLockWaitGuard { observer }
+}
+
+impl Drop for DirectoryLockWaitGuard {
+    fn drop(&mut self) {
+        let mut slot = DIRECTORY_LOCK_WAIT_OBSERVER
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &self.observer))
+        {
+            *slot = None;
+            DIRECTORY_LOCK_WAIT_ARMED.store(false, Ordering::Release);
+        }
+    }
+}
+
+fn notify_directory_lock_wait(path: &Path) {
+    if !DIRECTORY_LOCK_WAIT_ARMED.load(Ordering::Acquire) {
+        return;
+    }
+    let observer = DIRECTORY_LOCK_WAIT_OBSERVER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(observer) = observer {
+        observer(path);
     }
 }
 
@@ -132,6 +189,7 @@ impl DirectoryLockGuard {
                 ));
             }
             if !reclaimed {
+                notify_directory_lock_wait(&path);
                 thread::sleep(Duration::from_millis(50).min(options.timeout - elapsed));
             }
         }

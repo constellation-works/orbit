@@ -528,7 +528,32 @@ fn envelope_widening_progresses_beside_a_continuous_shared_join_stream() {
             .map_err(|error| error.to_string())
         }
     });
-    std::thread::sleep(Duration::from_millis(200));
+    // An exclusive widening publishes a locked .waiting record before it
+    // polls, which is what makes the shared stream yield to it.
+    let waiting = Instant::now();
+    let waiters = root.join(".generation-admission-waiters");
+    loop {
+        let published = std::fs::read_dir(&waiters)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("waiting")
+            });
+        if published {
+            break;
+        }
+        assert!(
+            waiting.elapsed() < Duration::from_secs(10),
+            "the widening join publishes an exclusive waiter"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     drop(in_flight);
     let outcome = widening.join().expect("widening thread");
     stop.store(true, Ordering::Release);

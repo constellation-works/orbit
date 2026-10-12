@@ -4,8 +4,34 @@ use super::fixtures::sample;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
+use std::time::{Duration, Instant};
+
+struct ManualClock {
+    origin: Instant,
+    offset_ms: AtomicU64,
+}
+
+impl ManualClock {
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+            offset_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn advance(&self, by: Duration) {
+        self.offset_ms.fetch_add(
+            u64::try_from(by.as_millis()).expect("offset fits"),
+            Ordering::SeqCst,
+        );
+    }
+
+    fn instant(&self) -> Instant {
+        self.origin + Duration::from_millis(self.offset_ms.load(Ordering::SeqCst))
+    }
+}
 
 #[test]
 fn overlapping_callers_reuse_one_sample_including_unknown() {
@@ -17,7 +43,12 @@ fn overlapping_callers_reuse_one_sample_including_unknown() {
         }
     }
     let source = Arc::new(Counter(AtomicUsize::new(0)));
-    let cache = Arc::new(CachedHostResourceProbe::new(source.clone()));
+    let clock = Arc::new(ManualClock::new());
+    let now = {
+        let clock = Arc::clone(&clock);
+        Arc::new(move || clock.instant())
+    };
+    let cache = Arc::new(CachedHostResourceProbe::with_clock(source.clone(), now));
     std::thread::scope(|scope| {
         for _ in 0..16 {
             let cache = cache.clone();
@@ -38,7 +69,7 @@ fn overlapping_callers_reuse_one_sample_including_unknown() {
         2,
         "different filesystems need their own observations"
     );
-    std::thread::sleep(RESOURCE_CACHE_TTL + std::time::Duration::from_millis(30));
+    clock.advance(RESOURCE_CACHE_TTL);
     cache.sample(&[PathBuf::from("/other")]);
     assert_eq!(
         source.0.load(Ordering::SeqCst),

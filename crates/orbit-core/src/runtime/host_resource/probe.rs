@@ -10,13 +10,24 @@ use super::{HostResourceProbe, HostResourceSample, RESOURCE_CACHE_TTL, platform}
 pub struct CachedHostResourceProbe {
     source: Arc<dyn HostResourceProbe>,
     cached: Mutex<Option<(Instant, Vec<PathBuf>, HostResourceSample)>>,
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
 
 impl CachedHostResourceProbe {
     pub fn new(source: Arc<dyn HostResourceProbe>) -> Self {
+        Self::with_clock(source, Arc::new(Instant::now))
+    }
+
+    /// `now` is the monotonic clock the TTL is measured with.
+    /// [`Self::new`] reads [`Instant::now`].
+    pub fn with_clock(
+        source: Arc<dyn HostResourceProbe>,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
         Self {
             source,
             cached: Mutex::new(None),
+            now,
         }
     }
 }
@@ -24,16 +35,28 @@ impl CachedHostResourceProbe {
 impl HostResourceProbe for CachedHostResourceProbe {
     fn sample(&self, disk_paths: &[PathBuf]) -> HostResourceSample {
         let mut guard = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+        let fresh = (self.now)();
         if let Some((at, paths, sample)) = &*guard
-            && at.elapsed() < RESOURCE_CACHE_TTL
+            && fresh.saturating_duration_since(*at) < RESOURCE_CACHE_TTL
             && paths == disk_paths
         {
             return sample.clone();
         }
         let sample = self.source.sample(disk_paths);
-        *guard = Some((Instant::now(), disk_paths.to_vec(), sample.clone()));
+        *guard = Some(((self.now)(), disk_paths.to_vec(), sample.clone()));
         sample
     }
+}
+
+/// Native probe whose cache TTL follows `now` instead of the process clock.
+///
+/// Production callers use [`default_host_resource_probe`]. Tests advance `now`
+/// to expire a sample without sleeping out [`RESOURCE_CACHE_TTL`].
+#[doc(hidden)]
+pub fn host_resource_probe_with_clock(
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
+) -> Arc<dyn HostResourceProbe> {
+    Arc::new(super::platform::NativeProbe::with_clock(now))
 }
 
 /// The process shares its native probe so runtime clones and callers reuse samples.
