@@ -6,6 +6,7 @@
 //! failures (registry unreadable, store unopenable) — an unconfigured host
 //! is a clean no-op, because launchd/systemd will invoke this forever.
 
+use crate::application::distributed::PullSettlementOutcome;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -683,14 +684,19 @@ fn tick_allows_workspace(
 /// pending; the next tick retries it.
 fn deliver_recorded_pull_settlements(workspace: &Workspace, runtime: &OrbitRuntime) {
     for entry in runtime.deliver_recorded_pull_settlements() {
-        match entry.outcome.as_str() {
-            "settled" | "closed_obsolete" => tracing::info!(
-                target: "orbit.core.sweep",
-                workspace = %workspace.name,
-                settlement = %entry.describe(),
-                "sweep.pull_settlement_delivered",
-            ),
-            "pending_delivery" | "owner_unreachable" | "pending" | "no_owner_route" => {
+        match entry.outcome {
+            PullSettlementOutcome::Settled | PullSettlementOutcome::ClosedObsolete => {
+                tracing::info!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    settlement = %entry.describe(),
+                    "sweep.pull_settlement_delivered",
+                )
+            }
+            PullSettlementOutcome::PendingDelivery
+            | PullSettlementOutcome::OwnerUnreachable
+            | PullSettlementOutcome::Pending
+            | PullSettlementOutcome::NoOwnerRoute => {
                 tracing::warn!(
                     target: "orbit.core.sweep",
                     workspace = %workspace.name,

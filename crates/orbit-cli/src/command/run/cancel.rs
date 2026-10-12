@@ -2,6 +2,7 @@
 
 use clap::Args;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::job::JobRunCancelOutcome;
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload, require_confirmation};
@@ -87,7 +88,7 @@ impl Execute for RunCancelArgs {
             "unstopped_children": result.unstopped_children,
         });
         let mut lines = Vec::new();
-        if result.outcome == "cancelling" {
+        if result.outcome == JobRunCancelOutcome::Cancelling {
             lines.push(format!(
                 "cancelling job run {}: waiting for {} leaves; it ends `cancelled` once they \
                  finish and settle (`--force` stops them instead)",
@@ -100,7 +101,7 @@ impl Execute for RunCancelArgs {
                     .iter()
                     .map(|leaf| format!("  {}", leaf.describe())),
             );
-        } else if result.outcome == "already_terminal" {
+        } else if result.outcome == JobRunCancelOutcome::AlreadyTerminal {
             lines.push(format!(
                 "job run {} was already terminal ({})",
                 result.run_id, result.final_state

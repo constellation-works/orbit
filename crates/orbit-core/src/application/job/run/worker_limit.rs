@@ -54,6 +54,34 @@ pub struct DrainWorkerLimitRequest<'a> {
     pub claim_token: Option<&'a str>,
 }
 
+/// Result of changing a live drain worker ceiling.
+///
+/// Serialized as the existing snake_case response tokens. Unknown response
+/// tokens are rejected on deserialization; persisted audit records remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrainWorkerLimitOutcome {
+    Updated,
+    Unchanged,
+}
+
+impl DrainWorkerLimitOutcome {
+    /// The stable response and audit token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+impl std::fmt::Display for DrainWorkerLimitOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Outcome of an accepted worker-ceiling change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainWorkerLimitChange {
@@ -62,7 +90,7 @@ pub struct DrainWorkerLimitChange {
     /// `updated` when the ceiling moved, `unchanged` when the requested value
     /// already was the effective one. Both are successes and both are audited;
     /// they differ in whether a revision was consumed.
-    pub outcome: &'static str,
+    pub outcome: DrainWorkerLimitOutcome,
     pub previous_max_active_leaf_runs: u32,
     pub max_active_leaf_runs: u32,
     pub revision: u32,
@@ -87,7 +115,7 @@ impl OrbitRuntime {
             Ok(change) => self.record_worker_limit_completion(
                 request.run_id,
                 &request_id,
-                change.outcome,
+                change.outcome.as_str(),
                 json!({
                     "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
                     "max_active_leaf_runs": change.max_active_leaf_runs,
@@ -196,7 +224,11 @@ impl OrbitRuntime {
         Ok(DrainWorkerLimitChange {
             run_id: run_id.to_string(),
             job_id: run.job_id,
-            outcome: if unchanged { "unchanged" } else { "updated" },
+            outcome: if unchanged {
+                DrainWorkerLimitOutcome::Unchanged
+            } else {
+                DrainWorkerLimitOutcome::Updated
+            },
             previous_max_active_leaf_runs: effective_before_request,
             max_active_leaf_runs: requested,
             revision: applied.as_ref().map_or(0, |limit| limit.revision),

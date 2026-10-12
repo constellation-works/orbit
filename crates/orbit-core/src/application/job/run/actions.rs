@@ -28,7 +28,7 @@ use crate::application::job::log_best_effort;
 use super::owner::signal_run_owner_process;
 #[cfg(unix)]
 use super::owner::{ProviderStop, stop_provider_process};
-use super::types::JobRunCancelResult;
+use super::types::{JobRunCancelOutcome, JobRunCancelResult};
 
 /// `source` recorded on a cancellation a parent propagated to its child.
 const CHILD_CASCADE_SOURCE: &str = "parent_cascade";
@@ -190,7 +190,7 @@ impl OrbitRuntime {
             self.record_cancellation_completion(&run, &request_id, "already_terminal", None, None)?;
             return Ok(cancellation_result(
                 &run,
-                "already_terminal",
+                JobRunCancelOutcome::AlreadyTerminal,
                 run.state,
                 false,
                 None,
@@ -288,7 +288,7 @@ impl OrbitRuntime {
             )?;
             return Ok(cancellation_result(
                 &run,
-                "already_terminal",
+                JobRunCancelOutcome::AlreadyTerminal,
                 after_signal.state,
                 signal_attempted,
                 signal_outcome,
@@ -331,7 +331,7 @@ impl OrbitRuntime {
                 )?;
                 return Ok(cancellation_result(
                     &run,
-                    "already_terminal",
+                    JobRunCancelOutcome::AlreadyTerminal,
                     cancelled_run.state,
                     signal_attempted,
                     signal_outcome,
@@ -385,7 +385,7 @@ impl OrbitRuntime {
         )?;
         Ok(cancellation_result(
             &run,
-            "cancelled",
+            JobRunCancelOutcome::Cancelled,
             JobRunState::Cancelled,
             signal_attempted,
             signal_outcome,
@@ -778,14 +778,14 @@ impl OrbitRuntime {
             signal_run_owner_process,
             depth + 1,
         ) {
-            Ok(result) if result.outcome == "already_terminal" => (
-                result.outcome,
+            Ok(result) if result.outcome == JobRunCancelOutcome::AlreadyTerminal => (
+                result.outcome.to_string(),
                 Some(format!(
                     "job run '{}' was already terminal ({})",
                     result.run_id, result.final_state
                 )),
             ),
-            Ok(result) => (result.outcome, None),
+            Ok(result) => (result.outcome.to_string(), None),
             // A child that reached a terminal state on its own is the ordinary
             // race, not a fault: the parent simply lost it to the finish line.
             Err(OrbitError::JobValidation(message))
@@ -844,7 +844,7 @@ fn run_cancellation_state_write_hook() {
 
 pub(super) fn cancellation_result(
     run: &JobRun,
-    outcome: &str,
+    outcome: JobRunCancelOutcome,
     final_state: JobRunState,
     signal_attempted: bool,
     signal_outcome: Option<String>,
@@ -853,7 +853,7 @@ pub(super) fn cancellation_result(
 ) -> JobRunCancelResult {
     JobRunCancelResult {
         run_id: run.run_id.clone(),
-        outcome: outcome.to_string(),
+        outcome,
         previous_state: run.state.to_string(),
         final_state: final_state.to_string(),
         actor: actor.to_string(),

@@ -58,7 +58,8 @@ use super::drain::{
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
+    PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, PullSettlementOutcome,
+    is_owner_transport_failure,
 };
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
@@ -415,7 +416,7 @@ impl OrbitRuntime {
                 .map(|record| {
                     entry(
                         record,
-                        "no_owner_route",
+                        PullSettlementOutcome::NoOwnerRoute,
                         Some(
                             "this runtime has no federated owner route; register the owner \
                              with `orbit host add <ssh-target>`"
@@ -449,7 +450,11 @@ impl OrbitRuntime {
         let mut entries = Vec::with_capacity(records.len());
         for mut record in records {
             if unreachable.contains(&record.destination.selector) {
-                entries.push(entry(&record, "owner_unreachable", None));
+                entries.push(entry(
+                    &record,
+                    PullSettlementOutcome::OwnerUnreachable,
+                    None,
+                ));
                 continue;
             }
             let scope = if !may_abandon || drain_live(&record) {
@@ -475,7 +480,7 @@ impl OrbitRuntime {
             }
             let carried = scope == SettleScope::Deliver || drain_live(&record);
             if error.is_none() && drain.release_held(&record).unwrap_or(false) {
-                entries.push(entry(&record, "release_held", None));
+                entries.push(entry(&record, PullSettlementOutcome::ReleaseHeld, None));
                 continue;
             }
             entries.push(classify(&record, carried, error));
@@ -604,19 +609,23 @@ fn classify(
     error: Option<OrbitError>,
 ) -> PullSettlementEntry {
     let outcome = match record.phase {
-        LocalPullPhase::Settled if record.refusal.is_some() => "closed_obsolete",
-        LocalPullPhase::Settled => "settled",
-        LocalPullPhase::Settling if error.is_none() && record.settlement_refusal.is_some() => {
-            "settlement_refused"
+        LocalPullPhase::Settled if record.refusal.is_some() => {
+            PullSettlementOutcome::ClosedObsolete
         }
-        LocalPullPhase::Settling => "pending_delivery",
-        LocalPullPhase::Launched if error.is_none() => "leaf_running",
-        LocalPullPhase::Launching => "launch_uncertain",
-        LocalPullPhase::Requested if !drain_live && error.is_none() => "unanswered_request",
-        LocalPullPhase::Idle => "idle",
-        LocalPullPhase::Refused => "refused",
-        _ if drain_live && error.is_none() => "awaiting_drain",
-        _ => "pending",
+        LocalPullPhase::Settled => PullSettlementOutcome::Settled,
+        LocalPullPhase::Settling if error.is_none() && record.settlement_refusal.is_some() => {
+            PullSettlementOutcome::SettlementRefused
+        }
+        LocalPullPhase::Settling => PullSettlementOutcome::PendingDelivery,
+        LocalPullPhase::Launched if error.is_none() => PullSettlementOutcome::LeafRunning,
+        LocalPullPhase::Launching => PullSettlementOutcome::LaunchUncertain,
+        LocalPullPhase::Requested if !drain_live && error.is_none() => {
+            PullSettlementOutcome::UnansweredRequest
+        }
+        LocalPullPhase::Idle => PullSettlementOutcome::Idle,
+        LocalPullPhase::Refused => PullSettlementOutcome::Refused,
+        _ if drain_live && error.is_none() => PullSettlementOutcome::AwaitingDrain,
+        _ => PullSettlementOutcome::Pending,
     };
     let detail = error
         .map(|error| error.to_string())
@@ -637,7 +646,7 @@ fn classify(
 
 fn entry(
     record: &LocalPullAdmission,
-    outcome: &str,
+    outcome: PullSettlementOutcome,
     detail: Option<String>,
 ) -> PullSettlementEntry {
     PullSettlementEntry {
@@ -650,7 +659,7 @@ fn entry(
             .and_then(|receipt| receipt.claim.as_ref())
             .map(|claim| claim.task_id.clone()),
         leaf_run_id: record.leaf_run_id.clone(),
-        outcome: outcome.to_string(),
+        outcome,
         detail,
     }
 }

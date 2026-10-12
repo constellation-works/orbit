@@ -1,3 +1,4 @@
+use orbit_core::application::distributed::PullSettlementOutcome;
 use std::fmt::Write as _;
 
 use clap::Args;
@@ -281,8 +282,10 @@ pub(super) fn pull_settlement_lines(entries: &[orbit_core::PullSettlementEntry])
     );
     if entries.iter().any(|entry| {
         matches!(
-            entry.outcome.as_str(),
-            "pending_delivery" | "owner_unreachable" | "pending"
+            entry.outcome,
+            PullSettlementOutcome::PendingDelivery
+                | PullSettlementOutcome::OwnerUnreachable
+                | PullSettlementOutcome::Pending
         )
     }) {
         lines.push(

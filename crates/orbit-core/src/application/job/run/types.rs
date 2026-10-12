@@ -28,6 +28,36 @@ pub struct JobRunListParams {
     pub order_by: JobRunOrder,
 }
 
+/// Result of a cancellation request.
+///
+/// Serialized as the existing snake_case response tokens. Unknown response
+/// tokens are rejected on deserialization; persisted audit records remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobRunCancelOutcome {
+    Cancelled,
+    AlreadyTerminal,
+    Cancelling,
+}
+
+impl JobRunCancelOutcome {
+    /// The stable response and audit token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::AlreadyTerminal => "already_terminal",
+            Self::Cancelling => "cancelling",
+        }
+    }
+}
+
+impl std::fmt::Display for JobRunCancelOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Result of a job run cancellation attempt.
 #[derive(Debug, Clone, Serialize)]
 pub struct JobRunCancelResult {
@@ -39,7 +69,7 @@ pub struct JobRunCancelResult {
     /// ends `cancelled` on its own. This describes the parent run; callers
     /// must also inspect `unstopped_leaves` and `unstopped_children` before
     /// treating a forced cancellation as complete.
-    pub outcome: String,
+    pub outcome: JobRunCancelOutcome,
     pub previous_state: String,
     pub final_state: String,
     pub actor: String,

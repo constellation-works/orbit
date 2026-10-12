@@ -1,6 +1,7 @@
 //! Graceful and forced drain cancel.
 
 use super::*;
+use orbit_core::application::job::JobRunCancelOutcome;
 
 /// A dead owner cannot authorize releasing a live provider's ownership.
 /// Corrupting one audit row deterministically fails the actual store read while
@@ -157,7 +158,7 @@ fn cancellation_retains_claim_and_reservation_until_provider_teardown_is_confirm
             rusqlite::params![restored.to_string(), event_id, leaf],
         ).unwrap(), 1);
         let cancelled = pair.follower.cancel_job_run(&leaf).unwrap();
-        assert_eq!(cancelled.outcome, "cancelled");
+        assert_eq!(cancelled.outcome, JobRunCancelOutcome::Cancelled);
         assert_eq!(cancelled.signal_outcome.as_deref(), Some("already_exited"));
         assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
         assert_eq!(pair.admission(&leaf).phase, LocalPullPhase::Settled);
@@ -264,7 +265,7 @@ fn cancelling_a_shared_group_owner_stops_only_the_owner() {
             .cancel_job_run_with_options(&run, "operator", "cli", None, true)
             .expect("a shared-group owner can be stopped independently");
 
-        assert_eq!(cancel.outcome, "cancelled");
+        assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled);
         assert_eq!(
             cancel.signal_outcome.as_deref(),
             Some(if force_kill {
@@ -328,7 +329,7 @@ fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leav
         .follower
         .cancel_job_run_with_options(&drain, "operator", "cli", Some("host maintenance"), false)
         .expect("cancel");
-    assert_eq!(cancel.outcome, "cancelling");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelling);
     let waiting: Vec<_> = cancel
         .waiting_leaves
         .iter()
@@ -467,7 +468,7 @@ fn a_forced_drain_cancel_accepts_an_already_exited_drain_owner() {
         .cancel_job_run_with_options(&drain, "operator", "cli", None, true)
         .expect("an already-exited owner permits forced cancellation");
     assert_eq!(cancel.signal_outcome.as_deref(), Some("already_exited"));
-    assert_eq!(cancel.outcome, "cancelled");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled);
     assert_eq!(cancel.forced_runs, vec![running.clone()]);
     assert!(cancel.unstopped_leaves.is_empty(), "{cancel:?}");
     assert!(worker.stopped());
@@ -509,7 +510,7 @@ fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog
         .follower
         .cancel_job_run_with_options(&drain, "operator", "cli", Some("host maintenance"), true)
         .expect("forced cancel");
-    assert_eq!(cancel.outcome, "cancelled");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled);
     assert!(
         drain_worker.stopped(),
         "the drain worker stops before release"
@@ -743,7 +744,7 @@ fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
         .follower
         .cancel_job_run_with_options(&drain.run_id, "operator", "cli", None, true)
         .unwrap();
-    assert_eq!(cancel.outcome, "cancelled");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled);
     assert_eq!(cancel.final_state, "cancelled");
     assert_eq!(cancel.forced_runs, vec![stopped.run_id.clone()]);
     assert!(worker.stopped());

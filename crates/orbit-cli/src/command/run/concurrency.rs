@@ -1,6 +1,7 @@
 //! `orbit run concurrency` — retune a live drain's worker ceiling [ORB-11253].
 
 use clap::Args;
+use orbit_core::application::job::DrainWorkerLimitOutcome;
 use orbit_core::{DrainWorkerLimitRequest, OrbitRuntime};
 use serde_json::json;
 
@@ -63,7 +64,7 @@ impl Execute for RunConcurrencyArgs {
             "concurrency": change.max_active_leaf_runs,
             "revision": change.revision,
         });
-        let text = if change.outcome == "unchanged" {
+        let text = if change.outcome == DrainWorkerLimitOutcome::Unchanged {
             format!(
                 "job run {} already admits {} tasks at a time (revision {})",
                 change.run_id, change.max_active_leaf_runs, change.revision

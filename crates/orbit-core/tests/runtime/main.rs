@@ -75,6 +75,7 @@ mod provider_limit_hold;
 
 mod run_cli_invocations;
 mod run_history;
+mod run_outcome_contract;
 mod task_delivery;
 mod task_lint_paths;
 mod task_pilot;

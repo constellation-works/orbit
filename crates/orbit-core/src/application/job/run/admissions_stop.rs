@@ -49,6 +49,40 @@ pub struct RemainingDrainChild {
     pub child_status: Option<String>,
 }
 
+/// Result of stopping drain admissions.
+///
+/// Serialized as the existing snake_case response tokens. Unknown response
+/// tokens are rejected on deserialization; persisted audit records remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrainAdmissionsStopOutcome {
+    Idle,
+    Stopped,
+    Unchanged,
+    CancelledQueued,
+    ForceCancelled,
+}
+
+impl DrainAdmissionsStopOutcome {
+    /// The stable response and audit token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Stopped => "stopped",
+            Self::Unchanged => "unchanged",
+            Self::CancelledQueued => "cancelled_queued",
+            Self::ForceCancelled => "force_cancelled",
+        }
+    }
+}
+
+impl std::fmt::Display for DrainAdmissionsStopOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Outcome for one auto coordinator this workspace owns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainAdmissionsStopChange {
@@ -58,7 +92,7 @@ pub struct DrainAdmissionsStopChange {
     /// already set, `cancelled_queued` when a never-started coordinator was
     /// cancelled so it cannot admit later, `force_cancelled` when a forced
     /// stop cancelled it and stopped its in-flight work.
-    pub outcome: &'static str,
+    pub outcome: DrainAdmissionsStopOutcome,
     pub remaining_children: Vec<RemainingDrainChild>,
     /// Runs a forced stop cancelled under this coordinator.
     pub forced_runs: Vec<String>,
@@ -76,7 +110,7 @@ pub struct DrainAdmissionsStopResult {
     /// least one running coordinator was acknowledged, `cancelled_queued`
     /// when only queued never-started coordinators were removed,
     /// `force_cancelled` when a forced stop cancelled at least one.
-    pub outcome: &'static str,
+    pub outcome: DrainAdmissionsStopOutcome,
     pub coordinators: Vec<DrainAdmissionsStopChange>,
     /// [ORB-13663] Pull settlements the stop's settle-only pass carried, for
     /// every owner this replica pulls from: recorded settlements delivered,
@@ -127,7 +161,7 @@ impl OrbitRuntime {
                 None,
             )?;
             return Ok(DrainAdmissionsStopResult {
-                outcome: "idle",
+                outcome: DrainAdmissionsStopOutcome::Idle,
                 coordinators: Vec::new(),
                 pull_settlements: self.settle_pending_pulls(),
                 replica_owner_machine_id: self.coordination_write_owner().map(str::to_owned),
@@ -141,7 +175,7 @@ impl OrbitRuntime {
                     self.record_stop_completion(
                         Some(&change.run_id),
                         &request_id,
-                        change.outcome,
+                        change.outcome.as_str(),
                         json!({
                             "job_id": change.job_id,
                             "remaining_children": change
@@ -174,18 +208,21 @@ impl OrbitRuntime {
 
         let outcome = if changes
             .iter()
-            .any(|change| change.outcome == "force_cancelled")
+            .any(|change| change.outcome == DrainAdmissionsStopOutcome::ForceCancelled)
         {
-            "force_cancelled"
-        } else if changes.iter().any(|change| change.outcome == "stopped") {
-            "stopped"
+            DrainAdmissionsStopOutcome::ForceCancelled
         } else if changes
             .iter()
-            .any(|change| change.outcome == "cancelled_queued")
+            .any(|change| change.outcome == DrainAdmissionsStopOutcome::Stopped)
         {
-            "cancelled_queued"
+            DrainAdmissionsStopOutcome::Stopped
+        } else if changes
+            .iter()
+            .any(|change| change.outcome == DrainAdmissionsStopOutcome::CancelledQueued)
+        {
+            DrainAdmissionsStopOutcome::CancelledQueued
         } else {
-            "unchanged"
+            DrainAdmissionsStopOutcome::Unchanged
         };
         Ok(DrainAdmissionsStopResult {
             outcome,
@@ -213,7 +250,7 @@ impl OrbitRuntime {
             return Ok(DrainAdmissionsStopChange {
                 run_id: run.run_id.clone(),
                 job_id: run.job_id.clone(),
-                outcome: "cancelled_queued",
+                outcome: DrainAdmissionsStopOutcome::CancelledQueued,
                 remaining_children: Vec::new(),
                 forced_runs: Vec::new(),
                 unstopped_leaves: Vec::new(),
@@ -280,7 +317,11 @@ impl OrbitRuntime {
         let mut change = DrainAdmissionsStopChange {
             run_id: run.run_id.clone(),
             job_id: run.job_id.clone(),
-            outcome: if unchanged { "unchanged" } else { "stopped" },
+            outcome: if unchanged {
+                DrainAdmissionsStopOutcome::Unchanged
+            } else {
+                DrainAdmissionsStopOutcome::Stopped
+            },
             remaining_children: Vec::new(),
             forced_runs: Vec::new(),
             unstopped_leaves: Vec::new(),
@@ -297,7 +338,7 @@ impl OrbitRuntime {
                 true,
                 false,
             )?;
-            change.outcome = "force_cancelled";
+            change.outcome = DrainAdmissionsStopOutcome::ForceCancelled;
             change.forced_runs = forced.forced_runs;
             change.unstopped_leaves = forced.unstopped_leaves;
             change.unstopped_children = forced.unstopped_children;

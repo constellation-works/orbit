@@ -11,6 +11,7 @@
 //! the implementer the findings, continuing an earlier pull request on its
 //! branch rather than opening a second.
 
+use orbit_core::application::job::JobRunCancelOutcome;
 use orbit_types::workflow::{REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewVerdict};
 
 use super::candidate_carry::{
@@ -114,7 +115,7 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
             false,
         )
         .expect("cancel the leaf");
-    assert_eq!(cancel.outcome, "cancelled", "{cancel:?}");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled, "{cancel:?}");
     assert!(worker.stopped(), "the leaf's worker is stopped");
 
     // The repair is a reviewer-authored commit on the candidate head, kept

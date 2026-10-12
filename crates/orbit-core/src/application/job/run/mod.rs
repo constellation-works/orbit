@@ -47,8 +47,8 @@ mod tests;
 #[cfg(unix)]
 pub(crate) use actions::{CANCELLATION_WORKER_EXIT_AUDIT, active_cancellation_request};
 pub use admissions_stop::{
-    DrainAdmissionsStopChange, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
-    RemainingDrainChild,
+    DrainAdmissionsStopChange, DrainAdmissionsStopOutcome, DrainAdmissionsStopRequest,
+    DrainAdmissionsStopResult, RemainingDrainChild,
 };
 pub(crate) use child_timeout::{kept_candidate, kept_clause};
 #[cfg(test)]
@@ -60,7 +60,12 @@ pub use projection::{
     job_run_to_json_with_activity_provenance, run_error_step,
 };
 pub use root_cause::{RunIncident, fold_run_incidents};
-pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild, UnstoppedLeaf};
-pub use window_extension::{DrainWindowExtensionChange, DrainWindowExtensionRequest};
+pub use types::{
+    JobRunCancelOutcome, JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild,
+    UnstoppedLeaf,
+};
+pub use window_extension::{
+    DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
+};
 pub(crate) use window_extension::{drain_deadline, pull_window_closed};
-pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};
+pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitOutcome, DrainWorkerLimitRequest};

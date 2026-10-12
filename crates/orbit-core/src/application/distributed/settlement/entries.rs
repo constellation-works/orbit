@@ -7,6 +7,58 @@ use orbit_store::contracts::{LocalPullAdmission, LocalPullPhase};
 use orbit_types::workflow::ClaimFailureClass;
 use serde::Serialize;
 
+/// Result of a settle-only pass for one admission.
+///
+/// Serialized as the existing snake_case response tokens. Unknown response
+/// tokens are rejected on deserialization; persisted audit records remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullSettlementOutcome {
+    Settled,
+    ClosedObsolete,
+    LeafRunning,
+    PendingDelivery,
+    SettlementRefused,
+    ReleaseHeld,
+    OwnerUnreachable,
+    AwaitingDrain,
+    UnansweredRequest,
+    LaunchUncertain,
+    Idle,
+    Refused,
+    Pending,
+    NoOwnerRoute,
+}
+
+impl PullSettlementOutcome {
+    /// The stable response and audit token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Settled => "settled",
+            Self::ClosedObsolete => "closed_obsolete",
+            Self::LeafRunning => "leaf_running",
+            Self::PendingDelivery => "pending_delivery",
+            Self::SettlementRefused => "settlement_refused",
+            Self::ReleaseHeld => "release_held",
+            Self::OwnerUnreachable => "owner_unreachable",
+            Self::AwaitingDrain => "awaiting_drain",
+            Self::UnansweredRequest => "unanswered_request",
+            Self::LaunchUncertain => "launch_uncertain",
+            Self::Idle => "idle",
+            Self::Refused => "refused",
+            Self::Pending => "pending",
+            Self::NoOwnerRoute => "no_owner_route",
+        }
+    }
+}
+
+impl std::fmt::Display for PullSettlementOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One admission carried by a settle-only pass.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullSettlementEntry {
@@ -42,7 +94,7 @@ pub struct PullSettlementEntry {
     ///   nothing ready, or refused, so no claim exists;
     /// - `pending` — stopped by the error in `detail`; any later pass retries;
     /// - `no_owner_route` — this runtime has no federated route to the owner.
-    pub outcome: String,
+    pub outcome: PullSettlementOutcome,
     /// The error that stopped the admission, when one did.
     pub detail: Option<String>,
 }
@@ -62,9 +114,11 @@ impl PullSettlementEntry {
             (None, Some(leaf)) => format!("leaf {leaf}"),
             (None, None) => format!("request {}", self.request_id),
         };
-        let guidance = outcome_guidance(&self.outcome);
+        let guidance = outcome_guidance(self.outcome);
         match (&self.detail, guidance) {
-            (Some(detail), Some(guidance)) if self.outcome == "launch_uncertain" => {
+            (Some(detail), Some(guidance))
+                if self.outcome == PullSettlementOutcome::LaunchUncertain =>
+            {
                 format!("{subject}: {} — {detail} ({guidance})", self.outcome)
             }
             (Some(detail), _) => format!("{subject}: {} — {detail}", self.outcome),
@@ -75,30 +129,36 @@ impl PullSettlementEntry {
 }
 
 /// What an outcome means for the operator, when it is not self-evident.
-fn outcome_guidance(outcome: &str) -> Option<&'static str> {
+fn outcome_guidance(outcome: PullSettlementOutcome) -> Option<&'static str> {
     match outcome {
-        "closed_obsolete" => {
+        PullSettlementOutcome::ClosedObsolete => {
             Some("the owner had already ended this claim; decide the task's status on the owner")
         }
-        "leaf_running" => Some("still running; it settles itself when it ends"),
-        "pending_delivery" | "owner_unreachable" => Some(
+        PullSettlementOutcome::LeafRunning => Some("still running; it settles itself when it ends"),
+        PullSettlementOutcome::PendingDelivery | PullSettlementOutcome::OwnerUnreachable => Some(
             "recorded but not delivered to the owner; the clock sweep retries it, or rerun \
              `orbit run auto --stop` once it is reachable",
         ),
-        "pending" => Some("stopped by an error; any later pass retries it"),
-        "settlement_refused" => Some(SETTLEMENT_REFUSAL_REMEDY),
-        "release_held" => Some(
+        PullSettlementOutcome::Pending => Some("stopped by an error; any later pass retries it"),
+        PullSettlementOutcome::SettlementRefused => Some(SETTLEMENT_REFUSAL_REMEDY),
+        PullSettlementOutcome::ReleaseHeld => Some(
             "its leaf may still be running, so the owner keeps the claim; the release is \
              delivered once the leaf is seen to stop",
         ),
-        "awaiting_drain" => Some("a live drain for this owner will carry it"),
-        "unanswered_request" => Some("the owner holds no receipt for it, so nothing is held there"),
-        "launch_uncertain" => Some(
+        PullSettlementOutcome::AwaitingDrain => Some("a live drain for this owner will carry it"),
+        PullSettlementOutcome::UnansweredRequest => {
+            Some("the owner holds no receipt for it, so nothing is held there")
+        }
+        PullSettlementOutcome::LaunchUncertain => Some(
             "the launch was never acknowledged, so the leaf may still be running; recover the \
              claim on the owner's dashboard and do not start another attempt",
         ),
-        "no_owner_route" => Some("register the owner with `orbit host add <ssh-target>`"),
-        _ => None,
+        PullSettlementOutcome::NoOwnerRoute => {
+            Some("register the owner with `orbit host add <ssh-target>`")
+        }
+        PullSettlementOutcome::Settled
+        | PullSettlementOutcome::Idle
+        | PullSettlementOutcome::Refused => None,
     }
 }
 

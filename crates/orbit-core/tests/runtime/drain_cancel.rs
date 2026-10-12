@@ -1,6 +1,7 @@
 //! Forced local drain cancellation preserves the operator's task disposition.
 
 use chrono::Utc;
+use orbit_core::application::job::{DrainAdmissionsStopOutcome, JobRunCancelOutcome};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
@@ -87,7 +88,7 @@ fn forced_local_cancel_and_admissions_stop_preserve_task_disposition() {
                     force: true,
                 })
                 .unwrap();
-            assert_eq!(stopped.outcome, "force_cancelled");
+            assert_eq!(stopped.outcome, DrainAdmissionsStopOutcome::ForceCancelled);
             assert_eq!(stopped.coordinators.len(), 1);
             let change = &stopped.coordinators[0];
             assert!(change.remaining_children.is_empty());
@@ -104,7 +105,7 @@ fn forced_local_cancel_and_admissions_stop_preserve_task_disposition() {
                     block,
                 )
                 .unwrap();
-            assert_eq!(cancelled.outcome, "cancelled");
+            assert_eq!(cancelled.outcome, JobRunCancelOutcome::Cancelled);
             assert!(cancelled.unstopped_children.is_empty());
             cancelled.forced_runs
         };

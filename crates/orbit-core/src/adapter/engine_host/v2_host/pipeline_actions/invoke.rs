@@ -1,5 +1,6 @@
 //! Child Job submission: blocking `invoke_and_wait` and non-blocking `invoke_detached`.
 
+use crate::application::job::JobRunCancelOutcome;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
@@ -334,7 +335,7 @@ fn stop_unfinished_child(
     );
     let mut stopped = entry;
     match runtime.cancel_timed_out_child(child_run_id, &reason) {
-        Ok(result) if result.outcome == "cancelled" => {
+        Ok(result) if result.outcome == JobRunCancelOutcome::Cancelled => {
             let handoff = runtime
                 .read_run_state(child_run_id)
                 .ok()
