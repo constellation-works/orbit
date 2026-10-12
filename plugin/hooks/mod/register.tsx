@@ -373,11 +373,17 @@ function actionsFor($: EngineInterface): Actions {
     refresh: () => void refresh($),
     setView: next => void openPane($, next),
     select: taskId => void update($, selectedAtom, () => taskId),
-    toggleLane: section =>
-      void update($, openLanesAtom, prior => {
+    toggleLane: async section => {
+      const snapshot = await read($, snapshotAtom)
+      const selected = await read($, selectedAtom)
+      const task = [...(snapshot?.tasks ?? []), ...(snapshot?.doneRecently ?? [])].find(task => task.id === selected)
+      const hasSelection = task?.status === section
+      await update($, openLanesAtom, prior => {
         const open = prior ?? [...DEFAULT_OPEN]
-        return open.includes(section) ? open.filter(id => id !== section) : [...open, section]
-      }),
+        return hasSelection || open.includes(section) ? open.filter(id => id !== section) : [...open, section]
+      })
+      if (hasSelection) await update($, selectedAtom, () => null)
+    },
     clearFlash: () => void say($, null),
     hideBand: () => void update($, isBandHiddenAtom, () => true),
     closePane: () => void $.ui.close({ id: PANE }),
