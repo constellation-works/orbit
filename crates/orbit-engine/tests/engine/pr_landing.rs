@@ -1653,26 +1653,38 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
     );
 }
 
-/// A missing validation tool is refused with the actual allowlisted PATH,
-/// both in the action error and the durable command log [ORB-13963].
+/// A missing validation tool is refused with the full searched PATH,
+/// both in the action error and the durable command log [ORB-13963], even
+/// when the resolved PATH differs from the launcher or exceeds 1024 bytes.
 #[test]
 fn missing_required_validation_tool_reports_its_search_path() {
     isolated(
         "missing_required_validation_tool_reports_its_search_path",
         |sandbox| {
             let fx = Fixture::new(sandbox);
-            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-            host.require_commands(&["orbit_missing_validation_tool_13963"]);
-            let error = action(&host, "candidate_validate", &fx.validate_input())
-                .expect_err("a missing required tool must refuse publication");
-            let diagnostic = format!(
-                "Required validation PATH={}",
-                std::env::var("PATH").unwrap()
-            );
-            assert!(error.to_string().contains(&diagnostic), "{error}");
-            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
-            assert_eq!(log["exit_code"], 127);
-            assert!(log["output"].as_str().unwrap().contains(&diagnostic));
+            let launcher_path = std::env::var("PATH").unwrap();
+            // Deterministically exercise long, multibyte paths on short-PATH
+            // hosts too, without changing the fixture's own tool lookup.
+            let long_path = format!("{MINIMAL_PATH}{}", ":/orbit-missing-é".repeat(100));
+            for resolved_path in [None, Some(MINIMAL_PATH), Some(long_path.as_str())] {
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                if let Some(path) = resolved_path {
+                    host.resolve_validation_env(ValidationEnvironment::launcher(vec![(
+                        "PATH".to_string(),
+                        path.to_string(),
+                    )]));
+                }
+                host.require_commands(&["orbit_missing_validation_tool_13963"]);
+                let error = action(&host, "candidate_validate", &fx.validate_input())
+                    .expect_err("a missing required tool must refuse publication");
+                let searched_path = resolved_path.unwrap_or(&launcher_path);
+                let diagnostic = format!("Required validation PATH={searched_path}");
+                assert!(error.to_string().contains(&diagnostic), "{error}");
+                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                assert_eq!(log["exit_code"], 127);
+                assert_eq!(log["validation_env"]["path"], searched_path);
+                assert!(log["output"].as_str().unwrap().contains(&diagnostic));
+            }
         },
     );
 }

@@ -191,7 +191,8 @@ pub(crate) struct MissingTool {
 impl RequiredCommandRun {
     /// The refusal both validation steps report for a command that did not
     /// pass, carrying a bounded summary. A missing tool is reported as the
-    /// validation environment's failure, with the marker, PATH and tool.
+    /// validation environment's failure, with the marker, full searched PATH
+    /// and tool. PATH is not bounded: operators need every searched directory.
     pub(super) fn failure(&self, candidate: &str, baseline: &str, logs: &str) -> OrbitError {
         let summary = self.failure_summary(candidate, baseline, logs);
         if let Some(cause) = &self.infrastructure_failure {
@@ -218,7 +219,7 @@ impl RequiredCommandRun {
                 )
             ),
             self.environment.source.as_str(),
-            bounded_validation_text(self.environment.path().unwrap_or("<unset>"), 1024),
+            self.environment.path().unwrap_or("<unset>"),
             bounded_validation_text(&missing.evidence, 1024),
         ))
     }
