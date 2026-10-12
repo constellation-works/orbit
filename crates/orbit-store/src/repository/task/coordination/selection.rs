@@ -167,6 +167,18 @@ impl Screen<'_> {
                 .push(diagnostic(reason, Vec::new()));
             return None;
         }
+        // Nor one whose work the executor's host load forecast has no room
+        // for: it stays until that host has room, or for another host.
+        if let Some(reason) = request
+            .admissible
+            .as_ref()
+            .and_then(|fit| fit.unfit_reason(task))
+        {
+            receipt
+                .capacity_unavailable
+                .push(diagnostic(reason, Vec::new()));
+            return None;
+        }
         // Nor one this drain already gave back for its host's failure, nor
         // any task once a release blamed the host whatever crew runs there
         // [ORB-14257]; they stay for another host or a later drain.

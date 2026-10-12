@@ -12,6 +12,7 @@ mod plan;
 mod readiness;
 mod receipt;
 mod show_fields;
+mod work_class;
 pub use error::TaskError;
 
 #[cfg(test)]
@@ -80,3 +81,4 @@ pub use show_fields::{
     task_dependency_labels, task_os_requirement_json, task_show_record_field_json,
     task_show_reference_field_json, unknown_task_show_field_message,
 };
+pub use work_class::{CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, work_class};

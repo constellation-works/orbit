@@ -369,6 +369,7 @@ impl TaskCommitBoundary {
             deferred_conflicts: Vec::new(),
             crew_unavailable: Vec::new(),
             os_unavailable: Vec::new(),
+            capacity_unavailable: Vec::new(),
             queue_depth: snapshot
                 .backlog
                 .iter()

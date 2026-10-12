@@ -148,6 +148,7 @@ impl Leaf {
             },
             crews: None,
             os: None,
+            admissible: None,
         };
         let record = jobs
             .allocate_pull_request(&destination, &request, 10)
@@ -188,6 +189,7 @@ impl Leaf {
             crew_unavailable: vec![],
             os_unavailable: vec![],
             queue_depth: 0,
+            capacity_unavailable: Vec::new(),
         };
         let mut record = jobs
             .mutate_local_pull(

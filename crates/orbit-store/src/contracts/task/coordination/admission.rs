@@ -318,6 +318,64 @@ impl AdmissionCrewCapability {
     }
 }
 
+/// One kind of non-template work an executor's host has room for: a work
+/// class and the complexity its tasks carry.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct AdmissionWorkKey {
+    /// `no-diff` or `change`.
+    pub work_class: String,
+    /// The task's complexity as its tasks spell it (`low`, `xhard`,
+    /// `unassessed`); absent for tasks with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<String>,
+}
+
+/// The work a pulling executor's host load forecast has room for, for the
+/// whole horizon of its resource profile. The owner admits only a task inside
+/// it: a recurring `auto-task:` task when its template is listed, any other
+/// task when its work class and complexity are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AdmissionWorkFit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<AdmissionWorkKey>,
+    /// Template names, without the `auto-task:` prefix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<String>,
+}
+
+impl AdmissionWorkFit {
+    /// Whether nothing fits, so a request carrying it could admit nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty() && self.templates.is_empty()
+    }
+
+    /// Why `task` falls outside this fit, or `None` when it is inside it.
+    #[must_use]
+    pub fn unfit_reason(&self, task: &orbit_types::task::Task) -> Option<String> {
+        if let Some(template) = orbit_types::task::auto_task_template(&task.tags) {
+            return (!self.templates.iter().any(|name| name == template)).then(|| {
+                format!("the executor's host load forecast has no room for template `{template}`")
+            });
+        }
+        let key = AdmissionWorkKey {
+            work_class: orbit_types::task::work_class(&task.tags),
+            complexity: task
+                .complexity
+                .map(|complexity| complexity.as_str().to_string()),
+        };
+        (!self.keys.contains(&key)).then(|| {
+            format!(
+                "the executor's host load forecast has no room for {} work of complexity {}",
+                key.work_class,
+                key.complexity.as_deref().unwrap_or("unset")
+            )
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionRequest {
     pub request_id: String,
@@ -350,6 +408,12 @@ pub struct AdmissionRequest {
     /// tasks without an `os:` tag are admitted to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<orbit_types::task::HostOs>,
+    /// The work the executor's host load forecast has room for, under
+    /// `machine.auto_concurrency.mode = "enforce"`. Absent otherwise, and from
+    /// an executor with no resource profiles: then every work class and
+    /// complexity is admissible, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admissible: Option<AdmissionWorkFit>,
 }
 
 impl AdmissionRequest {
@@ -404,6 +468,11 @@ pub struct AdmissionReceipt {
     /// executor runs. They stay in the backlog for a host that does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub os_unavailable: Vec<AdmissionDiagnostic>,
+    /// Ready candidates skipped because their work is outside the request's
+    /// [`AdmissionRequest::admissible`] fit. They stay in the backlog until
+    /// the executor's host has room, or for another host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capacity_unavailable: Vec<AdmissionDiagnostic>,
     pub queue_depth: usize,
     /// The owner's `workflow.required_validation_commands` and
     /// `review.baseline_commands` when it admitted this request

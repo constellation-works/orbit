@@ -74,16 +74,23 @@ task_prefix = "ORB"
 
 ### `[machine.auto_concurrency]` — host forecast admission
 
-Global-only host thresholds for forecast-based delivery admission. Local
-drains read them; pull drains do not yet. `off`, the default, leaves
-admission unchanged. `shadow` makes each local drain pass build the host load
-forecast and record in `drain_last_pass.admission_forecast` what gap fit
-would admit, while it admits as `off` and reserves nothing. `enforce` admits
-only candidates whose profile fits under the forecast within
-`admit_cpu_percent` and `admit_memory_percent`, after the drain's ceiling,
-the resource throttle and the conflict checks. `profile_window`,
-`min_profile_deliveries` and `horizon_cap_minutes` also shape the resource
-profiles `orbit run profiles` reports.
+Global-only host thresholds for forecast-based delivery admission in local
+and pull drains. `off`, the default, leaves admission unchanged. `shadow`
+makes each local drain pass record in `drain_last_pass.admission_forecast`
+what gap fit would admit, while it admits as `off` and reserves nothing.
+`enforce` admits local candidates whose profile fits under the forecast
+within `admit_cpu_percent` and `admit_memory_percent`, after the drain's
+ceiling, the resource throttle and the conflict checks.
+
+For a pull drain (`orbit run auto --pull`), under `enforce` each
+`orbit.task.pull` request names the work this host's load forecast has room
+for, the owner grants only a task inside it, and the drain requests nothing
+while nothing fits (`forecast_no_headroom`). `shadow` records that list on
+the drain as `pull_admission_fit` and requests as with `off`. A host without
+resource profiles requests as with `off`. Claims are reserved before the
+next request is forecast. `profile_window`, `min_profile_deliveries` and
+`horizon_cap_minutes` also shape the resource profiles `orbit run profiles`
+reports. See [auto-concurrency §6](design/auto-concurrency/2_design.md#6-pull-drains).
 
 ```toml
 [machine.auto_concurrency]

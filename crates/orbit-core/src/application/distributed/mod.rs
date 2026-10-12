@@ -49,6 +49,7 @@ mod probe;
 mod pull_waiting;
 mod serve;
 mod settlement;
+mod work_fit;
 
 pub use contract::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
@@ -70,3 +71,4 @@ pub use settlement::{
 pub(crate) use settlement::{
     is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,
 };
+pub(crate) use work_fit::PullWorkFit;

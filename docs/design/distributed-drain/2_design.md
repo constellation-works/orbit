@@ -178,6 +178,13 @@ window (one `workspace_pull_pipeline` run):
 A request without `crews` (owner-local admission) is unrestricted, as before. Crews are matched
 by registry name, so a crew both sides configure must use the same name.
 
+*Host capacity* [ORB-15774]. Under `machine.auto_concurrency` `enforce`, a request also carries
+`admissible`: the work classes, complexities and templates the executor's host load forecast
+has room for. The owner skips a ready or repair candidate outside it, recording it in the
+receipt's `capacity_unavailable`, and the follower sends no request when nothing fits. A request
+without the list is unrestricted. The follower side is
+[auto-concurrency §6](../auto-concurrency/2_design.md#6-pull-drains).
+
 *Operator restriction* [ORB-14174]. `orbit run auto --pull <selector> --allow-crew a,b` narrows the
 declared capability for one drain. Submission canonicalizes the names against this host's
 `[crews.*]` (an unknown or blank name refuses before the probe) and persists them as
@@ -436,8 +443,8 @@ A pull drain also records what its owner kept off this host. When a request is a
 the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
 in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
-(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`) and
-unrunnable crews (`crew_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
+(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
+unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
 answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
 owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date

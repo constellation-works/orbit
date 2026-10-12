@@ -13,7 +13,8 @@ use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 use super::OrbitRuntime;
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
-    ForecastDecision, HostLoadForecast, HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
+    AdmissionReservationRequest, ForecastDecision, HostLoadForecast, HostLoadProbe,
+    RESERVATION_TTL_MINUTES, build_forecast,
 };
 use crate::runtime::host_resource::profile::{
     ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
@@ -198,19 +199,44 @@ impl OrbitRuntime {
             );
             let decision = decide(&forecast)?;
             outcome = Some(decision.outcome);
-            Ok(decision
-                .admitted
-                .into_iter()
-                .map(|admitted| NewAdmissionReservation {
-                    workspace_id: admitted.lookup.workspace_id,
-                    task_id: admitted.task_id,
-                    work_class: admitted.lookup.work_class,
-                    complexity: admitted.lookup.complexity,
-                    base_class: admitted.lookup.base_class.as_str().to_string(),
-                })
-                .collect())
+            Ok(decision.admitted.into_iter().map(new_reservation).collect())
         })?;
         outcome.ok_or_else(|| OrbitError::Execution("the admission decision never ran".to_string()))
+    }
+
+    /// Reserve tasks admitted outside a forecast decision, under the host
+    /// admission lock, so the next admitter on the host counts each before
+    /// its run exists. A pull drain's claim is one: the owner chose the
+    /// task, so the drain learns it only when the claim returns.
+    ///
+    /// Each reservation is stamped `decided_at`, when the admission was
+    /// decided: a delivery run naming its task created since then replaces
+    /// it, whether that run was created before or after this write.
+    pub fn reserve_admissions_at(
+        &self,
+        decided_at: DateTime<Utc>,
+        admitted: Vec<AdmissionReservationRequest>,
+    ) -> Result<(), OrbitError> {
+        if admitted.is_empty() {
+            return Ok(());
+        }
+        let store = self.sqlite_store()?;
+        let jobs = delivery_jobs();
+        let query = AdmissionLoadQuery {
+            now: decided_at,
+            delivery_jobs: &jobs,
+            reservations_expire_before: Utc::now() - Duration::minutes(RESERVATION_TTL_MINUTES),
+        };
+        let mut admitted = Some(admitted);
+        store.admit_under_host_lock(&query, &mut |_| {
+            Ok(admitted
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .map(new_reservation)
+                .collect())
+        })?;
+        Ok(())
     }
 
     fn host_resource_paths(&self) -> Vec<PathBuf> {
@@ -222,5 +248,15 @@ impl OrbitRuntime {
         paths.sort();
         paths.dedup();
         paths
+    }
+}
+
+fn new_reservation(admitted: AdmissionReservationRequest) -> NewAdmissionReservation {
+    NewAdmissionReservation {
+        workspace_id: admitted.lookup.workspace_id,
+        task_id: admitted.task_id,
+        work_class: admitted.lookup.work_class,
+        complexity: admitted.lookup.complexity,
+        base_class: admitted.lookup.base_class.as_str().to_string(),
     }
 }

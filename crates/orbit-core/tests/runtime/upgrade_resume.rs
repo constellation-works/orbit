@@ -262,6 +262,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             },
             crews: None,
             os: None,
+            admissible: None,
         },
         receipt: None,
         leaf_run_id: Some(run_claimed.run_id.clone()),

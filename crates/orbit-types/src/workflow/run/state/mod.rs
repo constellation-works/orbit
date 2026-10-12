@@ -13,8 +13,9 @@ pub use drain::{
     CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
     DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask,
     DrainWindowExtension, DrainWorkerLimit, ForecastPeak, GapFitAdmission, GapFitHead, GapFitSkip,
-    PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullSinglePass,
-    PullWindowClose, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
+    PullAdmissionFit, PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight,
+    PullSinglePass, PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle,
+    TaskCancellationPolicy,
 };
 pub use failure::{
     CONTRACT_REFUSAL_MARKER, ClaimFailureClass, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,

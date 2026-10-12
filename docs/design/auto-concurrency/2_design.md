@@ -8,23 +8,23 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/gap_fit.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/gap_fit.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
-related_artifacts: [ORB-15757]
+related_artifacts: [ORB-15757, ORB-15774]
 ---
 
 # Auto-concurrency — Design
 
 > **Status: Draft proposal; rollout steps 1 (Record, §2) and 2 (Profiles
 > report, §3) are implemented, and so are the load forecast (§4), the host
-> admission lock (§5.2) and, for local drains, steps 3 and 4 (Shadow and
-> Enforce): gap fit (§5.1) and the starvation guard (§5.3).** §1 describes
-> today's code and cites it, with `mode = off` still the default. §2
-> describes the recording that ships, §3 the profiles `orbit run profiles`
-> reports, §4 and §5 the forecast and local admission, and the
-> `drain_last_pass` row of §7 the record a local pass writes; pull drains
-> (§6), the other surfaces of §7 and the shadow report of §8 are the
-> proposed design.
+> admission lock (§5.2), local-drain steps 3 and 4 (Shadow and Enforce),
+> and pull-drain admission (§6). Local drains implement gap fit (§5.1) and
+> the starvation guard (§5.3).** §1 describes today's code and cites it,
+> with `mode = off` still the default. §2 describes the recording that
+> ships, §3 the profiles `orbit run profiles` reports, §4 and §5 the
+> forecast and local admission, §6 pull admission, and the `drain_last_pass`
+> row of §7 the record a local pass writes. The other surfaces of §7 and
+> the shadow report of §8 are the proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -470,23 +470,58 @@ assumes the worst, so the forecast never treats unknown work as free.
 
 ## 6. Pull drains
 
+Implemented in `application/distributed/work_fit.rs` and the pull refill
+(`pull/refill.rs`); the owner's filter is in the store's admission selection.
+
 A follower does not pick its task; the owner does. So the follower cannot run
-gap fit on a specific candidate. Instead:
+gap fit on a specific candidate. Instead, before every request, under the host
+admission lock (§5.2):
 
-1. The follower computes which complexities of that workspace fit under its
-   forecast.
-2. It sends them as `admissible_complexities` on its `orbit.task.pull`
-   request, and only requests when at least one fits.
-3. The owner's ready-queue selection skips tasks outside the list.
+1. The follower gap-fits (§5.1) every kind of work it could be granted
+   against its forecast, each priced by its profile through the fallback chain
+   of §3:
+   - each work class `no-diff` and `change` with each complexity, unset
+     included;
+   - each `auto-task:` template this workspace has a profile of on this host.
+2. Under `mode = enforce` the request carries the fits as `admissible` on its
+   `orbit.task.pull` request: `(work class, complexity)` keys and template
+   names. When nothing fits, the drain sends no request, records
+   `forecast_no_headroom` as its refusal, and polls again.
+3. The owner skips a ready or repair candidate outside the list. A template
+   task is inside it when its template is listed; any other task when its
+   work class and complexity are. Each skipped task is returned in the
+   receipt's `capacity_unavailable`, which the follower records among its
+   excluded backlog as `capacity_unavailable`.
+4. A claim that returns is reserved on the follower, stamped when its request
+   went out and keyed by the class of this replica's copy of the task. The
+   reservation is written before the next request is forecast, and the
+   claim's leaf run, created after that stamp, replaces it in the forecast.
 
-This changes the pull protocol. That is safe because the owner already
-refuses pulls from a different binary version. The follower adds a
-reservation for the claimed task as soon as the claim returns.
+Each request is one candidate against a fresh forecast. The drain records the
+last fit as `pull_admission_fit` on its run state: the mode, whether it was
+sent, the work that fits, and the minute and resource each unfit kind would
+exceed, for example `change/hard: cpu 94% at +6m`.
 
-The follower checks one candidate per request, then re-forecasts. The quirk
-where a pass requests up to its submitted ceiling, not its live one
-(`pull/drain/refill_pass.rs`), stops mattering once each request depends on
-the forecast.
+`mode = shadow` computes and records the same fit, with `sent` false, and
+requests as with `off`. Its claims are reserved too, so shadow forecasts count
+them. With `off`, on a host with no profiles, or when the host's load cannot
+be read, nothing is computed and the request carries no list; the owner then
+selects as before.
+
+The new field changes the distributed-drain protocol fingerprint, so an owner
+on another binary refuses the pull as before.
+
+A pass bounds its requests by the drain's live ceiling, an operator's
+`orbit run concurrency` included. The forecast alone did not make the
+submitted-ceiling quirk moot, because a drain with `off` forecasts nothing.
+
+Limitations:
+
+- A template this host has never run in the workspace is not listed, so under
+  `enforce` the owner keeps it for another executor until this host has a
+  profile of it.
+- The owner classifies a task by its own tags, and the follower reserves it
+  by its replica's. A replica that lacks the task reserves it as `change`.
 
 ## 7. Surfaces and configuration
 
@@ -562,5 +597,6 @@ first.
 - [ORB-15765] — filed to stop instructing `no-diff-expected` tasks to run
   workspace gates.
 - [ORB-15766] — filed to stop counting build-heavy QA sweeps as CPU-light.
+- [ORB-15774] — gap-fit admission for pull drains (§6).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

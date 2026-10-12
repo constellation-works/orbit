@@ -42,6 +42,7 @@ mod fit;
 mod host_load;
 
 pub(crate) use build::build_forecast;
+pub(crate) use fit::{AdmissionLimits, gap_fit};
 pub use fit::{ForecastGap, GapMiss, GapResource};
 pub(crate) use host_load::HostLoadProbe;
 

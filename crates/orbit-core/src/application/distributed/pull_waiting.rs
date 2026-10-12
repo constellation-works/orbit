@@ -18,6 +18,7 @@ pub(crate) const FOOTPRINT_HELD: &str = "context_lock_conflict";
 pub(crate) const DEPENDENCY_NOT_DONE: &str = "dependency_not_done";
 pub(crate) const HOST_OS_MISMATCH: &str = "host_os_mismatch";
 pub(crate) const CREW_UNAVAILABLE: &str = "crew_unavailable";
+pub(crate) const CAPACITY_UNAVAILABLE: &str = "capacity_unavailable";
 pub(crate) const OWNER_HOLD: &str = "owner_hold";
 pub(crate) const INVALID_CANDIDATE: &str = "invalid_candidate";
 
@@ -58,8 +59,8 @@ impl PullWaiting {
     ///
     /// - `queued` is the owner's `queue_depth`: backlog tasks it could start.
     /// - `deferred` is the tasks the owner is holding back for a footprint, a
-    ///   hold or a rule it keeps; `excluded` is the dependency, OS and crew
-    ///   refusals, each with its reason and the tasks it waits on.
+    ///   hold or a rule it keeps; `excluded` is the dependency, OS, crew and
+    ///   capacity refusals, each with its reason and the tasks it waits on.
     pub(crate) fn of(receipt: &AdmissionReceipt) -> Self {
         let mut by_reason = BTreeMap::new();
         let mut count = |reason: &str| *by_reason.entry(reason.to_string()).or_insert(0_u64) += 1;
@@ -98,6 +99,12 @@ impl PullWaiting {
                     .crew_unavailable
                     .iter()
                     .map(|diagnostic| (diagnostic, CREW_UNAVAILABLE)),
+            )
+            .chain(
+                receipt
+                    .capacity_unavailable
+                    .iter()
+                    .map(|diagnostic| (diagnostic, CAPACITY_UNAVAILABLE)),
             )
             .map(|(diagnostic, code)| {
                 count(code);

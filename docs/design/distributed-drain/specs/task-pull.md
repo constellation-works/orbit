@@ -106,6 +106,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
+| `admissible` | object, optional | The work the executor's host load forecast has room for, sent under `machine.auto_concurrency` `enforce` ([auto-concurrency §6](../../auto-concurrency/2_design.md#6-pull-drains)): `keys` (`{work_class, complexity}` pairs, `work_class` `change` or `no-diff`, `complexity` absent for unset) and `templates` (`auto-task:` template names). A template task is admissible when its template is listed, any other task when its work class and complexity are. Absent: every task is admissible |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
 no count, slot declaration, or caller scan bound. The crew capability is part of the immutable
@@ -170,8 +171,8 @@ A pull drain also records what its owner kept off this host. When a request is a
 the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
 in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
-(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`) and
-unrunnable crews (`crew_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
+(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
+unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
 answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
 owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date
@@ -220,6 +221,9 @@ for a pull drain as for a local one.
    wave and its gate's first reservation. Skip a candidate
    whose crew the request's `crews` says the executor cannot run and record it in
    `crew_unavailable` [ORB-13941]. A malformed capability (a blank crew name) is `invalid_input`.
+   After the crew check, skip a candidate outside the request's `admissible`, when it carries
+   one, and record it in `capacity_unavailable` [ORB-15774]; a repair claim is filtered the same
+   way.
    Also skip, into `crew_unavailable`, a task the requesting machine's same drain run
    (`run_context.run_id`) released for an `environment`, `transient`, `owner_route` or `provider`
    failure, and every task when that run released one for an `environment` or `owner_route`
@@ -302,6 +306,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
+| `capacity_unavailable[]` | Ready candidates skipped because the request's `admissible` leaves them out, with the work the forecast had no room for; omitted when empty |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons; `blocked_by` names the unfinished dependencies |
 | `idle` | No claim created by this request |
 | `queue_depth` | Remaining ready entries at original admission, diagnostic only |
