@@ -20,7 +20,7 @@ use orbit_store::contracts::ProviderLedgerEntry;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::Provider;
 
-use super::provider_limit::reading_lifetime;
+use super::gate::reading_lifetime;
 use crate::OrbitRuntime;
 use crate::runtime::task::provider_hold::same_provider;
 

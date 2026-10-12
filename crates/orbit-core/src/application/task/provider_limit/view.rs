@@ -17,8 +17,8 @@ use orbit_types::telemetry::{
 use orbit_types::workflow::Provider;
 use serde::{Deserialize, Serialize};
 
-use super::provider_limit::{reading_at_limit, reading_covers, reading_lifetime};
-use super::provider_limit_ledger::PARTIAL_NOTE;
+use super::gate::{reading_at_limit, reading_covers, reading_lifetime};
+use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
 
 /// One live reading of a provider usage window.

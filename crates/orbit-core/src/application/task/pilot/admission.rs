@@ -12,10 +12,12 @@ use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::finding_verification::{UnverifiedFindingHold, VERIFIABLE_STATUSES, is_review_finding};
-use super::positive_validation_tools;
+use super::super::finding_verification::{
+    UnverifiedFindingHold, VERIFIABLE_STATUSES, is_review_finding,
+};
+use super::super::positive_validation_tools;
 
-use super::helpers::is_automation_actor;
+use super::super::helpers::is_automation_actor;
 use crate::OrbitRuntime;
 
 /// The trusted history events an operator decision on a hold records.
@@ -640,7 +642,7 @@ impl OrbitRuntime {
                 event.by = "system".into();
                 self.stores().task_records().update(
                     task_id,
-                    super::TaskRecordUpdateParams {
+                    super::super::TaskRecordUpdateParams {
                         actor: "system".into(),
                         expected_status: Some(vec![TaskStatus::Backlog]),
                         append_comments: vec![TaskComment {
@@ -678,10 +680,10 @@ impl OrbitRuntime {
     /// text cannot mint a resolution event or satisfy an operator handoff.
     /// Each typed hold records its own resolution event;
     /// one decision resolves the hold admission currently reports.
-    pub(super) fn pilot_hold_resolution(
+    pub(in crate::application::task) fn pilot_hold_resolution(
         &self,
         task: &Task,
-        params: &super::TaskUpdateParams,
+        params: &super::super::TaskUpdateParams,
         actor: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         let (event, hold) = match self.pilot_admission_hold(&task.id)? {

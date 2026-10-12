@@ -30,7 +30,7 @@ use orbit_types::task::Task;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
-use super::provider_limit_ledger::PARTIAL_NOTE;
+use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
 use crate::runtime::run_input::non_empty;

@@ -1293,7 +1293,7 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
 /// release budget: three in a day leave the task in the backlog, where the
 /// third release of any other kind blocks it. [ORB-14697] The release itself
 /// excludes no crew: the follower's provider-limit store holds the reading
-/// that does, and only until it lapses (`provider_limit.rs`).
+/// that does, and only until it lapses (`provider_limit/gate.rs`).
 #[test]
 fn a_provider_limit_releases_the_claim_outside_the_release_budget() {
     if !isolated(
