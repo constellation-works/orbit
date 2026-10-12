@@ -95,6 +95,8 @@ Admitted unit tests:
 
 - `crates/orbit-engine/src/activity_job/cli_runner/tests/inspection.rs::inspection_git_ignores_parent_locale_and_config` and `executor/automation/vcs/tests/git.rs::host_git_classifies_failures_in_the_c_locale` (criterion 3). These private Git boundaries must discard parent locale and Git configuration authority before classifying stderr. Isolated children supply hostile parent environments; the inspection shim queries real Git's effective fsmonitor setting before executing the command, and both runners classify real failures under C and German parent locale settings. Public provider dispatch cannot expose the host runner or cheaply inject an environment observer for every inspection command.
 
+- `crates/orbit-core/src/application/task/tests/final_recovery.rs::terminal_replay_finishes_side_effects_after_a_post_lock_read_failure` (criterion 2, fault injection). A one-shot read seam stops final recovery after its decision is durable and before resolves or PR closure. The isolated fixture verifies replay finishes done/rejected/archived effects, writes one decision, and leaves successful effects and a human-reopened friction alone on another retry. The public boundary cannot deterministically fail only that post-lock read.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.

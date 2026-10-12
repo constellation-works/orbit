@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use super::lifecycle::ensure_completion_run_stopped;
+use super::resolves::pending_resolves_history;
 use crate::OrbitRuntime;
 
 pub use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
@@ -271,8 +272,8 @@ impl OrbitRuntime {
     /// naming the run, whether it was applied, overridden or refused:
     ///
     /// - a run whose comment the task already holds was applied before; its
-    ///   recorded outcome is returned and nothing is written, so applying a
-    ///   run's decision again is a no-op [ORB-13907];
+    ///   recorded outcome is returned without another decision write. Pending
+    ///   resolves and open PRs from its terminal transition are retried;
     /// - a task that is already terminal, or whose lifecycle changed after
     ///   `request.observed` ([`FinalRecoveryTaskRevision`]), is refused;
     /// - `complete_no_diff` completes only when `evidence_commit` is reachable
@@ -301,6 +302,22 @@ impl OrbitRuntime {
                 if let Some(recorded) =
                     self.recorded_final_recovery(&request.task_id, &request.run_id)?
                 {
+                    let marker = format!("final recovery (run_id={}):", request.run_id);
+                    transition = self
+                        .get_task_history(&request.task_id)?
+                        .into_iter()
+                        .find(|entry| {
+                            matches!(
+                                entry.event.as_str(),
+                                COMPLETED_EVENT | REJECTED_EVENT | ARCHIVED_EVENT
+                            ) && entry
+                                .note
+                                .as_deref()
+                                .is_some_and(|note| note.starts_with(&marker))
+                        })
+                        .and_then(|entry| {
+                            Some((entry.from_status?, entry.to_status?, entry.note?))
+                        });
                     applied = Some(recorded);
                     replayed = true;
                     return Ok(());
@@ -316,7 +333,7 @@ impl OrbitRuntime {
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
                 self.write_plan(&task, &plan)?;
-                transition = Some((task.status, plan.note.clone()));
+                transition = Some((task.status, plan.status, plan.note.clone()));
                 applied = Some(plan.outcome);
                 Ok(())
             })?;
@@ -325,26 +342,35 @@ impl OrbitRuntime {
                 "final recovery applier did not run under the task lock".to_string(),
             )
         })?;
-        if !replayed
-            && let Some((previous_status, _)) = &transition
-            && matches!(
-                outcome,
-                FinalRecoveryOutcome::Completed {
-                    status: TaskStatus::Done,
-                    ..
-                }
-            )
+        if let Some((previous_status, committed_status, note)) = transition
+            && committed_status.is_terminal()
         {
-            self.record_resolves_side_effects(*previous_status, &self.get_task(&request.task_id)?);
-        }
-        if let Some((previous_status, note)) = transition {
-            self.close_task_prs_after_transition(
-                previous_status,
-                &self.get_task(&request.task_id)?,
-                Some(&note),
+            let task = self.final_recovery_side_effect_task(&request.task_id)?;
+            // A later lifecycle decision wins over this run's transition.
+            if task.status != committed_status {
+                return Ok(outcome);
+            }
+            self.record_resolves_side_effects(
+                if replayed {
+                    task.status
+                } else {
+                    previous_status
+                },
+                &task,
             );
+            self.close_task_prs_after_transition(previous_status, &task, Some(&note));
         }
         Ok(outcome)
+    }
+
+    fn final_recovery_side_effect_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        #[cfg(test)]
+        if FAIL_SIDE_EFFECT_READ.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Execution(
+                "injected post-lock task read failure".to_string(),
+            ));
+        }
+        self.get_task(task_id)
     }
 
     /// The revision `task` is at now, for a later [`Self::apply_final_recovery`]
@@ -576,6 +602,11 @@ impl OrbitRuntime {
                     status_note: record_status.then(|| plan.note.clone()),
                     execution_summary: plan.execution_summary.clone(),
                     append_comments: vec![comment.clone()],
+                    append_history: if transition && plan.status == TaskStatus::Done {
+                        pending_resolves_history(task)
+                    } else {
+                        Vec::new()
+                    },
                     expected_status: Some(vec![task.status]),
                     ..Default::default()
                 },
@@ -589,6 +620,11 @@ impl OrbitRuntime {
         })?;
         Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_SIDE_EFFECT_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Plan {
