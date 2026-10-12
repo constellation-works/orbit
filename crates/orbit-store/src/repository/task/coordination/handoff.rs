@@ -108,7 +108,8 @@ impl TaskCommitBoundary {
     ) -> Result<(), OrbitError> {
         use HandoffReviewRefusal as R;
         // No candidate or PR exists to review. The owner independently
-        // verifies the clean-base report and required validation instead.
+        // verifies the clean-base report and, unless it is a
+        // `no-diff-expected` skip, required validation instead.
         if matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }) {
             if handoff.review != HandoffReview::not_required() {
                 return Err(review_refused(
@@ -398,7 +399,8 @@ impl TaskCommitBoundary {
 
     /// Check the validation logs a handoff pinned against the owner's
     /// required commands, and return the known-red commands among them
-    /// [ORB-15427].
+    /// [ORB-15427]. A `no-diff-expected` NoDiff skip on a task the owner
+    /// still tags needs no log for a required command [ORB-15764].
     ///
     /// A log passes with exit status 0, or fails only with tests its base
     /// fails too: a non-zero log must carry the leaf's known-red report for
@@ -466,9 +468,7 @@ impl TaskCommitBoundary {
                 known.push(known_red_validation(&log, report, handoff, known_red)?);
             }
         }
-        if !commands.iter().all(|c| passed.contains(*c)) {
-            return Err(invalid("required validation missing"));
-        }
+        let mut no_diff_expected = false;
         if let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery {
             let report: serde_json::Value =
                 serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, evidence)?)
@@ -489,7 +489,8 @@ impl TaskCommitBoundary {
             }
             // [ORB-14791] A claimed `no-diff-expected` skip carries no report
             // of its own: the owner's copy of the task must still be tagged.
-            if report["decision"] == "skipped_no_diff_expected"
+            no_diff_expected = report["decision"] == "skipped_no_diff_expected";
+            if no_diff_expected
                 && !self
                     .bundle_store
                     .read_bundle_lightweight(&handoff.task_id)?
@@ -500,6 +501,13 @@ impl TaskCommitBoundary {
             {
                 return Err(invalid("NoDiff skip requires a no-diff-expected task"));
             }
+        }
+        // [ORB-15764] Only that tagged skip is exempt: its leaf runs no
+        // required command, as the owner's own pipelines skip `validate` for
+        // the tag. Any log it still carries, such as one from a leaf built
+        // before the exemption, was checked above like every other.
+        if !no_diff_expected && !commands.iter().all(|c| passed.contains(*c)) {
+            return Err(invalid("required validation missing"));
         }
         if let HandoffDelivery::AlreadyLanded {
             covering_commit,
