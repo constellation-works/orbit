@@ -4,7 +4,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
-use super::codec::{RELEASE_BUDGET_WINDOW_HOURS, STATE};
+use super::codec::{FRICTION, RELEASE_BUDGET_WINDOW_HOURS, STATE};
 use super::decode;
 use crate::contracts::*;
 
@@ -294,7 +294,7 @@ impl TaskCommitBoundary {
         mut result: ClaimMutationResult,
         receipt_id: &str,
     ) -> Result<ClaimMutationResult, OrbitError> {
-        if let Some(row) = self.coordination_row("distributed-claim-friction-v1", receipt_id)? {
+        if let Some(row) = self.coordination_row(FRICTION, receipt_id)? {
             result.friction = Some(decode(&row.payload_json)?);
         }
         Ok(result)

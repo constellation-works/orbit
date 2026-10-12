@@ -1,4 +1,5 @@
-//! Task coordination row insert, lookup and payload replacement.
+//! Task coordination row insert, lookup, payload replacement and settled
+//! claim-receipt deletion.
 
 use orbit_common::OrbitError;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -35,6 +36,61 @@ impl Store {
                 "UPDATE task_coordination_rows SET payload_json=?5 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
                 params![workspace, old.kind, old.row_id, old.payload_json, payload],
             ).map(|n| n == 1).map_err(|e| OrbitError::Store(e.to_string()))
+        })
+    }
+
+    /// Delete the claim-mutation receipts of `claim_ids` written before
+    /// `created_before`, with the `sidecar_kind` rows keyed by the same
+    /// receipt ids, in one transaction. A receipt's `input` is the encoded
+    /// invocation tuple whose second element is its claim id. A receipt whose
+    /// commit the journal has not finished applying is kept for recovery.
+    /// Returns how many receipts went.
+    pub(crate) fn delete_claim_mutation_receipts(
+        &self,
+        workspace: &str,
+        receipt_kind: &str,
+        sidecar_kind: &str,
+        claim_ids: &[String],
+        created_before: &str,
+    ) -> Result<usize, OrbitError> {
+        let claim_ids =
+            serde_json::to_string(claim_ids).map_err(|e| OrbitError::Store(e.to_string()))?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let receipt_ids = {
+                let mut stmt = tx
+                    .tx
+                    .prepare(
+                        "SELECT r.row_id FROM task_coordination_rows r
+                         WHERE r.workspace_id = ?1 AND r.kind = ?2 AND r.created_at < ?3
+                           AND json_extract(json_extract(r.payload_json, '$.input'), '$[1]')
+                               IN (SELECT value FROM json_each(?4))
+                           AND NOT EXISTS (
+                               SELECT 1 FROM task_commit_journal j
+                               WHERE j.journal_id = r.journal_id
+                                 AND j.state IN ('prepared', 'committed'))",
+                    )
+                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                stmt.query_map(
+                    params![workspace, receipt_kind, created_before, claim_ids],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| OrbitError::Store(e.to_string()))?
+            };
+            let mut delete = tx
+                .tx
+                .prepare(
+                    "DELETE FROM task_coordination_rows
+                     WHERE workspace_id = ?1 AND kind IN (?2, ?3) AND row_id = ?4",
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            for receipt_id in &receipt_ids {
+                delete
+                    .execute(params![workspace, receipt_kind, sidecar_kind, receipt_id])
+                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+            }
+            Ok(receipt_ids.len())
         })
     }
 

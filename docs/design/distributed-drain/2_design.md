@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-09
+last_updated: 2026-10-11
 last_validated: 2026-10-09
 status: Draft
 feature: distributed-drain
@@ -775,6 +775,29 @@ The substrate is `ClaimInvocation` (non-deserializable trusted context), `ClaimM
 read-only `ClaimInspection` (which refuses pending journal repair rather than writing), committed
 through the task journal.
 
+**Claim row retention** [ORB-15705]. Claim mutation receipts (`distributed-claim-mutation-v1`)
+hold each mutation's full input and dominate the coordination table's size. Retention covers
+them only. The other claim kinds stay, as do admission receipts.
+
+- **Prunable:** the receipts of a claim that is settled (`failed`, `revoked` or `landed`) and whose
+  last mutation (`ClaimInspection.updated_at`) is more than 7 days old. Their
+  `distributed-claim-friction-v1` replay rows go with them. A receipt whose commit the journal has
+  not finished applying is kept for recovery.
+- **When:** every claim mutation that leaves its claim settled prunes afterwards, outside the
+  admission section (`lifecycle/retention.rs`). A failed prune is logged and retried by the next
+  settlement; it never fails the settlement. Freed pages return to the filesystem only after
+  `VACUUM`.
+- **Never pruned:** claim (`distributed-execution-claim-v1`) and lifecycle
+  (`distributed-claim-lifecycle-v1`) rows, about 2 KB per claim. The settled claim row is the
+  retired namespace that keeps an old mutation ID from acting again. Release budgets, drain
+  releases, kept candidates, the one-leaf-per-attempt bind check and claim listings read these rows.
+  Handoff, landing and admission rows are out of scope.
+- **Late replay:** a replay of a pruned mutation finds no receipt and reaches `claim_authority`,
+  which refuses the settled claim as `stale_claim`, the answer any other mutation of a settled
+  claim gets. The mutation never runs a second time; the caller loses only the recorded outcome.
+  The single exception is an operator's `recover` of a `failed` claim, which a settled claim still
+  accepts. A pruned ID reused for it is applied as that recovery, just as a fresh ID would be.
+
 ### 3.2 Durable review and landing handoff
 
 **Handoff contents.** An idempotent submission of claim and execution run identity, repository
@@ -1237,5 +1260,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14697] — excluded crews whose provider the follower reads at or near its usage limit from each pass's crew window (`provider_limit`, lifting at `until` in the same drain), replacing the window-long exclusion a limit release added.
 - [ORB-15191] — made a multi-slot local drain or discovery ship wait for the task pilot to prepare empty-context backlog work (`awaiting_footprint`), then run it only alone (`awaiting_exclusive_slot`), after three such tasks edited one stylesheet concurrently.
 - [ORB-15285] — kept a review-filed task's evidence selectors through task-pilot assessments that propose only modification targets.
+- [ORB-15705] — pruned settled claims' mutation receipts 7 days after their last mutation, keeping claim and lifecycle rows as the namespace that refuses a late replay.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

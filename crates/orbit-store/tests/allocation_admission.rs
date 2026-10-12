@@ -11,6 +11,8 @@
 //! - The owner's commit boundary admits at most one claim per request and per
 //!   task under concurrent pulls, and a handoff is authorized only by the
 //!   policy its claim was admitted under and only over unchanged evidence.
+//! - A settled claim's mutation receipts are pruned once past retention; its
+//!   claim and lifecycle rows stay, so a pruned replay is refused, never rerun.
 //! - Claimed evidence stores canonical artifact paths, and racing review
 //!   report revisions are each retained in the store-owned report history.
 //!
@@ -71,6 +73,8 @@ use orbit_types::workflow::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+#[path = "allocation_admission/claim_retention.rs"]
+mod claim_retention;
 #[path = "allocation_admission/dependencies.rs"]
 mod dependencies;
 #[path = "allocation_admission/known_red.rs"]
