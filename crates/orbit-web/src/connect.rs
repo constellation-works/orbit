@@ -275,7 +275,7 @@ pub(crate) struct ProbedHttp {
 /// `GET path` over the forwarded local port. Returns the response body only
 /// on a `200` status line. The exchange stops at [`PROBE_EXCHANGE_TIMEOUT`]
 /// even when the peer keeps sending.
-fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
+pub(crate) fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
     let deadline = Instant::now() + PROBE_EXCHANGE_TIMEOUT;
     let response = probe_http_get(
         local_port,
@@ -346,7 +346,7 @@ pub(crate) fn healthz_ok(local_port: u16, limit: ProbeLimit<'_>) -> bool {
     let Ok(status_line) = read_status_line(&mut stream, deadline, cancel, ProbeIdle::Yield) else {
         return false;
     };
-    status_line.starts_with("HTTP/1.") && status_line.contains(" 200 ")
+    http_status_code(&status_line).is_ok_and(|code| code == 200)
 }
 
 fn connect_probed(
