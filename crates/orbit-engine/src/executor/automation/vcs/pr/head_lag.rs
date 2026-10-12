@@ -13,7 +13,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use super::super::git::git_output;
+use super::super::remote_probe::remote_ref_output;
 use super::delivery::DeliveryPin;
 
 const MAX_STALE_HEAD_REREADS: u32 = 3;
@@ -156,9 +156,10 @@ fn remote_ref_sha(
     pr_number: &str,
     error_code: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let remote = git_output(
+    let probe = remote_ref_output(
         Path::new(workspace_path),
         &["ls-remote", "origin", reference],
+        "PR head settling",
     )
     .map_err(|error| {
         OrbitError::Execution(format!(
@@ -166,7 +167,7 @@ fn remote_ref_sha(
                  {reference}: {error}; the task stays in review"
         ))
     })?;
-    Ok(remote.lines().find_map(|line| {
+    Ok(probe.stdout.lines().find_map(|line| {
         let (sha, remote_ref) = line.split_once('\t')?;
         (remote_ref == reference).then(|| sha.to_string())
     }))

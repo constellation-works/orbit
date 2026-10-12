@@ -666,6 +666,7 @@
         "executor/automation/vcs/tests/git.rs::host_git_classifies_failures_in_the_c_locale",
         "executor/automation/vcs/tests/git.rs::quiet_git_failures_keep_exit_status_and_signal_diagnostics",
         "executor/automation/vcs/tests/git.rs::stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out",
+        "executor/automation/vcs/tests/remote_probe.rs::branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget",
         "executor/automation/vcs/tests/required_command.rs::a_guardrail_for_a_tool_on_path_is_not_a_missing_tool",
         "executor/automation/vcs/tests/required_command.rs::an_unnamed_exit_127_is_still_an_environment_failure",
         "executor/automation/vcs/tests/required_command.rs::ordinary_check_failures_are_candidate_failures",

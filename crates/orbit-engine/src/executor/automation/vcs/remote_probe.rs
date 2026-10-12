@@ -1,4 +1,4 @@
-//! Bounded retries and diagnostics for the read-only pre-push remote probe.
+//! Bounded retries and diagnostics for read-only delivery remote probes.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -17,32 +17,54 @@ pub(super) struct RemoteBranchProbe {
     pub(super) waited_ms: u64,
 }
 
-/// Retry only supervisor deadlines, never a completed Git refusal. Each child
-/// retains the activity's Git budget and secured environment; backoff is bounded
-/// to 250 ms then 500 ms. The probe acquires no Orbit repository lock.
 pub(super) fn pre_push_remote_branch(
     repo_root: &Path,
     branch: &str,
 ) -> Result<RemoteBranchProbe, OrbitError> {
     let reference = format!("refs/heads/{branch}");
     let args = ["ls-remote", "--heads", "origin", &reference];
+    let probe = remote_ref_output(repo_root, &args, "git_push pre-push")?;
+    Ok(RemoteBranchProbe {
+        sha: probe.stdout.split_whitespace().next().map(str::to_owned),
+        attempts: probe.attempts,
+        elapsed_ms: probe.elapsed_ms,
+        waited_ms: probe.waited_ms,
+    })
+}
+
+pub(super) struct RemoteRefProbe {
+    pub(super) stdout: String,
+    pub(super) attempts: u32,
+    pub(super) elapsed_ms: u64,
+    pub(super) waited_ms: u64,
+}
+
+/// Retry only supervisor deadlines, never a completed Git refusal. Each child
+/// retains the activity's Git budget and secured environment; backoff is bounded
+/// to 250 ms then 500 ms. The probe acquires no Orbit repository lock. Callers
+/// supply only read-only `ls-remote` arguments and keep their own ref parsing.
+pub(super) fn remote_ref_output(
+    repo_root: &Path,
+    args: &[&str],
+    stage: &str,
+) -> Result<RemoteRefProbe, OrbitError> {
     let started = Instant::now();
     let io_before = io_stall_total();
     let mut lock_observed = false;
     let mut waited_ms = 0;
     for attempt in 1..=PROBE_ATTEMPTS {
-        let outcome = git_run(repo_root, &args)?;
+        let outcome = git_run(repo_root, args)?;
         if !outcome.timed_out {
             if !outcome.success {
                 return Err(git_failure_error(
                     repo_root,
-                    &args,
+                    args,
                     outcome.exit_code,
                     &outcome.stderr,
                 ));
             }
-            return Ok(RemoteBranchProbe {
-                sha: outcome.stdout.split_whitespace().next().map(str::to_owned),
+            return Ok(RemoteRefProbe {
+                stdout: outcome.stdout,
                 attempts: attempt,
                 elapsed_ms: elapsed_ms(started),
                 waited_ms,
@@ -63,7 +85,7 @@ pub(super) fn pre_push_remote_branch(
             return Err(timeout_recovery_error(
                 outcome.timeout_ms,
                 format!(
-                    "git_push pre-push ls-remote probe timed out after {attempt} attempts; \
+                    "{stage} ls-remote probe timed out after {attempt} attempts; \
                      elapsed={elapsed_ms}ms, per-attempt timeout={}ms, backoff={waited_ms}ms; \
                      local lock contention={lock} (probe acquires no Orbit lock); \
                      IO contention={io}; git {} in '{}': {}",
@@ -76,13 +98,13 @@ pub(super) fn pre_push_remote_branch(
         }
         let backoff_ms = INITIAL_BACKOFF_MS << (attempt - 1);
         tracing::warn!(
-            branch,
+            stage,
             attempt,
             elapsed_ms,
             backoff_ms,
             lock_observed,
             io_contention = %io,
-            "retrying timed-out pre-push ls-remote probe"
+            "retrying timed-out ls-remote probe"
         );
         std::thread::sleep(Duration::from_millis(backoff_ms));
         waited_ms += backoff_ms;
