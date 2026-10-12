@@ -248,9 +248,6 @@ pub(super) fn apply_task(
                     target_status.cli_name()
                 ));
             }
-            if let Some(marker) = &task.history_marker {
-                history_summary.push_str(marker);
-            }
             let requirements = super::validation_tools::ImplementationLane::resolve(runtime)
                 .operator_requirements(&current);
             let mut assessed = current.clone();
@@ -330,6 +327,7 @@ pub(super) fn apply_task(
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
                 history_summary,
+                decision: task.history_decision.clone(),
                 append_history: operator_hold
                     .as_ref()
                     .map(|hold| hold.history(&task.operation_id))
@@ -459,11 +457,7 @@ fn assessment_history_summary(assessment: &Value) -> String {
             }
         })
         .collect::<String>();
-    let rationale = rationale
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace("drain-approval-held:", "drain approval held:");
+    let rationale = rationale.split_whitespace().collect::<Vec<_>>().join(" ");
     let short = rationale.chars().take(64).collect::<String>();
     let truncated = rationale.chars().count() > 64;
     format!(

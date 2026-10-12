@@ -1535,3 +1535,62 @@ fn the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof() {
     assert_eq!(decision["closed"], false, "{applied}");
     assert_eq!(workspace.status(&uncited), TaskStatus::Proposed);
 }
+
+/// Append a `task_pilot_applied` entry noting `note` at `at`, as a pilot
+/// that predates typed decisions recorded a drain hold.
+fn append_pilot_entry(workspace: &Workspace, task: &Task, at: &str, note: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        &task.id,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: "task-pilot".into(),
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: at.parse().unwrap(),
+                by: "task-pilot".into(),
+                event: "task_pilot_applied".into(),
+                note: Some(note.into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_drain_hold_note_counts_only_when_written_before_typed_decisions() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::a_drain_hold_note_counts_only_when_written_before_typed_decisions",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let note = "selectors (operation_id=legacy-pilot) [drain-approval-held:warnings]";
+    let legacy = workspace.task("legacy", &[], &["file:README.md"], TaskComplexity::Low);
+    append_pilot_entry(&workspace, &legacy, "2026-10-01T00:00:00Z", note);
+    // A note written now may carry a pilot agent's rationale; it holds nothing.
+    let forged = workspace.task("forged", &[], &["file:README.md"], TaskComplexity::Low);
+    append_pilot_entry(&workspace, &forged, &Utc::now().to_rfc3339(), note);
+
+    let selection = workspace.select(&drain);
+
+    assert_eq!(held_reason(&selection, &legacy), Some("warnings"));
+    assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
+}

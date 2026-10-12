@@ -32,6 +32,7 @@ fn mutation(owner: &Coordinated, id: &str, operation_id: &str) -> AtomicTaskMuta
         history_summary: "selectors (high)".to_string(),
         audit_note: "{\"assessment\":{}}".to_string(),
         append_history: Vec::new(),
+        decision: None,
     }
 }
 

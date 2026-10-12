@@ -492,6 +492,7 @@ impl OrbitRuntime {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
+                decision: None,
             });
         }
         if params.discard_candidate {
@@ -511,6 +512,7 @@ impl OrbitRuntime {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
+                decision: None,
             });
         }
         if let Some(replacement) = source_task_id_replacement {
@@ -529,6 +531,7 @@ impl OrbitRuntime {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
+                decision: None,
             });
         }
         // A forced transition is still a transition: naming it in history is

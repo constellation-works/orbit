@@ -94,6 +94,7 @@ fn pilot_write(
                 history_summary: "pilot applied".to_string(),
                 audit_note: "evidence".to_string(),
                 append_history: vec![],
+                decision: None,
             },
         )
         .expect("atomic mutation")
@@ -323,6 +324,7 @@ fn a_history_append_cannot_forge_a_grant() {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
+                decision: None,
             }],
             ..Default::default()
         },

@@ -6,7 +6,8 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    HostOs, Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskOsRequirement, TaskStatus,
+    HostOs, PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
+    TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus,
 };
 use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ use super::super::finding_verification::UnverifiedFindingHold;
 use super::super::positive_validation_tools;
 
 use super::super::helpers::is_automation_actor;
+use super::super::legacy_decisions;
 use crate::OrbitRuntime;
 
 /// The trusted history events an operator decision on a hold records.
@@ -77,6 +79,7 @@ impl HostOperationalHold {
             from_status: None,
             to_status: None,
             operation_id: None,
+            decision: None,
         }
     }
 }
@@ -145,6 +148,7 @@ impl OperatorValidationHold {
             from_status: None,
             to_status: None,
             operation_id: None,
+            decision: None,
         }
     }
 }
@@ -348,7 +352,7 @@ fn operator_resolved(
     history
         .iter()
         .filter_map(|entry| trusted_operator_resolution(entry, event))
-        .any(|record| record["operation_id"] == operation_id && record["hold"][field] == current)
+        .any(|(answered, hold)| answered == operation_id && hold[field] == current)
 }
 
 /// Native-host decisions answer the finding, independently of its pilot pass.
@@ -356,39 +360,58 @@ fn native_os_resolved(history: &[TaskHistoryEntry], hold: &NativeOsHold) -> bool
     history
         .iter()
         .filter_map(|entry| trusted_operator_resolution(entry, NATIVE_OS_RESOLVED))
-        .filter_map(|record| serde_json::from_value::<NativeOsHold>(record["hold"].clone()).ok())
+        .filter_map(|(_, hold)| serde_json::from_value::<NativeOsHold>(hold).ok())
         .any(|resolved| hold.same_finding(&resolved))
 }
 
-fn trusted_operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<Value> {
-    if entry.event != event || is_automation_actor(&entry.by) {
+/// An operator's resolution `event` that decided its hold: the pilot receipt
+/// it answers and the hold it resolved.
+fn trusted_operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value)> {
+    let (operation_id, hold, decided) = operator_resolution(entry, event)?;
+    decided.then_some((operation_id, hold))
+}
+
+/// An operator's resolution `event`, decided or a rescope: the pilot receipt
+/// it answers, the hold it recorded, and whether it decided that hold.
+fn operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value, bool)> {
+    if entry.event != event || entry.by.trim().is_empty() || is_automation_actor(&entry.by) {
         return None;
     }
-    let record: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
-    (matches!(
-        record["decision"].as_str(),
-        Some(
-            "task-pilot-admission: clear"
-                | "task-pilot-admission: approve-anyway"
-                | "task-pilot-admission: evaluated"
-        )
-    ) && record["evidence"]
-        .as_str()
-        .is_some_and(decision_has_evidence))
-    .then_some(record)
+    match &entry.decision {
+        Some(TaskDecision::PilotAdmission {
+            operation_id,
+            verdict,
+            hold,
+        }) => Some((
+            operation_id.clone(),
+            hold.clone().unwrap_or_default(),
+            *verdict != PilotAdmissionVerdict::Rescope,
+        )),
+        Some(_) => None,
+        None => legacy_decisions::pilot_resolution_note(entry),
+    }
 }
 
-fn decision_header(message: &str) -> bool {
-    matches!(
-        message.lines().next().unwrap_or_default().trim(),
-        "task-pilot-admission: approve-anyway"
-            | "task-pilot-admission: clear"
-            | "task-pilot-admission: evaluated"
-    )
+/// Whether an operator's `approve-anyway` or `clear` answers the pilot
+/// receipt `operation_id`, releasing its duplicate and already-landed findings.
+fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
+    history.iter().any(|entry| {
+        !entry.by.trim().is_empty()
+            && !is_automation_actor(&entry.by)
+            && matches!(
+                &entry.decision,
+                Some(TaskDecision::PilotAdmission { operation_id: answered, verdict, .. })
+                    if answered == operation_id && verdict.overrides_findings()
+            )
+    })
 }
 
-fn decision_has_evidence(message: &str) -> bool {
-    decision_header(message) && message.lines().skip(1).any(|line| !line.trim().is_empty())
+/// The verdict an operator's decision comment states on its first line, and
+/// whether evidence follows it.
+fn stated_verdict(message: &str) -> Option<(PilotAdmissionVerdict, bool)> {
+    let mut lines = message.lines();
+    let verdict = PilotAdmissionVerdict::from_header(lines.next().unwrap_or_default())?;
+    Some((verdict, lines.any(|line| !line.trim().is_empty())))
 }
 
 impl OrbitRuntime {
@@ -416,25 +439,16 @@ impl OrbitRuntime {
             return Ok(Some(PilotAdmissionHold::UnverifiedFinding(hold)));
         }
         let material = validation_material(task);
-        let mut legacy_decision = false;
+        let mut legacy_override = false;
         // Atomic pilot application persists the full assessment in a
         // task-pilot-authored comment carrying its replay receipt. Read that
         // durable record, not the human-readable history summary or an
         // uncommitted agent result.
         for comment in comments.iter().rev() {
-            let mut lines = comment.message.lines();
-            let header = lines.next().unwrap_or_default().trim();
-            if !comment.by.trim().is_empty()
-                && !is_automation_actor(&comment.by)
-                && matches!(
-                    header,
-                    "task-pilot-admission: approve-anyway" | "task-pilot-admission: clear"
-                )
-            {
-                // Preserve the duplicate/landed comment contract. Operator
-                // validation additionally requires its trusted resolution event.
-                legacy_decision = true;
-            }
+            // An override written as a comment before typed decisions, after
+            // this receipt. Operator validation additionally requires its
+            // trusted resolution event.
+            legacy_override |= legacy_decisions::pilot_override_comment(comment);
             if comment.by != "task-pilot" {
                 continue;
             }
@@ -460,16 +474,14 @@ impl OrbitRuntime {
                     .cloned()
                     .or_else(|| {
                         task_history.iter().rev().find_map(|entry| {
-                            let trusted = match entry.event.as_str() {
-                                "host_operational_held" => {
-                                    matches!(entry.by.as_str(), "system" | "task-pilot")
-                                }
-                                HOST_OPERATIONAL_RESOLVED => {
-                                    !entry.by.trim().is_empty() && !is_automation_actor(&entry.by)
-                                }
-                                _ => false,
-                            };
-                            if !trusted {
+                            if let Some((answered, hold, _)) =
+                                operator_resolution(entry, HOST_OPERATIONAL_RESOLVED)
+                            {
+                                return (answered == operation_id).then_some(hold);
+                            }
+                            if entry.event != "host_operational_held"
+                                || !matches!(entry.by.as_str(), "system" | "task-pilot")
+                            {
                                 return None;
                             }
                             let record: Value =
@@ -553,7 +565,7 @@ impl OrbitRuntime {
                 }
                 None => None,
             };
-            if legacy_decision {
+            if legacy_override || operator_overrode(&history()?, operation_id) {
                 return Ok(native_os);
             }
             for (field, hold) in [
@@ -672,45 +684,50 @@ impl OrbitRuntime {
 
     /// Only the trusted human update path calls this. Agent-authored comment
     /// text cannot mint a resolution event or satisfy an operator handoff.
-    /// Each typed hold records its own resolution event;
-    /// one decision resolves the hold admission currently reports.
+    /// Each typed hold records its own resolution event; one decision
+    /// resolves the hold admission currently reports. An `approve-anyway` or
+    /// `clear` of a duplicate or already-landed finding is recorded as
+    /// [`PILOT_ADMISSION_DECIDED_EVENT`]. Every event carries the decision as
+    /// [`TaskDecision::PilotAdmission`], which is what admission reads.
     pub(in crate::application::task) fn pilot_hold_resolution(
         &self,
         task: &Task,
         params: &super::super::TaskUpdateParams,
         actor: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        let stated = params.comment.as_deref().and_then(stated_verdict);
         let (event, hold) = match self.pilot_admission_hold(&task.id)? {
             Some(PilotAdmissionHold::OperatorValidation(hold)) => {
-                (OPERATOR_VALIDATION_RESOLVED, json!(hold))
+                (OPERATOR_VALIDATION_RESOLVED, Some(json!(hold)))
             }
-            Some(PilotAdmissionHold::NativeOs(hold)) => (NATIVE_OS_RESOLVED, json!(hold)),
+            Some(PilotAdmissionHold::NativeOs(hold)) => (NATIVE_OS_RESOLVED, Some(json!(hold))),
             Some(PilotAdmissionHold::HostOperational(hold)) => {
-                (HOST_OPERATIONAL_RESOLVED, json!(hold))
+                (HOST_OPERATIONAL_RESOLVED, Some(json!(hold)))
+            }
+            Some(PilotAdmissionHold::Duplicate | PilotAdmissionHold::AlreadyLanded)
+                if stated.is_some_and(|(verdict, _)| verdict.overrides_findings()) =>
+            {
+                (PILOT_ADMISSION_DECIDED_EVENT, None)
             }
             _ => return Ok(None),
         };
-        let rescoped = params
-            .acceptance_criteria
-            .as_ref()
-            .is_some_and(|criteria| criteria != &task.acceptance_criteria);
-        let decision = params
-            .comment
-            .as_deref()
-            .filter(|message| decision_header(message));
-        if !rescoped && decision.is_none() {
+        let rescoped = hold.is_some()
+            && params
+                .acceptance_criteria
+                .as_ref()
+                .is_some_and(|criteria| criteria != &task.acceptance_criteria);
+        if !rescoped && stated.is_none() {
             return Ok(None);
         }
-        if let Some(message) = decision
-            && !decision_has_evidence(message)
-        {
+        // A typed hold's decision needs evidence; a duplicate or landed
+        // override never has.
+        if hold.is_some() && matches!(stated, Some((_, false))) {
             return Err(OrbitError::InvalidInput(
                 "a task-pilot admission decision requires evidence after its first line".into(),
             ));
         }
-        if let Some(message) = decision
-            && message.lines().next().unwrap_or_default().trim()
-                == "task-pilot-admission: evaluated"
+        if let (Some((PilotAdmissionVerdict::Evaluated, _)), Some(message)) =
+            (stated, params.comment.as_deref())
         {
             let evidence = message
                 .split_once('\n')
@@ -739,22 +756,36 @@ impl OrbitRuntime {
             .ok_or_else(|| {
                 OrbitError::Execution("task-pilot admission decision has no pilot receipt".into())
             })?;
+        let verdict = match stated {
+            Some((verdict, _)) if !rescoped => verdict,
+            _ => PilotAdmissionVerdict::Rescope,
+        };
+        let header = params
+            .comment
+            .as_deref()
+            .and_then(|message| message.lines().next())
+            .map(str::trim);
         Ok(Some(TaskHistoryEntry {
             at: chrono::Utc::now(),
             by: actor.into(),
             event: event.into(),
+            // For people, and for a binary that predates the typed decision.
             note: Some(
                 json!({
                     "operation_id": operation_id,
-                    "decision": if rescoped { "rescope" } else {
-                        decision.unwrap_or_default().lines().next().unwrap_or_default().trim()
-                    }, "hold": hold, "evidence": params.comment,
+                    "decision": if rescoped { "rescope" } else { header.unwrap_or_default() },
+                    "hold": hold, "evidence": params.comment,
                 })
                 .to_string(),
             ),
             from_status: None,
             to_status: None,
             operation_id: None,
+            decision: Some(TaskDecision::PilotAdmission {
+                operation_id: operation_id.to_string(),
+                verdict,
+                hold,
+            }),
         }))
     }
 }

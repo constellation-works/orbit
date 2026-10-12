@@ -14,7 +14,8 @@ use orbit_engine::{
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_store::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::task::{
-    TASK_ENVELOPE_FILE_NAME, TASK_PLAN_FILE_NAME, Task, TaskComment, TaskEnvelopeV2, TaskStatus,
+    TASK_ENVELOPE_FILE_NAME, TASK_PLAN_FILE_NAME, Task, TaskComment, TaskDecision, TaskEnvelopeV2,
+    TaskHistoryEntry, TaskStatus,
 };
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
@@ -205,12 +206,23 @@ fn source_of(input: &Value) -> &str {
     input["block_source"].as_str().expect("block source")
 }
 
+/// The typed final-recovery decisions recorded on the task.
+fn recovery_decisions(runtime: &OrbitRuntime, task_id: &str) -> Vec<TaskHistoryEntry> {
+    runtime
+        .get_task_history(task_id)
+        .expect("read history")
+        .into_iter()
+        .filter(|entry| matches!(entry.decision, Some(TaskDecision::FinalRecovery { .. })))
+        .collect()
+}
+
+/// The human-readable comments recording those decisions.
 fn recovery_comments(runtime: &OrbitRuntime, task_id: &str) -> Vec<TaskComment> {
     runtime
         .get_task_comments(task_id)
         .expect("read comments")
         .into_iter()
-        .filter(|comment| FinalRecoveryRecord::last(std::slice::from_ref(comment)).is_some())
+        .filter(|comment| comment.message.starts_with("final_recovery run_id="))
         .collect()
 }
 
@@ -776,8 +788,8 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         runtime.get_task(&requeued.id).expect("task").status,
         TaskStatus::Backlog
     );
-    let record = FinalRecoveryRecord::last(&recovery_comments(&runtime, &requeued.id))
-        .expect("decision comment");
+    let record = FinalRecoveryRecord::last(&recovery_decisions(&runtime, &requeued.id), &[])
+        .expect("typed decision");
     assert_eq!(
         (record.run_id.as_str(), record.decision.as_str()),
         (run_id.as_str(), "requeue")
@@ -807,7 +819,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
     }
     let (again, _) = tick(&runtime);
     assert!(again.dispatched.is_empty(), "{again:?}");
-    assert_eq!(recovery_comments(&runtime, &resumed.id).len(), 1);
+    assert_eq!(recovery_decisions(&runtime, &resumed.id).len(), 1);
 
     // A task that moved since dispatch is not prepared.
     let moved = in_progress_task(&runtime, "Moved after dispatch");
@@ -877,9 +889,9 @@ fn a_recovery_run_that_ends_without_a_decision_is_escalated_once() {
     let (after, _) = tick(&runtime);
     assert!(after.settled.is_empty() && after.dispatched.is_empty());
 
-    let comments = recovery_comments(&runtime, &task.id);
-    assert_eq!(comments.len(), 1, "one decision for the episode");
-    let record = FinalRecoveryRecord::last(&comments).expect("decision");
+    let decisions = recovery_decisions(&runtime, &task.id);
+    assert_eq!(decisions.len(), 1, "one decision for the episode");
+    let record = FinalRecoveryRecord::last(&decisions, &[]).expect("decision");
     assert_eq!(record.decision, "escalate");
     assert!(
         [run_id.as_str(), resumed.run_id.as_str()].contains(&record.run_id.as_str()),

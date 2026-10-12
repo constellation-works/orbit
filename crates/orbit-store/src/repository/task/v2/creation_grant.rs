@@ -54,6 +54,7 @@ pub(super) fn append_creation_grant(
         from_status: None,
         to_status: None,
         operation_id: None,
+        decision: None,
     };
     store.append_event(&bundle.envelope.id, &event)?;
     bundle.events.push(event);

@@ -11,8 +11,8 @@
 //! Selection only decides who is worth a pilot. Approval itself happens in
 //! the task-pilot apply boundary under the drain's verified authority, so the
 //! qualification checked here is a cost filter, not the gate. A task the
-//! pilot held is not piloted again until it changes: its hold marker stays
-//! the newest entry in its history, and a pilot this drain already ran that
+//! pilot held is not piloted again until it changes: the pilot entry that
+//! records the hold stays the newest in its history, and a pilot this drain already ran that
 //! left no decision behind (a failed or stale pilot) is not retried until the
 //! task changes either. Creation-grant rows are not changes here: every write
 //! to a task holding a grant appends one after its own entry to re-seal it.
@@ -173,7 +173,6 @@ fn approval_snapshot(
             .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT);
         if let Some(classification) = latest
             .filter(|entry| entry.event == "task_pilot_applied")
-            .and_then(|entry| entry.note.as_deref())
             .and_then(held_classification)
         {
             snapshot.held.push(held(classification, None));

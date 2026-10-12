@@ -431,6 +431,7 @@ fn record_known_red<H: RuntimeHost + ?Sized>(
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 }],
                 ..TaskAutomationUpdate::default()
             },

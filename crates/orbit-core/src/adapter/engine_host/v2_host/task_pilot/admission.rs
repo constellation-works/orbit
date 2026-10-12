@@ -46,8 +46,9 @@ pub(super) struct ValidatedTask {
     pub(super) admission: Option<Admission>,
     /// Write `backlog` in the atomic pilot mutation itself (CI sweep).
     pub(super) promote: bool,
-    /// Appended to the pilot's history entry, e.g. a drain hold marker.
-    pub(super) history_marker: Option<String>,
+    /// Recorded as the typed decision of the pilot's history entry: a
+    /// drain hold.
+    pub(super) history_decision: Option<orbit_types::task::TaskDecision>,
     pub(super) complexity: TaskComplexity,
     pub(super) operation_id: String,
     /// The typed native-OS finding, persisted as the audit's

@@ -56,6 +56,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             from_status: None,
             to_status: Some(TaskStatus::Backlog),
             operation_id: None,
+            decision: None,
         }],
         comments: vec![TaskCommentRowV2 {
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,

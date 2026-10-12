@@ -2675,6 +2675,7 @@ fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
         from_status: Some(TaskStatus::InProgress),
         to_status: Some(TaskStatus::Done),
         operation_id: None,
+        decision: None,
     };
     let aborted_comment = TaskCommentRowV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,

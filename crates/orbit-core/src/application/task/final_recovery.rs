@@ -16,7 +16,8 @@ use orbit_common::process::run_bounded_capped;
 use orbit_types::identity::MACHINE_ID_PREFIX;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task, TaskComment,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
+    FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task, TaskComment, TaskDecision,
     TaskHistoryEntry, TaskStatus,
 };
 use orbit_types::workflow::FinalRecoveryDecision;
@@ -24,6 +25,7 @@ use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::legacy_decisions;
 use super::lifecycle::ensure_completion_run_stopped;
 use super::resolves::pending_resolves_history;
 use crate::OrbitRuntime;
@@ -252,6 +254,51 @@ pub enum FinalRecoveryOutcome {
     },
 }
 
+impl FinalRecoveryOutcome {
+    /// The outcome as the typed decision records it; `None` for `resume`,
+    /// which the applier never records.
+    fn applied(&self) -> Option<RecordedFinalRecovery> {
+        Some(match self {
+            Self::Resume { .. } => return None,
+            Self::Completed {
+                status,
+                evidence_commit,
+            } => RecordedFinalRecovery::Completed {
+                status: *status,
+                evidence_commit: evidence_commit.clone(),
+            },
+            Self::Rejected => RecordedFinalRecovery::Rejected,
+            Self::Archived => RecordedFinalRecovery::Archived,
+            Self::Requeued => RecordedFinalRecovery::Requeued,
+            Self::Escalated { reason } => RecordedFinalRecovery::Escalated {
+                reason: reason.clone(),
+            },
+            Self::Refused { reason } => RecordedFinalRecovery::Refused {
+                reason: reason.clone(),
+            },
+        })
+    }
+}
+
+impl From<RecordedFinalRecovery> for FinalRecoveryOutcome {
+    fn from(applied: RecordedFinalRecovery) -> Self {
+        match applied {
+            RecordedFinalRecovery::Completed {
+                status,
+                evidence_commit,
+            } => Self::Completed {
+                status,
+                evidence_commit,
+            },
+            RecordedFinalRecovery::Rejected => Self::Rejected,
+            RecordedFinalRecovery::Archived => Self::Archived,
+            RecordedFinalRecovery::Requeued => Self::Requeued,
+            RecordedFinalRecovery::Escalated { reason } => Self::Escalated { reason },
+            RecordedFinalRecovery::Refused { reason } => Self::Refused { reason },
+        }
+    }
+}
+
 /// One planned write: the status, its history event and note, and the
 /// comment that records the decision.
 struct Plan {
@@ -332,7 +379,7 @@ impl OrbitRuntime {
                     self.ensure_resolves_are_workspace_local(&task)?;
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
-                self.write_plan(&task, &plan)?;
+                self.write_plan(&task, request, &decision, &plan)?;
                 transition = Some((task.status, plan.status, plan.note.clone()));
                 applied = Some(plan.outcome);
                 Ok(())
@@ -403,19 +450,33 @@ impl OrbitRuntime {
     }
 
     /// The outcome the applier recorded on the task for `run_id`'s decision,
-    /// when it already applied one: read back from the decision comment it
-    /// wrote with the task change.
+    /// when it already applied one: read back from the typed decision it
+    /// recorded with the task change.
     pub(crate) fn recorded_final_recovery(
         &self,
         task_id: &str,
         run_id: &str,
     ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
-        let marker = format!("final_recovery run_id={run_id} decision=");
-        Ok(self
-            .get_task_comments(task_id)?
-            .iter()
-            .find(|comment| comment.message.starts_with(&marker))
-            .map(|comment| recorded_outcome(&comment.message)))
+        let typed = self
+            .get_task_history(task_id)?
+            .into_iter()
+            .find_map(|entry| match entry.decision {
+                Some(TaskDecision::FinalRecovery {
+                    run_id: recorded,
+                    outcome,
+                    ..
+                }) if entry.by == SYSTEM_ACTOR_LABEL && recorded == run_id => {
+                    Some(FinalRecoveryOutcome::from(outcome))
+                }
+                _ => None,
+            });
+        if typed.is_some() {
+            return Ok(typed);
+        }
+        Ok(legacy_decisions::final_recovery_outcome(
+            &self.get_task_comments(task_id)?,
+            run_id,
+        ))
     }
 
     fn plan(
@@ -581,13 +642,35 @@ impl OrbitRuntime {
             .count())
     }
 
-    fn write_plan(&self, task: &Task, plan: &Plan) -> Result<(), OrbitError> {
+    fn write_plan(
+        &self,
+        task: &Task,
+        request: &FinalRecoveryRequest,
+        decision: &FinalRecoveryDecision,
+        plan: &Plan,
+    ) -> Result<(), OrbitError> {
         let comment = TaskComment {
             at: Utc::now(),
             by: SYSTEM_ACTOR_LABEL.to_string(),
             message: plan.comment.clone(),
             operation_id: None,
         };
+        // The comment is the human-readable record; the typed decision is
+        // what a replay and the blocked-task backstop read back.
+        let decided = plan.outcome.applied().map(|outcome| TaskHistoryEntry {
+            at: comment.at,
+            by: SYSTEM_ACTOR_LABEL.to_string(),
+            event: FINAL_RECOVERY_DECIDED_EVENT.to_string(),
+            note: plan.comment.lines().next().map(str::to_string),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: Some(TaskDecision::FinalRecovery {
+                run_id: request.run_id.clone(),
+                decision: decision.kind().to_string(),
+                outcome,
+            }),
+        });
         let transition = plan.status != task.status;
         // A requeue is a new retry decision even if the task is already in
         // backlog. Its event must guard cleanup and count toward the bound.
@@ -602,11 +685,15 @@ impl OrbitRuntime {
                     status_note: record_status.then(|| plan.note.clone()),
                     execution_summary: plan.execution_summary.clone(),
                     append_comments: vec![comment.clone()],
-                    append_history: if transition && plan.status == TaskStatus::Done {
-                        pending_resolves_history(task)
-                    } else {
-                        Vec::new()
-                    },
+                    append_history: decided
+                        .clone()
+                        .into_iter()
+                        .chain(if transition && plan.status == TaskStatus::Done {
+                            pending_resolves_history(task)
+                        } else {
+                            Vec::new()
+                        })
+                        .collect(),
                     expected_status: Some(vec![task.status]),
                     ..Default::default()
                 },
@@ -694,47 +781,6 @@ fn refusal(
         ));
     }
     None
-}
-
-/// The outcome a decision comment records: its header's `outcome=` (and a
-/// completion's `status=`), with the detail lines `plan`
-/// writes below it. A comment this module did not write as expected reads as
-/// an escalation, which never settles the task twice.
-fn recorded_outcome(message: &str) -> FinalRecoveryOutcome {
-    let header = message.lines().next().unwrap_or_default();
-    let field = |key: &str| {
-        header
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix(key))
-    };
-    let detail = |key: &str| {
-        message
-            .lines()
-            .find_map(|line| line.strip_prefix(key))
-            .map(|value| value.trim().to_string())
-    };
-    let escalated = FinalRecoveryOutcome::Escalated { reason: None };
-    match field("outcome=") {
-        Some("completed") => {
-            match (
-                field("status=").and_then(|status| status.parse().ok()),
-                detail("evidence_commit: "),
-            ) {
-                (Some(status), Some(evidence_commit)) => FinalRecoveryOutcome::Completed {
-                    status,
-                    evidence_commit,
-                },
-                _ => escalated,
-            }
-        }
-        Some("rejected") => FinalRecoveryOutcome::Rejected,
-        Some("archived") => FinalRecoveryOutcome::Archived,
-        Some("requeued") => FinalRecoveryOutcome::Requeued,
-        Some("refused") => FinalRecoveryOutcome::Refused {
-            reason: detail("reason: ").unwrap_or_default(),
-        },
-        _ => escalated,
-    }
 }
 
 fn comment_header(request: &FinalRecoveryRequest, decision: &FinalRecoveryDecision) -> String {

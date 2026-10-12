@@ -232,7 +232,8 @@ model = "fixture-b"
         owner.get_task(&task_id).unwrap().status.to_string(),
         "backlog"
     );
-    let record = FinalRecoveryRecord::last(&owner.get_task_comments(&task_id).unwrap()).unwrap();
+    let record =
+        FinalRecoveryRecord::last(&owner.get_task_history(&task_id).unwrap(), &[]).unwrap();
     assert_eq!(record.run_id, recovery.run_id);
     assert_eq!(record.decision, "requeue");
     assert_eq!(record.outcome, "requeued");

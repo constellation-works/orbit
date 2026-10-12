@@ -3,6 +3,7 @@
 mod artifacts;
 mod context_creation;
 mod context_widening;
+mod decision;
 mod epic;
 mod error;
 mod model;
@@ -22,6 +23,10 @@ pub use context_creation::{
 };
 pub use context_widening::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
+};
+pub use decision::{
+    FINAL_RECOVERY_DECIDED_EVENT, PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict,
+    RecordedFinalRecovery, TaskDecision,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 

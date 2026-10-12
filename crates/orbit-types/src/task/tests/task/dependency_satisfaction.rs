@@ -57,6 +57,7 @@ fn history(statuses: &[TaskStatus]) -> Vec<TaskHistoryEntry> {
             from_status: previous,
             to_status: Some(*status),
             operation_id: None,
+            decision: None,
         });
         entries.push(TaskHistoryEntry {
             at: Utc::now(),
@@ -66,6 +67,7 @@ fn history(statuses: &[TaskStatus]) -> Vec<TaskHistoryEntry> {
             from_status: None,
             to_status: None,
             operation_id: None,
+            decision: None,
         });
         previous = Some(*status);
     }

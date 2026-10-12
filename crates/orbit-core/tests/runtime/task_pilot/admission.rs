@@ -3,6 +3,7 @@
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{PilotAdmissionVerdict, TaskDecision};
 use serde_json::json;
 
 use super::Workspace;
@@ -344,6 +345,7 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 }],
                 ..Default::default()
             },
@@ -951,6 +953,7 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 }],
                 append_comments: vec![orbit_types::task::TaskComment {
                     at,
@@ -1070,6 +1073,7 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 }],
                 append_comments: vec![orbit_types::task::TaskComment {
                     at,
@@ -1106,4 +1110,101 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
         record2["hold"]["requirements"][0]["tool"],
         "orbit.pipeline.invoke"
     );
+}
+
+/// Append `message` as `by`'s comment at `at`, as a binary that predates
+/// typed decisions recorded it.
+fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, message: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        &task.id,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: by.into(),
+            append_comments: vec![orbit_types::task::TaskComment {
+                at: at.parse().unwrap(),
+                by: by.into(),
+                message: message.into(),
+                operation_id: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_override_comment_decides_only_when_written_before_typed_decisions() {
+    if !isolated(
+        "task_pilot::admission::an_override_comment_decides_only_when_written_before_typed_decisions",
+    ) {
+        return;
+    }
+    for (decision, verdict) in [
+        ("approve-anyway", PilotAdmissionVerdict::ApproveAnyway),
+        ("clear", PilotAdmissionVerdict::Clear),
+    ] {
+        for (field, reason) in [
+            ("duplicate_of", "pilot_duplicate"),
+            ("already_landed", "pilot_already_landed"),
+        ] {
+            let workspace = Workspace::new();
+            let task = backlog_task(&workspace);
+            let comment = format!("task-pilot-admission: {decision}\nReviewed the finding.");
+            assess(&workspace, &task, Some(field));
+            // Comment text written now is open to any author; it decides nothing.
+            let now = chrono::Utc::now().to_rfc3339();
+            append_comment(&workspace, &task, "human:fixture", &now, &comment);
+            assert_admission(&workspace, &task, Some(reason));
+            // The same comment from before typed decisions is still honoured.
+            append_comment(
+                &workspace,
+                &task,
+                "human:fixture",
+                "2026-10-01T00:00:00Z",
+                &comment,
+            );
+            assert_admission(&workspace, &task, None);
+
+            // A decision made now is the typed one the trusted path records;
+            // an override needs no explanation below its header.
+            assess(&workspace, &task, Some(field));
+            assert_admission(&workspace, &task, Some(reason));
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(format!("task-pilot-admission: {decision}")),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+            assert_admission(&workspace, &task, None);
+            let decided = workspace
+                .runtime
+                .get_task_history(&task.id)
+                .unwrap()
+                .into_iter()
+                .filter_map(|entry| match entry.decision {
+                    Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(decided, vec![verdict]);
+        }
+    }
 }

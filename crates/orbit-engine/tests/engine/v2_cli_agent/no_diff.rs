@@ -312,6 +312,7 @@ impl RuntimeHost for SummaryDeliveryHost {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
+                    decision: None,
                 });
         }
         Ok(())
