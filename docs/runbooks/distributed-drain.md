@@ -610,6 +610,14 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   The handoff pins that verifier report; the owner rechecks it against its live
   base and completes without a PR under the same completion authority. A moved
   base or changed report requires fresh validation; a skip flag alone is refused.
+  When the tests that show the base already resolves the task run only
+  outside the agent sandbox, the implementer also returns `already_resolved`
+  `{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}`.
+  `claim_validate` replays each selector on the base, outside the agent
+  sandbox in a detached worktree, after the required commands, and pins each
+  passing log beside theirs. A failing replay fails the claim with its output
+  (the owner blocks the task); an empty list, a selector outside that
+  grammar, or a run that executes no test or prints a skip is refused.
 - The implement step runs in **claimed mode**. The agent sandbox denies
   `~/.ssh`, so a sandboxed agent on a follower has no route to the owner; it
   does not need one. It works from the injected task envelope, is not granted

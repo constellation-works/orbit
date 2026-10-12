@@ -34,6 +34,7 @@
 //! ([`super::required_command`]), the same network reruns and the same
 //! comparison of a failure with the base ([`super::baseline`]).
 
+mod already_resolved;
 mod carry;
 mod delivery;
 mod handoff;

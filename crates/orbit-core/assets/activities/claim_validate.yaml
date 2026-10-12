@@ -47,6 +47,14 @@ spec:
     cannot apply a profile:` line is the validation environment's failure, a
     replay that fails fails the step, and a passing replay is pinned with the
     required commands as the gate's evidence.
+    The implementer's already-resolved outcome
+    (`implementation.already_resolved`) names `cargo test` selectors. The
+    NoDiff route replays each on the base after them, outside the agent
+    sandbox in a detached worktree; each must report a passed test and no
+    skip, and its log is pinned beside the required commands'. A failing
+    replay fails the step with its output; an empty list, a selector outside
+    the grammar or a replay that runs nothing is refused, as is the
+    declaration on a candidate that changes its base.
   input_schema_json:
     type: object
     required: [workspace_path]
@@ -93,7 +101,8 @@ spec:
       # record the implement step derived into it adds that gate after the
       # required commands, run here
       # outside the agent sandbox; it must report executed tests, and the
-      # pre-publication output names it in `replayed`.
+      # pre-publication output names it in `replayed`. Its
+      # `already_resolved` selectors replay on a NoDiff base.
       implementation:
         type: [object, "null"]
   output_schema_json:
@@ -162,6 +171,13 @@ spec:
         description: >
           Gates run for the implementer's deferred sandbox validation, when
           publication is pending.
+        items:
+          type: string
+      already_resolved:
+        type: array
+        description: >
+          The command lines a NoDiff route ran on the base for the
+          implementer's already-resolved outcome, each passing.
         items:
           type: string
       tested_head:

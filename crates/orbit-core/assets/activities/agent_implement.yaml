@@ -121,6 +121,20 @@ spec:
           summary:
             type: string
             description: Checkout-relative path of the gate's validation summary, under `.orbit/tmp/`.
+      # Claimed mode: the unchanged base already resolves the task, shown by
+      # tests that run only outside the agent sandbox. The implement step
+      # admits each selector; `claim_validate` replays them on the base on
+      # the claim host before the NoDiff handoff.
+      already_resolved:
+        type: [object, "null"]
+        required: [selectors]
+        additionalProperties: false
+        properties:
+          selectors:
+            type: array
+            items:
+              type: string
+              description: "`cargo test -p <crate> --test <target> [<filter>]`"
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -177,6 +191,16 @@ spec:
       replaces the artifact-attachment requirement in item 12 for claimed mode.
       A task tagged `no-diff-expected` needs no such report: leave the
       worktree clean, and the commit step hands off on the tag.
+    - In claimed mode, when the base already resolves the task but the
+      tests that show it run only outside the agent sandbox (they skip or
+      defer here, and an affected-test gate selects none on an unchanged
+      base), also return `already_resolved` as
+      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
+      The claim host replays each selector on the base outside the agent
+      sandbox before the NoDiff handoff. A passing replay lets the handoff
+      complete the task without a PR; a failing one fails the claim with its
+      output; an empty list, another command shape, or a selector that runs
+      no test is refused. Never set it with a diff or outside claimed mode.
     - In claimed mode, `orbit.task.add` relations must include
       `{"type":"spawned_from","target":"<claimed task ID>"}`. A review task
       minted by `delivery-code-review` or `code-review` may also give each

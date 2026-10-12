@@ -158,7 +158,11 @@ implementation changes nothing may also hand off `NoDiff`. In claimed mode the i
 and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
 references; commit imports and verifies them through the claim. The owner
 rechecks the report against its live base before authorized completion without
-a PR. A changed base or evidence requires fresh validation.
+a PR. A changed base or evidence requires fresh validation. When the tests that
+show the base resolves the task run only outside the agent sandbox, the
+implementer also names them as `already_resolved` `cargo test` selectors, and
+`claim_validate` replays each on the base on the claim host; a failing or empty
+replay never completes the task.
 
 
 A claimed PR leaf that fails before its normal commit preserves unfinished
