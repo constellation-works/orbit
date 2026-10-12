@@ -1,11 +1,14 @@
 //! What a host resource throttle still lets start [ORB-14624].
 //!
 //! CPU pressure from cargo-heavy leaves used to hold every admission, so a
-//! frozen review batch could wait out its retry budget behind them. A review,
-//! curation or full-review auto-task reads code and writes artifacts; it adds
-//! almost no CPU. While CPU alone holds admissions, such leaves start up to a
-//! small reserved budget. Memory and disk pressure still hold them: an agent
-//! session costs memory, and its artifacts cost disk.
+//! frozen review batch could wait out its retry budget behind them. CPU-light
+//! status means "does no build work", not merely "makes no diff" [ORB-15766].
+//! A review, curation or full-review auto-task reads code and writes artifacts;
+//! it adds almost no CPU. Templates whose brief builds or runs the product
+//! (such as qa-sweep and qa-full-sweep) do cargo/build work despite expecting
+//! no diff and are excluded. While CPU alone holds admissions, such light leaves
+//! start up to a small reserved budget. Memory and disk pressure still hold
+//! them: an agent session costs memory, and its artifacts cost disk.
 //!
 //! The drain's classifier and the readiness diagnostic both take their answer
 //! from [`resource_gate`], so they cannot disagree about who starts.
@@ -21,16 +24,40 @@ use serde_json::{Value, json};
 pub(in crate::adapter::engine_host::v2_host) const CPU_LIGHT_BUDGET_FULL: &str =
     "cpu_light_budget_full";
 
-/// A leaf that adds almost no CPU: an auto-task tagged `no-diff-expected`.
+/// Auto-task templates whose brief builds or runs the product [ORB-15766].
+///
+/// These tasks carry `no-diff-expected` because they do not commit changes,
+/// but their brief instructs the worker to build or run the software. They
+/// are cargo/build-heavy and must not be admitted from the CPU-light budget
+/// while the host is under CPU pressure.
+const BUILD_HEAVY_AUTO_TASKS: &[&str] = &["qa-sweep", "qa-full-sweep"];
+
+/// A leaf that adds almost no CPU: an auto-task tagged `no-diff-expected`
+/// whose brief does no build work [ORB-15766].
+///
 /// Both tags are required. `no-diff-expected` alone is an operator's claim
 /// about the diff, not about the work; automated provenance alone says
-/// nothing about cost.
+/// nothing about cost. Auto-tasks that build or run the product are excluded.
 pub(in crate::adapter::engine_host::v2_host) fn is_cpu_light(task: &Task) -> bool {
-    task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
-        && task
-            .tags
-            .iter()
-            .any(|tag| tag.starts_with(AUTO_TASK_TAG_PREFIX))
+    let has_no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+    if !has_no_diff {
+        return false;
+    }
+    let has_auto_task = task
+        .tags
+        .iter()
+        .any(|tag| tag.starts_with(AUTO_TASK_TAG_PREFIX));
+    if !has_auto_task {
+        return false;
+    }
+    let is_build_heavy = task.tags.iter().any(|tag| {
+        if let Some(name) = tag.strip_prefix(AUTO_TASK_TAG_PREFIX) {
+            BUILD_HEAVY_AUTO_TASKS.contains(&name)
+        } else {
+            BUILD_HEAVY_AUTO_TASKS.contains(&tag.as_str())
+        }
+    });
+    !is_build_heavy
 }
 
 /// Reserved light slots, and how many live leaves already hold one.

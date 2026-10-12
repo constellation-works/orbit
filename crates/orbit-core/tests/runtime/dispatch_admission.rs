@@ -2019,6 +2019,84 @@ fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
     assert_eq!(resumed["cpu_light_budget"]["applies"], false, "{resumed}");
 }
 
+/// A minted qa-sweep or qa-full-sweep task is not CPU-light because its
+/// brief builds or runs the product; under CPU-only pressure it is held while
+/// a review auto-task is admitted from the light reservation [ORB-15766].
+#[test]
+fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
+    if !isolated("a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks") {
+        return;
+    }
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    std::fs::create_dir_all(&definitions).unwrap();
+    std::fs::write(
+        definitions.join("qa-sweep.yaml"),
+        include_str!("../../assets/auto_tasks/qa-sweep.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        definitions.join("qa-full-sweep.yaml"),
+        include_str!("../../assets/auto_tasks/qa-full-sweep.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        definitions.join("code-review.yaml"),
+        include_str!("../../assets/auto_tasks/code-review.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        definitions.join("friction-curation.yaml"),
+        include_str!("../../assets/auto_tasks/friction-curation.yaml"),
+    )
+    .unwrap();
+
+    let qa_sweep = runtime.auto_task_mint("qa-sweep").unwrap();
+    let qa_full_sweep = runtime.auto_task_mint("qa-full-sweep").unwrap();
+    let code_review = runtime.auto_task_mint("code-review").unwrap();
+    let friction_curation = runtime.auto_task_mint("friction-curation").unwrap();
+
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    probe.sustain(&runtime, |probe| probe.cpu(Some(195.0)));
+
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["resource_throttle"]["resources"][0]["resource"], "cpu",
+        "{wave}"
+    );
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([code_review.id, friction_curation.id]),
+        "review and curation are admitted from the light reservation while QA sweeps wait: {wave}"
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+
+    let review_entry = readiness_task(&readiness, &code_review.id);
+    assert_eq!(review_entry["reason"], "ready", "{review_entry}");
+    assert_eq!(review_entry["cpu_light"], true, "{review_entry}");
+
+    let curation_entry = readiness_task(&readiness, &friction_curation.id);
+    assert_eq!(curation_entry["reason"], "ready", "{curation_entry}");
+    assert_eq!(curation_entry["cpu_light"], true, "{curation_entry}");
+
+    for qa_task in [&qa_sweep.id, &qa_full_sweep.id] {
+        let entry = readiness_task(&readiness, qa_task);
+        assert_eq!(entry["reason"], "resource_throttled", "{entry}");
+        assert_eq!(
+            entry["cpu_light"],
+            Value::Null,
+            "minted QA sweep must not be CPU-light: {entry}"
+        );
+    }
+}
+
 /// Memory and disk pressure hold light leaves like any other: an agent
 /// session costs memory and its artifacts cost disk, whatever CPU does.
 #[test]
