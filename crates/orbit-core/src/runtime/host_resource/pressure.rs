@@ -39,7 +39,12 @@ impl ResourcePressureEvaluator {
         let mut pressures = Vec::new();
         let mut seen = Vec::new();
         let mut reading = |key: String, value: Option<f64>, high: u8, resume: u8, cpu: bool| {
-            seen.push(key.clone());
+            // Share history only between workspaces using the same resource thresholds.
+            // Schema-1 readers accept these string keys, but their unqualified resource
+            // lookups start empty rather than mistaking this history for their own.
+            // Put thresholds first so no new key can collide with a legacy disk path.
+            let state_key = format!("{high}/{resume}@{key}");
+            seen.push(state_key.clone());
             let unknown_reason = if stale {
                 Some("stale")
             } else {
@@ -49,11 +54,17 @@ impl ResourcePressureEvaluator {
                     _ => None,
                 }
             };
-            let state = self.states.entry(key.clone()).or_default();
-            // History from another workspace is evidence only for the same thresholds.
-            if state.high_percent != high || state.resume_percent != resume {
-                *state = PressureState::default();
+            // Carry matching legacy history forward once, preserving a sustain window
+            // or hold across an upgrade on hosts with a single threshold set.
+            if !self.states.contains_key(&state_key)
+                && self.states.get(&key).is_some_and(|state| {
+                    state.high_percent == high && state.resume_percent == resume
+                })
+                && let Some(state) = self.states.remove(&key)
+            {
+                self.states.insert(state_key.clone(), state);
             }
+            let state = self.states.entry(state_key).or_default();
             if unknown_reason.is_some() {
                 *state = PressureState::default();
                 return ResourceReading {
@@ -163,7 +174,7 @@ impl ResourcePressureEvaluator {
             .cloned();
         pressures.retain(|pressure| !pressure.resource.starts_with("disk "));
         pressures.extend(worst_disk);
-        // Keep recent disk history for other workspaces sharing the host root.
+        // Keep recent resource/threshold history for other workspaces sharing the host root.
         // It is never included in this verdict unless this probe observes it.
         self.states.retain(|key, state| {
             seen.contains(key)
