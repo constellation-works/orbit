@@ -15,6 +15,7 @@ use orbit_types::workflow::automation::SourceRevision;
 pub use super::base_claim::{
     BaseFailureCheck, BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure,
 };
+pub use super::claim::implementer_summary;
 use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };

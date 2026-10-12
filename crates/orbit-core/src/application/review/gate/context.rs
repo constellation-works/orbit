@@ -37,6 +37,35 @@ pub(super) struct GateContext {
 }
 
 impl GateContext {
+    /// Summaries for the reviewer. Until handoff acceptance, the owner's
+    /// summary may describe an earlier claimed attempt; the current leaf's
+    /// implementer output is checkpointed locally by the compound step.
+    pub(super) fn implementer_summaries(
+        &self,
+        runtime: &OrbitRuntime,
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut summaries = self
+            .tasks
+            .iter()
+            .map(|task| (task.id.to_string(), task.execution_summary.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if self.claimed {
+            let state = runtime.stores().jobs().read_run_state(&self.run_id)?;
+            if let Some(implementation) = state
+                .as_ref()
+                .and_then(|state| state.pipeline.get("implement_one"))
+                && let Some(summary) = orbit_engine::review_gate::implementer_summary(
+                    &json!({"implementation": implementation}),
+                )
+            {
+                // load verified that this bound run reviews exactly its
+                // claimed task, so no other task receives this summary.
+                summaries.insert(self.task_ids[0].clone(), summary);
+            }
+        }
+        Ok(summaries)
+    }
+
     pub(super) fn load(
         runtime: &OrbitRuntime,
         input: &Value,

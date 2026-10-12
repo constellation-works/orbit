@@ -410,11 +410,7 @@ fn admit(
         base: candidate.base.clone(),
         candidate: candidate.head.clone(),
         implementation_commits: candidate.commits.clone(),
-        implementer_summaries: context
-            .tasks
-            .iter()
-            .map(|task| (task.id.to_string(), task.execution_summary.clone()))
-            .collect(),
+        implementer_summaries: context.implementer_summaries(runtime)?,
         reviewer_crew: reviewer["crew"].as_str().unwrap_or_default().to_string(),
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,

@@ -332,11 +332,10 @@ pub(in crate::executor::automation::vcs) fn carries_implementer_output(input: &V
 }
 
 /// This run's implementer summary, trimmed, in the precedence
-/// [`handoff_execution_summary`] documents (items 1 and 2). The claimed
-/// delivery gate
-/// ([`reject_failed_attempt`](super::super::handoff::reject_failed_attempt)) judges
-/// the same text the handoff carries [ORB-13755].
-pub(in crate::executor::automation::vcs) fn implementer_summary(input: &Value) -> Option<String> {
+/// handoff uses: an explicit `execution_summary`, then
+/// `implementation.execution_summary`, then `implementation.summary`.
+/// The claimed delivery and review gates read the same text [ORB-13755].
+pub fn implementer_summary(input: &Value) -> Option<String> {
     let implementation = implementation_output(input);
     input_string_field(input, "execution_summary")
         .or_else(|| text(implementation.and_then(|output| output.get("execution_summary"))))
