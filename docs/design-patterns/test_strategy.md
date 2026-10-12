@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-11
+last_validated: 2026-10-12
 ---
 # Boundary-First Testing
 
@@ -56,6 +56,8 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes without evaluating `cfg` or expanding macros, as in the original retirement measure.
 
 Admitted unit tests:
+
+- `crates/orbit-common/src/process/tests/identity.rs::partial_linux_group_scans_cannot_certify_death_and_vanished_pids_do_not_delay_cleanup` (criterion 2, I/O fault injection). The production scan accepts directory entries and a stat reader so the table can force entry errors, unreadable and malformed stat records, and ENOENT between enumeration and reading. It proves an observed zombie cannot certify group death when a potentially live PID cannot be inspected, preserving cleanup's SIGKILL escalation, while vanished PIDs do not prevent zombie-only success. Live-member and unavailable-directory controls cover conclusive activity and the existing signal fallback. The public probe cannot force these partial `/proc` failures economically without host permission changes or nondeterministic races; the crate-root process-group test covers a real Linux zombie through that public probe.
 
 - The [launchd enable tests](../../crates/orbit-core/src/application/routines/clock/tests/enable.rs) (criterion 2,
   fault injection) drives the enable entry point with launchd selected and failed

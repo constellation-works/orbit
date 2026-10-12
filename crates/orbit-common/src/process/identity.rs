@@ -530,6 +530,11 @@ pub struct LinuxProcessStat {
 #[cfg(target_os = "linux")]
 pub fn linux_process_stat(pid: u32) -> Option<LinuxProcessStat> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_linux_process_stat(&stat)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_process_stat(stat: &str) -> Option<LinuxProcessStat> {
     // comm (field 2) can contain spaces and ')', so split at its last ')'.
     let (_, tail) = stat.rsplit_once(')')?;
     let fields = tail.split_whitespace().collect::<Vec<_>>();
@@ -635,24 +640,66 @@ pub fn probe_process_group_liveness(_pgid: i32) -> KernelLiveness {
 /// unavailable or incomplete.
 #[cfg(target_os = "linux")]
 fn linux_process_group_liveness(pgid: libc::pid_t) -> Option<KernelLiveness> {
-    let entries = std::fs::read_dir("/proc").ok()?;
+    linux_process_group_liveness_with(
+        pgid,
+        std::fs::read_dir("/proc")
+            .map(|entries| entries.map(|entry| entry.map(|entry| entry.file_name()))),
+        |pid| std::fs::read_to_string(format!("/proc/{pid}/stat")),
+    )
+}
+
+/// I/O seams keep disappearing PIDs distinct from an incomplete scan. A
+/// readable live member is conclusive even if other observations failed.
+#[cfg(target_os = "linux")]
+pub(super) fn linux_process_group_liveness_with(
+    pgid: libc::pid_t,
+    entries: std::io::Result<impl IntoIterator<Item = std::io::Result<std::ffi::OsString>>>,
+    mut read_stat: impl FnMut(u32) -> std::io::Result<String>,
+) -> Option<KernelLiveness> {
+    let entries = entries.ok()?;
     let mut found_group_member = false;
-    for entry in entries.flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+    let mut unknown_member = false;
+    for entry in entries {
+        let name = match entry {
+            Ok(name) => name,
+            Err(_) => {
+                unknown_member = true;
+                continue;
+            }
+        };
+        let Ok(pid) = name.to_string_lossy().parse::<u32>() else {
             continue;
         };
-        let Some((state, member_pgid)) = linux_process_state(pid) else {
+        let stat = match read_stat(pid) {
+            Ok(stat) => stat,
+            // A PID may vanish between readdir and reading stat. It cannot
+            // keep this group alive; other I/O errors cannot prove that.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                unknown_member = true;
+                continue;
+            }
+        };
+        let Some(stat) = parse_linux_process_stat(&stat) else {
+            unknown_member = true;
             continue;
         };
-        if member_pgid != pgid {
+        if stat.process_group != pgid {
             continue;
         }
         found_group_member = true;
-        if state != 'Z' {
+        if stat.state != 'Z' {
             return Some(KernelLiveness::Alive);
         }
     }
-    found_group_member.then_some(KernelLiveness::Exited)
+    if unknown_member {
+        // The public probe returns this uncertainty directly. In particular,
+        // a visible zombie cannot authorize cleanup to skip SIGKILL while an
+        // unreadable PID might still be running in the group.
+        Some(KernelLiveness::Unknown)
+    } else {
+        found_group_member.then_some(KernelLiveness::Exited)
+    }
 }
 
 /// Darwin libproc group scan. The buffer is retried when libproc fills it,

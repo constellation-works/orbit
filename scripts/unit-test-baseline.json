@@ -173,6 +173,7 @@
         "process/tests/identity.rs::darwin_native_probes_classify_an_unreaped_zombie_and_its_group_as_exited",
         "process/tests/identity.rs::libproc_start_time_renders_exactly_as_ps_lstart",
         "process/tests/identity.rs::only_a_denied_ps_spawn_skips_the_comparison",
+        "process/tests/identity.rs::partial_linux_group_scans_cannot_certify_death_and_vanished_pids_do_not_delay_cleanup",
         "process/tests/signal.rs::retained_signal_identity_never_targets_a_reused_numeric_pid",
         "process/tests/stopped_descendants.rs::a_stopped_pid_with_another_start_identity_is_never_signalled",
         "security/tests/child_env.rs::an_explicit_pass_list_cannot_smuggle_a_privilege_bearing_orbit_name",
