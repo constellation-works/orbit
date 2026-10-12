@@ -15,6 +15,7 @@
 #![allow(clippy::expect_used, clippy::print_stdout, clippy::unwrap_used)]
 #![cfg(target_os = "macos")]
 
+use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
@@ -27,6 +28,59 @@ use wait_timeout::ChildExt;
 
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
+fn fixture_root_outside_profile_write_grants() -> tempfile::TempDir {
+    let home = std::env::var_os("HOME").map(PathBuf::from).expect(
+        "macOS sandbox test precondition: HOME must be set for a fixture outside granted trees",
+    );
+    let fixture = tempfile::tempdir_in(&home).unwrap_or_else(|error| {
+        panic!(
+            "macOS sandbox test precondition: cannot create fixture under HOME {}: {error}",
+            home.display()
+        )
+    });
+    let root = fixture
+        .path()
+        .canonicalize()
+        .expect("canonicalize macOS sandbox fixture root");
+
+    let mut granted_roots = vec![
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/private/var/folders"),
+        PathBuf::from("/dev"),
+        home.join("Library/Caches"),
+        home.join(".orbit/state/logs"),
+        home.join(".codex"),
+        home.join(".claude"),
+        home.join(".gemini"),
+        home.join(".grok"),
+    ];
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cargo"));
+    granted_roots.extend([cargo_home.join("registry"), cargo_home.join("git")]);
+    for name in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME"] {
+        if let Some(path) = std::env::var_os(name).filter(|path| !path.is_empty()) {
+            granted_roots.push(PathBuf::from(path));
+        }
+    }
+
+    let granted_root = granted_roots.iter().find(|granted| {
+        root.starts_with(granted)
+            || granted
+                .canonicalize()
+                .is_ok_and(|canonical| root.starts_with(canonical))
+    });
+    if let Some(granted) = granted_root {
+        panic!(
+            "macOS sandbox test precondition: fixture root {} is under profile-granted write tree {}",
+            root.display(),
+            granted.display()
+        );
+    }
+    fixture
+}
+
 #[test]
 fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
     if !macos_sandbox_test_guard(
@@ -35,10 +89,9 @@ fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
         return;
     }
 
-    // Under the target directory, not `/tmp` or `/private/var/folders`: the
-    // compiled profile grants those scratch trees to every agent, so a fixture
-    // there could not show a write being refused.
-    let fixture = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    // Keep this outside host scratch, provider state, and Cargo cache write
+    // grants; CARGO_TARGET_DIR may itself live in a profile-granted tree.
+    let fixture = fixture_root_outside_profile_write_grants();
     let root = fixture.path().canonicalize().expect("canonical root");
     let masked = root.join("global/state/plugins");
     let secrets = root.join("global/state/plugin-secrets");
