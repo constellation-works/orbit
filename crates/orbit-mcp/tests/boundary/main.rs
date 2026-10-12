@@ -10,4 +10,6 @@
 mod dep_boundary;
 mod listener;
 mod mcp_wire_roundtrip;
+#[cfg(unix)]
+mod ssh_reuse;
 mod task_route;

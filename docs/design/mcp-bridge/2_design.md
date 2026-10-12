@@ -111,6 +111,28 @@ ssh -T <ssh-host> orbit mcp serve --remote-caller-machine-id <audit-label>
 so the local proxy never sees or rewrites an MCP message. SSH handles transport,
 host verification, encryption, and access to the remote shell.
 
+The direct proxy and federated destination sessions share OpenSSH connections.
+Orbit supplies a generated `-F` config under `~/.orbit/ssh/` that includes the
+user's SSH config and `/etc/ssh/ssh_config` before setting `ControlMaster auto`,
+`ControlPersist 60`, and a `ControlPath` based on OpenSSH's `%C` connection hash.
+Explicit SSH settings take precedence. Set `ControlMaster no` and
+`ControlPath none` to opt out of both creating and attaching to a master.
+The socket directory is owner-only (`0700`), and an idle master expires after
+60 seconds. Each call still starts its own remote MCP process and handshakes;
+only the authenticated SSH connection is shared.
+
+Orbit's default socket pathname is at most 86 bytes, leaving room for OpenSSH's
+[17-byte temporary socket suffix](https://github.com/openssh/openssh-portable/blob/master/mux.c)
+and terminating NUL within the portable 104-byte limit. For longer home
+paths, SSH starts in the socket directory and uses a relative `%C` pathname.
+In that case, relative paths in user SSH settings or local `Match exec` commands
+resolve from that directory. Use absolute paths or `~` in those settings.
+SSH config evaluation remains OpenSSH's, including `Host`, `Match`, and
+`Include`; Orbit does not parse or cache the user's config. The web UI's
+forwarding tunnels keep their own connection lifecycle.
+Use absolute `Include` paths in the system config: the generated wrapper is
+read as a user config, so relative includes are rooted in `~/.ssh`.
+
 The remote `orbit mcp serve` process then follows the local request flow. It also
 marks the session as `ssh-mcp` and reads the first field of `SSH_CONNECTION` as a
 best-effort caller IP. The supplied machine label and the observed IP are audit
