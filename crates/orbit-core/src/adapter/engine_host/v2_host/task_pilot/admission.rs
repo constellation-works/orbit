@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_engine::DispatchError;
 use orbit_types::task::{TaskComplexity, TaskRelation, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,6 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF};
 
-use super::CONTEXT_CREATION_IDENTITY;
 use super::drain_promotion::{self, Approval, DrainAuthority};
 
 #[derive(Clone)]
@@ -94,49 +92,6 @@ pub(super) enum PromotionAuthority<'a> {
 pub(super) enum CheckedAdmission {
     Apply(Option<Admission>),
     Superseded(Value),
-}
-
-pub(super) fn material_components(
-    entry: &Value,
-    action: &str,
-) -> Result<Option<BTreeMap<String, String>>, DispatchError> {
-    let Some(value) = entry.get("material_components") else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let Some(object) = value.as_object() else {
-        return Err(DispatchError::action_failed(
-            action,
-            "prepared task material_components must be an object of component digests",
-        ));
-    };
-    let mut components = BTreeMap::new();
-    for (key, digest) in object {
-        let Some(digest) = digest.as_str() else {
-            return Err(DispatchError::action_failed(
-                action,
-                format!("prepared task material_components.{key} must be a string digest"),
-            ));
-        };
-        components.insert(key.clone(), digest.to_string());
-    }
-    Ok(Some(components))
-}
-
-pub(super) fn context_creation_identity(
-    entry: &Value,
-    action: &str,
-) -> Result<Option<String>, DispatchError> {
-    match entry.get(CONTEXT_CREATION_IDENTITY) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(identity)) => Ok(Some(identity.clone())),
-        Some(_) => Err(DispatchError::action_failed(
-            action,
-            format!("prepared task {CONTEXT_CREATION_IDENTITY} must be a string or null"),
-        )),
-    }
 }
 
 /// Approve a drain-promoted task once its pilot write landed, recording on
