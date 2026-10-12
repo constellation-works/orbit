@@ -226,6 +226,10 @@ returns.
   backlog. A leaf it cannot confirm stopped keeps its claim, is listed under
   `unstopped_leaves`, and fails the command. The MCP stop
   (`orbit.workflow.auto`, `action: "stop"`) takes the same `force`.
+  `run auto --stop --json`, the MCP stop and the dashboard's stop return one
+  result: `outcome`, `pull_settlements`, and per coordinator its `run_id`,
+  `job_id`, `outcome`, `remaining_children` (`run_id`, `job_name`, `phase`,
+  `child_status`) and `forced_runs`.
   Prefer `--stop`, which ends nothing. The OS clock sweep retries any
   settlement still recorded on the follower (for example after the owner was
   unreachable) once no drain or leaf worker is left to; `orbit run auto --stop`

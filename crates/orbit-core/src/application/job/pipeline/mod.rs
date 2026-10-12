@@ -54,11 +54,13 @@ use std::os::unix::process::ExitStatusExt;
 use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
 
 mod admission;
+mod notices;
 mod submit;
 mod wait;
 mod worker;
 
 pub(crate) use admission::input_hash;
+pub use notices::{SubmissionKind, SubmissionNotices};
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]

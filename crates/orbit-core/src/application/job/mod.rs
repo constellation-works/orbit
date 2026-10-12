@@ -47,6 +47,7 @@ pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
 pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
+    SubmissionKind, SubmissionNotices,
 };
 #[cfg(test)]
 pub(crate) use run::TERMINAL_OUTCOME_CONFLICT_CODE;

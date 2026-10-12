@@ -91,7 +91,7 @@ globalThis.fetch = async (path, options = {}) => {
     if (delayPost) await new Promise(resolve => { releasePost = resolve; });
     if (responseError) return response({ error: responseError }, 500);
     if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
-    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString() });
+    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
@@ -244,6 +244,8 @@ const started = requests.find(r => r.path === '/api/workflows/auto');
 assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false, `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
+// The receipt's notices are shown one per line, as `orbit run auto` prints them.
+assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
 const backToReview = completionOption('review');
 backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
 assert(completionOption('review').checked, 'completion returns to review');

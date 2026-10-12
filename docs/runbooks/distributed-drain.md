@@ -1626,8 +1626,9 @@ tooltip gives the verdict, reason and sample age.
   MCP `orbit.workflow.auto` status carries
   `capacity.resource_throttle`; `orbit.workflow.run.show` carries the drain's
   `drain_last_pass`.
-- `orbit run auto`, MCP `orbit.workflow.auto` start, and `orbit run ship` with
-  named tasks proceed and print a warning. The drain admits nothing until the
+- `orbit run auto`, MCP `orbit.workflow.auto` start, the dashboard's drain
+  start, and a ship of named tasks (`orbit run ship`, MCP
+  `orbit.workflow.ship`, the dashboard's ship) proceed and report a warning. The drain admits nothing until the
   pressure clears; a named ship starts at once.
 - CPU-light work keeps moving under CPU pressure. When CPU is the only held
   resource, a local drain still starts `no-diff-expected` auto-task leaves

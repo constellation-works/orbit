@@ -1,6 +1,6 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
-use crate::application::job::DrainWorkerLimitRequest;
+use crate::application::job::{DrainWorkerLimitRequest, SubmissionKind};
 use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
@@ -105,31 +105,9 @@ pub(in crate::adapter::tool_host) fn control(
             )?;
             let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
                 "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
-            // [ORB-13901] The drain starts and holds its own waves while the
-            // host is throttled; the caller learns why it admits nothing.
-            let mut warnings = Vec::new();
-            if let Some(throttle) = runtime.admission_resource_throttle().throttle {
-                warnings.push(throttle.hold_reason());
-                started["resource_throttle"] = json!(throttle);
-            }
-            // [ORB-13987] The drain starts either way; the caller learns that
-            // required validation may not find the user's toolchain.
-            if let Some(warning) = runtime.validation_env_preflight_warning() {
-                started["validation_env_warning"] = json!(warning);
-                warnings.push(warning);
-            }
-            // Backlog this host's OS cannot start waits for a host of its
-            // own; named so the window does not read as an empty backlog.
-            if let Some(warning) = runtime.host_os_backlog_warning() {
-                warnings.push(warning);
-            }
-            if !warnings.is_empty() {
-                started["warning"] = json!(warnings.join("\n"));
-            }
-            // Informational, not a refusal: an empty list is no required check.
-            if let Some(note) = runtime.required_validation_note() {
-                started["note"] = json!(note);
-            }
+            runtime
+                .submission_notices(SubmissionKind::Drain)
+                .insert_into(&mut started);
             started
         }
         "stop" => {
@@ -183,12 +161,9 @@ pub(in crate::adapter::tool_host) fn control(
                     unstopped.join("; ")
                 )));
             }
-            let coordinators = stopped.coordinators.iter().map(|change| json!({
-                "run_id":change.run_id,"outcome":change.outcome,
-                "remaining_children":change.remaining_children.iter().map(|child| json!({"run_id":child.run_id,"phase":child.phase})).collect::<Vec<_>>(),
-                "forced_runs":change.forced_runs,
-            })).collect::<Vec<_>>();
-            json!({"action":"stop","outcome":stopped.outcome,"coordinators":coordinators,"pull_settlements":stopped.pull_settlements})
+            let mut result = stopped.to_json();
+            result["action"] = json!("stop");
+            result
         }
         "resize" => resize(runtime, &input, claim.as_deref(), actor)?,
         _ => {

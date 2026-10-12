@@ -8,7 +8,7 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::job::{DrainAdmissionsStopRequest, DrainAdmissionsStopResult};
+use orbit_core::application::job::{DrainAdmissionsStopRequest, SubmissionKind};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
@@ -45,8 +45,9 @@ pub(in crate::api) struct ShipBody {
 /// Submit a `ship` workflow run (`POST /workflows/ship?workspace=<id>`).
 ///
 /// One-shot: responds as soon as the run is persisted, with the same
-/// `queued`/`submitted` states the CLI reports. Callers poll
-/// `GET /runs/:id` for progress.
+/// `queued`/`submitted` states the CLI reports, and the same submission
+/// notices (`warning`, `validation_env_warning`) `orbit run ship` and
+/// `orbit.workflow.ship` report. Callers poll `GET /runs/:id` for progress.
 ///
 /// An omitted `mode` resolves to the selected workspace's own ship mode
 /// (ORB-10444), so the dashboard's one-click Ship needs no PR/local toggle;
@@ -71,7 +72,7 @@ pub(in crate::api) async fn ship_workflow_action(
         None => workspace_default_ship_mode(&runtime),
     };
     match blocking("ship workflow", move || {
-        runtime.submit_ship_run(
+        let invoke = runtime.submit_ship_run(
             mode,
             body.base.as_deref(),
             &body.task_ids,
@@ -83,18 +84,24 @@ pub(in crate::api) async fn ship_workflow_action(
             Some("dashboard"),
             body.claim_token.as_deref(),
             JobRunTrigger::dashboard(),
-        )
-    })
-    .await
-    {
-        Ok(invoke) => Json(json!({
+        )?;
+        let mut shipped = json!({
             "workflow": "ship",
             "job_id": invoke.job_name,
             "run_id": invoke.run_id,
             "state": if invoke.queued { "queued" } else { "submitted" },
             "submitted_at": invoke.submitted_at,
-        }))
-        .into_response(),
+        });
+        runtime
+            .submission_notices(SubmissionKind::Ship {
+                explicit: !body.task_ids.is_empty(),
+            })
+            .insert_into(&mut shipped);
+        Ok(shipped)
+    })
+    .await
+    {
+        Ok(shipped) => Json(shipped).into_response(),
         Err(response) => *response,
     }
 }
@@ -176,6 +183,9 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// (CLI `--approve-proposed`) is likewise explicit and operator-gated: it lets
 /// the window approve qualifying proposed tasks, including ones filed after
 /// submission. A non-boolean value fails body parsing like any other bad field.
+/// The receipt carries the drain's submission notices (`warning`, `note`,
+/// `resource_throttle`, `validation_env_warning`) as `orbit.workflow.auto`
+/// does.
 pub(in crate::api) async fn auto_drain_workflow_action(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
@@ -207,7 +217,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
         return authorization_denied(denial);
     }
     match blocking("auto-drain workflow", move || {
-        runtime.submit_workspace_auto_run_with_containment(
+        let invoke = runtime.submit_workspace_auto_run_with_containment(
             Some(for_seconds),
             body.concurrency,
             completion,
@@ -221,11 +231,8 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             // Strict worker containment is a CLI-only flag.
             false,
             approve_proposed,
-        )
-    })
-    .await
-    {
-        Ok(invoke) => Json(json!({
+        )?;
+        let mut started = json!({
             "workflow": "auto",
             "job_id": invoke.job_name,
             "run_id": invoke.run_id,
@@ -233,8 +240,15 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             "submitted_at": invoke.submitted_at,
             "completion": completion.as_input_value(),
             "approve_proposed": approve_proposed,
-        }))
-        .into_response(),
+        });
+        runtime
+            .submission_notices(SubmissionKind::Drain)
+            .insert_into(&mut started);
+        Ok(started)
+    })
+    .await
+    {
+        Ok(started) => Json(started).into_response(),
         Err(response) => *response,
     }
 }
@@ -290,41 +304,13 @@ pub(in crate::api) async fn auto_drain_stop_action(
     })
     .await
     {
-        Ok(result) => Json(auto_drain_stop_to_json(&result)).into_response(),
+        Ok(result) => {
+            let mut stopped = result.to_json();
+            stopped["workflow"] = json!("auto");
+            Json(stopped).into_response()
+        }
         Err(response) => *response,
     }
-}
-
-/// The stop outcome the CLI prints, projected for the pane: the workspace
-/// outcome plus one entry per coordinator naming what changed and which
-/// children are still in flight under it.
-fn auto_drain_stop_to_json(result: &DrainAdmissionsStopResult) -> Value {
-    json!({
-        "workflow": "auto",
-        "outcome": result.outcome,
-        // [ORB-13663] The stop's settle-only pass: pull settlements delivered
-        // and cancelled drains' unlaunched claims ended.
-        "pull_settlements": result.pull_settlements,
-        "coordinators": result
-            .coordinators
-            .iter()
-            .map(|change| json!({
-                "run_id": change.run_id,
-                "job_id": change.job_id,
-                "outcome": change.outcome,
-                "remaining_children": change
-                    .remaining_children
-                    .iter()
-                    .map(|child| json!({
-                        "run_id": child.run_id,
-                        "job_name": child.job_name,
-                        "phase": child.phase,
-                        "child_status": child.child_status,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
-            .collect::<Vec<_>>(),
-    })
 }
 
 #[derive(serde::Deserialize, Default)]

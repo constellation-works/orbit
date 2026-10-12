@@ -132,7 +132,7 @@ pub(crate) fn dispatch_workflow(
     Ok(results)
 }
 
-/// [ORB-14777] Warn once on stderr, at a drain, ship or job start, naming each
+/// [ORB-14777] Warn once on stderr, at a job start, naming each
 /// `execution.env.pass` variable this environment does not hold. Agents the
 /// run starts inherit this environment, so a missing worker token otherwise
 /// falls back to another login without a sign. Names only, never values; the
@@ -151,26 +151,16 @@ pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
 ) -> CommandOut {
-    workflow_dispatch_payload_with_warning(workflow_alias, runs, Vec::new())
+    workflow_dispatch_payload_with_notices(workflow_alias, runs, Vec::new(), Vec::new())
 }
 
-/// [`workflow_dispatch_payload`] with the admission warnings the submission
-/// proceeded past, such as a host resource throttle [ORB-13901] or a
-/// validation environment that may not find the user's toolchain
-/// [ORB-13987]. The warnings are `.warning` in JSON (one per line) and one
-/// `Warning:` line each in text; the exit code is unchanged.
-pub(crate) fn workflow_dispatch_payload_with_warning(
-    workflow_alias: &'static str,
-    runs: &[WorkflowDispatchResult],
-    warnings: Vec<String>,
-) -> CommandOut {
-    workflow_dispatch_payload_with_notices(workflow_alias, runs, warnings, Vec::new())
-}
-
-/// [`workflow_dispatch_payload_with_warning`] plus informational notes about
-/// how the submission is configured, such as running no required validation.
-/// Notes are `.note` in JSON (one per line) and one `Note:` line each in
-/// text; they never change the exit code.
+/// [`workflow_dispatch_payload`] with a submission's notices: the admission
+/// warnings it proceeded past, such as a host resource throttle [ORB-13901]
+/// or a validation environment that may not find the user's toolchain
+/// [ORB-13987], and informational notes about how it is configured, such as
+/// running no required validation. Warnings are `.warning` in JSON (one per
+/// line) and one `Warning:` line each in text; notes are `.note` and `Note:`
+/// lines. Neither changes the exit code.
 pub(crate) fn workflow_dispatch_payload_with_notices(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],

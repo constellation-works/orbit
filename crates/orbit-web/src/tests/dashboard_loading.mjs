@@ -534,8 +534,11 @@ for (const origin of ['detail', 'row']) {
   shipFixture.status = 'in-progress';
   shipFixture.job_run_id = `jrun-${origin}-retry`;
   shipLive = true;
-  pendingShips.shift()(response({ run_id: shipFixture.job_run_id, state: 'submitted' }));
+  pendingShips.shift()(response({ run_id: shipFixture.job_run_id, state: 'submitted', warning: 'Admissions throttled: cpu 97%. Running work is not touched.' }));
   await settle();
+  // The ship receipt's warning is shown with the run it started.
+  const notice = document.querySelector('.task-action-notice')?.textContent || '';
+  check(notice === `${shipFixture.id}: ship run ${shipFixture.job_run_id} submitted\nWarning: Admissions throttled: cpu 97%. Running work is not touched.`, `${origin}: the ship warning follows the run: ${notice}`);
 }
 shipFixture = null;
 shipLive = false;

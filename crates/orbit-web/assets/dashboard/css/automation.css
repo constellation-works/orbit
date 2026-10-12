@@ -13,6 +13,7 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
 .operation-feedback {
   min-height: 30px; padding: 7px 14px; border-bottom: 1px solid var(--border);
   color: var(--fg-dim); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 .operation-feedback:empty { display: none; }
 .operation-feedback.pending { color: var(--priority-medium); }

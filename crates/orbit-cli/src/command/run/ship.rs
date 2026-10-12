@@ -1,11 +1,12 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
+use orbit_core::application::job::SubmissionKind;
 use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
 
 use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_warning};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
 
 const SHIP_WORKFLOW: &str = "ship";
 
@@ -102,7 +103,6 @@ impl Execute for ShipCommand {
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
         )?;
-        super::support::warn_unset_env_pass(runtime);
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,
             job_id: invoke.job_name,
@@ -117,17 +117,15 @@ impl Execute for ShipCommand {
             error_code: None,
             error_message: None,
         };
-        // [ORB-13901] Discovery is refused while throttled; an explicit
-        // selection proceeds and is warned.
-        let mut warnings: Vec<String> = if self.task_ids.is_empty() {
-            Vec::new()
-        } else {
-            super::auto::resource_throttle_warning(runtime)
-                .into_iter()
-                .collect()
-        };
-        warnings.extend(runtime.validation_env_preflight_warning());
-        workflow_dispatch_payload_with_warning(SHIP_WORKFLOW, &[run], warnings)
+        let notices = runtime.submission_notices(SubmissionKind::Ship {
+            explicit: !self.task_ids.is_empty(),
+        });
+        workflow_dispatch_payload_with_notices(
+            SHIP_WORKFLOW,
+            &[run],
+            notices.warnings(),
+            notices.notes(),
+        )
     }
 }
 
