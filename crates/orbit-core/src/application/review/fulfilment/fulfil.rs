@@ -396,15 +396,12 @@ pub(crate) fn fulfil_review_evidence(
     input: &Value,
     run_id: Option<&str>,
 ) -> Result<Value, DispatchError> {
-    let failed = |message: String| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message,
-    };
-    let run_id =
-        run_id.ok_or_else(|| failed("a fulfilment step must run inside a pipeline run".into()))?;
+    let run_id = run_id.ok_or_else(|| {
+        DispatchError::action_failed(action, "a fulfilment step must run inside a pipeline run")
+    })?;
     runtime
         .fulfil_review_evidence(input, run_id)
-        .map_err(|error| failed(error.to_string()))
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))
 }
 
 /// Admit `requirement`'s command or refuse it with a typed reason. Nothing

@@ -293,6 +293,14 @@ pub enum DispatchError {
 }
 
 impl DispatchError {
+    /// A [`DispatchError::DeterministicActionFailed`] for `action`.
+    pub fn action_failed(action: &str, message: impl Into<String>) -> Self {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: message.into(),
+        }
+    }
+
     /// Whether this error should bypass the retry wrapper. Tool denials,
     /// unknown deterministic actions, validation errors, and permanent CLI
     /// invocation failures are non-retryable (§4.3: "Non-retryable errors —

@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
 use super::VALIDATION_TOOL_WARNINGS;
-use super::input::{action_failed, required_string, required_string_array, string_array_value};
+use super::input::{required_string, required_string_array, string_array_value};
 use super::source::{GitPathKind, SourceSnapshot};
 
 pub(super) struct ValidatedSelectors {
@@ -34,7 +34,7 @@ pub(super) fn validate_after_selectors(
 ) -> Result<ValidatedSelectors, DispatchError> {
     if selectors.is_empty() {
         if !matches!(disposition, "verified_no_diff" | "host_operational") {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!(
                     "task {task_id} may keep empty context_files only with verified_no_diff or host_operational disposition"
@@ -48,7 +48,7 @@ pub(super) fn validate_after_selectors(
         });
     }
     if disposition != "selectors" {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "task {task_id} has non-empty context_files_after but disposition is {disposition}"
@@ -69,7 +69,7 @@ pub(super) fn validate_after_selectors(
             trimmed.to_string()
         } else {
             if trimmed.contains(':') {
-                return Err(action_failed(
+                return Err(DispatchError::action_failed(
                     action,
                     format!(
                         "task {task_id} bare selector {selector:?} is ambiguous because it contains ':'"
@@ -77,7 +77,7 @@ pub(super) fn validate_after_selectors(
                 ));
             }
             let source = source.ok_or_else(|| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     format!(
                         "task {task_id} selector {selector:?} must use file:, dir:, or symbol: when no pinned source is available"
@@ -86,13 +86,13 @@ pub(super) fn validate_after_selectors(
             })?;
             let path_candidate =
                 canonical_selector(&format!("file:{trimmed}")).map_err(|error| {
-                    action_failed(
+                    DispatchError::action_failed(
                         action,
                         format!("task {task_id} bare selector {selector:?} is invalid: {error}"),
                     )
                 })?;
             let anchor = anchor_path(&path_candidate).map_err(|error| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     format!("task {task_id} bare selector {selector:?} is invalid: {error}"),
                 )
@@ -101,9 +101,9 @@ pub(super) fn validate_after_selectors(
             let normalized = match kind {
                 GitPathKind::Blob => path_candidate,
                 GitPathKind::Tree => canonical_selector(&format!("dir:{trimmed}"))
-                    .map_err(|error| action_failed(action, error.to_string()))?,
+                    .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
                 GitPathKind::Missing => {
-                    return Err(action_failed(
+                    return Err(DispatchError::action_failed(
                         action,
                         format!(
                             "task {task_id} bare selector {selector:?} does not resolve at pinned source revision {}",
@@ -112,7 +112,7 @@ pub(super) fn validate_after_selectors(
                     ));
                 }
                 GitPathKind::Other => {
-                    return Err(action_failed(
+                    return Err(DispatchError::action_failed(
                         action,
                         format!(
                             "task {task_id} bare selector {selector:?} has an unsupported or ambiguous kind at pinned source revision {}",
@@ -136,13 +136,13 @@ pub(super) fn validate_after_selectors(
             canonical_selector_in_workspace(&candidate, workspace_root)
         }
         .map_err(|error| {
-            action_failed(
+            DispatchError::action_failed(
                 action,
                 format!("task {task_id} selector {selector:?} is invalid: {error}"),
             )
         })?;
         if has_kind && canonical != trimmed {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!(
                     "task {task_id} selector {selector:?} is not canonical; expected {canonical:?}"
@@ -164,7 +164,7 @@ pub(super) fn validate_after_selectors(
             )?;
         } else if !exists_in_workspace(&canonical, workspace_root) {
             if !authorized {
-                return Err(action_failed(
+                return Err(DispatchError::action_failed(
                     action,
                     format!(
                         "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target{}",
@@ -176,7 +176,7 @@ pub(super) fn validate_after_selectors(
             validate_selector_target_kind(action, task_id, &canonical, workspace_root)?;
         }
         if !seen.insert(canonical) {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("task {task_id} repeats selector {selector:?}"),
             ));
@@ -260,7 +260,7 @@ pub(super) fn validate_recommendations(
     required_string(assessment, "recommended_crew", action)?;
     let complexity = required_string(assessment, "recommended_complexity", action)?;
     let complexity = complexity.parse::<TaskComplexity>().map_err(|_| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!(
                 "task {task_id} recommended_complexity must be low, medium, hard, xhard, or \
@@ -272,7 +272,7 @@ pub(super) fn validate_recommendations(
     required_string(assessment, "validation_approach", action)?;
     let confidence = required_string(assessment, "confidence", action)?;
     if !matches!(confidence, "high" | "medium" | "low") {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("task {task_id} confidence must be high, medium, or low"),
         ));
@@ -280,13 +280,13 @@ pub(super) fn validate_recommendations(
     let evidence_gaps = required_string_array(assessment, "evidence_gaps", action)?;
     required_string_array(assessment, "reassessment_triggers", action)?;
     if complexity == TaskComplexity::Unassessed && evidence_gaps.is_empty() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("task {task_id} unassessed complexity requires actionable evidence_gaps"),
         ));
     }
     if complexity.is_assessed() && !evidence_gaps.is_empty() && confidence == "high" {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("task {task_id} with high confidence must not have evidence_gaps"),
         ));
@@ -299,7 +299,7 @@ pub(super) fn validate_recommendations(
     ] {
         string_array_value(
             assessment.get(field).ok_or_else(|| {
-                action_failed(action, format!("task {task_id} is missing {field}"))
+                DispatchError::action_failed(action, format!("task {task_id} is missing {field}"))
             })?,
             field,
             action,
@@ -307,7 +307,7 @@ pub(super) fn validate_recommendations(
     }
     for field in ["duplicate_of", "already_landed"] {
         if assessment.get(field).is_none() {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("task {task_id} is missing {field} recommendation"),
             ));
@@ -348,8 +348,9 @@ pub(super) fn required_os(
     else {
         return Ok(Vec::new());
     };
-    let invalid =
-        |detail: &str| action_failed(action, format!("task {task_id} required_os {detail}"));
+    let invalid = |detail: &str| {
+        DispatchError::action_failed(action, format!("task {task_id} required_os {detail}"))
+    };
     let mut requirements = Vec::new();
     for entry in entries
         .as_array()
@@ -413,8 +414,9 @@ pub(super) fn required_machine(
     else {
         return Ok(None);
     };
-    let invalid =
-        |detail: &str| action_failed(action, format!("task {task_id} required_machine {detail}"));
+    let invalid = |detail: &str| {
+        DispatchError::action_failed(action, format!("task {task_id} required_machine {detail}"))
+    };
     let entries = entries
         .as_array()
         .ok_or_else(|| invalid("must be an array or null"))?;
@@ -490,7 +492,7 @@ fn validate_optional_finding(
         return Ok(());
     }
     let object = value.as_object().ok_or_else(|| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!("task {task_id} {field} must be an object or null"),
         )
@@ -502,7 +504,7 @@ fn validate_optional_finding(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     format!("task {task_id} {field}.{required} must be a non-empty string"),
                 )
@@ -632,7 +634,7 @@ fn validate_selector_at_source(
     authorized_creation: bool,
 ) -> Result<(), DispatchError> {
     let anchor = anchor_path(selector).map_err(|error| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!("task {task_id} selector {selector:?} has no filesystem anchor: {error}"),
         )
@@ -642,7 +644,7 @@ fn validate_selector_at_source(
     match (kind, expected_dir) {
         (GitPathKind::Tree, true) | (GitPathKind::Blob, false) => Ok(()),
         (GitPathKind::Missing, _) if authorized_creation => Ok(()),
-        (GitPathKind::Missing, _) => Err(action_failed(
+        (GitPathKind::Missing, _) => Err(DispatchError::action_failed(
             action,
             format!(
                 "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target at source revision {} ({}){}",
@@ -651,7 +653,7 @@ fn validate_selector_at_source(
                 reauthorization_hint(selector)
             ),
         )),
-        _ => Err(action_failed(
+        _ => Err(DispatchError::action_failed(
             action,
             format!(
                 "task {task_id} selector {selector:?} does not match the target's file/directory kind at source revision {} ({})",
@@ -668,7 +670,7 @@ fn validate_selector_target_kind(
     workspace_root: &Path,
 ) -> Result<(), DispatchError> {
     let anchor = anchor_path(selector).map_err(|error| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!("task {task_id} selector {selector:?} has no filesystem anchor: {error}"),
         )
@@ -682,7 +684,7 @@ fn validate_selector_target_kind(
     if correct_kind {
         Ok(())
     } else {
-        Err(action_failed(
+        Err(DispatchError::action_failed(
             action,
             format!(
                 "task {task_id} selector {selector:?} does not match the target's file/directory kind"

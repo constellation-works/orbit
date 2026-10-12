@@ -21,7 +21,6 @@ use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
 };
 use crate::runtime::task::locks::lock_context_files_for_task;
 
-use super::action_failed;
 use super::drains::{
     DEFAULT_MAX_ACTIVE_LEAF_RUNS, live_admissions_stop, live_leaf_runs, live_worker_limit,
 };
@@ -72,7 +71,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     runtime
         .record_backlog_pilot_operator_handoffs()
         .map_err(|error| {
-            action_failed(action, format!("record pilot operator handoffs: {error}"))
+            DispatchError::action_failed(action, format!("record pilot operator handoffs: {error}"))
         })?;
 
     let submitted_max_active_leaf_runs = templated_u64(
@@ -145,7 +144,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
             || jobs.drain_leaf_occupancy(),
             |id| jobs.drain_leaf_occupancy_for_run(id),
         )
-        .map_err(|error| action_failed(action, format!("read shared leaf occupancy: {error}")))?;
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("read shared leaf occupancy: {error}"))
+        })?;
     // Between iterations nothing of this drain is in flight in-process: a
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
@@ -160,7 +161,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
 
     let pools = runtime
         .auto_crew_pools_for_input(input)
-        .map_err(|error| action_failed(action, error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let allowlist = allowlist_from_input(runtime, action, input)?;
     // The same snapshot readiness reads, so the two cannot disagree about the
     // eligible population before they even reach the selection rule.
@@ -414,7 +415,7 @@ fn admit_through_section(
         .tasks()
         .admit_owner_wave(&candidates)
         .map_err(|error| {
-            action_failed(
+            DispatchError::action_failed(
                 action,
                 format!("admit the wave through the admission section: {error}"),
             )
@@ -474,19 +475,22 @@ pub(super) fn templated_u64(
     };
     match raw {
         Value::Null => Ok(default),
-        Value::Number(number) => number
-            .as_u64()
-            .ok_or_else(|| action_failed(action, format!("`{name}` must be a whole number"))),
+        Value::Number(number) => number.as_u64().ok_or_else(|| {
+            DispatchError::action_failed(action, format!("`{name}` must be a whole number"))
+        }),
         Value::String(text) => {
             let text = text.trim();
             if text.is_empty() {
                 return Ok(default);
             }
             text.parse::<u64>().map_err(|err| {
-                action_failed(action, format!("`{name}` '{text}' is not a number: {err}"))
+                DispatchError::action_failed(
+                    action,
+                    format!("`{name}` '{text}' is not a number: {err}"),
+                )
             })
         }
-        other => Err(action_failed(
+        other => Err(DispatchError::action_failed(
             action,
             format!("`{name}` must be a number, got {other}"),
         )),

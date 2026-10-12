@@ -20,8 +20,6 @@ use crate::runtime::audit::system::{
 };
 use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
-use super::action_failed;
-
 /// The gate's post-wait step. Runs on every gate run so later steps may read
 /// its output: a reserved window is `{deferred: false}`; an expired one is
 /// audited as `gate.starvation` and returned as the deferral `invoke_and_wait`
@@ -147,8 +145,9 @@ fn blocking_lock_holders(
     if reservations.is_empty() {
         return Ok(blocking);
     }
-    let workspace_id = workspace_task_reservation_id(runtime)
-        .map_err(|err| action_failed(action, format!("resolve reservation workspace: {err}")))?;
+    let workspace_id = workspace_task_reservation_id(runtime).map_err(|err| {
+        DispatchError::action_failed(action, format!("resolve reservation workspace: {err}"))
+    })?;
     for reservation_id in reservations {
         let reservation = runtime
             .stores()
@@ -159,7 +158,10 @@ fn blocking_lock_holders(
                 &reservation_id,
             )
             .map_err(|err| {
-                action_failed(action, format!("read reservation {reservation_id}: {err}"))
+                DispatchError::action_failed(
+                    action,
+                    format!("read reservation {reservation_id}: {err}"),
+                )
             })?;
         if let Some(reservation) = reservation {
             blocking.extend(reservation.task_ids);
@@ -186,7 +188,7 @@ fn record_starvation(
     let mut payload = deferral.clone();
     payload["outcome"] = json!("deferred");
     let arguments_json = serde_json::to_string(&payload).map_err(|err| {
-        action_failed(action, format!("serialize gate.starvation payload: {err}"))
+        DispatchError::action_failed(action, format!("serialize gate.starvation payload: {err}"))
     })?;
     let task_id = task_ids.first().map(String::as_str);
     record_system_audit_event(
@@ -206,5 +208,7 @@ fn record_starvation(
             attribution: AuditRunAttribution::Run(parent_run_id),
         },
     )
-    .map_err(|err| action_failed(action, format!("record gate.starvation audit: {err}")))
+    .map_err(|err| {
+        DispatchError::action_failed(action, format!("record gate.starvation audit: {err}"))
+    })
 }

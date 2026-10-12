@@ -86,10 +86,10 @@ pub(in crate::adapter::engine_host::v2_host) fn footprint_waits<'a>(
         let wait = match pilots.prepares_until(task).filter(|until| *until > now) {
             Some(until) => {
                 let assessed = runtime.task_pilot_assessed(&task.id).map_err(|error| {
-                    DispatchError::DeterministicActionFailed {
-                        action: action.to_string(),
-                        message: format!("read task-pilot assessment of {}: {error}", task.id),
-                    }
+                    DispatchError::action_failed(
+                        action,
+                        format!("read task-pilot assessment of {}: {error}", task.id),
+                    )
                 })?;
                 if assessed {
                     FootprintWait::Exclusive

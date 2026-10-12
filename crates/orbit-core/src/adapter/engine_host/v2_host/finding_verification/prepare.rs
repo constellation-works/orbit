@@ -13,9 +13,7 @@ use crate::application::task::{
     TaskListFilter, VERIFIABLE_STATUSES, is_review_finding, needs_verification,
 };
 
-use super::super::task_pilot::input::{
-    action_failed, bounded_usize, requested_workspace_root, string_array,
-};
+use super::super::task_pilot::input::{bounded_usize, requested_workspace_root, string_array};
 use super::super::task_pilot::source::resolve_source_snapshot;
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -29,14 +27,14 @@ pub(in super::super) fn prepare(
     input: &Value,
     run_id: Option<&str>,
 ) -> Result<Value, DispatchError> {
-    let failed = |error: OrbitError| action_failed(action, error.to_string());
+    let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
     let workspace_root = requested_workspace_root(runtime, action, input)?;
     let claim = crate::application::automation::members::claim(runtime, input).map_err(failed)?;
     // Verdicts cite `path:line` at one revision, so there is nothing to
     // verify against outside a Git work tree.
     let source =
         resolve_source_snapshot(runtime, action, input, &workspace_root)?.ok_or_else(|| {
-            action_failed(
+            DispatchError::action_failed(
                 action,
                 "finding verification pins a Git revision; the workspace is not a Git work tree",
             )
@@ -45,7 +43,7 @@ pub(in super::super) fn prepare(
         && (source.source_revision != claim.member.source.commit
             || input.get("task_ids") != Some(&json!(claim.task_ids())))
     {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "state-trigger source or task membership changed",
         ));
@@ -67,7 +65,7 @@ pub(in super::super) fn prepare(
     let explicit_task_ids = string_array(input, "task_ids", action)?;
     let explicit = !explicit_task_ids.is_empty();
     if explicit_task_ids.len() > max_tasks {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "explicit selection names {} tasks, exceeding max_tasks {max_tasks}",
@@ -93,17 +91,20 @@ pub(in super::super) fn prepare(
             .iter()
             .map(|task_id| {
                 if !seen.insert(task_id.as_str()) {
-                    return Err(action_failed(
+                    return Err(DispatchError::action_failed(
                         action,
                         format!("explicit task_ids contains duplicate {task_id}"),
                     ));
                 }
-                runtime.get_task(task_id).map_err(|error| match error {
-                    OrbitError::NotFound { .. } => action_failed(
-                        action,
-                        format!("task {task_id} does not exist in the selected workspace"),
-                    ),
-                    error => failed(error),
+                runtime.get_task(task_id).map_err(|error| {
+                    if matches!(error, OrbitError::NotFound { .. }) {
+                        DispatchError::action_failed(
+                            action,
+                            format!("task {task_id} does not exist in the selected workspace"),
+                        )
+                    } else {
+                        failed(error)
+                    }
                 })
             })
             .collect::<Result<Vec<_>, _>>()?

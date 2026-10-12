@@ -71,22 +71,18 @@ pub(crate) fn run_deterministic(
             | CoreDeterministicAction::ApplyFindingVerification
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
-        let claim = crate::application::automation::members::claim(runtime, claim_input).map_err(
-            |error| DispatchError::DeterministicActionFailed {
-                action: action.into(),
-                message: error.to_string(),
-            },
-        )?;
+        let claim = crate::application::automation::members::claim(runtime, claim_input)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if let Some(claim) = claim {
             let owner = tool_context
                 .reservation_owner
                 .as_ref()
                 .map(|owner| owner.owner_run_id.as_str());
             if owner.is_none() || owner != claim.action_id.as_deref() {
-                return Err(DispatchError::DeterministicActionFailed {
-                    action: action.into(),
-                    message: "state claim belongs to another run".into(),
-                });
+                return Err(DispatchError::action_failed(
+                    action,
+                    "state claim belongs to another run",
+                ));
             }
         }
     }
@@ -107,9 +103,11 @@ pub(crate) fn run_deterministic(
                 .get("tool_name")
                 .or_else(|| config.get("tool_name"))
                 .and_then(Value::as_str)
-                .ok_or_else(|| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: "missing `tool_name` in config or input".to_string(),
+                .ok_or_else(|| {
+                    DispatchError::action_failed(
+                        action,
+                        "missing `tool_name` in config or input".to_string(),
+                    )
                 })?;
             let args = input
                 .get("args")
@@ -119,10 +117,7 @@ pub(crate) fn run_deterministic(
 
             runtime
                 .run_tool_with_context_and_role(tool_name, args, Role::Admin, tool_context)
-                .map_err(|err| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("{err}"),
-                })
+                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
         }
         // Retired Phase 4 stubs. These used to return structured skipped
         // success, which made unavailable git/API behavior look like a
@@ -138,52 +133,38 @@ pub(crate) fn run_deterministic(
                 .get("source_branch")
                 .and_then(Value::as_str)
                 .unwrap_or("agent-main");
-            Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!(
+            Err(DispatchError::action_failed(
+                action,
+                format!(
                     "deterministic action `promote_agent_main` is a retired stub; refusing to report promotion from `{source}` to `{target}` as skipped success. Use shipped `git_merge` plus `git_push`, or the `pr_open` workflow, for supported v2 git flow."
                 ),
-            })
+            ))
         }
         CoreDeterministicAction::RevertOnRed => {
             let sha = input
                 .get("commit_sha")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!(
+            Err(DispatchError::action_failed(
+                action,
+                format!(
                     "deterministic action `revert_on_red` is a retired stub; no automatic revert implementation ships today, so commit `{sha}` was not reverted. Use an explicit git revert/manual incident task or add a real deterministic action before wiring this workflow."
                 ),
-            })
+            ))
         }
         CoreDeterministicAction::ContextConflictCheck => {
-            let task_ids = parse_task_ids(input).map_err(|error| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                }
-            })?;
-            let index = TaskLockIndex::load(runtime, &task_ids).map_err(|error| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                }
-            })?;
+            let task_ids = parse_task_ids(input)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+            let index = TaskLockIndex::load(runtime, &task_ids)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             let repo_root = runtime.paths().repo_root.as_path();
             let requested_files = requested_task_files_indexed(&index, &task_ids, repo_root)
-                .map_err(|error| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                })?;
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             let task_conflicts =
                 task_lock_conflicts_indexed(&index, &task_ids, &requested_files, repo_root);
             runtime
                 .reconcile_stale_owned_reservations_for_files(&requested_files, 32)
-                .map_err(|error| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                })?;
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             let reservation_check = runtime
                 .stores()
                 .task_reservations()
@@ -191,23 +172,14 @@ pub(crate) fn run_deterministic(
                     orbit_store::contracts::TaskReservationCheckParams {
                         workspace_orbit_dir: workspace_orbit_dir(runtime),
                         workspace_id: workspace_task_reservation_id(runtime).map_err(|error| {
-                            DispatchError::DeterministicActionFailed {
-                                action: action.to_string(),
-                                message: error.to_string(),
-                            }
+                            DispatchError::action_failed(action, error.to_string())
                         })?,
                         requested_files,
                     },
                 )
-                .map_err(|error| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                })?;
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             emit_expired_reservation_events(runtime, &reservation_check.expired_reservations)
-                .map_err(|error| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                })?;
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             let conflicts = merge_task_lock_conflicts(task_conflicts, reservation_check.conflicts);
             Ok(serde_json::json!({
                 "clear": conflicts.is_empty(),
@@ -218,15 +190,14 @@ pub(crate) fn run_deterministic(
             let seconds = input
                 .get("seconds")
                 .and_then(Value::as_f64)
-                .ok_or_else(|| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: "missing `seconds`".to_string(),
+                .ok_or_else(|| {
+                    DispatchError::action_failed(action, "missing `seconds`".to_string())
                 })?;
             if !(0.0..=3600.0).contains(&seconds) {
-                return Err(DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: "`seconds` must be between 0 and 3600".to_string(),
-                });
+                return Err(DispatchError::action_failed(
+                    action,
+                    "`seconds` must be between 0 and 3600".to_string(),
+                ));
             }
             let started_at = Instant::now();
             std::thread::sleep(Duration::from_secs_f64(seconds));
@@ -237,12 +208,12 @@ pub(crate) fn run_deterministic(
         // The opt-in daily retention sweep: audit rows and blobs, then old
         // terminal runs' pipeline state, under the configured windows.
         CoreDeterministicAction::StoreGc => {
-            let failed = |error: OrbitError| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: error.to_string(),
-            };
-            let audit = runtime.gc_audit(true, None).map_err(failed)?;
-            let runs = runtime.gc_runs(true, None).map_err(failed)?;
+            let audit = runtime
+                .gc_audit(true, None)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+            let runs = runtime
+                .gc_runs(true, None)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             Ok(serde_json::json!({ "audit": audit, "runs": runs }))
         }
         // Turn one host-collected CI evidence snapshot into ordinary backlog
@@ -250,28 +221,16 @@ pub(crate) fn run_deterministic(
         // engine-private `collect_ci_evidence` step; this action only reads
         // that JSON and writes tasks.
         CoreDeterministicAction::FileCiFailureTasks => {
-            ci_failure_filing::file_ci_failure_tasks(runtime, input).map_err(|error| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                }
-            })
+            ci_failure_filing::file_ci_failure_tasks(runtime, input)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::ConsolidateCodeScanningTasks => {
-            dependabot_consolidate::consolidate_code_scanning_tasks(runtime, input).map_err(
-                |error| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                },
-            )
+            dependabot_consolidate::consolidate_code_scanning_tasks(runtime, input)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::FileDependabotAlertTasks => {
-            dependabot_filing::file_dependabot_alert_tasks(runtime, input).map_err(|error| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                }
-            })
+            dependabot_filing::file_dependabot_alert_tasks(runtime, input)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // The admissible work for one drain iteration [ORB-10819]: the
         // conflict-free backlog leaves this tick may start. Every candidate is
@@ -423,12 +382,8 @@ pub(crate) fn run_deterministic(
         // generic `{tool_name, args}` envelope into the activity's
         // input_schema.
         CoreDeterministicAction::ReserveLocks => {
-            let admission = dependency_admission_for_input(runtime, input).map_err(|err| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("{err}"),
-                }
-            })?;
+            let admission = dependency_admission_for_input(runtime, input)
+                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
             // Fail before the first poll: an archived/rejected/dangling
             // `blocked_by` target cannot be cleared by waiting, so returning
             // `reserved: false` here would burn the gate's whole iteration
@@ -447,10 +402,10 @@ pub(crate) fn run_deterministic(
                     None,
                     action,
                 )?;
-                return Err(DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: admission.unsatisfiable_message(),
-                });
+                return Err(DispatchError::action_failed(
+                    action,
+                    admission.unsatisfiable_message(),
+                ));
             }
             if !admission.waiting_on.is_empty() {
                 update_run_waiting_reasons(
@@ -467,17 +422,10 @@ pub(crate) fn run_deterministic(
                 }));
             }
 
-            let task_ids =
-                parse_task_ids(input).map_err(|err| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("{err}"),
-                })?;
-            let lock_index = TaskLockIndex::load(runtime, &task_ids).map_err(|err| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("{err}"),
-                }
-            })?;
+            let task_ids = parse_task_ids(input)
+                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
+            let lock_index = TaskLockIndex::load(runtime, &task_ids)
+                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
             let mut output = reserve_with_index(
                 runtime,
                 input.clone(),
@@ -487,10 +435,7 @@ pub(crate) fn run_deterministic(
                 &lock_index,
                 EmptyTaskSurfacePolicy::Admit,
             )
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{err}"),
-            })?;
+            .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
             // Always publish `waiting_on_deps` (empty here) and `conflicts`
             // (empty once reserved) so the gate pipeline's always-run
             // starvation step can reference both unconditionally, whichever
@@ -525,10 +470,7 @@ pub(crate) fn run_deterministic(
                     Role::Admin,
                     tool_context,
                 )
-                .map_err(|err| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("{err}"),
-                })
+                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
         }
         // Submit a child v2 Job and block on its terminal state.
         // Chains `orbit.pipeline.invoke` + `orbit.pipeline.wait` so
@@ -587,17 +529,15 @@ fn plugin_tool_call(
     input: &Value,
     mut tool_context: ToolContext,
 ) -> Result<Value, DispatchError> {
-    let failed = |message: String| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message,
-    };
     let tool_name = input
         .get("tool")
         .or_else(|| config.get("tool"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| failed("missing `tool` in config or input".to_string()))?
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "missing `tool` in config or input".to_string())
+        })?
         .to_string();
     let args = input
         .get("input")
@@ -606,11 +546,14 @@ fn plugin_tool_call(
         .unwrap_or_else(|| serde_json::json!({}));
 
     let Some(binding) = runtime.tool_registry().plugin_binding(&tool_name) else {
-        return Err(failed(format!(
-            "tool '{tool_name}' is not a plugin tool on this host; `plugin.tool_call` dispatches \
+        return Err(DispatchError::action_failed(
+            action,
+            format!(
+                "tool '{tool_name}' is not a plugin tool on this host; `plugin.tool_call` dispatches \
              only tools contributed by an installed plugin — check `orbit plugin list`, or use \
              `orbit_tool_call` for a built-in tool"
-        )));
+            ),
+        ));
     };
     if let ToolCaller::DeterministicStep(step) = &mut tool_context.caller {
         let plugin = binding.provenance.name.clone();
@@ -640,7 +583,7 @@ fn plugin_tool_call(
             },
         )
         .map(|outcome| outcome.value)
-        .map_err(|error| failed(error.to_string()))
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))
 }
 
 /// [ORB-11187] This activity resolves the *workspace's* shipping defaults —
@@ -662,9 +605,8 @@ fn resolve_workspace_ship_input(
         COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
         &[],
     )
-    .map_err(|error| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: format!("resolve workspace ship input: {error}"),
+    .map_err(|error| {
+        DispatchError::action_failed(action, format!("resolve workspace ship input: {error}"))
     })?;
     // build_ship_input deliberately omits base_sync for PR submissions. The
     // drain renders this output into each child, so make that default explicit
@@ -748,10 +690,6 @@ fn dependency_admission_for_input(
     })
 }
 
-// `pub(super)` (not private): the sibling `tests/dispatch.rs` unit-tests this
-// pure parsing helper directly rather than through a full lock-conflict
-// integration setup — see docs/design-patterns/test_layout.md migration
-// recipe step 6.
 fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
     output
         .get("conflicts")
@@ -767,10 +705,6 @@ fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
         .collect()
 }
 
-// `pub(super)` (not private): the sibling `tests/dispatch.rs` unit-tests this
-// writer directly for no-op, error, lock, and lost-update coverage rather
-// than only through a full `reserve_locks` setup — see
-// docs/design-patterns/test_layout.md migration recipe step 6.
 fn update_run_waiting_reasons(
     runtime: &OrbitRuntime,
     input: &Value,
@@ -794,10 +728,7 @@ fn update_run_waiting_reasons(
             Ok(())
         })
         .map(|_| ())
-        .map_err(|err| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("{err}"),
-        })
+        .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
 }
 
 fn non_empty(values: Vec<String>) -> Option<Vec<String>> {
@@ -815,8 +746,5 @@ fn reconciliation_step(
     action: &str,
     result: Result<Value, orbit_common::OrbitError>,
 ) -> Result<Value, DispatchError> {
-    result.map_err(|error| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: error.to_string(),
-    })
+    result.map_err(|error| DispatchError::action_failed(action, error.to_string()))
 }

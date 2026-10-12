@@ -9,6 +9,9 @@ use orbit_engine::DispatchError;
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
 
+use crate::adapter::engine_host::v2_host::task_pilot::input::{
+    required_string, required_string_array,
+};
 use crate::adapter::engine_host::v2_host::task_pilot::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };
@@ -33,7 +36,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
 ) -> Result<AdmissionOutcome, DispatchError> {
     let filed_task_id = required_string(filing, "task_id", action)?;
     if filed_task_id != task_id {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("CI-sweep filing names task {filed_task_id}, expected {task_id}"),
         ));
@@ -45,7 +48,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     let step = required_string(filing, "step", action)?;
     let run_urls = required_string_array(filing, "run_urls", action)?;
     if run_urls.is_empty() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("CI-sweep filing for task {task_id} has no source run URLs"),
         ));
@@ -54,7 +57,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     if !task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
         || !task.tags.iter().any(|tag| tag == &failure_tag)
     {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("task {task_id} does not match its CI-sweep filing identity"),
         ));
@@ -69,7 +72,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
         })));
     }
     if task.status != TaskStatus::Proposed {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "CI-sweep task {task_id} changed to {} before admission; refusing stale pilot output",
@@ -229,7 +232,7 @@ pub(in crate::adapter::engine_host::v2_host) fn piloted_elsewhere(
     }
     let run_ids = required_string_array(&excluded[0], "prepared_by_run_ids", action)?;
     if run_ids.iter().any(|run_id| run_id.trim().is_empty()) {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "prepared_by_run_ids must contain non-empty run IDs",
         ));
@@ -265,13 +268,13 @@ fn release_action_required<'a>(
         return Ok(None);
     };
     if !recommendation_has_evidence(finding) {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("task {task_id} release_action_required must include concrete evidence"),
         ));
     }
     if required_string(finding, "action", action).is_err() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "task {task_id} release_action_required must name the required operator action"
@@ -279,44 +282,4 @@ fn release_action_required<'a>(
         ));
     }
     Ok(Some(finding))
-}
-
-fn required_string<'a>(
-    value: &'a Value,
-    field: &str,
-    action: &str,
-) -> Result<&'a str, DispatchError> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| action_failed(action, format!("{field} must be a non-empty string")))
-}
-
-fn required_string_array(
-    value: &Value,
-    field: &str,
-    action: &str,
-) -> Result<Vec<String>, DispatchError> {
-    let values = value
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, format!("{field} must be an array")))?;
-    values
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| action_failed(action, format!("{field} must contain strings")))
-        })
-        .collect()
-}
-
-fn action_failed(action: &str, message: impl Into<String>) -> DispatchError {
-    DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: message.into(),
-    }
 }

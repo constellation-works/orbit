@@ -12,7 +12,6 @@ use orbit_types::task::NO_AUTO_APPROVE_TAG;
 use serde_json::{Value, json};
 
 use super::VALIDATION_TOOL_WARNINGS;
-use super::input::action_failed;
 
 /// Warning-shaped findings. `validation_tool_warnings` is the deterministic
 /// boundary's own finding rather than the pilot's, but it withholds promotion
@@ -47,18 +46,18 @@ pub(in crate::adapter::engine_host::v2_host) fn promotion_findings<'a>(
     task_id: &str,
     assessment: &'a Value,
 ) -> Result<PromotionFindings<'a>, DispatchError> {
-    let duplicate_of = assessment
-        .get("duplicate_of")
-        .ok_or_else(|| action_failed(action, format!("task {task_id} is missing duplicate_of")))?;
+    let duplicate_of = assessment.get("duplicate_of").ok_or_else(|| {
+        DispatchError::action_failed(action, format!("task {task_id} is missing duplicate_of"))
+    })?;
     let already_landed = assessment.get("already_landed").ok_or_else(|| {
-        action_failed(action, format!("task {task_id} is missing already_landed"))
+        DispatchError::action_failed(action, format!("task {task_id} is missing already_landed"))
     })?;
     for (field, value) in [
         ("duplicate_of", duplicate_of),
         ("already_landed", already_landed),
     ] {
         if !value.is_null() && !recommendation_has_evidence(value) {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("task {task_id} {field} finding must include concrete evidence"),
             ));

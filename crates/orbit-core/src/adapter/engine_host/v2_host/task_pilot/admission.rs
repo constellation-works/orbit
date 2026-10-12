@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF};
 
+use super::CONTEXT_CREATION_IDENTITY;
 use super::drain_promotion::{self, Approval, DrainAuthority};
-use super::{CONTEXT_CREATION_IDENTITY, action_failed};
 
 #[derive(Clone)]
 pub(super) struct PreparedTaskSnapshot {
@@ -107,7 +107,7 @@ pub(super) fn material_components(
         return Ok(None);
     }
     let Some(object) = value.as_object() else {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "prepared task material_components must be an object of component digests",
         ));
@@ -115,7 +115,7 @@ pub(super) fn material_components(
     let mut components = BTreeMap::new();
     for (key, digest) in object {
         let Some(digest) = digest.as_str() else {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("prepared task material_components.{key} must be a string digest"),
             ));
@@ -132,7 +132,7 @@ pub(super) fn context_creation_identity(
     match entry.get(CONTEXT_CREATION_IDENTITY) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(identity)) => Ok(Some(identity.clone())),
-        Some(_) => Err(action_failed(
+        Some(_) => Err(DispatchError::action_failed(
             action,
             format!("prepared task {CONTEXT_CREATION_IDENTITY} must be a string or null"),
         )),

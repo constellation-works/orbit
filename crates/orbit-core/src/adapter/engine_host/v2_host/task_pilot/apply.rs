@@ -27,9 +27,9 @@ use super::persist::{
 use super::source::SourceSnapshot;
 use super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, action_failed, member_ready,
-    normalize_evidence_gaps, requested_workspace_root, required_machine, required_os,
-    required_string, required_string_array, retained_review_evidence, review_filed, string_array,
+    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, member_ready, normalize_evidence_gaps,
+    requested_workspace_root, required_machine, required_os, required_string,
+    required_string_array, retained_review_evidence, review_filed, string_array,
     string_array_value, unauthorized_missing_targets, validate_after_selectors,
     validate_recommendations,
 };
@@ -42,16 +42,18 @@ pub(in super::super) fn apply(
     let workspace_root = requested_workspace_root(runtime, action, input)?;
     let prepared_value = input
         .get("prepared")
-        .ok_or_else(|| action_failed(action, "`prepared` must be an object"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "`prepared` must be an object"))?;
     let prepared = prepared_value
         .as_object()
-        .ok_or_else(|| action_failed(action, "`prepared` must be an object"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "`prepared` must be an object"))?;
     let prepared_workspace = prepared
         .get("workspace_path")
         .and_then(Value::as_str)
-        .ok_or_else(|| action_failed(action, "prepared.workspace_path must be a string"))?;
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "prepared.workspace_path must be a string")
+        })?;
     if Path::new(prepared_workspace) != workspace_root {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "prepared workspace {prepared_workspace} does not match active workspace {}",
@@ -62,19 +64,21 @@ pub(in super::super) fn apply(
     let mode = prepared
         .get("mode")
         .and_then(Value::as_str)
-        .ok_or_else(|| action_failed(action, "prepared.mode must be a string"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "prepared.mode must be a string"))?;
     let expected_partitions = prepared
         .get("partitions")
         .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "prepared.partitions must be an array"))?;
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "prepared.partitions must be an array")
+        })?;
     let prepared_tasks = prepared
         .get("tasks")
         .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "prepared.tasks must be an array"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "prepared.tasks must be an array"))?;
     let results = input
         .get("results")
         .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "`results` must be an array"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "`results` must be an array"))?;
     let prior_applied_count = input
         .get("prior_applied_count")
         .and_then(Value::as_u64)
@@ -82,20 +86,19 @@ pub(in super::super) fn apply(
     let mut carried_task_outcomes = input
         .get("carried_task_outcomes")
         .map(|value| {
-            value
-                .as_array()
-                .cloned()
-                .ok_or_else(|| action_failed(action, "carried_task_outcomes must be an array"))
+            value.as_array().cloned().ok_or_else(|| {
+                DispatchError::action_failed(action, "carried_task_outcomes must be an array")
+            })
         })
         .transpose()?
         .unwrap_or_default();
     let claim = crate::application::automation::members::claim(runtime, prepared_value)
-        .map_err(|error| action_failed(action, error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // The same consumer policy prepare fingerprinted under; a run without a
     // claim evaluates the default eligibility and configured freshness
     // [ORB-12745, ORB-13638].
     let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
-        .map_err(|error| action_failed(action, error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(prepared_value, action)?;
     if let Some(source) = &source {
         source.ensure_commit(action, &workspace_root)?;
@@ -106,15 +109,16 @@ pub(in super::super) fn apply(
         .map(|entry| {
             let task_id = required_string(entry, "task_id", action)?;
             let context_files = required_string_array(entry, "context_files_before", action)?;
-            let status = serde_json::from_value::<TaskStatus>(
-                entry
-                    .get("status")
-                    .cloned()
-                    .ok_or_else(|| action_failed(action, "prepared task is missing status"))?,
-            )
-            .map_err(|error| {
-                action_failed(action, format!("prepared task status is invalid: {error}"))
-            })?;
+            let status =
+                serde_json::from_value::<TaskStatus>(entry.get("status").cloned().ok_or_else(
+                    || DispatchError::action_failed(action, "prepared task is missing status"),
+                )?)
+                .map_err(|error| {
+                    DispatchError::action_failed(
+                        action,
+                        format!("prepared task status is invalid: {error}"),
+                    )
+                })?;
             let title = required_string(entry, "title", action)?.to_string();
             let tags = required_string_array(entry, "tags", action)?;
             Ok((
@@ -126,7 +130,7 @@ pub(in super::super) fn apply(
                         entry.get("complexity").cloned().unwrap_or(Value::Null),
                     )
                     .map_err(|error| {
-                        action_failed(
+                        DispatchError::action_failed(
                             action,
                             format!("prepared task complexity is invalid: {error}"),
                         )
@@ -154,7 +158,10 @@ pub(in super::super) fn apply(
                         entry.get("history_len").cloned().unwrap_or(Value::Null),
                     )
                     .map_err(|error| {
-                        action_failed(action, format!("invalid history_len: {error}"))
+                        DispatchError::action_failed(
+                            action,
+                            format!("invalid history_len: {error}"),
+                        )
                     })?,
                     context_creation_identity: context_creation_identity(entry, action)?,
                 },
@@ -162,7 +169,7 @@ pub(in super::super) fn apply(
         })
         .collect::<Result<BTreeMap<_, _>, DispatchError>>()?;
     if prepared_before.len() != prepared_tasks.len() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "prepared.tasks contains duplicate task snapshots",
         ));
@@ -181,7 +188,7 @@ pub(in super::super) fn apply(
             &prepared_before.keys().cloned().collect::<Vec<_>>(),
             &BTreeMap::new(),
         )
-        .map_err(|error| action_failed(action, error.to_string()))?,
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
         None => BTreeMap::new(),
     };
     for set_aside in ["superseded_by_source", "superseded_during_preparation"]
@@ -216,16 +223,16 @@ pub(in super::super) fn apply(
     let promotion_authorized = input
         .get("promotion_authorized")
         .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| action_failed(action, "promotion_authorized must be a boolean"))
+            value.as_bool().ok_or_else(|| {
+                DispatchError::action_failed(action, "promotion_authorized must be a boolean")
+            })
         })
         .transpose()?
         .unwrap_or(false);
     if ci_sweep_filing.is_some()
         && prepared_before.len() + usize::from(piloted_elsewhere.is_some()) != 1
     {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "CI-sweep admission requires exactly one prepared task",
         ));
@@ -235,14 +242,14 @@ pub(in super::super) fn apply(
         .filter(|value| !value.is_null());
     let authority = match (ci_sweep_filing, drain_promotion) {
         (Some(_), Some(_)) => {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 "ci_sweep_filing and drain_promotion are separate authorities; supply one",
             ));
         }
         (Some(filing), None) => PromotionAuthority::CiSweep(filing, promotion_authorized),
         (None, Some(_)) if !promotion_authorized => {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 "drain_promotion requires promotion_authorized",
             ));
@@ -261,7 +268,7 @@ pub(in super::super) fn apply(
     {
         let filed_task_id = required_string(filing, "task_id", action)?;
         if filed_task_id != prepared_task_id {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("CI-sweep filing names task {filed_task_id}, expected {prepared_task_id}"),
             ));
@@ -280,7 +287,7 @@ pub(in super::super) fn apply(
             .get("partition_index")
             .and_then(Value::as_u64)
             .ok_or_else(|| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     format!("prepared.partitions[{position}].partition_index is invalid"),
                 )
@@ -288,13 +295,13 @@ pub(in super::super) fn apply(
         let expected_ids = required_string_array(expected, "task_ids", action)?;
         for task_id in &expected_ids {
             if !seen_task_ids.insert(task_id.clone()) {
-                return Err(action_failed(
+                return Err(DispatchError::action_failed(
                     action,
                     format!("task {task_id} appears in more than one prepared partition"),
                 ));
             }
             if !prepared_before.contains_key(task_id) {
-                return Err(action_failed(
+                return Err(DispatchError::action_failed(
                     action,
                     format!("task {task_id} was not in prepared.tasks"),
                 ));
@@ -338,7 +345,7 @@ pub(in super::super) fn apply(
         };
         let result_ids = match result_object
             .get("task_ids")
-            .ok_or_else(|| action_failed(action, "`task_ids` must be an array"))
+            .ok_or_else(|| DispatchError::action_failed(action, "`task_ids` must be an array"))
             .and_then(|value| string_array_value(value, "task_ids", action))
         {
             Ok(ids) => ids,
@@ -919,7 +926,7 @@ pub(in super::super) fn apply(
     }
 
     if seen_task_ids.len() != prepared_before.len() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "prepared partitions did not cover every prepared task",
         ));

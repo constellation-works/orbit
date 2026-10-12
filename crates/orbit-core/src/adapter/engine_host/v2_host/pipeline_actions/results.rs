@@ -18,8 +18,6 @@ use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
 
-use super::action_failed;
-
 pub(in super::super) fn pipeline_success_guard(
     runtime: &OrbitRuntime,
     action: &str,
@@ -29,7 +27,10 @@ pub(in super::super) fn pipeline_success_guard(
         .get("allow_non_success")
         .map(|value| {
             value.as_bool().ok_or_else(|| {
-                action_failed(action, "`allow_non_success` must be a boolean".to_string())
+                DispatchError::action_failed(
+                    action,
+                    "`allow_non_success` must be a boolean".to_string(),
+                )
             })
         })
         .transpose()?
@@ -51,13 +52,9 @@ pub(in super::super) fn pipeline_success_guard(
     if let Some(results) = input.get("results")
         && !results.is_null()
     {
-        let results =
-            results
-                .as_array()
-                .ok_or_else(|| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: "`results` must be an array".to_string(),
-                })?;
+        let results = results.as_array().ok_or_else(|| {
+            DispatchError::action_failed(action, "`results` must be an array".to_string())
+        })?;
         entries.extend(
             results
                 .iter()
@@ -66,10 +63,10 @@ pub(in super::super) fn pipeline_success_guard(
         );
     }
     if entries.is_empty() {
-        return Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: "expected `result` or `results` to check".to_string(),
-        });
+        return Err(DispatchError::action_failed(
+            action,
+            "expected `result` or `results` to check".to_string(),
+        ));
     }
 
     let held_count = entries
@@ -105,13 +102,13 @@ pub(in super::super) fn pipeline_success_guard(
         if let (Some(parent), Some(cause)) = (parent_run_id(input), root_causes.first()) {
             runtime.record_run_root_cause(parent, cause);
         }
-        return Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: bounded_guard_text(&format!(
+        return Err(DispatchError::action_failed(
+            action,
+            bounded_guard_text(&format!(
                 "{context} did not succeed: {}",
                 failures.join("; ")
             )),
-        });
+        ));
     }
 
     Ok(serde_json::json!({
@@ -187,11 +184,15 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
     let results = input
         .get("results")
         .and_then(|value| (!value.is_null()).then_some(value))
-        .ok_or_else(|| action_failed(action, "expected `results` to record".to_string()))?
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "expected `results` to record".to_string())
+        })?
         .as_array()
-        .ok_or_else(|| action_failed(action, "`results` must be an array".to_string()))?;
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "`results` must be an array".to_string())
+        })?;
     if results.is_empty() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "expected at least one `results` entry to record".to_string(),
         ));
@@ -207,17 +208,19 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
             .and_then(Value::as_str)
             .filter(|run_id| !run_id.trim().is_empty())
             .ok_or_else(|| {
-                action_failed(action, format!("{label} missing non-empty string run_id"))
+                DispatchError::action_failed(
+                    action,
+                    format!("{label} missing non-empty string run_id"),
+                )
             })?;
-        let status = entry
-            .get("status")
-            .and_then(Value::as_str)
-            .ok_or_else(|| action_failed(action, format!("{label} missing string status")))?;
+        let status = entry.get("status").and_then(Value::as_str).ok_or_else(|| {
+            DispatchError::action_failed(action, format!("{label} missing string status"))
+        })?;
         if let Some(error) = entry.get("error")
             && !error.is_null()
             && !error.is_string()
         {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("{label} run {run_id} has non-string error"),
             ));
@@ -227,7 +230,7 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
             status if pipeline_wait_status_is_held(status) => held_count += 1,
             "failed" | "cancelled" | "interrupted" | "timeout" => non_success_count += 1,
             other => {
-                return Err(action_failed(
+                return Err(DispatchError::action_failed(
                     action,
                     format!("{label} run {run_id} has non-terminal status {other}"),
                 ));
@@ -274,7 +277,7 @@ pub(in super::super) fn record_pipeline_results_audit(
         "results": output.get("results"),
     });
     let arguments_json = serde_json::to_string(&payload).map_err(|error| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!("serialize pipeline.child_results payload: {error}"),
         )
@@ -298,7 +301,7 @@ pub(in super::super) fn record_pipeline_results_audit(
         },
     )
     .map_err(|error| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!("record pipeline.child_results audit: {error}"),
         )

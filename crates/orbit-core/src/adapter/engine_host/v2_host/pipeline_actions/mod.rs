@@ -1,8 +1,6 @@
 //! Deterministic actions pipeline sequencers use to validate bundles, dispatch
 //! child Jobs, re-check admission at dispatch, and guard pipeline results.
 
-use orbit_engine::DispatchError;
-
 mod bundles;
 mod delivery;
 mod gate_admission;
@@ -18,10 +16,3 @@ pub(super) use delivery::resolve_delivery_job;
 pub(super) use gate_starvation::gate_starvation_defer;
 pub(super) use invoke::{invoke_and_wait, invoke_detached};
 pub(super) use results::{pipeline_success_guard, record_pipeline_results_audit};
-
-fn action_failed(action: &str, message: String) -> DispatchError {
-    DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message,
-    }
-}
