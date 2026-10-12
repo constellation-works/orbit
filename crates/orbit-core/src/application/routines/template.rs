@@ -225,10 +225,11 @@ pub(super) fn render_refresh(
 /// collision forever.
 ///
 /// `None` means the file is not one Orbit can manage from this template:
-/// either it does not parse as a routine, or its recorded binding could not be
-/// re-rendered later. Refusing those keeps a future reconcile from
-/// hard-failing the whole workspace sync on a binding Orbit adopted but cannot
-/// use.
+/// either it does not parse as a routine, its declared name differs from the
+/// seeded name, or its recorded binding could not be re-rendered later.
+/// Refusing those keeps an operator's own routine unmanaged and prevents a
+/// future reconcile from hard-failing the whole workspace sync on a binding
+/// Orbit adopted but cannot use.
 pub(super) fn adoptable_binding(
     identity: &RoutineSeedIdentity,
     file_stem: &str,
@@ -236,6 +237,9 @@ pub(super) fn adoptable_binding(
     existing: &str,
 ) -> Option<RoutineMaterializationBinding> {
     let definition = parse_routine_yaml(existing).ok()?;
+    if definition.name != identity.binding(file_stem, template).name {
+        return None;
+    }
     let binding = identity.complete(file_stem, template, &binding_of(&definition));
     render_routine_template(file_stem, template, &binding).ok()?;
     Some(binding)
