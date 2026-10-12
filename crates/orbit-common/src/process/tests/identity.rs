@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 mod liveness {
     use crate::process::identity::*;
 
@@ -152,5 +152,149 @@ mod darwin {
             std::panic::catch_unwind(|| classify_ps(Err(io::ErrorKind::NotFound.into()))).is_err(),
             "a missing `ps` is a failure, not a skip"
         );
+    }
+}
+
+// Criterion 2: partial /proc failures and disappearance cannot be forced at the
+// public probe reliably without changing host permissions or racing a process.
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::ffi::OsString;
+    use std::io::{self, ErrorKind};
+
+    use crate::process::identity::{KernelLiveness, linux_process_group_liveness_with};
+
+    #[derive(Clone, Copy)]
+    enum Stat {
+        Member(char, i32),
+        Error(ErrorKind),
+        Malformed(&'static str),
+    }
+
+    #[test]
+    fn partial_linux_group_scans_cannot_certify_death_and_vanished_pids_do_not_delay_cleanup() {
+        use KernelLiveness::{Alive, Exited, Unknown};
+        use Stat::{Error, Malformed, Member};
+
+        let zombie = Member('Z', 100);
+        let live = Member('S', 100);
+        type Entries = Result<Vec<Result<&'static str, ErrorKind>>, ErrorKind>;
+        let entries = || Ok(vec![Ok("100"), Ok("101")]);
+        let cases: Vec<(&str, Entries, Vec<Stat>, Option<KernelLiveness>)> = vec![
+            (
+                "unreadable member after zombie",
+                entries(),
+                vec![zombie, Error(ErrorKind::PermissionDenied)],
+                Some(Unknown),
+            ),
+            (
+                "I/O failure after zombie",
+                entries(),
+                vec![zombie, Error(ErrorKind::Other)],
+                Some(Unknown),
+            ),
+            (
+                "malformed stat after zombie",
+                entries(),
+                vec![zombie, Malformed("unparseable")],
+                Some(Unknown),
+            ),
+            (
+                "invalid stat fields after zombie",
+                entries(),
+                vec![zombie, Malformed("101 (child) S invalid")],
+                Some(Unknown),
+            ),
+            (
+                "vanished member after zombie",
+                entries(),
+                vec![zombie, Error(ErrorKind::NotFound)],
+                Some(Exited),
+            ),
+            (
+                "complete zombie-only scan",
+                entries(),
+                vec![zombie, zombie],
+                Some(Exited),
+            ),
+            (
+                "live member after zombie",
+                entries(),
+                vec![zombie, live],
+                Some(Alive),
+            ),
+            (
+                "live member after unreadable PID",
+                entries(),
+                vec![Error(ErrorKind::PermissionDenied), live],
+                Some(Alive),
+            ),
+            (
+                "other group cannot mask uncertainty",
+                entries(),
+                vec![Member('S', 200), Error(ErrorKind::Other)],
+                Some(Unknown),
+            ),
+            (
+                "other group ignored",
+                entries(),
+                vec![zombie, Member('S', 200)],
+                Some(Exited),
+            ),
+            (
+                "directory entry failure after zombie",
+                Ok(vec![Ok("100"), Err(ErrorKind::Other)]),
+                vec![zombie],
+                Some(Unknown),
+            ),
+            (
+                "live member after directory entry failure",
+                Ok(vec![Err(ErrorKind::Other), Ok("101")]),
+                vec![zombie, live],
+                Some(Alive),
+            ),
+            (
+                "non-PID entries ignored",
+                Ok(vec![Ok("self"), Ok("100")]),
+                vec![zombie],
+                Some(Exited),
+            ),
+            (
+                "only vanished PIDs use signal fallback",
+                entries(),
+                vec![Error(ErrorKind::NotFound); 2],
+                None,
+            ),
+            ("empty scan uses signal fallback", Ok(vec![]), vec![], None),
+            (
+                "unavailable proc uses signal fallback",
+                Err(ErrorKind::PermissionDenied),
+                vec![],
+                None,
+            ),
+        ];
+        for (case, entries, stats, expected) in cases {
+            let entries = entries
+                .map(|entries| {
+                    entries
+                        .into_iter()
+                        .map(|entry| entry.map(OsString::from).map_err(io::Error::from))
+                })
+                .map_err(io::Error::from);
+            let actual = linux_process_group_liveness_with(100, entries, |pid| {
+                match stats[(pid - 100) as usize] {
+                    Member(state, group) => Ok(format!(
+                        "{pid} (child) {state} 1 {group} {}7",
+                        "0 ".repeat(16)
+                    )),
+                    Error(kind) => Err(kind.into()),
+                    Malformed(text) => Ok(text.to_owned()),
+                }
+            });
+            assert_eq!(
+                actual, expected,
+                "{case}: partial observations must not certify group death; cleanup may skip SIGKILL only on Exited"
+            );
+        }
     }
 }
