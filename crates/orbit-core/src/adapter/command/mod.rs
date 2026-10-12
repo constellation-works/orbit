@@ -32,13 +32,13 @@ pub use dispatch::{
 #[cfg(unix)]
 pub use dispatch::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use plugin::{
-    MAX_PLUGIN_SECRET_BYTES, PluginAddOptions, PluginAddResult, PluginCliGroup, PluginCliVerb,
-    PluginDoctorResult, PluginEnableOptions, PluginEnableResult, PluginLinkSummary,
-    PluginMigrateRequest, PluginPanelSummary, PluginPermissionChange, PluginPermissionSummary,
-    PluginRemoveOptions, PluginSecretStatus, PluginSecretValue, PluginSeedAction,
-    PluginSeedOutcome, PluginSkillLink, PluginSummary, PluginSyncOutcome, PluginTestOptions,
-    PluginTestOutcome, PluginTestReport, PluginToolSummary, PluginUpgradeOptions,
-    PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
+    HostPluginMcpCache, HostPluginMcpSurface, MAX_PLUGIN_SECRET_BYTES, PluginAddOptions,
+    PluginAddResult, PluginCliGroup, PluginCliVerb, PluginDoctorResult, PluginEnableOptions,
+    PluginEnableResult, PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary,
+    PluginPermissionChange, PluginPermissionSummary, PluginRemoveOptions, PluginSecretStatus,
+    PluginSecretValue, PluginSeedAction, PluginSeedOutcome, PluginSkillLink, PluginSummary,
+    PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginToolSummary,
+    PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
     host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows,
     host_plugin_workspace_tool_owners, migrate_plugin_sidecars,
 };

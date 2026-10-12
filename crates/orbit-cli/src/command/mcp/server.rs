@@ -18,8 +18,8 @@ use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
-    ToolEntryPoint, execute_global_in_process_tool_dispatch, execute_global_plugin_tool,
-    host_plugin_mcp_definitions, host_plugin_workspace_tool_owners,
+    HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
+    execute_global_in_process_tool_dispatch, execute_global_plugin_tool,
 };
 use orbit_core::runtime::{HostLifetime, resolve_global_root};
 use orbit_mcp::federated;
@@ -437,6 +437,14 @@ struct ServerMcpHost {
     host_facts: orbit_mcp::HostFacts,
     /// Runtimes this long-lived host has already opened.
     workspace_runtimes: WorkspaceRuntimeCache,
+    plugin_surface: HostPluginMcpCache,
+    definitions: Mutex<Option<CachedMcpDefinitions>>,
+}
+
+/// The combined tool surface and the plugin snapshot it was built from.
+struct CachedMcpDefinitions {
+    plugins: Arc<HostPluginMcpSurface>,
+    value: Arc<Vec<McpToolDefinition>>,
 }
 
 impl ServerMcpHost {
@@ -448,48 +456,67 @@ impl ServerMcpHost {
             process_machine_name,
             host_facts,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
+            plugin_surface: HostPluginMcpCache::default(),
+            definitions: Mutex::new(None),
         }
     }
 
     fn definition(&self, name: &str) -> Result<McpToolDefinition, OrbitError> {
         self.advertised_definitions()?
-            .into_iter()
+            .iter()
             .find(|definition| definition.schema.name == name)
+            .cloned()
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
     }
 
-    /// The canonical built-in surface plus this host's active plugin tools.
-    ///
-    /// The built-in half is memoised process-wide because it is a function of
-    /// the binary alone. The plugin half is not: it changes with `orbit plugin
-    /// add|enable|disable|remove`, so it is read from the host's plugin
-    /// records on each call rather than frozen at first use.
-    fn advertised_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+    /// Reuse the validated combined surface while the plugin snapshot is unchanged.
+    /// The plugin cache retains config and its store handle; row and file stamps
+    /// pick up lifecycle changes and admission-file edits on the next request.
+    fn advertised_definitions(&self) -> Result<Arc<Vec<McpToolDefinition>>, OrbitError> {
+        let plugins = match self.plugin_surface.resolve(&self.global_root) {
+            Ok(plugins) => Some(plugins),
+            Err(error) => {
+                tracing::warn!(target: "orbit.mcp.plugin", error = %error,
+                    "omitting plugin tools from tools/list");
+                None
+            }
+        };
+        let mut cached = self
+            .definitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(plugins) = &plugins
+            && let Some(previous) = cached.as_ref()
+            && Arc::ptr_eq(&previous.plugins, plugins)
+        {
+            return Ok(Arc::clone(&previous.value));
+        }
         let mut definitions = orbit_mcp::canonical_mcp_tool_definitions()
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-        match host_plugin_mcp_definitions(&self.global_root) {
-            Ok(plugins) => definitions.extend(plugins),
-            // A plugin problem is that plugin's problem: the built-in surface
-            // must still be listable (design §4.9).
-            Err(error) => tracing::warn!(
-                target: "orbit.mcp.plugin",
-                error = %error,
-                "omitting plugin tools from tools/list"
-            ),
+        if let Some(plugins) = &plugins {
+            definitions.extend(plugins.definitions.iter().cloned());
         }
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         orbit_types::tool::validate_mcp_tool_definitions(&definitions)
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let definitions = Arc::new(definitions);
+        *cached = plugins.map(|plugins| CachedMcpDefinitions {
+            plugins,
+            value: Arc::clone(&definitions),
+        });
         Ok(definitions)
     }
 
-    /// Whether `name` is one of this host's plugin tools.
+    /// Plugin classification uses the same snapshot as discovery.
     fn is_plugin_tool(&self, name: &str) -> bool {
-        host_plugin_mcp_definitions(&self.global_root).is_ok_and(|definitions| {
-            definitions
-                .iter()
-                .any(|definition| definition.schema.name == name)
-        })
+        self.plugin_surface
+            .resolve(&self.global_root)
+            .is_ok_and(|surface| {
+                surface
+                    .definitions
+                    .iter()
+                    .any(|definition| definition.schema.name == name)
+            })
     }
 
     /// The plugins every registered checkout on this host has switched off.
@@ -838,6 +865,13 @@ impl ServerMcpHost {
 impl McpHost for ServerMcpHost {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         self.advertised_definitions()
+            .map(|definitions| definitions.as_ref().clone())
+    }
+
+    fn dynamic_mcp_tool_definitions(
+        &self,
+    ) -> Result<Option<Arc<Vec<McpToolDefinition>>>, OrbitError> {
+        self.advertised_definitions().map(Some)
     }
 
     fn friction_tag_taxonomy(
@@ -866,8 +900,10 @@ impl McpHost for ServerMcpHost {
     /// tools follow the host state alone and are never hidden here. Any read
     /// that fails hides nothing — `tools/call` refuses on its own.
     fn hidden_tool_names(&self, context: &ToolSessionContext) -> BTreeSet<String> {
-        let owners = match host_plugin_workspace_tool_owners(&self.global_root) {
-            Ok(owners) if !owners.is_empty() => owners,
+        let owners = match self.plugin_surface.resolve(&self.global_root) {
+            Ok(surface) if !surface.workspace_tool_owners.is_empty() => {
+                surface.workspace_tool_owners.clone()
+            }
             _ => return BTreeSet::new(),
         };
         let switched_off: BTreeSet<String> = if context.workspace.is_some() {

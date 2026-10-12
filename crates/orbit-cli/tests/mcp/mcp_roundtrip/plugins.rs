@@ -672,6 +672,121 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
     );
 }
 
+/// One live session observes lifecycle changes through both name translation
+/// and tools/list, while unrelated calls keep the manifest-derived cache hot.
+#[cfg(unix)]
+#[test]
+fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let log_path = workspace.home.join("plugin-surface.log");
+    let log = std::fs::File::create(&log_path).expect("server log");
+    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["mcp", "serve"])
+        .env("RUST_LOG", "orbit.mcp.plugin=debug")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log))
+        .spawn()
+        .map(ChildGuard::new)
+        .expect("start live MCP session");
+    let mut client = McpClient::new(child);
+    workspace.initialize(&mut client);
+    let names = advertised_tool_names(&mut client);
+    assert!(!names.iter().any(|name| name.starts_with("livecache_")));
+
+    let source = write_plugin(&workspace.home, "livecache");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ],
+    );
+    // Call the new wire name before tools/list, so a stale adapter name map
+    // cannot be repaired incidentally by listing first.
+    client.call_tool_ok("livecache_echo", json!({}));
+    assert!(
+        advertised_tool_names(&mut client)
+            .iter()
+            .any(|name| name == "livecache_echo")
+    );
+    let rebuilds = || {
+        std::fs::read_to_string(&log_path)
+            .expect("read synchronous server log")
+            .lines()
+            .filter(|line| line.contains("rebuilding plugin MCP surface"))
+            .count()
+    };
+    let before = rebuilds();
+    assert!(
+        before > 0,
+        "discovery logs must demonstrate that the seam ran"
+    );
+    for _ in 0..3 {
+        client.call_tool_ok("orbit_task_list", json!({}));
+        client.call_tool_ok("orbit_workspace_list", json!({}));
+    }
+    advertised_tool_names(&mut client);
+    assert_eq!(
+        rebuilds(),
+        before,
+        "built-in calls and their audit writes reuse the plugin surface"
+    );
+
+    let manifest = source.join("plugin.yaml");
+    let upgraded = std::fs::read_to_string(&manifest)
+        .expect("manifest")
+        .replace("version: 0.1.0", "version: 0.2.0")
+        .replace("name: echo", "name: reply");
+    std::fs::write(&manifest, upgraded).expect("new plugin version");
+    add_global_tool(&source);
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "upgrade",
+            "livecache",
+            source.to_str().expect("source"),
+        ],
+    );
+    client.call_tool_ok("livecache_reply", json!({}));
+    client.call_tool_ok("livecache_ping", json!({}));
+    client.call_tool_err("livecache_echo", json!({}));
+    let names = advertised_tool_names(&mut client);
+    assert!(names.iter().any(|name| name == "livecache_reply"));
+    assert!(names.iter().any(|name| name == "livecache_ping"));
+    assert!(!names.iter().any(|name| name == "livecache_echo"));
+
+    run_orbit(&workspace, &["plugin", "disable", "livecache"]);
+    client.call_tool_err("livecache_ping", json!({}));
+    assert!(
+        !advertised_tool_names(&mut client)
+            .iter()
+            .any(|name| name.starts_with("livecache_"))
+    );
+    run_orbit(&workspace, &["plugin", "enable", "livecache"]);
+    client.call_tool_ok("livecache_reply", json!({}));
+    assert!(
+        advertised_tool_names(&mut client)
+            .iter()
+            .any(|name| name == "livecache_reply")
+    );
+    run_orbit(&workspace, &["plugin", "remove", "livecache", "--yes"]);
+    client.call_tool_err("livecache_reply", json!({}));
+    assert!(
+        !advertised_tool_names(&mut client)
+            .iter()
+            .any(|name| name.starts_with("livecache_"))
+    );
+}
+
 /// Add a `mcp_scope: global` tool beside the fixture's workspace-scoped one.
 fn add_global_tool(source: &Path) {
     let manifest = source.join("plugin.yaml");

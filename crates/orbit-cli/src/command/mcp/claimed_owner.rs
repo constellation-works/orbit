@@ -30,6 +30,12 @@ impl McpHost for ClaimedOwnerBridge {
         self.inner.list_mcp_tool_definitions()
     }
 
+    fn dynamic_mcp_tool_definitions(
+        &self,
+    ) -> Result<Option<Arc<Vec<McpToolDefinition>>>, OrbitError> {
+        self.inner.dynamic_mcp_tool_definitions()
+    }
+
     fn friction_tag_taxonomy(
         &self,
         session_context: &ToolSessionContext,
