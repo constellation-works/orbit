@@ -13,6 +13,20 @@ use orbit_types::task::{
 use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 use std::collections::BTreeSet;
 
+/// `allocator_state` row present while the issued-id high-water mark is
+/// unknown: the registry was recreated over existing task partitions.
+/// Surviving bundles cannot prove which ids deleted tasks or crashed
+/// reservations consumed, so allocation stays refused until an explicit
+/// [`TaskRegistryStore::seed_allocator_start`] removes the row.
+pub(super) const HIGH_WATER_UNKNOWN_AUTHORITY: &str = "high_water_unknown";
+
+fn high_water_unknown(conn: &Connection) -> Result<bool, OrbitError> {
+    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM allocator_state WHERE authority = ?1)")
+        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .query_row([HIGH_WATER_UNKNOWN_AUTHORITY], |row| row.get(0))
+        .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
 fn read_allocator_next_number(conn: &Connection) -> Result<u32, OrbitError> {
     let next: i64 = conn
         .prepare_cached("SELECT next_number FROM allocator_state WHERE authority = 'local'")
@@ -164,6 +178,16 @@ impl TaskRegistryStore {
 
         if workspace_by_id(&tx, &partition_id)?.is_none() {
             return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
+        }
+        if high_water_unknown(&tx)? {
+            return Err(OrbitError::Store(
+                "task id allocation refused: the task registry was recreated over existing task \
+                 partitions, so the highest task id already issued is unknown. Reindex every \
+                 workspace, then set the next id above every id ever issued with `orbit \
+                 workspace init --force --task-id-start <N>` (see the task-migration recovery \
+                 guide)"
+                    .into(),
+            ));
         }
 
         let (next, task_prefix): (i64, String) = tx
@@ -350,7 +374,9 @@ impl TaskRegistryStore {
     ///
     /// Only ever moves the counter *forward*: if `start` is below the current
     /// `next_number` the call is refused, so two machines can be handed disjoint
-    /// id ranges without risk of silently rewinding a live counter.
+    /// id ranges without risk of silently rewinding a live counter. Seeding is
+    /// also the operator's assertion of the issued-id high-water mark, so it
+    /// lifts the refusal of a registry recreated over existing partitions.
     pub fn seed_allocator_start(&self, start: u32) -> Result<AllocatorSeedOutcome, OrbitError> {
         let mut conn = self
             .conn
@@ -369,6 +395,11 @@ impl TaskRegistryStore {
         if changed {
             set_allocator_next_number(&tx, start)?;
         }
+        tx.execute(
+            "DELETE FROM allocator_state WHERE authority = ?1",
+            [HIGH_WATER_UNKNOWN_AUTHORITY],
+        )
+        .map_err(sqlite_store_error)?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
         Ok(AllocatorSeedOutcome {
             previous,

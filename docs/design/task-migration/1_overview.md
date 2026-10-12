@@ -157,7 +157,9 @@ padding is a minimum display width, not an exhaustion boundary.
 
 ### Recovering a drifted index
 
-If bundles were `rsync`'d or moved by hand, rebuild the index from disk:
+If bundles were `rsync`'d or moved by hand, rebuild the index from disk. Keep
+`tasks/index.sqlite` in place: reindex repairs it without discarding anything
+it alone records.
 
 ```sh
 orbit task reindex --task-workspace <task-workspace-id>   # default: the current workspace
@@ -172,27 +174,49 @@ binding/index; healthy neighbors are indexed, and reindex returns an error listi
 the unresolved task IDs rather than reporting full success.
 
 The command works from either supported layout. With a repo-local root, run it
-from the checkout whose `.orbit` directory identifies the workspace. The task
-index and bundles remain under the home Orbit root:
-
-```sh
-rm -f ~/.orbit/tasks/index.sqlite ~/.orbit/tasks/index.sqlite-wal ~/.orbit/tasks/index.sqlite-shm
-orbit task reindex
-```
-
-With an external root, keep the checkout as the current directory and pass the
-same root that was used for workspace initialization. The runtime restores the
-checkout's task-registry binding before reindexing, so `workspace init --force`
-is not required:
-
-```sh
-rm -f /path/to/orbit-root/tasks/index.sqlite /path/to/orbit-root/tasks/index.sqlite-wal /path/to/orbit-root/tasks/index.sqlite-shm
-orbit --root /path/to/orbit-root task reindex
-```
+from the checkout whose `.orbit` directory identifies the workspace; the task
+index and bundles remain under the home Orbit root. With an external root, keep
+the checkout as the current directory and pass the same root that was used for
+workspace initialization (`orbit --root /path/to/orbit-root task reindex`).
 
 If `orbit task list` reports that on-disk bundles are missing from the task
 index, run the matching reindex command before treating an empty list as task
 loss. The bundle partitions remain the recovery source until reindex completes.
+
+### Recovering a lost task registry
+
+`tasks/index.sqlite` is not a disposable cache. One registry serves every
+workspace on the Orbit root, and it alone records the allocator's issued-id
+high-water mark, the minting prefix, and each workspace and checkout binding.
+Bundles can restore bindings and index rows, but not the high-water mark: ids
+of deleted tasks and of reservations that never landed leave no bundle behind.
+Never delete the registry to fix drift; reindexing one workspace after deleting
+it is not a recovery.
+
+When the registry is missing or unusable:
+
+1. Stop every Orbit process that uses the root (MCP servers, the dashboard,
+   scheduled routines, running jobs) so nothing writes while you recover.
+2. Move the registry aside rather than deleting it, keeping
+   `index.sqlite`, `index.sqlite-wal` and `index.sqlite-shm` together. If a
+   backup of all three exists, restore it and run the drift procedure above
+   for every workspace. A restored registry does not refuse allocation, so if
+   ids may have been issued after the backup was taken, also do step 5 before
+   restarting writers.
+3. Run any Orbit command. A registry created while `tasks/workspaces/` already
+   holds partitions starts with an unknown high-water mark, and every task-id
+   allocation is refused until step 5. Reindex still works.
+4. Reindex every partition: from each workspace's checkout, run
+   `orbit task reindex` (with `--root` for an external root). Every
+   workspace's tasks become visible again, including workspaces that share one
+   external root.
+5. Establish the high-water mark: from one checkout, run
+   `orbit workspace init --force --task-id-start <N>`, with `N` above every id
+   this host has ever issued, not just the highest surviving bundle. Use the
+   moved-aside registry, publication mirrors, peers' records or delivery
+   history as evidence, and leave a margin when in doubt. The counter only
+   moves forward, and this explicit seed is what lifts the refusal; a
+   configured `[tasks] id_start` floor does not.
 
 Full-bundle readers, writers, creation, deletion, and reindex coordinate through
 persistent `.<task-id>.bundle.lock` files beside the canonical bundles.

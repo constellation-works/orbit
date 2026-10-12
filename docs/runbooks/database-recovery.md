@@ -62,7 +62,7 @@ Do not install the recovered database unless `PRAGMA integrity_check` returns `o
 | DB | Derivable? | Rebuild |
 |---|---|---|
 | `<ws>/.orbit/state/semantic.db` | yes | delete the file, then `orbit search reindex` |
-| `~/.orbit/tasks/index.sqlite` | yes, from task bundles | `orbit task reindex` |
+| `~/.orbit/tasks/index.sqlite` | index rows yes; the allocator high-water mark no | drift: `orbit task reindex`. Loss: restore it, or follow the [registry-loss procedure](../design/task-migration/1_overview.md#recovering-a-lost-task-registry) |
 | `~/.orbit/orbit.db` | **no**—audit + run history | restore or salvage; deleting it is a last resort that loses history, although task content survives in file bundles and decision reasoning survives in `docs/` |
 
 Graph is not a recoverable database subsystem: the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) retired it. If an older checkout left
