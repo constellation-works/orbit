@@ -19,6 +19,9 @@
 //! - Gap fit: under `machine.auto_concurrency.mode` `enforce` a local drain
 //!   admits only what fits under the host load forecast; `shadow` records
 //!   those decisions and admits as `off`.
+//! - Submission notices: what a drain or ship start reports as it proceeds
+//!   (throttle, validation environment, host-OS backlog, unset env-pass
+//!   names, the required-validation note), and the drain stop projection.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -54,6 +57,7 @@ use tempfile::TempDir;
 mod gap_fit;
 mod replay_crew;
 mod reservation_grants;
+mod submission_notices;
 mod unknown_footprint;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority

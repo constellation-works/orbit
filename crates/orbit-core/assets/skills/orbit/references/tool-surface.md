@@ -271,6 +271,13 @@ host, use `orbit run ship <task-id> --complete` there for a one-run completion
 authorization; do not use a local shadow store as a substitute. Otherwise
 report the MCP completion capability gap rather than inventing a `completion`
 argument.
+A ship receipt, like an `orbit_workflow_auto` start, carries the notices the
+CLI and the dashboard report for the same submission: `warning` (one line per
+notice: an explicit ship's host resource throttle, a validation environment
+that may not find the toolchain, unset `execution.env.pass` names) and
+`validation_env_warning`. A drain start also carries `resource_throttle`, a
+`warning` line naming backlog tagged for another OS, and a `note` when no
+required validation is configured. None of them refuses the submission.
 Read the returned run with `orbit_workflow_run_show` using `id` and `workspace`.
 List bounded history with `limit`, `job_id`, `state` (including `terminal`), and
 RFC3339 `since`. Submission success means a durable run exists, not that the

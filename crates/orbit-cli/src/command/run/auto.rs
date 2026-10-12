@@ -1,18 +1,15 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
-use orbit_core::application::job::DrainAdmissionsStopOutcome;
+use orbit_core::application::job::{DrainAdmissionsStopOutcome, SubmissionKind};
 use orbit_core::{
     CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
 };
-use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{
-    WorkflowDispatchResult, warn_unset_env_pass, workflow_dispatch_payload_with_notices,
-};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
@@ -198,8 +195,8 @@ impl Execute for AutoCommand {
                 },
                 orbit_types::workflow::JobRunTrigger::cli(),
             )?;
-            warn_unset_env_pass(runtime);
-            let mut warnings = submission_warnings(runtime);
+            let notices = runtime.submission_notices(SubmissionKind::PullDrain);
+            let mut warnings = notices.warnings();
             // [ORB-15622] A replica whose gates drifted from the owner's.
             warnings.extend(runtime.pull_gate_drift(&invoke.run_id)?);
             return workflow_dispatch_payload_with_notices(
@@ -219,7 +216,7 @@ impl Execute for AutoCommand {
                     error_message: None,
                 }],
                 warnings,
-                runtime.required_validation_note().into_iter().collect(),
+                notices.notes(),
             );
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
@@ -250,7 +247,6 @@ impl Execute for AutoCommand {
             self.strict_worker_containment,
             self.approve_proposed,
         )?;
-        warn_unset_env_pass(runtime);
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,
             job_id: invoke.job_name,
@@ -265,42 +261,14 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
+        let notices = runtime.submission_notices(SubmissionKind::Drain);
         workflow_dispatch_payload_with_notices(
             AUTO_WORKFLOW,
             &[run],
-            owner_drain_warnings(runtime),
-            runtime.required_validation_note().into_iter().collect(),
+            notices.warnings(),
+            notices.notes(),
         )
     }
-}
-
-/// What a drain submission warns about while still starting: a host resource
-/// throttle, and a validation environment that may not find the user's
-/// toolchain [ORB-13987].
-fn submission_warnings(runtime: &OrbitRuntime) -> Vec<String> {
-    resource_throttle_warning(runtime)
-        .into_iter()
-        .chain(runtime.validation_env_preflight_warning())
-        .collect()
-}
-
-/// A local drain's warnings, plus the backlog tasks this host's OS cannot
-/// start: they stay waiting for a host of theirs, named here so the drain
-/// does not read as idle over an empty backlog.
-fn owner_drain_warnings(runtime: &OrbitRuntime) -> Vec<String> {
-    let mut warnings = submission_warnings(runtime);
-    warnings.extend(runtime.host_os_backlog_warning());
-    warnings
-}
-
-/// [ORB-13901] The drain starts either way and holds its own waves while the
-/// host is throttled; say so at start rather than leaving an idle drain to be
-/// read as an empty backlog.
-pub(super) fn resource_throttle_warning(runtime: &OrbitRuntime) -> Option<String> {
-    runtime
-        .admission_resource_throttle()
-        .throttle
-        .map(|throttle| throttle.hold_reason())
 }
 
 fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {
@@ -311,21 +279,7 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
         claim_token,
         force: false,
     })?;
-    let doc = json!({
-        "outcome": result.outcome,
-        "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
-        "coordinators": result.coordinators.iter().map(|change| json!({
-            "run_id": change.run_id,
-            "job_id": change.job_id,
-            "outcome": change.outcome,
-            "remaining_children": change.remaining_children.iter().map(|child| json!({
-                "run_id": child.run_id,
-                "job_name": child.job_name,
-                "phase": child.phase,
-                "child_status": child.child_status,
-            })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
-    });
+    let doc = result.to_json();
     let settlement_lines = super::support::pull_settlement_lines(&result.pull_settlements);
     if result.coordinators.is_empty() {
         let replica = result.replica_owner_machine_id.is_some();

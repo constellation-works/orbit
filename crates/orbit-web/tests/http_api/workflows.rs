@@ -119,8 +119,20 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
             assert_eq!(first["outcome"], "stopped");
             assert_eq!(first["coordinators"][0]["run_id"], coordinator.run_id);
             assert_eq!(
-                first["coordinators"][0]["remaining_children"][0]["run_id"],
-                child.run_id
+                first["coordinators"][0],
+                json!({
+                    "run_id": coordinator.run_id,
+                    "job_id": "workspace_auto_pipeline",
+                    "outcome": "stopped",
+                    "remaining_children": [{
+                        "run_id": child.run_id,
+                        "job_name": "task_auto_pipeline",
+                        "phase": first["coordinators"][0]["remaining_children"][0]["phase"],
+                        "child_status": first["coordinators"][0]["remaining_children"][0]["child_status"],
+                    }],
+                    "forced_runs": [],
+                }),
+                "the dashboard returns the stop projection CLI and MCP return: {first}"
             );
             let stopped = fixture
                 .runtime
@@ -1077,6 +1089,179 @@ fn auto_readiness_explains_the_tasks_it_names() {
                     "/api/workflows/auto/readiness?workspace={WS}&task={bad}"
                 ));
                 assert_eq!(response.status().as_u16(), 400, "{bad}");
+            }
+        },
+    );
+}
+
+// Not `ORBIT_`-prefixed: those names are never reported unset.
+const UNSET_PASS: &str = "FIXTURE_HTTP_NOTICE_TOKEN";
+
+/// A fixture whose operator passes a variable the server does not hold,
+/// configured by `extra`, with both delivery workflows deployed.
+fn notice_fixture(extra: &str) -> Fixture {
+    let fixture = Fixture::new();
+    fixture.job("workspace_auto_pipeline");
+    fixture.job("task_auto_pipeline");
+    std::fs::write(
+        fixture.global.join("config.toml"),
+        format!("[execution.env]\npass = [\"HOME\", \"PATH\", \"{UNSET_PASS}\"]\n\n{extra}"),
+    )
+    .unwrap();
+    fixture
+}
+
+fn backlog_task(fixture: &Fixture, title: &str, tags: &[&str]) -> Task {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: "submission notice fixture".into(),
+            status: Some(TaskStatus::Backlog),
+            tags: tags.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        })
+        .unwrap()
+}
+
+fn warning_lines(receipt: &Value) -> Vec<String> {
+    receipt["warning"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A drain started from the dashboard reports what `orbit run auto` and
+/// `orbit.workflow.auto` report: the host throttle, backlog for another OS,
+/// unset `execution.env.pass` names and the required-validation note. An
+/// explicit ship reports the throttle and the unset names.
+#[test]
+fn auto_start_and_ship_report_the_submission_notices() {
+    isolated(
+        "workflows::auto_start_and_ship_report_the_submission_notices",
+        || {
+            let fixture = notice_fixture("");
+            // A live pull drain recorded a throttle on its latest pass; every
+            // admission in this workspace reports it.
+            let pull = fixture.seed_run(
+                "jrun-pull-throttled",
+                "workspace_pull_pipeline",
+                JobRunState::Running,
+            );
+            let mut state = PipelineState::new(pull.run_id.clone(), pull.job_id.clone(), json!({}));
+            state.drain_last_pass = Some(
+                serde_json::from_value(json!({
+                    "recorded_at": Utc::now(),
+                    "queued": 0,
+                    "resource_throttle": {"resources": [{
+                        "resource": "memory", "percent": 95.0, "high_percent": 90,
+                        "resume_percent": 85, "since": Utc::now(),
+                    }]},
+                }))
+                .unwrap(),
+            );
+            fixture
+                .runtime
+                .write_run_state(&pull.run_id, &state)
+                .unwrap();
+            let other_os = if cfg!(target_os = "macos") {
+                "os:linux"
+            } else {
+                "os:macos"
+            };
+            let elsewhere = backlog_task(&fixture, "another OS", &[other_os]);
+            let explicit = backlog_task(&fixture, "explicit", &[]);
+            let server = fixture.server(false);
+
+            let started = json_ok(server.send(
+                "POST",
+                &format!("/api/workflows/auto?workspace={WS}"),
+                json!({"for_duration":"1m"}),
+            ));
+            let warnings = warning_lines(&started);
+            assert_eq!(warnings.len(), 3, "{started}");
+            assert!(
+                warnings[0].starts_with("Admissions throttled: "),
+                "{started}"
+            );
+            assert!(
+                warnings[1].contains(&elsewhere.id) && warnings[1].contains("another OS"),
+                "{started}"
+            );
+            assert!(warnings[2].contains(UNSET_PASS), "{started}");
+            assert!(
+                started["resource_throttle"]["resources"]
+                    .as_array()
+                    .is_some_and(|resources| !resources.is_empty()),
+                "{started}"
+            );
+            assert!(
+                started["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("workflow.required_validation_commands")),
+                "{started}"
+            );
+            assert!(started.get("validation_env_warning").is_none(), "{started}");
+
+            let shipped = json_ok(server.send(
+                "POST",
+                &format!("/api/workflows/ship?workspace={WS}"),
+                json!({"task_ids":[explicit.id],"mode":"local"}),
+            ));
+            let warnings = warning_lines(&shipped);
+            assert_eq!(warnings.len(), 2, "{shipped}");
+            assert!(
+                warnings[0].starts_with("Admissions throttled: "),
+                "an explicit ship proceeds under the throttle and says so: {shipped}"
+            );
+            assert!(warnings[1].contains(UNSET_PASS), "{shipped}");
+            assert!(
+                shipped.get("resource_throttle").is_none() && shipped.get("note").is_none(),
+                "{shipped}"
+            );
+        },
+    );
+}
+
+/// Required validation that cannot use the login shell is reported by a
+/// dashboard drain start and ship, as by the CLI and MCP.
+#[test]
+fn auto_start_and_ship_report_the_validation_environment() {
+    isolated(
+        "workflows::auto_start_and_ship_report_the_validation_environment",
+        || {
+            let fixture = notice_fixture(
+                "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
+                 [workflow.validation_env]\nlogin_shell = false\n",
+            );
+            let explicit = backlog_task(&fixture, "explicit", &[]);
+            let server = fixture.server(false);
+            for (path, body) in [
+                ("auto", json!({"for_duration":"1m"})),
+                ("ship", json!({"task_ids":[explicit.id],"mode":"local"})),
+            ] {
+                let receipt = json_ok(server.send(
+                    "POST",
+                    &format!("/api/workflows/{path}?workspace={WS}"),
+                    body,
+                ));
+                let warning = receipt["validation_env_warning"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{path}: {receipt}"));
+                assert!(
+                    warning.contains("`workflow.validation_env.login_shell = false`"),
+                    "{path}: {receipt}"
+                );
+                assert!(
+                    warning_lines(&receipt).iter().any(|line| line == warning),
+                    "{path}: {receipt}"
+                );
+                assert!(
+                    receipt.get("note").is_none(),
+                    "{path}: configured required validation needs no note: {receipt}"
+                );
             }
         },
     );

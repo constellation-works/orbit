@@ -848,6 +848,7 @@ input.field-editor-input {
   color: var(--state-success);
   font-family: var(--font-mono);
   font-size: 12px;
+  white-space: pre-line;
   background: rgba(16, 185, 129, 0.1);
 }
 /* A folded status change whose task has no row on screen (its new status is

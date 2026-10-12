@@ -523,46 +523,95 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
 
 /// An operator who starts a drain through MCP with no
 /// `workflow.required_validation_commands` gets a note, not a refusal: an
-/// empty list means no required check, and the drain runs.
+/// empty list means no required check, and the drain runs. A drain or ship
+/// start also names each `execution.env.pass` variable the server's
+/// environment does not hold, in its `warning`.
 #[test]
-fn stdio_drain_start_notes_that_no_required_validation_runs() {
+fn stdio_drain_and_ship_starts_report_their_notices() {
+    // Not `ORBIT_`-prefixed: those names are never reported unset.
+    const UNSET: &str = "FIXTURE_MCP_NOTICE_TOKEN";
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let jobs = workspace.home.join(".orbit/resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
-    std::fs::write(
-        jobs.join("workspace_auto_pipeline.yaml"),
-        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
-    )
-    .unwrap();
+    for job in ["workspace_auto_pipeline", "task_auto_pipeline"] {
+        std::fs::write(
+            jobs.join(format!("{job}.yaml")),
+            format!("schemaVersion: 2\nkind: Job\nmetadata:\n  name: {job}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"),
+        )
+        .unwrap();
+    }
+    let config = workspace.home.join(".orbit/config.toml");
+    let mut document: toml_edit::DocumentMut =
+        std::fs::read_to_string(&config).unwrap().parse().unwrap();
+    let mut pass = toml_edit::Array::new();
+    for name in ["HOME", "PATH", UNSET] {
+        pass.push(name);
+    }
+    document["execution"]["env"]["pass"] = toml_edit::value(pass);
+    std::fs::write(&config, document.to_string()).unwrap();
+    let added = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "task",
+            "add",
+            "--title",
+            "Ship fixture",
+            "--description",
+            "An explicit selection for the ship start.",
+            "--complexity",
+            "low",
+            "--status",
+            "backlog",
+            "--json",
+        ]),
+    );
+    let task: Value = serde_json::from_slice(&added.stdout).unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
 
     let started = client.call_tool_ok(
         "orbit_workflow_auto",
         json!({"workspace":selector,"action":"start","for_seconds":60}),
     );
-
     assert!(
         started["note"]
             .as_str()
             .is_some_and(|note| note.contains("workflow.required_validation_commands")),
         "the start names the empty key it read: {started}"
     );
-    let run_id = started["run_id"].as_str().expect("the drain starts");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let run = client.call_tool_ok(
-            "orbit_workflow_run_show",
-            json!({"workspace":selector,"id":run_id}),
-        );
-        if run["state"] == "success" {
-            break;
-        }
+    let shipped = client.call_tool_ok(
+        "orbit_workflow_ship",
+        json!({"workspace":selector,"task_ids":[task["id"]],"mode":"local"}),
+    );
+    for receipt in [&started, &shipped] {
+        let unset = receipt["warning"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("execution.env.pass"))
+            .collect::<Vec<_>>();
         assert!(
-            Instant::now() < deadline && run["state"] != "failed",
-            "the drain runs to completion: {run}"
+            unset.len() == 1 && unset[0].contains(UNSET),
+            "the start names the unset variable once: {receipt}"
         );
-        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(shipped.get("note").is_none(), "{shipped}");
+    for receipt in [&started, &shipped] {
+        let run_id = receipt["run_id"].as_str().expect("the run starts");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let run = client.call_tool_ok(
+                "orbit_workflow_run_show",
+                json!({"workspace":selector,"id":run_id}),
+            );
+            if run["state"] == "success" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline && run["state"] != "failed",
+                "the run completes: {run}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 

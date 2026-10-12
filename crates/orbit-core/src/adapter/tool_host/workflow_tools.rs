@@ -7,7 +7,7 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 
-use crate::application::job::JobRunListParams;
+use crate::application::job::{JobRunListParams, SubmissionKind};
 use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
     RunRecoveryAttempts,
@@ -63,22 +63,11 @@ pub(super) fn ship(
         "state": if invoke.queued { "queued" } else { "submitted" },
         "submitted_at": invoke.submitted_at,
     });
-    // [ORB-13901] Discovery is refused while the host is throttled; an
-    // explicit selection proceeds and says so.
-    let mut warnings = Vec::new();
-    if !task_ids.is_empty()
-        && let Some(throttle) = runtime.admission_resource_throttle().throttle
-    {
-        warnings.push(throttle.hold_reason());
-    }
-    // [ORB-13987] Required validation may not find the user's toolchain.
-    if let Some(warning) = runtime.validation_env_preflight_warning() {
-        shipped["validation_env_warning"] = json!(warning);
-        warnings.push(warning);
-    }
-    if !warnings.is_empty() {
-        shipped["warning"] = json!(warnings.join("\n"));
-    }
+    runtime
+        .submission_notices(SubmissionKind::Ship {
+            explicit: !task_ids.is_empty(),
+        })
+        .insert_into(&mut shipped);
     Ok(shipped)
 }
 

@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, submissionNoticeLines } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
@@ -2947,7 +2947,7 @@ async function shipTask(task, detail, btnNode, context) {
     if (!visit.isCurrent()) return;
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
-    taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
+    taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
     collapseTask(task.id);
     await refreshTasks(context);
   } catch (error) {
@@ -3453,7 +3453,7 @@ async function runQuickAction(task, kind, context) {
       if (!visit.isCurrent()) return;
       const runId = result && result.run_id ? result.run_id : "(no run id)";
       const state = result && result.state ? result.state : "submitted";
-      taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
+      taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
     } else {
       let claimed = null;
       if (task.status === "review") {

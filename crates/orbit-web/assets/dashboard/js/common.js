@@ -975,6 +975,15 @@ export function postJson(path, body) {
   return requestJson(path, "POST", body);
 }
 
+// A drain or ship receipt's notices, one line each, as `orbit run auto` and
+// `orbit run ship` print them: `warning` (host throttle, validation
+// environment, backlog for another OS, unset execution.env.pass variables)
+// and `note` (no required validation) carry one notice per line.
+export function submissionNoticeLines(result) {
+  const lines = (value, label) => String(value || "").split("\n").filter(Boolean).map((line) => `${label}: ${line}`);
+  return [...lines(result?.warning, "Warning"), ...lines(result?.note, "Note")];
+}
+
 export function patchJson(path, body) {
   return requestJson(path, "PATCH", body);
 }

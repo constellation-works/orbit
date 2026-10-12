@@ -1363,7 +1363,29 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
             (&finished_wrapper, "task_auto_pipeline"),
         ],
     );
-    fixture.json(&["run", "auto", "--stop", "--json"]);
+    let stopped = fixture.json(&["run", "auto", "--stop", "--json"]);
+    let coordinator = &stopped["coordinators"][0];
+    assert_eq!(coordinator["run_id"], old, "{stopped}");
+    assert_eq!(
+        coordinator["job_id"], "workspace_auto_pipeline",
+        "{stopped}"
+    );
+    assert_eq!(
+        coordinator["forced_runs"],
+        json!([]),
+        "the CLI returns the stop projection MCP and the dashboard return: {stopped}"
+    );
+    assert!(
+        coordinator["remaining_children"]
+            .as_array()
+            .is_some_and(|children| !children.is_empty()
+                && children
+                    .iter()
+                    .all(|child| ["run_id", "job_name", "phase", "child_status"]
+                        .iter()
+                        .all(|key| child.get(key).is_some()))),
+        "{stopped}"
+    );
     assert!(
         runtime
             .read_run_state(&old)
