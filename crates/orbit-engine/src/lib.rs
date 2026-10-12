@@ -29,10 +29,11 @@
 //! → `orbit-engine` → orbit-core
 
 pub mod activity_job;
-/// Scoped hooks for downstream integration fixtures, enabled only in tests.
+/// Scoped hooks and the null host base for test fixtures, enabled only in tests.
 #[cfg(feature = "test-support")]
 pub mod test_support {
     pub use crate::activity_job::cli_runner::with_cli_supervision_clock;
+    pub use crate::context::NullRuntimeHost;
 }
 mod condition;
 mod context;
@@ -68,6 +69,7 @@ pub use executor::automation::vcs::claim::{
     observe_candidate, observe_no_diff_candidate, observe_published_candidate,
 };
 pub use executor::automation::vcs::review_gate;
+pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{
     BaselineHoldStatus, ClaimedKnownRed, KnownRedUnconfirmed, WorktreeGcOptions,
     WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport, baseline_hold_status,

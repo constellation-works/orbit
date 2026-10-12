@@ -68,6 +68,12 @@ supervision clocks. Landing fixtures freeze Core's source budget clock; auth
 fixtures expire Engine's deadline only after a real child signals readiness.
 Both clocks are thread-local, restored on unwind, and absent from shipped builds.
 
+Engine's dev-only edge to itself enables its `test-support` feature for its own
+unit and integration tests. The feature exports `test_support::NullRuntimeHost`,
+the base every `RuntimeHost` test double in Engine and Core builds on, so the
+`RuntimeHost` trait itself carries no defaults and shipped builds have no null
+host.
+
 The `orbit-core` → `orbit-exec` edge supports the Linux host probe and sandbox
 regression tests. The dependency-direction guard
 also checks that dependencies defined in `[workspace.dependencies]` are inherited

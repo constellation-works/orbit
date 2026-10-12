@@ -16,8 +16,8 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
-    V2SqliteSink, execute_job_with_resume,
+    FinalRecoveryApplied, JobOutcome, TaskAutomationUpdate, V2AuditWriter, V2SqliteSink,
+    execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
@@ -110,7 +110,7 @@ impl RecoveryHost {
     }
 }
 
-impl RuntimeHost for RecoveryHost {
+impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
     fn run_deterministic(
         &self,
         action: &str,

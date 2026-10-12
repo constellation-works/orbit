@@ -23,7 +23,7 @@ use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome, RuntimeHost,
+    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome,
     V2AuditWriter, execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2};
@@ -241,7 +241,7 @@ impl ForgeHost {
     }
 }
 
-impl RuntimeHost for ForgeHost {
+impl orbit_engine::test_support::NullRuntimeHost for ForgeHost {
     fn run_deterministic(
         &self,
         action: &str,

@@ -27,8 +27,8 @@ use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ResolvedCliExecutor, ReviewerInvocationRequest, RuntimeHost,
-    V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    DispatchError, JobOutcome, ResolvedCliExecutor, ReviewerInvocationRequest, V2AuditWriter,
+    V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::activity_job::{
@@ -62,7 +62,7 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
         seen: Mutex<Option<ToolContext>>,
     }
 
-    impl RuntimeHost for BindingHost {
+    impl orbit_engine::test_support::NullRuntimeHost for BindingHost {
         fn tool_context_for_activity(
             &self,
             run_id: Option<&str>,
@@ -169,7 +169,7 @@ fn smoke_dispatch_deterministic(
 
 struct EchoHost;
 
-impl RuntimeHost for EchoHost {
+impl orbit_engine::test_support::NullRuntimeHost for EchoHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -975,7 +975,7 @@ impl GraphHost {
     }
 }
 
-impl RuntimeHost for GraphHost {
+impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
     fn checkpoint_step(
         &self,
         _run_id: &str,
@@ -1115,7 +1115,7 @@ pub(crate) const RECOVERY: &str = "step_failure_recovery";
 #[test]
 fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
     struct UnavailableHost;
-    impl RuntimeHost for UnavailableHost {
+    impl orbit_engine::test_support::NullRuntimeHost for UnavailableHost {
         fn run_deterministic(
             &self,
             action: &str,
@@ -1497,7 +1497,7 @@ impl ScriptedHost {
     }
 }
 
-impl RuntimeHost for ScriptedHost {
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -1667,7 +1667,7 @@ impl ReviewerHost {
     }
 }
 
-impl RuntimeHost for ReviewerHost {
+impl orbit_engine::test_support::NullRuntimeHost for ReviewerHost {
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
@@ -1732,7 +1732,7 @@ fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation()
     struct ExhaustedHost {
         calls: Mutex<Vec<String>>,
     }
-    impl RuntimeHost for ExhaustedHost {
+    impl orbit_engine::test_support::NullRuntimeHost for ExhaustedHost {
         fn run_deterministic(
             &self,
             action: &str,

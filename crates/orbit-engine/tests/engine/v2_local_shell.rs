@@ -318,7 +318,7 @@ impl ShellHost {
     }
 }
 
-impl RuntimeHost for ShellHost {
+impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
     fn repo_root(&self) -> Result<String, orbit_common::OrbitError> {
         Ok(self.root.to_string_lossy().into_owned())
     }

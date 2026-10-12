@@ -9,8 +9,7 @@ use std::sync::Mutex;
 
 use orbit_common::OrbitError;
 use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, ReviewerInvocationRequest, RuntimeHost,
-    execute_job_with_resume,
+    DispatchError, ResolvedCliExecutor, ReviewerInvocationRequest, execute_job_with_resume,
 };
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::ReviewerInvocationEvent;
@@ -41,7 +40,7 @@ impl BoundingHost {
     }
 }
 
-impl RuntimeHost for BoundingHost {
+impl orbit_engine::test_support::NullRuntimeHost for BoundingHost {
     fn run_deterministic(
         &self,
         _action: &str,

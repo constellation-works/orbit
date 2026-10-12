@@ -19,7 +19,7 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::run_cli_backend;
 use orbit_engine::{
     DispatchError, DispatchOutcome, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
-    ResolvedCliExecutor, ResolvedSandbox, RuntimeHost, V2AuditWriter,
+    ResolvedCliExecutor, ResolvedSandbox, V2AuditWriter,
 };
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::policy::ResolvedFsProfile;
@@ -294,7 +294,7 @@ impl BrokerHost {
     }
 }
 
-impl RuntimeHost for BrokerHost {
+impl orbit_engine::test_support::NullRuntimeHost for BrokerHost {
     fn start_plugin_broker(
         &self,
         run: &PluginBrokerRun,

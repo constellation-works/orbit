@@ -9,7 +9,7 @@ use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
 
 use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, ResolvedCliExecutor, ResolvedSandbox};
-use crate::context::{ResolvedActivityTools, RuntimeHost};
+use crate::context::ResolvedActivityTools;
 
 pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> {
     vec!["-c".to_string(), script.to_string()]
@@ -63,7 +63,7 @@ impl TestHost {
     }
 }
 
-impl RuntimeHost for TestHost {
+impl crate::test_support::NullRuntimeHost for TestHost {
     fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
         Ok(ResolvedCliExecutor {
             command: self.command.clone(),

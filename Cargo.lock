@@ -1924,6 +1924,7 @@ dependencies = [
  "libc",
  "orbit-agent",
  "orbit-common",
+ "orbit-engine",
  "orbit-exec",
  "orbit-store",
  "orbit-tools",

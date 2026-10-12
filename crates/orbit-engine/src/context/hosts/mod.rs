@@ -3,6 +3,8 @@
 
 mod claim;
 mod config;
+#[cfg(feature = "test-support")]
+mod null_host;
 mod plugin_broker;
 mod recovery;
 mod review;
@@ -15,6 +17,8 @@ pub use claim::{
     ClaimExecutionContext, HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate,
 };
 pub use config::{CrewConfig, PrConfig};
+#[cfg(feature = "test-support")]
+pub use null_host::NullRuntimeHost;
 pub use plugin_broker::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun};
 pub use recovery::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,

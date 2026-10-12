@@ -4065,7 +4065,7 @@ impl LifecycleHost {
     }
 }
 
-impl RuntimeHost for LifecycleHost {
+impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     fn record_direct_landing_intent(
         &self,
         _request: &orbit_types::workflow::automation::DirectLandingRequest,
@@ -4099,7 +4099,7 @@ impl RuntimeHost for LifecycleHost {
     fn admit_task_for_workflow(&self, task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
         self.admitted.lock().unwrap().push(task_id.to_string());
         self.set_status(task_id, TaskStatus::InProgress);
-        self.get_task(task_id)
+        RuntimeHost::get_task(self, task_id)
     }
 
     fn apply_task_automation_update(
@@ -4200,7 +4200,7 @@ impl RuntimeHost for LifecycleHost {
         if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
             return answer.clone();
         }
-        match self.get_task(task_id) {
+        match RuntimeHost::get_task(self, task_id) {
             Ok(task) => WorktreeGcTaskLookup::Found {
                 status: task.status,
                 pr_status: task.pr_status,

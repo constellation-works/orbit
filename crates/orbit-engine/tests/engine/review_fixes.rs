@@ -21,8 +21,8 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink,
-    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
+    FinalRecoveryApplied, JobOutcome, V2AuditWriter, V2SqliteSink, execute_job_with_resume,
+    resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
 use orbit_types::workflow::{FinalRecoveryDecision, ReviewGateRefusal};
@@ -591,7 +591,7 @@ impl ScriptedHost {
     }
 }
 
-impl RuntimeHost for ScriptedHost {
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
     fn record_reviewer_invocation(
         &self,
         request: &orbit_engine::ReviewerInvocationRequest,

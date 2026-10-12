@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_engine::{RuntimeHost, execute_deterministic_action};
+use orbit_engine::execute_deterministic_action;
 use orbit_types::task::{Task, TaskArtifact, TaskComment, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -42,7 +42,7 @@ impl VerifierHost {
     }
 }
 
-impl RuntimeHost for VerifierHost {
+impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()

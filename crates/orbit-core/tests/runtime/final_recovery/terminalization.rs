@@ -32,7 +32,7 @@ struct FailingPipeline<'a> {
     failure_status: TaskStatus,
 }
 
-impl RuntimeHost for FailingPipeline<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
     fn run_deterministic(
         &self,
         action: &str,

@@ -23,7 +23,7 @@ use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome,
-    ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+    ResolvedCliExecutor, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
     execute_job_with_resume,
 };
 use orbit_store::Store;
@@ -189,7 +189,7 @@ impl CapacityHost {
     }
 }
 
-impl RuntimeHost for CapacityHost {
+impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
     fn run_deterministic(
         &self,
         action: &str,

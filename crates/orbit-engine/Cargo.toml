@@ -12,7 +12,8 @@ stability = "internal"
 workspace = true
 
 [features]
-# Scoped deadline clocks for downstream integration fixtures only.
+# Scoped deadline clocks and the null `RuntimeHost` base for test fixtures only.
+# Enable it only from `[dev-dependencies]`, never in a shipped build.
 test-support = []
 
 [dependencies]
@@ -36,5 +37,7 @@ wait-timeout.workspace = true
 
 [dev-dependencies]
 chrono-tz.workspace = true
+# The crate's own tests build their host doubles on `test_support::NullRuntimeHost`.
+orbit-engine = { path = ".", features = ["test-support"] }
 jsonschema.workspace = true
 tracing-subscriber.workspace = true

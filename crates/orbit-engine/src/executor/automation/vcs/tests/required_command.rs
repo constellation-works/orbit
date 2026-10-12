@@ -13,7 +13,6 @@ use tempfile::TempDir;
 use super::super::required_command::{
     RequiredCommandRun, VALIDATION_TIMEOUT_MS, missing_tool, run_required_command,
 };
-use crate::RuntimeHost;
 
 const DIAGNOSTIC: &str = "make: rg: No such file or directory";
 /// Larger than the 256 KiB capture cap, so a prefix-only capture drops the tail.
@@ -100,7 +99,7 @@ fn a_guardrail_for_a_tool_on_path_is_not_a_missing_tool() {
 
 struct CaptureHost;
 
-impl RuntimeHost for CaptureHost {}
+impl crate::test_support::NullRuntimeHost for CaptureHost {}
 
 /// A stdout past 256 KiB used to fill the capture and delete stderr, so exit 2
 /// was classified `candidate` and repair read the middle of stdout

@@ -10,8 +10,7 @@ use std::sync::Arc;
 
 use orbit_engine::activity_job::load_activity_asset;
 use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    dispatch_v2_activity,
+    DispatchError, ResolvedCliExecutor, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
 };
 use orbit_store::Store;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider, V2AuditEventKind};
@@ -230,7 +229,7 @@ struct InspectionHost {
     args: Vec<String>,
 }
 
-impl RuntimeHost for InspectionHost {
+impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
     fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
         Ok(ResolvedCliExecutor {
             command: self.command.display().to_string(),

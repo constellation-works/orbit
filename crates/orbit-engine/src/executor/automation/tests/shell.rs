@@ -6,7 +6,6 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use crate::activity_job::{DispatchError, ResolvedShellExecutor};
-use crate::context::RuntimeHost;
 
 use super::super::shell::local_shell;
 
@@ -15,7 +14,7 @@ struct ShellHost {
     root: PathBuf,
 }
 
-impl RuntimeHost for ShellHost {
+impl crate::test_support::NullRuntimeHost for ShellHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.root.to_string_lossy().into_owned())
     }

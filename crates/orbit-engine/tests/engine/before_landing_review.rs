@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ReviewerInvocationRequest, RuntimeHost, execute_job_with_resume,
+    DispatchError, JobOutcome, ReviewerInvocationRequest, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
@@ -509,7 +509,7 @@ impl Host {
     }
 }
 
-impl RuntimeHost for Host {
+impl orbit_engine::test_support::NullRuntimeHost for Host {
     fn run_deterministic(
         &self,
         action: &str,
@@ -720,7 +720,7 @@ struct LeafHost {
     calls: Mutex<Vec<(String, Value)>>,
 }
 
-impl RuntimeHost for LeafHost {
+impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
     fn run_deterministic(
         &self,
         action: &str,

@@ -284,6 +284,17 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::update_task_from_activity(self, task_id, update)
     }
 
+    /// Orbit admits every step recovery here. Each one stays bounded by its
+    /// step's attempt budget, and any Git mutation it asks for must first pass
+    /// `validate_step_recovery_mutation`.
+    fn authorize_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<orbit_engine::StepRecoveryAdmission, OrbitError> {
+        Ok(orbit_engine::StepRecoveryAdmission::Allowed)
+    }
+
     fn validate_step_recovery_mutation(
         &self,
         run_id: &str,
@@ -552,6 +563,10 @@ impl RuntimeHost for OrbitRuntime {
         self.host_validation_gates()
     }
 
+    fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
+        orbit_types::workflow::EvidenceHostOs::current()
+    }
+
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
         let mut config = std::collections::HashMap::new();
         let policy = self.codex_execution_policy();
@@ -700,6 +715,14 @@ impl RuntimeHost for OrbitRuntime {
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
         OrbitRuntime::run_tool_with_context_and_role(self, name, input, role, tool_context)
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        orbit_engine::run_private_vcs_operation(operation, &input)
     }
 
     fn scoring_enabled(&self) -> bool {

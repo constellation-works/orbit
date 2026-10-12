@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ReviewerInvocationRequest, RuntimeHost, execute_job_with_resume,
+    DispatchError, JobOutcome, ReviewerInvocationRequest, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::ReviewerInvocationEvent;
@@ -542,7 +542,7 @@ fn published_head(index: usize) -> String {
     }
 }
 
-impl RuntimeHost for CompletionReviewHost {
+impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
     fn run_deterministic(
         &self,
         action: &str,
