@@ -460,6 +460,7 @@
         "application/routines/tests/seed.rs::shipped_ship_sweep_leaves_slack_past_its_drain_window",
         "application/routines/tests/sweep.rs::blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces",
         "application/task/desktop/tests/authorization.rs::desktop_status_receipt_does_not_grant_authority",
+        "application/task/desktop/tests/write.rs::completion_replay_finishes_side_effects_after_a_post_lock_read_failure",
         "application/task/desktop/tests/write.rs::desktop_legacy_edit_receipt_survives_status_contract_extension",
         "application/task/desktop/tests/write.rs::desktop_redacts_before_receipt_and_preserves_retries",
         "application/task/tests/add.rs::keyed_creation_lost_reply_replays_without_history_or_events",

@@ -208,7 +208,11 @@ claim that a new binary was installed in Codex Desktop.
 
 Retain the exact request ID and payload when reconciling a timed-out write.
 A matching retry returns `replayed: true` and a fresh snapshot; it does not
-repeat the mutation. Reusing an ID with changed content is refused. Task edit,
+repeat the mutation. It does finish post-commit side effects the first attempt
+left undone: a completion records its `resolves` targets as pending with the
+receipt, and a terminal transition's pull-request closure is recorded as a
+`desktop_pr_closure` history entry once it has run, so a retry resolves only
+unsettled targets and never runs a recorded closure again. Reusing an ID with changed content is refused. Task edit,
 comment and review IDs are scoped to that task. Creation IDs are scoped to the
 workspace and reserve a stable task identity.
 

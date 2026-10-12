@@ -221,6 +221,7 @@ fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
                     crew_source: None,
                     comment: Some("A benign note.".to_string()),
                     status: None,
+                    append_history: Vec::new(),
                 },
             )
             .expect("desktop comment"),

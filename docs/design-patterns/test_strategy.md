@@ -97,6 +97,8 @@ Admitted unit tests:
 
 - `crates/orbit-core/src/application/task/tests/final_recovery.rs::terminal_replay_finishes_side_effects_after_a_post_lock_read_failure` (criterion 2, fault injection). A one-shot read seam stops final recovery after its decision is durable and before resolves or PR closure. The isolated fixture verifies replay finishes done/rejected/archived effects, writes one decision, and leaves successful effects and a human-reopened friction alone on another retry. The public boundary cannot deterministically fail only that post-lock read.
 
+- `crates/orbit-core/src/application/task/desktop/tests/write.rs::completion_replay_finishes_side_effects_after_a_post_lock_read_failure` (criterion 2, fault injection). A one-shot read seam stops a desktop completion after its receipt commits and before resolves or PR closure. The isolated fixture verifies a same-request retry resolves the target and closes the stale PR, and that another retry leaves a human-reopened friction and a recorded PR closure alone. The public boundary cannot deterministically fail only that post-lock read.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.

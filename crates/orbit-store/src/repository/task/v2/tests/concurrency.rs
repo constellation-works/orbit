@@ -172,6 +172,7 @@ fn desktop_concurrent_status_receipts_are_atomic_and_durable() {
         crew_source: None,
         comment: None,
         status: Some(TaskStatus::Backlog),
+        append_history: Vec::new(),
     };
     let mut competing = request.clone();
     competing.request_id = "competing".into();
