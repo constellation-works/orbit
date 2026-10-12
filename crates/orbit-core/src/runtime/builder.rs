@@ -339,6 +339,7 @@ pub(crate) fn build_context_from_roots(
                 .machine()
                 .task_prefix
                 .unwrap_or_else(|| "ORB".to_string()),
+            runtime_config.snapshot.host_shutdown_hold_minutes(),
             runtime_config.snapshot.worktree_reclaim.clone(),
             runtime_config.snapshot.worktree_reclaim_below_free_mib,
         ),

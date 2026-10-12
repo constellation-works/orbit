@@ -216,6 +216,11 @@ impl ConfigSnapshot {
         }
     }
 
+    /// Admitted `machine.host_shutdown_hold_minutes`.
+    pub fn host_shutdown_hold_minutes(&self) -> u32 {
+        self.machine_host_shutdown_hold_minutes
+    }
+
     /// Admitted host resource thresholds, shared by dashboard and admission consumers.
     pub fn resource_throttle(&self) -> ResourceThrottleSettings {
         ResourceThrottleSettings {

@@ -398,7 +398,8 @@ pub struct DrainAdmissionPass {
     pub resource_throttle: Option<ResourceThrottle>,
     /// [ORB-15637] Why this pull pass requested no new claim although its
     /// window was open: the owner's probe refusal, a refused settlement
-    /// (`settlement_refused`), the failure breaker (`circuit_open`) or no
+    /// (`settlement_refused`), the failure breaker (`circuit_open`), a host
+    /// shutdown inside the hold horizon (`host_shutdown_scheduled`), or no
     /// runnable crew (`no_runnable_crew`, `host_suppressed`). Set afresh each
     /// pass, never carried. Host pressure and degradation have their own
     /// fields. Pull drains only.

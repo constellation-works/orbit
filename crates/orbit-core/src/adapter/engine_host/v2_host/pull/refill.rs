@@ -63,9 +63,13 @@
 //! pull admission never reads it [ORB-15637].
 //!
 //! Every other reason a pass requests nothing although its window is open —
-//! an owner probe refusal, a refused settlement, the failure breaker, no
-//! runnable crew — is recorded on the drain's last pass as
-//! `admission_refusal`, so `orbit run show` and readiness name it [ORB-15637].
+//! an owner probe refusal, a refused settlement, the failure breaker, a
+//! shutdown inside `machine.host_shutdown_hold_minutes`
+//! (`host_shutdown_scheduled`), or no runnable crew — is recorded on the
+//! drain's last pass as `admission_refusal`, so `orbit run show` and
+//! readiness name it [ORB-15637]. A schedule further away is reported and
+//! does not hold requests. Host pressure keeps its own field and leaves
+//! `admission_refusal` unset.
 //!
 //! The failure breaker opens after three claims in a row settle as failures
 //! and half-opens after `breaker_cooldown_seconds` to admit one probe claim
@@ -240,9 +244,12 @@ pub(crate) fn pull_refill(
     } else {
         !window_expired
     };
-    // Stop admitting while a host shutdown is pending: anything started now
-    // would be killed by it [ORB-12968]. Settlement still runs.
+    // Stop admitting when a host shutdown is inside the hold horizon:
+    // anything started now would be killed by it [ORB-12968]. A schedule
+    // further away is named below and does not hold requests. Settlement
+    // still runs either way.
     let host_shutdown = runtime.scheduled_host_shutdown();
+    let host_shutdown_hold = runtime.host_shutdown_admission_hold();
     // Sustained host pressure holds new requests too [ORB-13901]; unknown
     // telemetry admits.
     runtime.reclaim_worktrees_on_admission();
@@ -298,7 +305,7 @@ pub(crate) fn pull_refill(
     };
     let mut admitting = !degraded
         && window_open
-        && host_shutdown.is_none()
+        && host_shutdown_hold.is_none()
         && resource.throttle.is_none()
         && !breaker_holds
         && !settlement_held
@@ -556,6 +563,15 @@ pub(crate) fn pull_refill(
             })
         })
         .or_else(|| breaker_refusal(breaker.as_ref(), gate, probe_waits_on, now))
+        .or_else(|| {
+            // Pressure already has `resource_throttle`. A shutdown hold would
+            // otherwise look like an idle owner (`queued=0`, no refusal).
+            resource.throttle.is_none().then(|| {
+                host_shutdown_hold
+                    .as_ref()
+                    .map(crate::runtime::host_signal::ScheduledShutdown::hold_reason)
+            })?
+        })
         .or_else(|| runs_nothing.then_some(no_runnable_crew));
     let owner_answer = match idle_receipt.as_deref() {
         Some(receipt) => OwnerAnswer::Idle(receipt),

@@ -179,11 +179,12 @@ pub fn explain_workspace_auto_readiness(
         .as_ref()
         .is_some_and(|drain| drain.admissions_stopped());
     let host_shutdown = runtime.scheduled_host_shutdown();
+    let host_shutdown_holding = runtime.host_shutdown_admission_hold();
     // [ORB-13901] The live drain's own throttle when this process has not
     // sampled long enough to judge sustained pressure itself.
     let resource = runtime.admission_resource_throttle();
     let shared_occupancy = shared_leaf_occupancy(runtime)?;
-    let unthrottled_slots = if admissions_stopped || host_shutdown.is_some() {
+    let unthrottled_slots = if admissions_stopped || host_shutdown_holding.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -495,7 +496,7 @@ pub fn explain_workspace_auto_readiness(
             if let Some(run_ids) = claimed_by_task.get(&task.id) {
                 object.insert("reason".to_string(), Value::String("claimed_by_live_child".to_string()));
                 object.insert("run_ids".to_string(), json!(run_ids));
-            } else if let Some(shutdown) = host_shutdown.as_ref() {
+            } else if let Some(shutdown) = host_shutdown_holding.as_ref() {
                 object.insert(
                     "reason".to_string(),
                     Value::String(HOST_SHUTDOWN_SCHEDULED.to_string()),
@@ -658,9 +659,13 @@ pub fn explain_workspace_auto_readiness(
             "pull_drain_refusal": pull_drain
                 .as_ref()
                 .and_then(|drain| drain.refusal.clone()),
-            // [ORB-12968] A pending host shutdown or reboot; while present no
-            // drain, sweep, or routine starts new work.
+            // [ORB-12968] A pending host shutdown or reboot. `host_shutdown`
+            // names it however far away it is. `host_shutdown_holding` is
+            // true only inside `machine.host_shutdown_hold_minutes`, which is
+            // when drains, the sweep and routines start no new work. A missing
+            // flag on an older payload means holding.
             "host_shutdown": host_shutdown,
+            "host_shutdown_holding": host_shutdown_holding.is_some(),
             // [ORB-13901] Sustained host resource pressure holding every new
             // admission, and readings that could not be used (which admit).
             "resource_throttle": resource.throttle,

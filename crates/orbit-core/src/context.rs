@@ -430,6 +430,9 @@ pub(crate) struct OrbitRuntimeSettings {
     worker_containment: orbit_config::WorkerContainmentSettings,
     /// Existing machine identity's task namespace; ORB for legacy runtimes.
     machine_task_prefix: String,
+    /// `machine.host_shutdown_hold_minutes`: how close a scheduled shutdown
+    /// must be before unattended admission holds.
+    host_shutdown_hold_minutes: u32,
     worktree_reclaim: Vec<String>,
     worktree_reclaim_below_free_mib: Option<u64>,
 }
@@ -460,6 +463,7 @@ impl OrbitRuntimeSettings {
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
         machine_task_prefix: String,
+        host_shutdown_hold_minutes: u32,
         worktree_reclaim: Vec<String>,
         worktree_reclaim_below_free_mib: Option<u64>,
     ) -> Self {
@@ -487,9 +491,18 @@ impl OrbitRuntimeSettings {
             operation,
             worker_containment,
             machine_task_prefix,
+            host_shutdown_hold_minutes,
             worktree_reclaim,
             worktree_reclaim_below_free_mib,
         }
+    }
+
+    pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
+        self.host_shutdown_hold_minutes = minutes;
+    }
+
+    pub(crate) fn host_shutdown_hold_minutes(&self) -> u32 {
+        self.host_shutdown_hold_minutes
     }
 
     pub(crate) fn worktree_reclaim(&self) -> &[String] {
@@ -680,6 +693,10 @@ impl OrbitContext {
 
     pub(crate) fn set_actor(&mut self, actor: ActorIdentity) {
         self.runtime.actor = actor;
+    }
+
+    pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
+        self.runtime.set_host_shutdown_hold_minutes(minutes);
     }
 
     pub(crate) fn scoring_enabled(&self) -> bool {

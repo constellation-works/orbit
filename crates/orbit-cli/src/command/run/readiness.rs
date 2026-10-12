@@ -15,7 +15,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. On a replica the throttle is this\nhost's own and holds its pull drain; the owner's throttle never holds a pull\nclaim. When that pull drain's last pass requested no claim for another reason,\n`Pull drain requests held:` names it (`capacity.pull_drain_refusal`), for\nexample `circuit_open` once three of its claims in a row settled as failures,\nuntil its breaker half-opens to admit one probe claim.\nWhen CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline.\n\nWith more than one slot, a backlog task with no context_files and no\n`no-diff-expected` tag holds no file lock: it reports `awaiting_footprint`\nwhile a task pilot on this host would still prepare it, then\n`awaiting_exclusive_slot` until no other leaf is in flight, and runs alone."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile a host shutdown or reboot is within machine.host_shutdown_hold_minutes\n(default 180), every task reports `host_shutdown_scheduled` and the output says\nadmissions are held, naming the scheduled time and mode. A schedule further\naway is named the same way and admissions continue. A pull drain held for that\nshutdown reports it as `Pull drain requests held: host_shutdown_scheduled: …`.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. On a replica the throttle is this\nhost's own and holds its pull drain; the owner's throttle never holds a pull\nclaim. When that pull drain's last pass requested no claim for another reason,\n`Pull drain requests held:` names it (`capacity.pull_drain_refusal`), for\nexample `circuit_open` once three of its claims in a row settled as failures,\nuntil its breaker half-opens to admit one probe claim.\nWhen CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline.\n\nWith more than one slot, a backlog task with no context_files and no\n`no-diff-expected` tag holds no file lock: it reports `awaiting_footprint`\nwhile a task pilot on this host would still prepare it, then\n`awaiting_exclusive_slot` until no other leaf is in flight, and runs alone."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -116,7 +116,10 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             ));
         }
     }
-    if let Some(hold) = host_shutdown_hold(&capacity["host_shutdown"]) {
+    if let Some(hold) = host_shutdown_line(
+        &capacity["host_shutdown"],
+        capacity["host_shutdown_holding"].as_bool(),
+    ) {
         lines.push(hold);
     }
     // [ORB-13901] Named up front like a shutdown hold: it holds every task.
@@ -267,13 +270,20 @@ fn cpu_light_budget_line(budget: &Value) -> Option<String> {
     ))
 }
 
-/// [ORB-12968] A pending host shutdown holds every new admission, so it is
-/// named up front with its mode and time rather than left to per-task reasons.
-fn host_shutdown_hold(shutdown: &Value) -> Option<String> {
+/// [ORB-12968] A pending host shutdown is named up front with its mode and
+/// time either way. Admissions are held only inside the horizon; a missing
+/// `host_shutdown_holding` flag is treated as holding.
+fn host_shutdown_line(shutdown: &Value, holding: Option<bool>) -> Option<String> {
     let mode = shutdown["mode"].as_str()?;
     let at = shutdown["scheduled_at"]
         .as_str()
         .unwrap_or("an unknown time");
+    if holding == Some(false) {
+        return Some(format!(
+            "Host {mode} scheduled for {at}. Admissions continue until \
+             machine.host_shutdown_hold_minutes of that time; in-flight runs are not touched."
+        ));
+    }
     Some(format!(
         "Admissions held: host {mode} scheduled for {at}. New runs start again once the \
          schedule is cancelled or the host has restarted; in-flight runs are not touched."

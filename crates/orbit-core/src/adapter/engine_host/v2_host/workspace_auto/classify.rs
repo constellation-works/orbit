@@ -109,11 +109,14 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         .collect();
     let admissions_stop = live_admissions_stop(runtime, input);
     let admissions_stopped = admissions_stop.is_some();
-    // [ORB-12968] A pending host shutdown would kill anything started now, so
-    // the wave admits nothing while one is scheduled. Live children are not
-    // touched, and the next iteration after the schedule clears admits again.
+    // [ORB-12968] A host shutdown inside the hold horizon would kill anything
+    // started now, so the wave admits nothing while one is that close. A
+    // later schedule is reported and does not hold the wave. Live children
+    // are not touched, and the next iteration after the horizon lifts admits
+    // again.
     let host_shutdown = runtime.scheduled_host_shutdown();
-    if let Some(shutdown) = host_shutdown.as_ref() {
+    let host_shutdown_holding = runtime.host_shutdown_admission_hold();
+    if let Some(shutdown) = host_shutdown_holding.as_ref() {
         tracing::warn!(
             target: "orbit.core.host_signal",
             mode = shutdown.mode.as_str(),
@@ -151,7 +154,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
     runtime.drain_upgrade_boundary();
-    let unthrottled_slots = if admissions_stopped || host_shutdown.is_some() {
+    let unthrottled_slots = if admissions_stopped || host_shutdown_holding.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -338,6 +341,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         "admissions_stopped": admissions_stopped,
         "admissions_stop": admissions_stop,
         "host_shutdown": host_shutdown,
+        "host_shutdown_holding": host_shutdown_holding.is_some(),
         "resource_throttle": resource.throttle,
         "resource_telemetry_unknown": resource.unknown,
         // [ORB-14624] Light slots a CPU-only throttle still admits into.

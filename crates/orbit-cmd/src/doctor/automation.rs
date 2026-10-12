@@ -222,18 +222,21 @@ fn format_age(age: chrono::Duration) -> String {
     }
 }
 
-/// A pending host shutdown or reboot holds every unattended admission —
-/// routine and auto-task fires, drain waves, the ship sweep — so doctor names
-/// it with its mode and time [ORB-12968]. Nothing is wrong with the workspace;
-/// the warning explains why no new work is starting.
+/// A host shutdown inside the hold horizon holds every unattended admission —
+/// routine and auto-task fires, drain waves, the ship sweep — so doctor warns
+/// and names the mode and time [ORB-12968]. A later schedule is still named,
+/// as ok: nothing is wrong, and work continues until the horizon. Nothing is
+/// wrong with the workspace either way.
 pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    match runtime.scheduled_host_shutdown() {
-        None => check(
+    let Some(shutdown) = runtime.scheduled_host_shutdown() else {
+        return check(
             "host-shutdown",
             WorkspaceDoctorStatus::Ok,
             "no host shutdown or reboot is scheduled".to_string(),
-        ),
-        Some(shutdown) => actionable_check(
+        );
+    };
+    if runtime.host_shutdown_admission_hold().is_some() {
+        return actionable_check(
             "host-shutdown",
             WorkspaceDoctorStatus::Warning,
             format!(
@@ -242,11 +245,22 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
                 shutdown.describe(),
                 shutdown.source
             ),
-            "Nothing to repair: admissions resume on their own after the restart. To resume \
-             them now, cancel the schedule as root with `shutdown -c`."
+            "Nothing to repair: admissions resume on their own after the restart, or once the \
+             schedule is further away than machine.host_shutdown_hold_minutes. To resume them \
+             now, cancel the schedule as root with `shutdown -c`."
                 .to_string(),
-        ),
+        );
     }
+    check(
+        "host-shutdown",
+        WorkspaceDoctorStatus::Ok,
+        format!(
+            "{} (read from {}); admissions continue until machine.host_shutdown_hold_minutes \
+             of that time, and in-flight runs are not touched",
+            shutdown.describe(),
+            shutdown.source
+        ),
+    )
 }
 
 /// `execution.env.pass` variables this process does not hold [ORB-14777].

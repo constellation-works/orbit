@@ -20,7 +20,7 @@ use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cach
 use crate::application::automation::SourceCache;
 use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
-use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
+use crate::runtime::host_signal::{HostSignalProbe, ScheduledShutdown, default_host_signal_probe};
 use chrono::Utc;
 use orbit_automation::routines::sweep::TICK_DEADLINE;
 use orbit_automation::routines::sweep::run_sweep_core;
@@ -298,12 +298,14 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
-    // [ORB-12968] A pending host shutdown or reboot would kill anything this
-    // tick starts, so the whole fire phase — routines and auto-tasks — stands
-    // down for it. Cursors are not advanced, so once the schedule is cancelled
-    // or the host is back, each routine's own `missed_run` policy decides what
-    // the held slots become, exactly as after any other downtime.
-    if let Some(shutdown) = host_signals.scheduled_shutdown() {
+    // [ORB-12968] A host shutdown inside the hold horizon would kill anything
+    // this tick starts, so the whole fire phase — routines and auto-tasks —
+    // stands down for it. A later schedule does not. Cursors are not advanced
+    // while held, so once the schedule is cancelled, the horizon lifts, or
+    // the host is back, each routine's own `missed_run` policy decides what
+    // the held slots become, exactly as after any other downtime. The horizon
+    // is the global machine setting, judged against this tick's clock.
+    if let Some(shutdown) = shutdown_holding_admission(global_root, host_signals, now_utc)? {
         let reason = shutdown.hold_reason();
         tracing::warn!(
             target: "orbit.core.sweep",
@@ -732,6 +734,26 @@ fn no_workspace_loaded_row(discovered: &super::loader::DiscoveredWorkspaces) -> 
         first.source_workspace,
         first.message
     ))
+}
+
+/// The global shutdown horizon, and the schedule when it holds this tick.
+///
+/// A missing config file is the built-in default. An invalid global config
+/// fails the tick rather than silently admitting into a reboot.
+fn shutdown_holding_admission(
+    global_root: &Path,
+    host_signals: &dyn HostSignalProbe,
+    now_utc: chrono::DateTime<Utc>,
+) -> Result<Option<ScheduledShutdown>, OrbitError> {
+    let Some(shutdown) = host_signals.scheduled_shutdown() else {
+        return Ok(None);
+    };
+    let loaded =
+        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let minutes = loaded.snapshot.host_shutdown_hold_minutes();
+    Ok(shutdown
+        .holds_admission(now_utc, minutes)
+        .then_some(shutdown))
 }
 
 /// Bind a routine sweep to the same cadence the host clock installer renders.

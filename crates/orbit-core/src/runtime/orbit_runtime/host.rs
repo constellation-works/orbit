@@ -47,6 +47,18 @@ impl OrbitRuntime {
         self
     }
 
+    /// Override `machine.host_shutdown_hold_minutes` for a fixture. Production
+    /// runtimes take the admitted setting from the global config.
+    pub fn with_host_shutdown_hold_minutes(mut self, minutes: u32) -> Self {
+        self.context.set_host_shutdown_hold_minutes(minutes);
+        self
+    }
+
+    /// The admitted shutdown-hold horizon, in minutes.
+    pub fn host_shutdown_hold_minutes(&self) -> u32 {
+        self.context.settings().host_shutdown_hold_minutes()
+    }
+
     /// Replace the forge a terminal task decision closes PRs through, so a
     /// fixture can observe closures without a real repository.
     pub fn with_task_pr_forge(mut self, forge: Arc<dyn TaskPrForge>) -> Self {
@@ -58,11 +70,24 @@ impl OrbitRuntime {
         self.task_pr_forge.as_ref()
     }
 
-    /// The host shutdown or reboot currently pending, if any. While one is,
-    /// unattended admission points start no new runs; in-flight runs are
-    /// left alone.
+    /// The host shutdown or reboot currently pending, if any. This is the raw
+    /// schedule: status surfaces name it however far away it is. Unattended
+    /// admission holds only inside [`Self::host_shutdown_hold_minutes`];
+    /// in-flight runs are left alone either way.
     pub fn scheduled_host_shutdown(&self) -> Option<ScheduledShutdown> {
         self.host_signals.scheduled_shutdown()
+    }
+
+    /// The pending shutdown when it is close enough to hold new admissions.
+    pub fn host_shutdown_admission_hold(&self) -> Option<ScheduledShutdown> {
+        self.host_shutdown_admission_hold_at(Utc::now())
+    }
+
+    /// [`Self::host_shutdown_admission_hold`] judged at `now`, so a sweep tick
+    /// and a test share one clock.
+    pub fn host_shutdown_admission_hold_at(&self, now: DateTime<Utc>) -> Option<ScheduledShutdown> {
+        self.scheduled_host_shutdown()
+            .filter(|shutdown| shutdown.holds_admission(now, self.host_shutdown_hold_minutes()))
     }
 
     /// Replace the resource probe for deterministic pressure/unknown fixtures.

@@ -144,9 +144,11 @@ pub struct DrainEntryAdmission {
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
     /// retained entry cannot disagree about it.
     pub claim_admission_refusal: Option<String>,
-    /// The host shutdown pending when the decision was taken. An unattended
-    /// entry point is refused for it; an explicit one is admitted with a
-    /// warning, and the drain it starts still holds its own waves.
+    /// The host shutdown pending when the decision was taken, however far
+    /// away it is. An unattended entry point is refused only when it is
+    /// inside `machine.host_shutdown_hold_minutes`; an explicit one is then
+    /// admitted with a warning. A later schedule is reported and does not
+    /// warn or refuse. A drain started during a hold still holds its own waves.
     pub host_shutdown: Option<ScheduledShutdown>,
     /// Host resource pressure holding admissions when the decision was taken
     /// [ORB-13901]. Discovery is refused for it; an explicit task selection or
@@ -229,7 +231,9 @@ impl crate::OrbitRuntime {
                 return Ok(decision);
             }
         }
-        if let Some(shutdown) = decision.host_shutdown.as_ref() {
+        if let Some(shutdown) = decision.host_shutdown.as_ref().filter(|shutdown| {
+            shutdown.holds_admission(Utc::now(), self.host_shutdown_hold_minutes())
+        }) {
             if unattended {
                 decision.refusal = Some(DrainEntryRefusal::HostShutdownScheduled {
                     shutdown: shutdown.clone(),

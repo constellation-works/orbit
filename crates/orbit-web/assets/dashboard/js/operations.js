@@ -2125,8 +2125,12 @@ function autoDrainCapacity(capacity, counts, blocked) {
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
   const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
   let summary;
-  if (capacity.host_shutdown) {
+  if (capacity.host_shutdown && capacity.host_shutdown_holding !== false) {
     summary = "New tasks cannot start while a host shutdown is scheduled.";
+  } else if (capacity.host_shutdown) {
+    const mode = capacity.host_shutdown.mode || "shutdown";
+    const at = capacity.host_shutdown.scheduled_at || "a later time";
+    summary = `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`;
   } else if (capacity.resource_throttle) {
     const resources = Array.isArray(capacity.resource_throttle.resources)
       ? capacity.resource_throttle.resources.map(item => item.resource).join(", ") : "";

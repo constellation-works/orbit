@@ -1143,23 +1143,39 @@ file, and `/run` is a tmpfs, so the hold lifts on its own either way. A `dry-*` 
 (`shutdown -k`), a missing file, an unreadable file, and a malformed file all mean "nothing
 scheduled". Other platforms have no probe and never hold. Tests inject a fixed probe
 (`with_host_signal_probe`; the sweep takes one explicitly), and orbit-core's unit-test build never
-reads the real host. There is no lead window: the hold starts as soon as a schedule exists.
+reads the real host. Admission holds only while the schedule is within
+`machine.host_shutdown_hold_minutes` (default 180), including that instant. A later schedule is
+still reported — readiness, doctor, and the pass record name the mode and time — and unattended
+admission continues, so a reboot set for tomorrow does not idle the host all day. Work admitted
+on the near side of the horizon can finish before the reboot. A schedule already in the past
+holds. A horizon that cannot be added to now holds, rather than starting work into an unknown
+reboot.
 
-- **Scheduler tick.** `run_sweep_at_with_providers` fires no routine (cron, delivery, or state) and
-  mints no auto-task. Each routine row reads `skipped` with a `host_shutdown_scheduled: …` reason
-  naming the mode and time, and every tick logs `sweep.host_shutdown_hold`. Cursors do not advance,
-  so each routine's `missed_run` policy decides what happens to the held slots once the hold lifts,
-  as after any other downtime.
-- **Drain waves.** `classify_workspace_auto_tasks` sets `free_slots` to 0, reports
-  `host_shutdown`, and admits no leaf until the schedule is gone. It does not signal or cancel live
-  children.
-- **Entry admission.** `drain_entry_admission` refuses an unattended caller (`orbit run
-  ship-sweep`) with `host_shutdown_scheduled`. Explicit operator commands (`orbit run ship`,
-  `orbit run auto`) are admitted with a warning and `host_shutdown` on the decision. That is the
-  documented override: an operator who ships one task during the window chooses to risk it. An
-  explicit drain started during a hold still holds its own waves.
-- **Surfaces.** `orbit run readiness` names the schedule and gives every waiting backlog task the
-  reason `host_shutdown_scheduled`. `orbit doctor` reports a `host-shutdown` warning.
+- **Scheduler tick.** Inside the horizon, `run_sweep_at_with_providers` fires no routine (cron,
+  delivery, or state) and mints no auto-task. Each routine row reads `skipped` with a
+  `host_shutdown_scheduled: …` reason naming the mode and time, and every such tick logs
+  `sweep.host_shutdown_hold`. Cursors do not advance, so each routine's `missed_run` policy decides
+  what happens to the held slots once the hold lifts, as after any other downtime. Beyond the
+  horizon the tick fires normally. The sweep reads the global setting itself; it does not go
+  through `OrbitRuntime`.
+- **Drain waves.** While holding, `classify_workspace_auto_tasks` sets `free_slots` to 0, reports
+  `host_shutdown` and `host_shutdown_holding`, and admits no leaf. Beyond the horizon it admits
+  and still reports `host_shutdown` with `host_shutdown_holding` false. It does not signal or
+  cancel live children.
+- **Pull drain.** A holding pass requests no claim and records `admission_refusal` beginning
+  `host_shutdown_scheduled`, so `orbit run show` says `Requests held:` instead of an unexplained
+  `queued=0`. A later schedule does not set that refusal. Settlement still runs either way. Host
+  pressure keeps its own field and does not also set this refusal.
+- **Entry admission.** While holding, `drain_entry_admission` refuses an unattended caller
+  (`orbit run ship-sweep`) with `host_shutdown_scheduled`. Explicit operator commands (`orbit run
+  ship`, `orbit run auto`) are admitted with a warning and `host_shutdown` on the decision. That
+  is the documented override: an operator who ships one task during the window chooses to risk it.
+  Beyond the horizon both explicit and unattended commands proceed, and the decision still carries
+  the raw `host_shutdown`. An explicit drain started during a hold still holds its own waves.
+- **Surfaces.** `orbit run readiness` names the schedule either way. Inside the horizon every
+  waiting backlog task has reason `host_shutdown_scheduled` and the text says admissions are held.
+  Beyond it, admissions continue and the text names `machine.host_shutdown_hold_minutes`.
+  `orbit doctor` warns only while the schedule holds; a further schedule is `ok` and names the time.
 
 ## 8. Required validation scenarios
 
@@ -1206,7 +1222,7 @@ Acceptance criteria, not reported as passing.
 | Approve twice, or revoke before merge | Operator required; one immutable authorization/start request under concurrent retries; revoked or stale candidate cannot publish merge intent |
 | Missing, failed, replaced or wrong-candidate validation artifact | Acceptance, approval and merge-intent publication rejected with no partial effects |
 | Idle polling and receipt compaction | One idle request per pass; tombstones cannot re-admit; unsettled receipts kept; growth metrics visible |
-| Host shutdown or reboot scheduled | Sweep fires and mints nothing, drain waves and the ship sweep admit nothing, readiness and doctor name mode and time; in-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
+| Host shutdown or reboot scheduled | Inside `machine.host_shutdown_hold_minutes` (default 180, the instant included): sweep fires and mints nothing, drain waves and the ship sweep admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
 | Mixed legacy and claimed admission under one ceiling | One occupancy reading; wrapper → gate → queued claimed leaf is one slot; terminal leaf holds its slot until settlement; `max_active_runs` per definition |
 
 ## 9. Concerns & Honest Limitations
