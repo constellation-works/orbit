@@ -1886,7 +1886,7 @@ fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() 
         root: PathBuf,
         store: Store,
     }
-    impl RuntimeHost for WaitHost {
+    impl orbit_engine::test_support::NullRuntimeHost for WaitHost {
         fn run_deterministic(
             &self,
             action: &str,
