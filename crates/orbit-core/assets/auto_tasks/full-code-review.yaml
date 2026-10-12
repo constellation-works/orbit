@@ -26,6 +26,10 @@ template:
       be mistaken for a sweep.
     - Area tasks have complexity `hard` at most, never `xhard`, and no `crew`,
       so each is routed by automatic selection.
+    - This coordinator and its area reviews are `no-diff-expected`, in owner
+      or claimed mode: run no workspace gates or required validation commands
+      and attach no `no-diff.json` or workspace validation logs. Run only
+      commands this brief requires and retain its evidence artifacts.
     - If area reviews from an earlier full review are still open, do not file a
       second set. Record their IDs in the execution summary and finish.
 
@@ -158,8 +162,11 @@ template:
     > `comment` in claimed mode) so it remains visible on the blocked task;
     > leave lifecycle transitions to the pipeline. Incomplete reading is never
     > a clean no-op. Only an area with every partition fully read, checks across
-    > partitions resolved and no confirmed findings is a successful no-op;
-    > follow the workspace's no-diff artifact and validation requirements.
+    > partitions resolved and no confirmed findings is a successful no-op.
+    > This `no-diff-expected` review runs no workspace gates or required
+    > validation commands and attaches no `no-diff.json` or workspace
+    > validation logs, in owner or claimed mode. Run only commands this brief
+    > requires and retain the reading and finding evidence above.
     > Record the SHA, area line count, per-partition coverage, progress artifact
     > and each filed task ID in the execution summary.
 

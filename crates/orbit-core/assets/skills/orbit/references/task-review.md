@@ -1,6 +1,13 @@
-# Reviewing a task
+# Reviewing a delivered diff
 
-Review someone else's work and surface issues in your review summary. Read-only: **never** use `orbit.task.update` to transition the reviewed task's lifecycle — approval requires the authorized operator or human decision, not the reviewing agent.
+Review someone else's delivered diff and surface issues in your review summary. Read-only: **never** use `orbit.task.update` to transition the reviewed task's lifecycle — approval requires the authorized operator or human decision, not the reviewing agent.
+
+A review auto-task tagged `no-diff-expected` follows its own brief. In owner or
+claimed mode, it runs no workspace gates or required validation commands and
+attaches no `no-diff.json` or workspace validation logs. Run only commands the
+brief requires, including reproducing a finding when requested; retain the
+brief's evidence artifacts and execution summary. The build and test guidance
+below applies to reviewing a delivered diff, not to these auto-tasks.
 
 ## Load context
 

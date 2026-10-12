@@ -429,7 +429,10 @@ as `ship-sweep`.
   required checks are respected and never bypassed; pending checks may use
   GitHub auto-merge, but enabling auto-merge is not success. A closed or blocked
   PR, a refused auto-merge, or an expired wait leaves the task in `review`.
-- Validated `no-diff-expected` work completes without a PR.
+- Completed `no-diff-expected` work completes without a PR. In owner or claimed
+  mode, it runs only commands its own brief requires, with no workspace gates,
+  required validation commands, or `no-diff.json` and workspace validation logs.
+  No-op implementations without the tag still need validated no-diff evidence.
 - `run auto --complete` is blanket authorization for every task the drain admits
   during its whole window, including work filed after it starts. Do not use it
   where the user authorized only the currently visible backlog.

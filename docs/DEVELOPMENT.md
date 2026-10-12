@@ -18,7 +18,7 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 
 ## Validation and CI
 
-Run these gates before implementation handoff or before-PR review:
+For tasks that deliver a diff, run these gates before implementation handoff or before-PR review:
 
 ```bash
 make ci-fast           # MSRV compile check, formatting, script guardrails; no Rust tests
@@ -26,6 +26,12 @@ make ci-test-affected  # complete test targets of changed crates and their works
 make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI log and sandbox profile goldens; UPDATE=1 regenerates
 ```
+
+Tasks tagged `no-diff-expected` run no workspace gates or required validation
+commands and attach no `no-diff.json` or workspace validation logs, in owner or
+claimed mode. Run only commands the task's own brief requires; a QA sweep may
+build and run the product, and a review may reproduce a finding when its brief
+asks for it. Keep the brief's evidence artifacts and execution summary.
 
 - `make ci-fast` runs independent repository script checks in concurrent batches of eight, captures each script's output separately, prints per-script wall times, and names every failing script before returning the first failure's exit code. Fixture self-tests run sequentially only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
@@ -82,7 +88,7 @@ The owner workspace lists `make ci-test-affected` in [`workflow.required_validat
 required_validation_commands = ["make ci-fast", "make ci-test-affected"]
 ```
 
-Candidate validation and before-PR review then require a passing affected-test record. Distributed review contracts freeze the owner's list at admission, so existing claims need a fresh admission after a change.
+For tasks that deliver a diff, candidate validation and before-PR review then require a passing affected-test record. Tasks tagged `no-diff-expected` do not run this list. Distributed review contracts freeze the owner's list at admission, so existing claims need a fresh admission after a change.
 
 ### Validation failure diagnostics
 
