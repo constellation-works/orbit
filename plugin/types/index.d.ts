@@ -27,7 +27,7 @@ export type OrbitSnapshot = {
   at: number
 }
 
-export type OrbitStepState = 'pending' | 'active' | 'done' | 'failed'
+export type OrbitStepState = 'pending' | 'active' | 'done' | 'failed' | 'stopped' | 'skipped'
 
 export type OrbitCheck = { label: string; isOk: boolean; detail: string }
 

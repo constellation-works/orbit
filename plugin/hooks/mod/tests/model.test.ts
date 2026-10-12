@@ -3,7 +3,65 @@
 import { expect, test } from 'claude-code/testing'
 
 import { federatedHosts, remoteArgv } from '../cli'
-import { withTaskTrailer } from '../model'
+import type { OrbitShip, OrbitStepState } from '../../../types'
+import { parseRunEvents, PIPELINE, shipPosition, stepStates, track, withTaskTrailer } from '../model'
+
+const shipWithSteps = (steps: OrbitStepState[]): OrbitShip => ({
+  taskId: 'ORB-7', phase: 'flying', runId: 'jrun-test', checks: [], steps,
+  startedAt: null, finishedAt: null, message: null,
+})
+
+test('terminal audit outcomes count only successful steps and locate failures or stops', () => {
+  const cases: { outcome: string | null; state: OrbitStepState; glyph: string }[] = [
+    { outcome: 'success', state: 'done', glyph: '●' },
+    { outcome: 'failed', state: 'failed', glyph: '✗' },
+    { outcome: 'error', state: 'failed', glyph: '✗' },
+    { outcome: 'held', state: 'stopped', glyph: '■' },
+    { outcome: 'cancelled', state: 'stopped', glyph: '■' },
+    { outcome: 'skipped', state: 'skipped', glyph: '↷' },
+    { outcome: 'unknown', state: 'stopped', glyph: '■' },
+    { outcome: null, state: 'stopped', glyph: '■' },
+  ]
+  for (const { outcome, state, glyph } of cases) {
+    for (const isFailed of [false, true]) {
+      const events = parseRunEvents(JSON.stringify({
+        run_id: 'jrun-test', job_id: 'task_pr_pipeline', events: [
+          { event_type: 'step.started', step_id: 'worktree' },
+          { event_type: 'step.finished', step_id: 'worktree', outcome: 'success', error_message: null },
+          { event_type: 'step.started', step_id: 'implement_bundle' },
+          { event_type: 'step.finished', step_id: 'implement_bundle', outcome, error_message: null },
+        ],
+      }))
+      const steps = stepStates(events, isFailed)
+      expect(steps).toEqual(['done', state, ...PIPELINE.slice(2).map(() => 'pending')])
+      const position = shipPosition(shipWithSteps(steps))
+      expect(position.done).toBe(state === 'done' ? 2 : 1)
+      expect(position.label).toBe(state === 'failed' || state === 'stopped' ? PIPELINE[1]?.label : 'flying')
+      expect(track(steps.slice(0, 3))).toBe(`●━${glyph}${state === 'done' ? '━' : '─'}○`)
+    }
+  }
+})
+
+test('the latest audit transition replaces earlier attempts and explicit skips stay incomplete', () => {
+  const cases: { rows: object[]; state: OrbitStepState; isFailed: boolean }[] = [
+    { rows: [{ event_type: 'step.skipped', reason: 'when: false' }], state: 'skipped', isFailed: false },
+    { rows: [{ event_type: 'step.started' }], state: 'active', isFailed: false },
+    { rows: [{ event_type: 'step.started' }], state: 'failed', isFailed: true },
+    { rows: [{ event_type: 'step.finished', outcome: 'error' }, { event_type: 'step.started' }], state: 'active', isFailed: false },
+    { rows: [{ event_type: 'step.finished', outcome: 'error' }, { event_type: 'step.started' }, { event_type: 'step.finished', outcome: 'success' }], state: 'done', isFailed: false },
+    { rows: [{ event_type: 'step.finished', outcome: 'success' }, { event_type: 'step.started' }, { event_type: 'step.finished', outcome: 'failed' }], state: 'failed', isFailed: true },
+  ]
+  for (const { rows, state, isFailed } of cases) {
+    const events = parseRunEvents(JSON.stringify({ events: [
+      ...rows.map(row => ({ ...row, step_id: 'worktree' })),
+      { event_type: 'activity.finished', step_id: 'worktree', outcome: 'success' },
+      { event_type: 'step.finished', step_id: 'unrelated', outcome: 'success' },
+    ] }))
+    const steps = stepStates(events, isFailed)
+    expect(steps).toEqual([state, ...PIPELINE.slice(1).map(() => 'pending')])
+    expect(shipPosition(shipWithSteps(steps)).done).toBe(state === 'done' ? 1 : 0)
+  }
+})
 
 test('a commit gains the task trailer once, and only a commit', () => {
   const rewritten = withTaskTrailer(`git commit -m "fix"`, 'ORB-7')

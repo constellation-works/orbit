@@ -323,7 +323,7 @@ export function parseShipRun(stdout: string): ShipRun {
   }
 }
 
-export type RunEvent = { type: string; step: string | null }
+export type RunEvent = { type: string; step: string | null; outcome: string | null }
 
 /** Reads `orbit run events --json` into the step transitions the ship track needs. */
 export function parseRunEvents(stdout: string): RunEvent[] {
@@ -332,34 +332,37 @@ export function parseRunEvents(stdout: string): RunEvent[] {
   return rows.filter(isRecord).map(row => ({
     type: text(row.event_type) || text(row.type),
     step: text(row.step_id) || null,
+    outcome: text(row.outcome) || null,
   }))
 }
 
-/** Each pipeline step's state from the run's events; the running step is `active`, or `failed` once the run failed. */
+/** Latest step transitions; only successful finishes count as done. */
 export function stepStates(events: readonly RunEvent[], isFailed: boolean): OrbitStepState[] {
-  const started = new Set<string>()
-  const finished = new Set<string>()
+  const states = new Map<string, OrbitStepState>()
   for (const event of events) {
     if (event.step === null) continue
-    if (event.type === 'step.started') started.add(event.step)
-    if (event.type === 'step.finished') finished.add(event.step)
+    if (event.type === 'step.started') states.set(event.step, isFailed ? 'failed' : 'active')
+    if (event.type === 'step.skipped') states.set(event.step, 'skipped')
+    if (event.type === 'step.finished') {
+      const state = event.outcome === 'success' ? 'done'
+        : event.outcome === 'failed' || event.outcome === 'error' ? 'failed'
+        : event.outcome === 'skipped' ? 'skipped'
+        : 'stopped'
+      states.set(event.step, state)
+    }
   }
-  return PIPELINE.map(({ id }) => {
-    if (finished.has(id)) return 'done'
-    if (started.has(id)) return isFailed ? 'failed' : 'active'
-    return 'pending'
-  })
+  return PIPELINE.map(({ id }) => states.get(id) ?? 'pending')
 }
 
 /** The step a ship is on (or stopped at), and how many it has finished. */
 export function shipPosition(ship: OrbitShip): { label: string; done: number } {
   const done = ship.steps.filter(state => state === 'done').length
-  const at = ship.steps.findIndex(state => state === 'active' || state === 'failed')
+  const at = ship.steps.findIndex(state => state === 'active' || state === 'failed' || state === 'stopped')
   const label = at >= 0 ? (PIPELINE[at]?.label ?? '') : ship.phase === 'landed' ? 'landed' : ship.phase
   return { label, done }
 }
 
-export const STEP_GLYPH: Record<OrbitStepState, string> = { done: '●', active: '◉', failed: '✗', pending: '○' }
+export const STEP_GLYPH: Record<OrbitStepState, string> = { done: '●', active: '◉', failed: '✗', stopped: '■', skipped: '↷', pending: '○' }
 
 /** One-line track: `●━●━◉─○─…`. */
 export const track = (steps: readonly OrbitStepState[]): string =>
