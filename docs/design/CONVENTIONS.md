@@ -1,7 +1,7 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-11
+last_updated: 2026-10-12
 last_validated: 2026-10-09
 status: Accepted
 ---
@@ -225,6 +225,7 @@ Retired features are removed from this table along with their folder.
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | codex |
 | Orbit Search | [docs/design/orbit-search/](./orbit-search/) | codex |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
+| Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
