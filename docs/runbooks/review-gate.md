@@ -302,6 +302,12 @@ Findings:
 …
 ```
 
+Caller-supplied artifacts on task updates, including updates that start a task,
+cannot write the reserved `review-*` namespace. The exception is a
+schema-valid `review-report.json`; the gate's system writer owns certificates
+and other review records. Paths are canonicalized before admission, and a
+rejected start artifact leaves the task and its artifact batch unchanged.
+
 The full evidence is in the task artifacts `review-manifest.json`,
 `review-report.json`, and `review-gate.json`:
 

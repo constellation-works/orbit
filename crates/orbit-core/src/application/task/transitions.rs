@@ -15,6 +15,7 @@ use super::helpers::{
 };
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
+use super::update::admit_agent_artifact;
 
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher
@@ -346,11 +347,14 @@ impl OrbitRuntime {
             if matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday) {
                 self.ensure_finding_verified(&task)?;
             }
-            let validated = self.validate_and_normalize_task_field_edits(
-                id,
-                &task,
-                start_body_field_edits(field_edits.clone(), plan.clone()),
-            )?;
+            let mut start_edits = start_body_field_edits(field_edits.clone(), plan.clone());
+            // A start accepts the same caller-supplied artifacts as an ordinary
+            // update. Admit the whole batch before approval or record writes.
+            for artifact in &mut start_edits.upsert_artifacts {
+                admit_agent_artifact(artifact)?;
+            }
+            let validated =
+                self.validate_and_normalize_task_field_edits(id, &task, start_edits)?;
             let crew_assignment = validated.crew_assignment;
             let crew_source = validated.crew_source;
             let crew_redraw_history = validated.crew_redraw_history;
