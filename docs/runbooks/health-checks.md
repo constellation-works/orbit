@@ -468,7 +468,10 @@ program that cannot report a version (the same detection behind `orbit doctor`'s
 `clock-unit` row), when `launchctl print gui/<uid>/com.orbit.sweep` reports a non-zero
 `last exit code` for the most recent run, when that dump lists `penalty box` under
 `properties`, or when the dump cannot be read at all. Each case prints the reason and the
-same recovery: `orbit clock enable` rewrites the unit to this binary and reloads it. The
+same recovery: `orbit clock enable` rewrites the unit to this binary and reloads it.
+Enable checks these signals even when the agent is already loaded; a healthy loaded
+agent keeps running without a rewrite or reload. Pause unloads the agent without
+rewriting it or trying to repair its health. The
 dashboard's Host Sweep Clock card shows the same states — a degraded clock is badged
 `missed`, not `healthy`, even though the launchd service itself is still enabled.
 It does not replay every tick missed during host or manager downtime: on the next sweep,

@@ -57,6 +57,13 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- The [launchd enable tests](../../crates/orbit-core/src/application/routines/clock/tests/enable.rs) (criterion 2,
+  fault injection) drives the enable entry point with launchd selected and failed
+  program/state probes. It checks rewrite and reload for unhealthy loaded agents,
+  error propagation when loading fails, and preservation of healthy and paused
+  agents. The public API selects the native host platform, so an integration test
+  on Linux cannot force these launchd states.
+
 - `orbit-engine`'s `branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget` (criterion 2, fault injection). A stub Git stalls until the supervisor deadline, then succeeds, exhausts the budget, or completes with a refusal. It drives the branch lookup used by PR preparation and verifies the timeout class, elapsed time, bounded backoff and attempt count. The private Git budget guard scales the deadline; `pr_prepare` does not expose that guard through its public action boundary.
 
 - `crates/orbit-config/src/tests/seed.rs`: `every_family_combination_seeds_valid_defaults_pools_and_enabled_flags` (criterion 1, combinatorial seed rendering) checks all detected-family subsets in memory: defaults name enabled crews, pools parse and reference enabled crews, and each crew's enabled flag follows its provider availability. It avoids filesystem setup for every subset. `rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled` (criterion 2, fault injection) removes or disables a dynamically selected pool member in the private renderer's crew map; the public seeder always constructs that map itself. Neither test fixes crew choices, models or weights as policy.
