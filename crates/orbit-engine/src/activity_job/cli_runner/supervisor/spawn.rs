@@ -13,9 +13,8 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd};
 
+use orbit_common::process::OwnedChild;
 use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
-#[cfg(unix)]
-use orbit_common::process::identity::{KernelLiveness, probe_process_group_liveness};
 #[cfg(unix)]
 use orbit_common::process::pipe::set_nonblocking;
 use orbit_common::process::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
@@ -36,8 +35,6 @@ use super::output::{
 };
 
 type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
-
-const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Newest stdout bytes a progress sample carries. Large enough for one
 /// provider event holding a long assistant message.
@@ -454,48 +451,5 @@ fn spawn_stdin_writer(_stdin: ChildStdin, _bytes: &[u8]) -> io::Result<StdinWrit
 /// `Child::kill`: descendants the child forked share its group, and only the
 /// group kill reaches them.
 pub(in crate::activity_job::cli_runner) fn kill_child_process_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let child_id = child.id();
-        let _ = signal_child_process_group(child_id, libc::SIGKILL);
-        let _ = child.kill();
-        let _ = child.wait();
-        wait_for_process_group_exit(child_id);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-#[cfg(unix)]
-fn wait_for_process_group_exit(child_id: u32) {
-    // An id beyond `pid_t` names no group. Pgid 0 probes as exited, so it never waits.
-    let pgid = libc::pid_t::try_from(child_id).unwrap_or(0);
-    let deadline = Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT;
-    while probe_process_group_liveness(pgid) != KernelLiveness::Exited {
-        let _ = signal_child_process_group(child_id, libc::SIGKILL);
-        if Instant::now() >= deadline {
-            break;
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
-#[cfg(unix)]
-fn signal_child_process_group(child_id: u32, signal: libc::c_int) -> std::io::Result<()> {
-    if child_id == 0 || child_id > i32::MAX as u32 {
-        return Ok(());
-    }
-    let rc = unsafe { libc::killpg(child_id as libc::pid_t, signal) };
-    if rc == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(error)
-    }
+    OwnedChild::kill_and_reap_spawned(child);
 }

@@ -18,7 +18,8 @@ related_artifacts: [ORB-15722]
 
 This doc covers every place Orbit waits on a child process it spawned:
 the three supervisors, two ad-hoc wait loops, and their callers, verified
-at `f9d7a0ccd`. §1–§3 describe the current code. §4 specifies the
+at `f9d7a0ccd`, with step 1 ownership changes reflected below. §1–§3
+describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
 built (sandbox wrappers in `orbit-exec`, `spawn_child_with_optional_sandbox`
@@ -39,15 +40,16 @@ loop drains both pipes nonblocking, with each turn capped at 64 KiB or
 20 ms, and polls `try_wait` every 20 ms. At the deadline it sends SIGTERM
 to the group, waits 200 ms, then SIGKILL. When the leader exits it kills
 the group and drains for up to 500 ms more. Group signals go through
-`signal_owned_group`, which skips the caller's own group and a pid that no
-longer leads its group. Capture keeps a prefix and keeps reading past the
+`OwnedChild::signal_group`, which skips the caller's own group and a pid
+that no longer leads its group. Capture keeps a prefix and keeps reading past the
 limit (`BoundedOutputCapture`, ending with `OUTPUT_TRUNCATED_MARKER`). The
 `complete` mode also needs both pipes at EOF before the deadline. The
 `_typed` variants return a spawn failure as its `io::Error`.
 
-It has no `Drop` for the child. In `supervise`, `drain_pipe(..)?`,
-`try_wait()?` and `drain_until(..)?` return an error without signalling
-or reaping the child, so a pipe or wait error leaks the group. It installs
+The spawned child is held through `process::OwnedChild`. A pipe or wait
+error, including any `?` return from `supervise`, drops the handle, kills
+its group, reaps the leader and waits up to one second for group drain.
+Normal completion disarms the handle after descendant cleanup. It installs
 no signal handling: a SIGTERM to Orbit during a call leaves the child's
 group running.
 
@@ -56,9 +58,11 @@ group running.
 [`supervision/`](../../../crates/orbit-exec/src/supervision/mod.rs) is the
 most complete supervisor.
 
-- **Ownership.** `SupervisedChild` (`wait.rs`) kills and reaps the group in
-  `Drop` unless the child was reaped. `SupervisedChild::spawn` installs the
-  signal guard before the spawn closure runs, so post-spawn work such as a
+- **Ownership.** `SupervisedChild` (`wait.rs`) holds the shared
+  `process::OwnedChild` handle, which kills and reaps the group on drop
+  unless cleanup was completed. Its wrapper releases the signal slot after
+  cleanup and before dropping the signal guard. `SupervisedChild::spawn`
+  installs the signal guard before the spawn closure runs, so post-spawn work such as a
   plugin's callback `bind_pid` is covered.
 - **Signals.** `SignalHandlerGuard` (`signal.rs`) is a refcounted
   process-wide SIGINT/SIGTERM handler. It fans the signal out with `killpg`
@@ -164,7 +168,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-cmd/src/doctor/workspace.rs` (`git ls-files`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-exec/src/linux_sandbox/probe.rs` (bwrap probe) | `run_bounded_capped_typed` | Deadline, prefix cap, spawn error kind |
 | `orbit-exec/src/macos_sandbox/probe.rs` (Seatbelt probe) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-common/src/test_env/process.rs`, `test_env/child.rs` (fixtures) | `run_bounded_capped(_typed)`; `isolate_process_group`, `kill_owned_group` | Deadline; a fixture-owned group killed on teardown |
+| `orbit-common/src/test_env/process.rs`, `test_env/child.rs` (fixtures) | `run_bounded_capped(_typed)`; `OwnedChild` | Deadline; a fixture-owned group killed on teardown |
 
 ### 2.2 Exec supervisor callers
 
@@ -309,6 +313,12 @@ provider- or plugin-specific policy.
   path runs with the watch off.
 
 ## 5. Migration order
+
+Step 1 introduces `orbit_common::process::OwnedChild`. The bounded runner,
+exec's `SupervisedChild` and the child-test runner own their processes through
+it. Engine teardown and the build-phase termination adapter delegate to its
+borrowed-child helpers until step 2 migrates their ownership. These adapters
+share the handle's own-group and reused-PID checks; they add no new wait loop.
 
 Each step is its own task, keeps every public entry point's signature, and
 must pass the existing tests of the code it replaces.

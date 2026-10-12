@@ -1226,3 +1226,90 @@ fn assert_reaped_with_probe(
         pause(remaining.min(Duration::from_millis(20)));
     }
 }
+
+/// Fault injection (test-strategy criterion 2) forces otherwise unreachable
+/// pipe and wait errors through the public run boundary. A separately waitable
+/// group peer proves no live member survives, without relying on init reaping.
+#[test]
+fn bounded_supervision_errors_kill_the_group_and_reap_the_leader() {
+    use std::cell::RefCell;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::Child;
+    use std::rc::Rc;
+
+    use crate::process::OwnedChild;
+    use crate::process::bounded::{SupervisionFailure, with_supervision_failure};
+
+    struct Group {
+        pid: Option<u32>,
+        peer: Child,
+    }
+    impl Drop for Group {
+        fn drop(&mut self) {
+            if let Some(pid) = self.pid {
+                let _ = OwnedChild::signal_spawned_group(pid, libc::SIGKILL);
+                // SAFETY: reap only the leader this fixture spawned, if the
+                // supervisor failed to do so. ECHILD is harmless after reap.
+                unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
+            }
+            let _ = self.peer.kill();
+            let _ = self.peer.wait();
+        }
+    }
+
+    for point in [
+        SupervisionFailure::PreparePipes,
+        SupervisionFailure::PipeRead,
+        SupervisionFailure::Wait,
+    ] {
+        let group = Rc::new(RefCell::new(None));
+        let observed = Rc::clone(&group);
+        let mut command = Command::new("/bin/sleep");
+        command.arg("60");
+        let result = with_supervision_failure(
+            point,
+            move |pid| {
+                let peer = Command::new("/bin/sleep")
+                    .arg("60")
+                    .process_group(pid as i32)
+                    .spawn()
+                    .expect("spawn waitable group peer before the injected error");
+                *observed.borrow_mut() = Some(Group {
+                    pid: Some(pid),
+                    peer,
+                });
+            },
+            || run_bounded(&mut command, Duration::from_secs(30)),
+        );
+        assert!(
+            matches!(result, Err(OrbitError::Execution(ref message))
+                if message == &format!("injected bounded supervision failure: {point:?}")),
+            "must reach the intended error: {point:?}, {result:?}"
+        );
+        let mut group = group.borrow_mut().take().expect("fault reached");
+        let pid = group.pid.expect("leader pid");
+        // SAFETY: only probes the child created by this call. ECHILD proves
+        // cleanup reaped it rather than merely leaving a killed zombie.
+        let waited = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG) };
+        let wait_error = io::Error::last_os_error().raw_os_error();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let status = loop {
+            if let Some(status) = group.peer.try_wait().expect("wait for peer") {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "peer survived {point:?}");
+            thread::sleep(Duration::from_millis(10));
+        };
+        // SAFETY: signal zero only queries this fixture's group after peer reap.
+        let probe = unsafe { libc::killpg(pid as i32, 0) };
+        let group_error = io::Error::last_os_error().raw_os_error();
+        if probe == -1 && group_error == Some(libc::ESRCH) {
+            group.pid = None;
+        }
+        assert_eq!((waited, wait_error), (-1, Some(libc::ECHILD)), "{point:?}");
+        assert_eq!(status.signal(), Some(libc::SIGKILL), "{point:?}");
+        assert_eq!((probe, group_error), (-1, Some(libc::ESRCH)), "{point:?}");
+        // A disappeared group must be harmless to signal again.
+        OwnedChild::signal_spawned_group(pid, libc::SIGKILL).expect("absent group");
+    }
+}
