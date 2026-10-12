@@ -66,6 +66,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod flaky;
+#[cfg(target_os = "linux")]
+mod stable_build_mount;
 
 use super::git_fixture;
 use super::v2_runtime::{build_writer_and_sinks, job_asset, workspace_root};
@@ -3625,9 +3627,14 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
             // Pin the supervisor, not just the command's environment: the drain
             // may have raised this ceiling as an operational mitigation.
             unsafe { std::env::set_var("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", "4096") };
+            // A capture stop still names the first failure before it, so a
+            // flood of one spawn failure says what failed [ORB-15870].
+            let first_failure = "spawn /tmp/orbit-build/debug/orbit: No such file or directory";
             for (index, (stop, cause)) in [
                 (
-                    "printf '%8192s' '' >&2",
+                    "printf '%s\\n' \"thread 'spawns_orbit' (7) panicked at tests/cli.rs:4:29:\" \
+                     'spawn /tmp/orbit-build/debug/orbit: No such file or directory (os error 2)' >&2\n\
+                     printf '%8192s' '' >&2",
                     "process output capture limit exceeded on stderr",
                 ),
                 ("kill -KILL $$", "process terminated with"),
@@ -3672,6 +3679,11 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
                         assert!(
                             message.contains("[validation_environment]") && message.contains(cause),
                             "the infrastructure cause must be named: {message}"
+                        );
+                        assert_eq!(
+                            message.contains(first_failure),
+                            index == 0 && !base_only,
+                            "only the candidate's capture stop printed a failure first: {message}"
                         );
                         assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
                         let log =

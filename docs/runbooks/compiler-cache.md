@@ -271,6 +271,27 @@ shared `SCCACHE_SERVER_PORT`, which is how
 `scripts/test-compiler-cache-namespaces.sh` regresses the missing-artifact
 failure. Do not use that combination on workers.
 
+## Host validation builds apart
+
+Output compiled through the stable mounts is valid only inside the sandbox.
+When `<worktree>/target` is aliased at `/tmp/orbit-build`, the wrapper also
+rewrites rustc's environment, so an integration test's
+`env!("CARGO_BIN_EXE_<bin>")` (and `CARGO_MANIFEST_DIR`) embeds a
+`/tmp/orbit-*` path. Cargo's freshness check never sees the rewrite: to it
+the same `target/` built the same sources. A later host build in that
+`target/` reused those test binaries, and every test that spawns the crate's
+binary failed with `No such file or directory` for
+`/tmp/orbit-build/debug/<bin>`. Step recovery, then the host's
+post-recovery validation, hit this; any sandboxed build followed by host
+validation with no source change in between can. [ORB-15870]
+
+Required validation on Linux therefore runs with `CARGO_TARGET_DIR` set to
+`<worktree>/target/orbit-host-validation`, a target no sandboxed step builds
+in. Host validation compiles everything it runs; the sandbox keeps its own
+warm `target/`. The host is not source-aliased, so workspace crates miss the
+compiler cache across worktrees there, and only the first host run in a
+worktree pays for the build; later validations of the same worktree reuse it.
+
 ## Custom `CARGO_TARGET_DIR`
 
 Jobs may set a private target directory that is **not** `<worktree>/target`, so

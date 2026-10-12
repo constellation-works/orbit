@@ -21,7 +21,19 @@
 //! A supervisor stop at the output capture limit or by a signal also says
 //! nothing about the candidate. Its structured execution metadata supplies the
 //! cause and carries the same validation-environment marker. Child output,
-//! including printed supervision diagnostics, cannot establish a stop.
+//! including printed supervision diagnostics, cannot establish a stop. The
+//! refusal still names the first failure the captured output shows, so a stop
+//! caused by a flood of identical failures says what they were [ORB-15870].
+//!
+//! On Linux a command builds in its own Cargo target directory,
+//! [`HOST_VALIDATION_TARGET_DIR`] under the checkout [ORB-15870]. A managed
+//! Linux sandbox binds the checkout's `target/` at the stable build mount, and
+//! the compiler-cache wrapper rewrites paths such as `CARGO_BIN_EXE_*` onto
+//! that mount for what it compiles there. Cargo's freshness check never sees
+//! the rewrite, so a host run in the shared `target/` reused test binaries
+//! that spawn paths existing only inside the sandbox. No sandboxed step builds
+//! into this directory, so everything a host validation runs was compiled on
+//! the host; dependencies come back through the compiler cache.
 //!
 //! Captured output keeps a head and a tail of each stream. A long stdout
 //! cannot drop the stderr failure before that classification, and the end of
@@ -69,13 +81,17 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::base_claim::failure_identities;
+use super::base_claim::{failure_identities, normalize_output};
 
 /// The file a required command may write its [`ValidationSummary`] to.
 pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
 /// A selection, as a candidate run's summary reported it, that the command
 /// must test instead of choosing its own.
 pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";
+/// The Cargo target directory, relative to the checkout, that a required
+/// command builds in on Linux. Never the checkout's `target/` itself, which
+/// sandboxed steps build in through the stable build mount.
+const HOST_VALIDATION_TARGET_DIR: &str = "target/orbit-host-validation";
 
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
@@ -126,6 +142,9 @@ pub(super) struct RequiredCommandRun {
     pub(super) missing_tool: Option<MissingTool>,
     /// The supervisor's reason for stopping before a conclusive test result.
     pub(super) infrastructure_failure: Option<String>,
+    /// The first failure the complete output shows, for a run the supervisor
+    /// stopped ([`first_failure_cause`]).
+    pub(super) first_failure: Option<String>,
     /// Reruns after a network-inconclusive failure [ORB-14258].
     pub(super) network_retries: u32,
     /// The line showing the failure was the network's, when it still was
@@ -197,8 +216,15 @@ impl RequiredCommandRun {
         let summary = self.failure_summary(candidate, baseline, logs);
         if let Some(cause) = &self.infrastructure_failure {
             return OrbitError::Execution(format!(
-                "{VALIDATION_ENVIRONMENT_MARKER} {summary} Stopped: {}. The candidate was not judged.",
+                "{VALIDATION_ENVIRONMENT_MARKER} {summary} Stopped: {}.{} The candidate was not \
+                 judged.",
                 bounded_validation_text(cause, 1024),
+                self.first_failure
+                    .as_deref()
+                    .map_or_else(String::new, |first| format!(
+                        " First failure before the stop: {}",
+                        bounded_validation_text(first, 1024)
+                    )),
             ));
         }
         let Some(missing) = &self.missing_tool else {
@@ -408,6 +434,17 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     if let Some(selection) = selection {
         env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
     }
+    // Only Linux sandboxes alias `target/` onto the stable build mount.
+    if cfg!(target_os = "linux") {
+        env.retain(|(key, _)| key != "CARGO_TARGET_DIR");
+        env.push((
+            "CARGO_TARGET_DIR".to_string(),
+            workspace_path
+                .join(HOST_VALIDATION_TARGET_DIR)
+                .to_string_lossy()
+                .into_owned(),
+        ));
+    }
     let supervised = run_process_supervised(
         &ExecRequest {
             program: "/bin/sh".to_string(),
@@ -454,6 +491,9 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             workspace_path,
         )
     };
+    let first_failure = infrastructure_failure
+        .as_ref()
+        .and_then(|_| first_failure_cause(&format!("{}\n{}", outcome.stdout, outcome.stderr)));
     let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
@@ -476,6 +516,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         environment,
         missing_tool,
         infrastructure_failure,
+        first_failure,
         network_retries: 0,
         network_evidence: None,
         summary,
@@ -587,6 +628,46 @@ pub(crate) fn missing_tool(
         tool: None,
         evidence: line.as_str().trim().to_string(),
     })
+}
+
+/// The first failure `output` shows, on one line: the first test panic with
+/// the message lines after it (libtest and nextest both print
+/// `thread '<test>' panicked at <location>:` and then the message), or else
+/// the first compiler error with its location.
+fn first_failure_cause(output: &str) -> Option<String> {
+    const MESSAGE_LINES: usize = 4;
+    let lines = output.lines().map(normalize_output).collect::<Vec<_>>();
+    let cause = if let Some(at) = lines
+        .iter()
+        .position(|line| line.starts_with("thread '") && line.contains(" panicked at "))
+    {
+        let message = lines[at + 1..]
+            .iter()
+            .take_while(|line| {
+                !line.is_empty()
+                    && !line.starts_with("note:")
+                    && !line.starts_with("stack backtrace")
+            })
+            .take(MESSAGE_LINES);
+        std::iter::once(&lines[at])
+            .chain(message)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        let at = lines
+            .iter()
+            .position(|line| line.starts_with("error: ") || line.starts_with("error["))?;
+        let location = lines[at + 1..]
+            .iter()
+            .take(3)
+            .find(|line| line.starts_with("--> "));
+        match location {
+            Some(location) => format!("{} {location}", lines[at]),
+            None => lines[at].clone(),
+        }
+    };
+    Some(bounded_validation_text(&cause, 1024))
 }
 
 /// Join what the command wrote, bounded per stream.
