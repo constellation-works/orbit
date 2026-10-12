@@ -660,6 +660,7 @@
         "executor/automation/ci/tests/pending.rs::red_run_that_failed_the_same_step_for_another_cause_stays_held",
         "executor/automation/ci/tests/pending.rs::red_run_that_reproduced_on_the_previous_completed_run_is_not_held",
         "executor/automation/tests/shell.rs::cwd_outside_the_workspace_root_is_rejected",
+        "executor/automation/vcs/claim/tests/validation.rs::claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes",
         "executor/automation/vcs/commit/tests/candidate_paths.rs::claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening",
         "executor/automation/vcs/commit/tests/candidate_paths.rs::owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance",
         "executor/automation/vcs/commit/tests/candidate_paths.rs::owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations",

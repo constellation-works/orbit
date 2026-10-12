@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_common::OrbitError;
+use orbit_engine::BaseSyncMode;
 use orbit_types::task::Task;
 use orbit_types::workflow::ReviewAdmission;
 use serde_json::{Value, json};
@@ -25,7 +26,7 @@ pub(super) struct GateContext {
     /// The synchronized base the candidate sits on, pinned at admission.
     base_sha: Option<String>,
     base_branch: String,
-    base_sync: String,
+    base_sync: BaseSyncMode,
     pub(super) admission: Option<ReviewAdmission>,
     pub(super) workspace_id: String,
     pub(super) repository: String,
@@ -100,13 +101,7 @@ impl GateContext {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let base_sync = input
-            .get("base_sync")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("remote")
-            .to_string();
+        let base_sync = BaseSyncMode::from_input(input)?;
         let base_branch = input
             .get("base")
             .and_then(Value::as_str)
@@ -167,7 +162,7 @@ impl GateContext {
             None => Ok(orbit_engine::review_gate::synchronized_base(
                 &self.workspace_path,
                 &self.base_branch,
-                &self.base_sync,
+                self.base_sync,
             )?
             .commit),
         }
@@ -177,10 +172,9 @@ impl GateContext {
     /// remote-tracking branch under remote sync, the local branch otherwise.
     /// A red-base hold watches it to learn when the base turns green.
     pub(super) fn base_ref(&self) -> String {
-        if self.base_sync == "local" {
-            self.base_branch.clone()
-        } else {
-            format!("origin/{}", self.base_branch)
+        match self.base_sync {
+            BaseSyncMode::Local => self.base_branch.clone(),
+            BaseSyncMode::Remote => format!("origin/{}", self.base_branch),
         }
     }
 

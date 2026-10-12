@@ -68,6 +68,7 @@ pub use executor::automation::execute_action as execute_deterministic_action;
 pub use executor::automation::vcs::claim::{
     observe_candidate, observe_no_diff_candidate, observe_published_candidate,
 };
+pub use executor::automation::vcs::git::BaseSyncMode;
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{

@@ -4313,7 +4313,7 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                         &fx.repo,
                         &ClaimedKnownRed {
                             base_branch: BASE,
-                            base_sync: "local",
+                            base_sync: orbit_engine::BaseSyncMode::Local,
                             base_sha,
                             command: RED_TESTS,
                             selection: None,

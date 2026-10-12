@@ -283,7 +283,7 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     handoff: &TaskHandoff,
-    base_sync: &str,
+    base_sync: BaseSyncMode,
 ) -> Result<HandoffCandidate, OrbitError> {
     let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery else {
         return Err(refused("NoDiff delivery required"));
@@ -291,16 +291,7 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     let report = checkpoint(host, &handoff.task_id, evidence)?;
     require_checkpoint_identity(&report, &handoff.task_id, &handoff.run_id)?;
     let submitted = &handoff.candidate;
-    let sync = match base_sync {
-        "remote" => BaseSyncMode::Remote,
-        "local" => BaseSyncMode::Local,
-        _ => {
-            return Err(refused(
-                "NoDiff observation requires a local or remote base",
-            ));
-        }
-    };
-    let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, sync)?;
+    let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, base_sync)?;
     let tip = revision(workspace, &base_ref)?;
     let contained = git_command_success(
         workspace,

@@ -31,6 +31,7 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_engine::BaseSyncMode;
 use orbit_engine::KnownRedUnconfirmed;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
@@ -389,9 +390,9 @@ impl crate::OrbitRuntime {
                 &self.paths().repo_root,
                 handoff,
                 if receipt.request.ship.mode == "pr" {
-                    "remote"
+                    BaseSyncMode::Remote
                 } else {
-                    "local"
+                    BaseSyncMode::Local
                 },
             )?,
             HandoffDelivery::LocalCandidate if remote => {
@@ -410,7 +411,7 @@ impl crate::OrbitRuntime {
                 &handoff.workspace_id,
                 // An owner-local candidate has no origin to fetch and must
                 // keep reading the local base it was synchronized onto.
-                "local",
+                BaseSyncMode::Local,
             )?,
             // [ORB-12500] The owner reads the published pull request itself:
             // the provider names the delivery, and the candidate and base
@@ -515,7 +516,11 @@ impl crate::OrbitRuntime {
         // The owner's own base, as admission captured it: never the branch a
         // handoff or its pull request names.
         let ship = self.claim_receipt(&handoff.claim_id)?.request.ship;
-        let base_sync = if ship.mode == "pr" { "remote" } else { "local" };
+        let base_sync = if ship.mode == "pr" {
+            BaseSyncMode::Remote
+        } else {
+            BaseSyncMode::Local
+        };
         let mut known_red = OwnerKnownRed::default();
         for (command, exit_code, report) in reported {
             let verdict = if !observation.required_commands.contains(&command) {

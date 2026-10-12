@@ -35,6 +35,14 @@ rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
 may admit one fresh re-review in the same lineage; a second conflict leaves the
 task in review as `review_gate_stale`.
 
+The gate parses the job input's `base_sync` into `BaseSyncMode` before reading
+its base: `local` uses the local branch; `remote` uses `origin/<base>`.
+Whitespace is trimmed, missing or empty values default to remote, and unknown
+values are refused even when `base_sha` is supplied. Claimed validation retains
+the admission's ship-mode fallback when `base_sync` is absent; an invalid
+explicit value errors rather than silently selecting a local red-base hold.
+The job input and stored records still carry the strings `local` and `remote`.
+
 The review manifest carries each task's implementer summary. For a claimed
 leaf, admission takes the current run's checkpointed `implement_one` summary,
 using the same summary precedence as the claimed handoff. The owner's task

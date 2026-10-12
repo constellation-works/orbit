@@ -20,7 +20,7 @@ use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    base_sync_mode_from_input, git_command_success, git_failure_error, git_output, git_output_raw,
+    BaseSyncMode, git_command_success, git_failure_error, git_output, git_output_raw,
     git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
 };
 pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
@@ -82,10 +82,9 @@ pub fn revision(workspace_path: &Path, spec: &str) -> Result<SourceRevision, Orb
 pub fn synchronized_base(
     workspace_path: &Path,
     base: &str,
-    base_sync: &str,
+    base_sync: BaseSyncMode,
 ) -> Result<SourceRevision, OrbitError> {
-    let mode = base_sync_mode_from_input(&serde_json::json!({ "base_sync": base_sync }))?;
-    let base_ref = resolve_worktree_start_point(workspace_path, base, mode)?;
+    let base_ref = resolve_worktree_start_point(workspace_path, base, base_sync)?;
     let merge_base = git_output(workspace_path, &["merge-base", "HEAD", &base_ref])?;
     revision(workspace_path, &merge_base)
 }

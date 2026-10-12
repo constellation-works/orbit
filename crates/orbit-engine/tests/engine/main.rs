@@ -12,6 +12,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod base_sync;
 mod before_landing_review;
 mod candidate_resume;
 mod claimed_candidate_paths;
