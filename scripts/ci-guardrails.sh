@@ -145,8 +145,14 @@ run_guard() {
   local slot="$next_slot"
   next_slot=$((next_slot + 1))
   (
+    # bash 3.2 drops TIMEFORMAT when errexit aborts a failing timed command,
+    # so a guard that exits non-zero would publish no duration line. Suspend
+    # errexit only around `time` and return the command status unchanged.
     TIMEFORMAT="ci-guardrails: $name %3R s"
+    set +e
     time { "$@"; }
+    status=$?
+    exit "$status"
   ) >"$guard_logs/$slot.out" 2>"$guard_logs/$slot.err" &
   pid=$!
   pids+=("$pid")
