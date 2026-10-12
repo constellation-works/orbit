@@ -534,8 +534,12 @@ pub(super) struct LaunchdHealthProbe {
 
 impl LaunchdHealthProbe {
     fn current() -> Result<Self, OrbitError> {
+        Self::at(&home_dir()?)
+    }
+
+    pub(super) fn at(home: &Path) -> Result<Self, OrbitError> {
         Ok(Self {
-            home: home_dir()?,
+            home: home.to_path_buf(),
             uid: current_uid(),
             running: RunningBinary::current()?,
             version_probe: probe_program_version,
@@ -568,7 +572,7 @@ fn current_uid() -> u32 {
 ///    path mismatch names a binary that still runs, so the clock still ticks.
 /// 2. `launchctl print`, for the outcome of the runs that already happened.
 ///    `dump` is that output when the enabled decision already captured it.
-fn launchd_health_issue(
+pub(super) fn launchd_health_issue(
     probe: &LaunchdHealthProbe,
     runner: &dyn ClockCommandRunner,
     dump: Option<String>,

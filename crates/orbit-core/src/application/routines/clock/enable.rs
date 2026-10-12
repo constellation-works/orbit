@@ -8,15 +8,17 @@ use orbit_common::fs::path::home_dir;
 use super::converge::clear_clock_reload_pending;
 use super::install::{
     launchd_plist_path, migrate_stale_systemd_service, migrate_stale_systemd_timer,
-    systemd_daemon_reload_command, systemd_enable_command, systemd_restart_command,
+    reload_launchd_unit, systemd_daemon_reload_command, systemd_enable_command,
+    systemd_restart_command, write_launchd_unit,
 };
 use super::manager::{ClockCommandRunner, ClockPlatform, ManagerCommand, NativeClockCommandRunner};
 use super::settings::{SYSTEMD_UNIT, load_clock_settings};
 use super::status::{
-    ClockStatus, clock_manager_probe_error, clock_manager_unavailable_error, clock_status_from,
-    launchd_manager_probe_command, launchd_reports_not_loaded, manager_command_error,
-    manager_status_command, query_systemd_clock_details, systemd_reports_disabled_or_missing,
-    systemd_reports_missing, systemd_unschedulable_error,
+    ClockStatus, LaunchdHealthProbe, clock_manager_probe_error, clock_manager_unavailable_error,
+    clock_status_from, launchd_health_issue, launchd_manager_probe_command,
+    launchd_reports_not_loaded, manager_command_error, manager_status_command,
+    query_systemd_clock_details, systemd_reports_disabled_or_missing, systemd_reports_missing,
+    systemd_unschedulable_error,
 };
 
 fn manager_set_enabled_command(
@@ -87,8 +89,8 @@ fn apply_clock_enabled(
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
     let (current, missing) = if enabled {
-        // Preserve the enable/rearm path: systemd always repairs and verifies
-        // the unit below, while launchd keeps its existing idempotent load.
+        // Systemd always repairs and verifies below. A loaded launchd agent
+        // also needs health inspection before enable can be an idempotent no-op.
         (
             runner
                 .run(&manager_status_command(platform))
@@ -171,6 +173,22 @@ fn apply_clock_enabled(
             None,
             Some(details),
         ));
+    }
+    if enabled && current {
+        let probe = LaunchdHealthProbe::at(home)?;
+        if launchd_health_issue(&probe, runner, None).is_some() {
+            write_launchd_unit(
+                global_root,
+                &probe.running.path.to_string_lossy(),
+                settings,
+                home,
+            )?;
+            if !reload_launchd_unit(runner, home) {
+                return Err(manager_command_error(&manager_set_enabled_command(
+                    platform, true, home,
+                )));
+            }
+        }
     }
     if current == enabled {
         return Ok(clock_status_from(

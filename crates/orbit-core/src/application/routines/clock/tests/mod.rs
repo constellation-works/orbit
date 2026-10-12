@@ -1,4 +1,5 @@
 mod converge;
+mod enable;
 mod inspect;
 mod install;
 mod manager;
