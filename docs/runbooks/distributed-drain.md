@@ -1331,7 +1331,12 @@ is reconciled. On a host without the clock, flush it with
 `orbit run auto --stop` in the replica checkout once the owner is reachable
 (safe to repeat, and it needs no active drain), or by starting the next
 drain. `orbit run cancel <drain-run> --confirm` on a drain that already ended
-does the same flush. `orbit doctor` reports a
+does the same flush. When the drain and its leaves died together, as when a
+host OOM killed the user systemd manager and the clock with it, the
+follower's `orbit run history` or `orbit run show` is enough: it marks each
+run whose worker is gone `interrupted`, then settles what they left that no
+live drain carries, a dead leaf's failure and the release of each claim the
+drain never launched. It contacts no owner while a drain or leaf is alive. `orbit doctor` reports a
 `pull-settlements` warning while any recorded settlement is undelivered: how many
 wait, how long the oldest has, and `orbit run auto --stop` as the fix. The row
 is `ok` once they are delivered, and on a workspace that never pulled. Every line

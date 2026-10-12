@@ -18,7 +18,9 @@ use super::format::{
 ///
 /// `Reconcile` is the operator default: an orphaned `pending`/`running` run
 /// is finalized as `interrupted`, releasing its task reservations, so the
-/// view shows what actually happened. `Observe` reports stored records
+/// view shows what actually happened. It then settles with their owner the
+/// pull claims an ended drain or leaf left that nothing else will carry
+/// [ORB-15783]. `Observe` reports stored records
 /// untouched, for readers that promise not to mutate run state [ORB-12941].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunRead {
@@ -37,7 +39,11 @@ impl RunRead {
 
     pub(crate) fn show(self, runtime: &OrbitRuntime, run_id: &str) -> Result<JobRun, OrbitError> {
         match self {
-            Self::Reconcile => runtime.show_job_run(run_id),
+            Self::Reconcile => {
+                let run = runtime.show_job_run(run_id)?;
+                runtime.settle_orphaned_pulls();
+                Ok(run)
+            }
             Self::Observe => runtime.show_job_run_observed(run_id),
         }
     }
@@ -48,7 +54,11 @@ impl RunRead {
         params: JobRunListParams,
     ) -> Result<Vec<JobRun>, OrbitError> {
         match self {
-            Self::Reconcile => runtime.list_job_runs(params),
+            Self::Reconcile => {
+                let runs = runtime.list_job_runs(params)?;
+                runtime.settle_orphaned_pulls();
+                Ok(runs)
+            }
             Self::Observe => runtime.list_job_runs_observed(params),
         }
     }

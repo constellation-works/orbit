@@ -336,6 +336,55 @@ impl OrbitRuntime {
         }
     }
 
+    /// An operator's reconciling read (`orbit run history`, `orbit run show`)
+    /// [ORB-15783]: once reconciliation has interrupted a drain or leaf whose
+    /// processes died, settle with the owner every admission they left that
+    /// nothing else will carry.
+    ///
+    /// Only admissions whose own drain ended, that no live drain pulls for,
+    /// and whose leaf, if launched, is no longer running. A live drain or leaf
+    /// settles its own, so this contacts no owner while one runs. Orphan
+    /// reconciliation at workspace open has no owner route, and the clock
+    /// sweep that would deliver the recorded failures runs under the same user
+    /// manager whose death took the workers with it. A refused settlement
+    /// still waits out its backoff.
+    pub fn settle_orphaned_pulls(&self) -> Vec<PullSettlementEntry> {
+        if self.is_write_free() {
+            return Vec::new();
+        }
+        let records = match self.stores().jobs().unsettled_local_pull_admissions() {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::warn!(target: "orbit.core.pull", %error, "pull admissions unreadable; no orphan settled");
+                return Vec::new();
+            }
+        };
+        if records.is_empty() {
+            return Vec::new();
+        }
+        // A live drain whose owner cannot be read could carry any admission.
+        let Some(live) = self.live_drain_destinations() else {
+            return Vec::new();
+        };
+        let orphaned = records
+            .into_iter()
+            .filter(|record| {
+                // A leaf queued but never launched has no worker of its own.
+                let leaf_running = matches!(
+                    record.phase,
+                    LocalPullPhase::Launching | LocalPullPhase::Launched
+                ) && record
+                    .leaf_run_id
+                    .as_deref()
+                    .is_some_and(|leaf| self.drain_run_live(leaf));
+                !leaf_running
+                    && !live.contains(&record.destination)
+                    && !self.drain_run_live(&record.request.run_context.run_id)
+            })
+            .collect();
+        self.carry_settlements_scoped(orphaned, DRAIN_ENDED_CAUSE, true, RefusedDelivery::WhenDue)
+    }
+
     /// Admissions whose outcome is recorded locally but not delivered to the
     /// owner (`Settling`), with when the oldest was recorded.
     ///

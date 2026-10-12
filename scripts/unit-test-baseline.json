@@ -350,6 +350,7 @@
         "application/job/pipeline/worker/tests/log.rs::shrink_after_the_size_snapshot_reports_only_bytes_still_available",
         "application/job/pipeline/worker/tests/scope.rs::admitted_credentials_reach_the_scoped_worker_environment_and_stay_off_argv",
         "application/job/pipeline/worker/tests/scope.rs::enabled_containment_always_yields_limits",
+        "application/job/pipeline/worker/tests/scope.rs::every_worker_launch_outranks_the_user_manager_as_an_oom_victim",
         "application/job/pipeline/worker/tests/scope.rs::scope_launch_carries_allowlisted_environment_and_honors_edits",
         "application/job/pipeline/worker/tests/supervisor.rs::a_closed_observer_channel_stops_and_reaps_the_spawned_child",
         "application/job/pipeline/worker/tests/supervisor.rs::store_read_faults_retain_supervision_and_reap_in_a_live_parent",

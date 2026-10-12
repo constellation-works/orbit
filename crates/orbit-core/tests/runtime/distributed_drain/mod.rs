@@ -81,6 +81,8 @@ mod landing_attribution;
 mod landing_repair;
 mod no_diff;
 mod ordering;
+#[cfg(unix)]
+mod orphaned_supervisor;
 mod owner_gates;
 mod partial_candidate;
 mod pilot;
