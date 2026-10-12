@@ -229,7 +229,10 @@ fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
         Err(error) => return close_failed(&prior, number, error),
     };
     let state = pull_request.state.as_deref().unwrap_or_default();
-    let head = pull_request.head_branch.as_deref().unwrap_or_default();
+    let head = pull_request
+        .exact_head_branch
+        .as_deref()
+        .unwrap_or_default();
     if !state.eq_ignore_ascii_case("open") {
         return outcome("not_open", format!("pull request #{prior} is {state}"));
     }
@@ -466,12 +469,12 @@ fn view_pr<H: RuntimeHost + ?Sized>(
         json!({ "pr": selector, "workspace_path": workspace_path }),
     )?;
     let pull_request = PullRequestStatus::from_view_response(&response)?;
-    let pr_number = pull_request.number.ok_or_else(|| {
+    let pr_number = pull_request.number_selector.ok_or_else(|| {
         OrbitError::Execution(
             "private automation VCS PR view did not return a PR number".to_string(),
         )
     })?;
-    Ok((pr_number.to_string(), pull_request.url))
+    Ok((pr_number, pull_request.url))
 }
 
 fn find_pr_by_head<H: RuntimeHost + ?Sized>(
@@ -496,15 +499,12 @@ fn find_pr_by_head<H: RuntimeHost + ?Sized>(
         if listed_head != head {
             continue;
         }
-        let pr_number = pull_request
-            .number
-            .map(|number| number.to_string())
-            .ok_or_else(|| {
-                OrbitError::Execution(
-                    "private automation VCS PR list returned a matching pull request without a number"
-                        .to_string(),
-                )
-            })?;
+        let pr_number = pull_request.number.ok_or_else(|| {
+            OrbitError::Execution(
+                "private automation VCS PR list returned a matching pull request without a number"
+                    .to_string(),
+            )
+        })?;
         if matching_pr_number.replace(pr_number).is_some() {
             return Err(OrbitError::Execution(format!(
                 "private automation VCS PR list returned multiple open pull requests for head branch '{head}'"

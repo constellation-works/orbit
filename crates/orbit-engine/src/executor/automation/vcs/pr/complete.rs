@@ -319,7 +319,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         match state {
             PrMergeState::Merged => {
                 let evidence = pin.ensure_delivered(&status, pr_number)?;
-                let landed_commit = status.merge_commit.as_deref();
+                let landed_commit = status.exact_merge_commit.as_deref();
                 let managed_merge = requested_landed_commit
                     .as_deref()
                     .is_some_and(|requested| Some(requested) == landed_commit);
