@@ -74,8 +74,10 @@ task_prefix = "ORB"
 ### `[machine.auto_concurrency]` — host forecast admission
 
 Global-only host thresholds for forecast-based delivery admission. These are
-settings only today; no admission path reads them yet, so the default `off`
-leaves behavior unchanged.
+settings only for admission today: no admission path reads them yet, so the
+default `off` leaves behavior unchanged. `profile_window`,
+`min_profile_deliveries` and `horizon_cap_minutes` already shape the
+resource profiles `orbit run profiles` reports.
 
 ```toml
 [machine.auto_concurrency]

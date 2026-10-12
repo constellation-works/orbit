@@ -1,4 +1,5 @@
-//! Cheap host observations and shared pressure history. No admission side effects.
+//! Cheap host observations, shared pressure history and the resource profiles
+//! learned from delivery samples. No admission side effects.
 
 use chrono::{DateTime, Utc};
 use orbit_config::ResourceThrottleSettings;
@@ -11,6 +12,7 @@ mod monitor;
 mod platform;
 mod pressure;
 mod probe;
+pub mod profile;
 mod usage;
 
 pub use monitor::HostResourceMonitor;

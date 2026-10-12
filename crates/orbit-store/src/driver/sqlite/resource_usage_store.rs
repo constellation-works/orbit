@@ -10,7 +10,8 @@ use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{
-    HostResourceMinute, ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
+    DeliveryRunResources, DeliveryRunsFreshness, HostResourceMinute, ResourceMinuteLoad,
+    ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
 };
 
 fn stamp(at: DateTime<Utc>) -> String {
@@ -138,6 +139,93 @@ impl ResourceUsageStoreBackend for Store {
             })
             .map_err(store_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+    }
+
+    fn delivery_run_resources(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DeliveryRunResources>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT r.workspace_id, r.run_id, j.job_id, r.task_id, r.work_class,
+                       r.complexity, r.resumed, r.delivery_admitted_at, j.finished_at,
+                       r.minute_started_at, r.cpu_cores, r.memory_bytes
+                FROM run_resource_minutes r
+                LEFT JOIN job_runs j
+                  ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
+                WHERE r.delivery_admitted_at >= ?1
+                ORDER BY r.workspace_id, r.run_id, r.minute_index
+                "#,
+            )
+            .map_err(store_error)?;
+        let rows = statement
+            .query_map(params![stamp(since)], |row| {
+                let run = DeliveryRunResources {
+                    workspace_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    job_id: row.get(2)?,
+                    task_id: row.get(3)?,
+                    work_class: row.get(4)?,
+                    complexity: row.get(5)?,
+                    resumed: row.get(6)?,
+                    delivery_admitted_at: crate::parse_timestamp(&row.get::<_, String>(7)?)?,
+                    finished_at: row
+                        .get::<_, Option<String>>(8)?
+                        .map(|at| crate::parse_timestamp(&at))
+                        .transpose()?,
+                    minutes: Vec::new(),
+                };
+                let minute = ResourceMinuteLoad {
+                    minute_started_at: crate::parse_timestamp(&row.get::<_, String>(9)?)?,
+                    cpu_cores: row.get(10)?,
+                    memory_bytes: unsigned(row.get(11)?),
+                };
+                Ok((run, minute))
+            })
+            .map_err(store_error)?;
+        let mut runs: Vec<DeliveryRunResources> = Vec::new();
+        for row in rows {
+            let (run, minute) = row.map_err(store_error)?;
+            match runs.last_mut() {
+                Some(last)
+                    if last.workspace_id == run.workspace_id && last.run_id == run.run_id =>
+                {
+                    last.resumed |= run.resumed;
+                    last.minutes.push(minute);
+                }
+                _ => {
+                    runs.push(DeliveryRunResources {
+                        minutes: vec![minute],
+                        ..run
+                    });
+                }
+            }
+        }
+        Ok(runs)
+    }
+
+    fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
+        let conn = self.read()?;
+        let (newest, finished) = conn
+            .query_row(
+                r#"
+                SELECT MAX(j.finished_at), COUNT(j.finished_at)
+                FROM (SELECT DISTINCT workspace_id, run_id FROM run_resource_minutes) r
+                JOIN job_runs j ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
+                "#,
+                [],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(store_error)?;
+        Ok(DeliveryRunsFreshness {
+            newest_finished_at: newest
+                .map(|at| crate::parse_timestamp(&at))
+                .transpose()
+                .map_err(store_error)?,
+            finished_runs: unsigned(finished),
+        })
     }
 
     fn host_resource_minutes(

@@ -218,6 +218,23 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
         self.task_status_index()
     }
+    /// Which of `task_ids` carry `tag`, in any workspace on the host. Backends
+    /// with a host-wide registry override this; the default answers from
+    /// [`Self::list_tasks`].
+    fn task_ids_with_tag(
+        &self,
+        tag: &str,
+        task_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        Ok(self
+            .list_tasks()?
+            .into_iter()
+            .filter(|task| {
+                task_ids.contains(task.id.as_str()) && task.tags.iter().any(|t| t == tag)
+            })
+            .map(|task| task.id.to_string())
+            .collect())
+    }
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());
         let mut tasks = self.list_tasks()?;

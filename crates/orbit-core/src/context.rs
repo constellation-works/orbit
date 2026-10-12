@@ -397,6 +397,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
     resource_throttle: orbit_config::ResourceThrottleSettings,
+    /// Global `[machine.auto_concurrency]`: profile bounds and, later, the
+    /// forecast admission thresholds.
+    auto_concurrency: orbit_config::AutoConcurrencySettings,
     /// Commands this owner requires a distributed execution claim to pass on
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
@@ -443,6 +446,7 @@ impl OrbitRuntimeSettings {
         workflow_base_branch: String,
         workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
+        auto_concurrency: orbit_config::AutoConcurrencySettings,
         workflow_required_validation_commands: Vec<String>,
         review_baseline_commands: Vec<String>,
         validation_env: orbit_exec::ValidationEnvPolicy,
@@ -469,6 +473,7 @@ impl OrbitRuntimeSettings {
             workflow_base_branch,
             workflow_auto_ship,
             resource_throttle,
+            auto_concurrency,
             workflow_required_validation_commands,
             review_baseline_commands,
             validation_env,
@@ -525,6 +530,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn resource_throttle(&self) -> &orbit_config::ResourceThrottleSettings {
         &self.resource_throttle
+    }
+
+    pub(crate) fn auto_concurrency(&self) -> &orbit_config::AutoConcurrencySettings {
+        &self.auto_concurrency
     }
 
     pub(crate) fn workflow_auto_ship(&self) -> bool {

@@ -38,6 +38,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["run", "task-pilot"], "run/task-pilot.txt"),
     (&["job", "resume"], "job/resume.txt"),
     (&["run", "logs"], "run/logs.txt"),
+    (&["run", "profiles"], "run/profiles.txt"),
     (&["friction"], "friction/root.txt"),
     (&["friction", "add"], "friction/add.txt"),
     (&["friction", "list"], "friction/list.txt"),

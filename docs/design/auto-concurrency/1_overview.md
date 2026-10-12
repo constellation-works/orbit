@@ -92,7 +92,7 @@ Implementation tasks are filed from this table once the design is accepted.
 |---------|------|------|
 | Per-task resource sampling from the worker's own scope | [worker/scope.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/scope.rs) | to file |
 | Resource sample storage | [job_run_store/](../../../crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs) | to file |
-| Profiles and `orbit run profiles` report | new, beside [host_resource/](../../../crates/orbit-core/src/runtime/host_resource/mod.rs) | to file |
+| Profiles and `orbit run profiles` report | [host_resource/profile/](../../../crates/orbit-core/src/runtime/host_resource/profile/mod.rs) | to file |
 | Host load forecast and admission reservations | new, beside [host_resource/](../../../crates/orbit-core/src/runtime/host_resource/mod.rs) | to file |
 | Gap-fit admission (local drains) | [workspace_auto/classify.rs](../../../crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs) | to file |
 | Gap-fit admission (pull drains) | [pull/refill.rs](../../../crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs) | to file |

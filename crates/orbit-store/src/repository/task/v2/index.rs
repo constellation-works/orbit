@@ -33,6 +33,14 @@ impl TaskV2Store {
         self.registry.task_status_index_for(workspace_id, targets)
     }
 
+    pub(crate) fn task_ids_with_tag(
+        &self,
+        tag: &str,
+        task_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        self.registry.task_ids_with_tag(tag, task_ids)
+    }
+
     pub(crate) fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {

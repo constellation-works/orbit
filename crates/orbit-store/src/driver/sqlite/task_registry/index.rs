@@ -193,6 +193,29 @@ impl TaskRegistryStore {
         Ok(statuses)
     }
 
+    /// Which of `task_ids` carry `tag`, in any workspace on the host. Task IDs
+    /// are globally unique, so the lookup needs no partition.
+    pub fn task_ids_with_tag(
+        &self,
+        tag: &str,
+        task_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare_cached("SELECT 1 FROM task_bundle_tags WHERE task_id = ?1 AND tag = ?2")
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut tagged = BTreeSet::new();
+        for task_id in task_ids {
+            if stmt
+                .exists(rusqlite::params![task_id, tag])
+                .map_err(|e| OrbitError::Store(e.to_string()))?
+            {
+                tagged.insert(task_id.clone());
+            }
+        }
+        Ok(tagged)
+    }
+
     /// True when this workspace still has index rows whose `complexity` column
     /// was added by migration and has not been written yet (`NULL`).
     pub fn workspace_index_has_null_complexity(
