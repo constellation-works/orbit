@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_core::AuditEventStatus;
 use orbit_core::JobRunState;
 use orbit_core::TaskStatus;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
@@ -21,7 +22,8 @@ use orbit_types::task::TaskArtifact;
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, Server, error_code, isolated, json_ok};
+use super::audit::row as audit_row;
+use super::support::{Fixture, Server, error_code, isolated, json_ok, walk_audit_pages};
 
 const WS: &str = "?workspace=ws_http_fixture";
 /// A spawn first waits out the attach budget, longer than the default client timeout.
@@ -634,6 +636,131 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                     "graceful shutdown stops the ssh child it started"
                 );
             }
+        },
+    );
+}
+
+/// B's audit window walked through A: every page's ids and cursor match the
+/// direct walk, so the forward keeps `x-audit-next-before`, and the walk
+/// reaches each matching event once, newest first, with no cursor at the end.
+#[test]
+fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
+    isolated(
+        "host_forward::forwarded_audit_cursor_walks_the_remote_window_page_by_page",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            let mut seeded = Vec::new();
+            for index in 0..35 {
+                let (id, tool, status) = if index < 12 {
+                    (
+                        format!("probe-{index}"),
+                        "orbit.drain.probe",
+                        AuditEventStatus::Success,
+                    )
+                } else if index < 15 {
+                    (
+                        format!("probe-fail-{index}"),
+                        "orbit.drain.probe",
+                        AuditEventStatus::Failure,
+                    )
+                } else {
+                    (
+                        format!("agent-{index}"),
+                        "orbit.task.show",
+                        AuditEventStatus::Success,
+                    )
+                };
+                b.runtime
+                    .record_audit_event(&audit_row(&id, Some(tool), status))
+                    .unwrap();
+                seeded.push((id, status));
+            }
+            let b_server = b.server(false);
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+
+            // The unfiltered SQL window, a Rust-side needle that pages through the
+            // scan, and a SQL status filter whose three matches span two pages.
+            type Keep = fn(&str, AuditEventStatus) -> bool;
+            let cases: [(&str, usize, Keep); 3] = [
+                ("", 8, |_, _| true),
+                ("q=probe", 8, |id, _| id.starts_with("probe")),
+                ("status=failure", 2, |_, status| {
+                    status == AuditEventStatus::Failure
+                }),
+            ];
+            for (query, limit, keep) in cases {
+                let direct =
+                    walk_audit_pages(|path| b_server.get(path), "/api/audit", query, limit);
+                let forwarded = walk_audit_pages(
+                    |path| a_server.get(path),
+                    "/api/on/hostb/audit",
+                    query,
+                    limit,
+                );
+                assert_eq!(forwarded, direct, "{query}: forwarded pages match B direct");
+                assert!(direct.len() > 1, "{query}: the walk followed a cursor");
+                assert!(
+                    forwarded.last().unwrap().1.is_none(),
+                    "{query}: the window's last page carries no cursor"
+                );
+                let expected: Vec<String> = seeded
+                    .iter()
+                    .rev()
+                    .filter(|(id, status)| keep(id, *status))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                let reached: Vec<String> = forwarded.into_iter().flat_map(|(ids, _)| ids).collect();
+                assert_eq!(reached, expected, "{query}: every match once, newest first");
+            }
+        },
+    );
+}
+
+/// A scan that hits its cap on a page with no matches returns an empty page
+/// that still carries a cursor. The forward must not drop it, or the rest of
+/// the window stays unreachable from the host dashboard.
+#[test]
+fn forwarded_audit_cursor_survives_a_capped_short_page() {
+    isolated(
+        "host_forward::forwarded_audit_cursor_survives_a_capped_short_page",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            // More rows than one scan examines, none matching the needle.
+            for index in 0..10_001 {
+                b.runtime
+                    .record_audit_event(&audit_row(
+                        &format!("bulk-{index}"),
+                        Some("orbit.task.show"),
+                        AuditEventStatus::Success,
+                    ))
+                    .unwrap();
+            }
+            let b_server = b.server(false);
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+
+            let query = "q=no-such-needle";
+            let direct = walk_audit_pages(|path| b_server.get(path), "/api/audit", query, 50);
+            let forwarded =
+                walk_audit_pages(|path| a_server.get(path), "/api/on/hostb/audit", query, 50);
+            assert_eq!(forwarded, direct, "forwarded pages match B direct");
+            let (first_ids, first_cursor) = &forwarded[0];
+            assert!(
+                first_ids.is_empty() && first_cursor.is_some(),
+                "a capped short page forwards its cursor: {forwarded:?}"
+            );
+            assert!(forwarded.len() > 1, "the capped scan was resumed");
+            assert!(
+                forwarded.last().unwrap().1.is_none(),
+                "the window's last page carries no cursor"
+            );
         },
     );
 }
