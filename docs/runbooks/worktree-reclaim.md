@@ -76,7 +76,11 @@ every task it serves is `done`, `rejected` or `archived` (or its claim is
 settled), and only when the candidate is recoverable elsewhere. The candidate is
 every tracked change and every untracked path Git does not ignore, snapshotted
 as one tree through a scratch index. The worktree's own index and files are not
-changed. GC checks these recovery sources in order:
+changed. If a staged path differs from this working candidate, GC retains the
+checkout with a refusal reason: one tree cannot preserve both versions. This
+check applies even when a published ref holds the working candidate. Staged
+paths matching the candidate remain rescuable alongside ordinary unstaged
+edits. GC checks these recovery sources in order:
 
 1. `carry_ref`: the run's durable carry ref on `origin`
    (`refs/orbit/candidates/<task>/<run>`), when its tree equals the snapshot.
@@ -96,7 +100,7 @@ file), and the `commit` (the ref's commit, or the commit the patch applies to:
 the snapshot again. If anything changed, it keeps the worktree. Otherwise it
 removes the worktree with `git worktree remove --force`. Ignored files go with
 it, as with a clean removal. A candidate GC cannot capture exactly (a nested
-repository, submodule changes) or whose patch exceeds a limit stays
+repository, submodule changes, distinct staged and working versions) or whose patch exceeds a limit stays
 `skipped:dirty_rescue_candidate`, and `detail` gives the reason. Manual
 `orbit gc worktrees --confirm` and delivery cleanup keep every dirty worktree.
 

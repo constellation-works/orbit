@@ -121,6 +121,9 @@ fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
             // With nothing on `origin`, GC writes a patch, proves it, and only
             // then removes the worktree; the patch rebuilds the candidate.
             let patched = DirtyCheckout::new(&host, "patch", TaskStatus::Archived);
+            // Staging a path whose working content matches is still rescuable,
+            // alongside the independent unstaged README edit.
+            git(&patched.checkout.path, &["add", "src/new.rs"]);
             let head = git(&patched.checkout.path, &["rev-parse", "HEAD"]);
             let report = patched.sweep(&host);
             assert_eq!(report["action"], "removed", "{report}");
@@ -171,6 +174,82 @@ fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
             // Its build output is still reclaimed, and the size it keeps is reported.
             assert!(!nested.checkout.path.join("target").exists(), "{report}");
             assert!(report["retained_bytes"].as_u64().unwrap() > 0, "{report}");
+        },
+    );
+}
+
+#[test]
+fn distinct_staged_and_working_versions_keep_the_settled_worktree() {
+    isolated_in(
+        module_path!(),
+        "distinct_staged_and_working_versions_keep_the_settled_worktree",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            for recovery in ["patch", "carry", "branch"] {
+                let dirty = DirtyCheckout::new(&host, recovery, TaskStatus::Done);
+                let path = &dirty.checkout.path;
+                fs::write(path.join("base.txt"), "unique staged version\n").unwrap();
+                git(path, &["add", "base.txt"]);
+                fs::write(path.join("base.txt"), "different working version\n").unwrap();
+                // DirtyCheckout also supplies an independent ordinary README
+                // edit and an untracked file, so the working tree differs from HEAD.
+                let status = git(path, &["status", "--porcelain", "--untracked-files=all"]);
+                assert!(status.lines().any(|line| line == "MM base.txt"), "{status}");
+                let staged = git_bytes(path, &["diff", "--cached", "--binary"]);
+                let working = git_bytes(path, &["diff", "HEAD", "--binary"]);
+                if recovery != "patch" {
+                    let candidate = snapshot_commit(path);
+                    assert_eq!(
+                        git(path, &["show", &format!("{candidate}:base.txt")]),
+                        "different working version"
+                    );
+                    let remote_ref = if recovery == "carry" {
+                        format!("refs/orbit/candidates/{}/{}", dirty.task_id, dirty.run_id)
+                    } else {
+                        format!("refs/heads/{}", dirty.checkout.branch)
+                    };
+                    git(
+                        path,
+                        &["push", "origin", &format!("{candidate}:{remote_ref}")],
+                    );
+                }
+
+                let report = dirty.sweep(&host);
+                assert_eq!(
+                    report["action"], "skipped:dirty_rescue_candidate",
+                    "{report}"
+                );
+                assert!(
+                    report["detail"]
+                        .as_str()
+                        .unwrap()
+                        .contains("staged paths differ"),
+                    "{report}"
+                );
+                assert!(report.get("recovery").is_none(), "{report}");
+                assert!(
+                    registered_worktrees(&fixture.repo).contains(path),
+                    "{report}"
+                );
+                assert_eq!(git(path, &["show", ":base.txt"]), "unique staged version");
+                assert_eq!(
+                    fs::read(path.join("base.txt")).unwrap(),
+                    b"different working version\n"
+                );
+                assert_eq!(git_bytes(path, &["diff", "--cached", "--binary"]), staged);
+                assert_eq!(git_bytes(path, &["diff", "HEAD", "--binary"]), working);
+                assert_eq!(
+                    git(path, &["status", "--porcelain", "--untracked-files=all"]),
+                    status
+                );
+            }
+            assert!(
+                !fixture
+                    .repo
+                    .join(".orbit/state/rescue/worktree-gc")
+                    .exists()
+            );
         },
     );
 }
