@@ -594,6 +594,17 @@ pub trait RuntimeHost: Send + Sync {
         compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError>;
 
+    /// Persist diagnostic output from an incomplete step without marking it
+    /// successful or making it eligible for resume skipping.
+    fn checkpoint_step_diagnostic(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
     /// Persist a successful terminal failure activity separately from normal
     /// step checkpoints. The failed step remains failed; this records only the
     /// recovery evidence a later resume may authenticate.

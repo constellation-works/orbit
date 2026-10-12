@@ -33,7 +33,8 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
     .map_err(|e| DispatchError::AuditFailed(format!("{e:?}")))?;
     ctx.audit.push_parent_lossy(step_event_id);
 
-    let result = run_step_with_retry(step, ctx);
+    let (result, lock_wait_ms) =
+        orbit_common::fs::lock_wait::measure(|| run_step_with_retry(step, ctx));
 
     ctx.audit.pop_parent_lossy();
     let (outcome_str, error_message) = match &result {
@@ -50,6 +51,7 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         &ctx.audit,
         ctx.task_id(),
         V2AuditEventKind::StepFinished {
+            lock_wait_ms: Some(lock_wait_ms),
             step_id: step.id.clone(),
             outcome: outcome_str.to_string(),
             error_message,

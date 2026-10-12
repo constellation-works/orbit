@@ -168,9 +168,7 @@ impl TaskRegistryStore {
             return Ok(Vec::new());
         }
         let count = i64::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))?;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -245,9 +243,7 @@ impl TaskRegistryStore {
             }
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -378,9 +374,7 @@ impl TaskRegistryStore {
     /// also the operator's assertion of the issued-id high-water mark, so it
     /// lifts the refusal of a registry recreated over existing partitions.
     pub fn seed_allocator_start(&self, start: u32) -> Result<AllocatorSeedOutcome, OrbitError> {
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -413,9 +407,7 @@ impl TaskRegistryStore {
     /// highest landed id.
     pub fn bump_allocator_to_at_least(&self, min_next: u32) -> Result<(), OrbitError> {
         let target = min_next;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -431,9 +423,7 @@ impl TaskRegistryStore {
     /// `u32::MAX + 1`, which marks exhaustion after the final valid ID.
     pub(crate) fn bump_allocator_past_task_number(&self, number: u32) -> Result<(), OrbitError> {
         let target = i64::from(number) + 1;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -464,9 +454,7 @@ impl TaskRegistryStore {
         expected_current: u32,
         previous: u32,
     ) -> Result<(), OrbitError> {
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)

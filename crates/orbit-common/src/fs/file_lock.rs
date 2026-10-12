@@ -457,9 +457,11 @@ pub fn try_acquire_exclusive_file_lock(
 
     let lock_file = open_lock_file(lock_path, label)?;
     let started = Instant::now();
+    let _timing = AcquisitionTiming(started);
     loop {
         match FileExt::try_lock_exclusive(&lock_file) {
             Ok(()) => {
+                drop(_timing);
                 write_file_lock_holder(&lock_file, label);
                 return Ok(Some(FileLockGuard {
                     file: lock_file,
@@ -713,6 +715,7 @@ fn acquire_file_lock(
     options: FileLockOptions,
     exclusive: bool,
 ) -> io::Result<FileLockGuard> {
+    let _timing = AcquisitionTiming(Instant::now());
     let mut wait = ContentionWait::new(lock_path, label, options);
     let requested = wait.started;
     let turnstile_path = options
@@ -736,6 +739,7 @@ fn acquire_file_lock(
             Ok(()) => {
                 drop(queued);
                 record_lock_wait(lock_path, requested);
+                drop(_timing);
                 // Re-entrant nested sections never reach here, so these
                 // events count the acquisitions a caller actually paid for.
                 crate::tracing::trace!(
@@ -776,6 +780,14 @@ fn acquire_file_lock(
                 }));
             }
         }
+    }
+}
+
+struct AcquisitionTiming(Instant);
+
+impl Drop for AcquisitionTiming {
+    fn drop(&mut self) {
+        super::lock_wait::record(self.0.elapsed());
     }
 }
 

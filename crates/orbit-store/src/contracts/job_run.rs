@@ -409,6 +409,9 @@ pub enum KeyedJobRunAdmission {
 
 #[derive(Debug, Clone)]
 pub struct JobRunStepParams {
+    /// Lock acquisition wait in the step; unknown for historical records.
+    pub lock_wait_ms: Option<u64>,
+
     pub step_index: usize,
     pub target_type: orbit_types::workflow::JobTargetType,
     pub target_id: String,

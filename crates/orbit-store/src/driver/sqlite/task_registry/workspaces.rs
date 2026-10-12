@@ -65,9 +65,7 @@ impl TaskRegistryStore {
             }
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -181,9 +179,7 @@ impl TaskRegistryStore {
                 OrbitError::InvalidInput("rebind_checkout requires an explicit workspace id".into())
             })?)?;
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -255,9 +251,7 @@ impl TaskRegistryStore {
     ) -> Result<WorkspaceBinding, OrbitError> {
         let partition_id = validate_partition_id(&params.partition_id)?;
         let slug = sanitize_slug(&params.slug);
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -305,9 +299,7 @@ impl TaskRegistryStore {
                 "workspace repository fingerprint must be non-empty and trimmed".to_string(),
             ));
         }
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -401,9 +393,7 @@ impl TaskRegistryStore {
     /// silently skip.
     pub fn unbind_workspace(&self, partition_id: &str) -> Result<bool, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)

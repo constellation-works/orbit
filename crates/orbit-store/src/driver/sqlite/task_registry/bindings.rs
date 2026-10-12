@@ -66,9 +66,7 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let canonical_path = self.validated_binding_path(&partition_id, task_id, canonical_path)?;
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -112,9 +110,7 @@ impl TaskRegistryStore {
             ));
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -160,9 +156,7 @@ impl TaskRegistryStore {
     ) -> Result<bool, OrbitError> {
         validate_orb_task_id(task_id)?;
         let partition_id = validate_partition_id(partition_id)?;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)

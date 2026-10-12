@@ -523,6 +523,7 @@ fn write_state(fixture: &Fixture, run: &JobRun, state: &PipelineState) {
 fn save_step(fixture: &Fixture, run: &JobRun, message: &str) {
     let now = at(5, 40);
     let step = JobRunStep {
+        lock_wait_ms: None,
         step_index: 15,
         target_type: JobTargetType::Activity,
         target_id: "landing_review".into(),

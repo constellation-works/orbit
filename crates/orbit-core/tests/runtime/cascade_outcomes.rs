@@ -137,6 +137,7 @@ impl Fixture {
             .complete_job_run_step(
                 &run_id,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index: 0,
                     target_type: JobTargetType::Activity,
                     target_id: "validate".to_string(),

@@ -57,9 +57,7 @@ impl Store {
         &self,
         params: &AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
 
         insert_audit_event_record_on_connection(&conn, params, AuditInvocationFields::default())
@@ -73,9 +71,7 @@ impl Store {
         params: &AuditEventInsertParams,
         invocation: AuditInvocationFields<'_>,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
 
         insert_audit_event_record_on_connection(&conn, params, invocation)

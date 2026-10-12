@@ -395,6 +395,7 @@ impl ReviewedLeaf {
         jobs.complete_job_run_step(
             &self.leaf,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: step.into(),

@@ -1233,7 +1233,7 @@ fn an_implementer_blocker_ends_implement_one_without_recovery() {
     assert!(
         events.iter().any(|event| matches!(
             &event.kind,
-            V2AuditEventKind::StepFinished { step_id, outcome, error_message }
+            V2AuditEventKind::StepFinished { step_id, outcome, error_message, .. }
                 if step_id == "implement_one"
                     && outcome == "failed"
                     && error_message.as_deref().is_some_and(|message| {
@@ -1874,6 +1874,127 @@ fn a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume() {
                 run.outcome().pipeline[alias],
                 "a skipped fan-out never publishes an alias: empty={is_empty}, alias={alias}"
             );
+        }
+    }
+}
+
+#[test]
+fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() {
+    use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
+    use orbit_store::Store;
+    struct WaitHost {
+        root: PathBuf,
+        store: Store,
+    }
+    impl orbit_engine::test_support::NullRuntimeHost for WaitHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "file_wait" | "failed_wait" => {
+                    let path = self.root.join("held.lock");
+                    let _held = acquire_exclusive_file_lock(
+                        &path,
+                        "fixture holder",
+                        FileLockOptions::default(),
+                    )
+                    .unwrap();
+                    let refusal = acquire_exclusive_file_lock(
+                        &path,
+                        "fixture waiter",
+                        FileLockOptions {
+                            timeout: Duration::from_millis(25),
+                            ..FileLockOptions::default()
+                        },
+                    )
+                    .unwrap_err();
+                    assert_eq!(refusal.kind(), std::io::ErrorKind::TimedOut);
+                    if action == "failed_wait" {
+                        return Err(DispatchError::DeterministicActionFailed {
+                            action: action.into(),
+                            message: "injected refusal".into(),
+                        });
+                    }
+                }
+                "store_wait" => {
+                    let connection = self.store.connection();
+                    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+                    let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+                    let holder = std::thread::spawn(move || {
+                        let _held = connection.lock().unwrap();
+                        ready_tx.send(()).unwrap();
+                        waiting_rx.recv().unwrap();
+                        std::thread::sleep(Duration::from_millis(25));
+                    });
+                    ready_rx.recv().unwrap();
+                    waiting_tx.send(()).unwrap();
+                    self.store.with_transaction(|_| Ok(())).unwrap();
+                    holder.join().unwrap();
+                }
+                _ => {}
+            }
+            Ok(json!({}))
+        }
+    }
+    for fail in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let host = WaitHost {
+            root: root.path().into(),
+            store: Store::open_in_memory().unwrap(),
+        };
+        let (writer, _, _) = build_writer_and_sinks(root.path(), "lock-wait-fixture");
+        let mut steps = vec!["file_wait", "store_wait", "quiet"];
+        if fail {
+            steps.push("failed_wait");
+        }
+        let job = job_asset(json!(
+            steps
+                .iter()
+                .map(|id| json!({
+                    "id": id, "spec": {"type": "deterministic", "action": id, "config": {}}
+                }))
+                .collect::<Vec<_>>()
+        ));
+        let outcome = execute_job_with_resume(
+            &job,
+            json!({}),
+            "lock-wait-fixture",
+            writer.clone(),
+            &host,
+            None,
+        );
+        if fail {
+            assert!(outcome.is_err());
+        } else {
+            assert!(outcome.unwrap().success);
+        }
+        let finished = writer
+            .events_snapshot()
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                V2AuditEventKind::StepFinished {
+                    step_id,
+                    lock_wait_ms,
+                    ..
+                } => Some((step_id, lock_wait_ms)),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        for id in ["file_wait", "store_wait"] {
+            assert!(finished[id].unwrap() > 0, "{id}: {finished:?}");
+        }
+        assert_eq!(
+            finished["quiet"],
+            Some(0),
+            "waits must not leak between leaves"
+        );
+        if fail {
+            assert!(finished["failed_wait"].unwrap() >= 25);
         }
     }
 }

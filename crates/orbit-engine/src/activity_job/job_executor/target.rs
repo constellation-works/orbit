@@ -141,6 +141,16 @@ pub(super) fn run_target(
     } else {
         (success, message)
     };
+    if let Some(output) = dispatch.output.as_object_mut() {
+        let prior = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(prior_output) = prior.get(&step.id).and_then(|step| step.get("output")) {
+            for key in ["conflicting_paths", "conflicting_files"] {
+                if let Some(diagnostics) = prior_output.get(key) {
+                    output.insert(key.to_string(), diagnostics.clone());
+                }
+            }
+        }
+    }
     record_pipeline(ctx, &step.id, dispatch.output.clone());
     Ok(StepOutcome {
         success,
@@ -191,6 +201,20 @@ fn dispatch_once(
         },
         t.activity_name.as_deref(),
     );
+    if let Err(DispatchError::RecoverableVcsConflict(conflict)) = &dispatch {
+        let diagnostic = serde_json::json!({
+            "conflicting_paths": conflict.conflicting_paths,
+            "conflicting_files": conflict.conflicting_files,
+        });
+        record_pipeline(ctx, &step.id, diagnostic.clone());
+        if let Err(error) = ctx
+            .host
+            .checkpoint_step_diagnostic(&ctx.run_id, &step.id, &diagnostic)
+        {
+            ctx.audit
+                .note_telemetry_failure("step_diagnostic", Some(&step.id), &error);
+        }
+    }
     let is_reviewer = reviewer.is_some();
     let timed_out = is_reviewer
         && dispatch.as_ref().is_ok_and(|outcome| {

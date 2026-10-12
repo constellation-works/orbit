@@ -260,6 +260,7 @@ fn run_retention_drops_terminal_state_and_keeps_runs_and_steps() {
         jobs.complete_job_run_step(
             &run.run_id,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: "implement".into(),

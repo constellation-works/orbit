@@ -88,9 +88,7 @@ impl Store {
         run_id: &str,
         state: &PipelineState,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         // A snapshot written after the run finished must not bring back what
         // finalization compacted away.

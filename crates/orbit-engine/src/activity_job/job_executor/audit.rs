@@ -82,11 +82,14 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             step_id,
             outcome,
             error_message,
+            lock_wait_ms,
         } => {
             let success = outcome == "success";
+            let lock_wait_ms = lock_wait_ms.unwrap_or_default();
             if success || outcome == "held" {
                 tracing::info!(
                     target: "orbit.job.step_finished",
+                    lock_wait_ms,
                     job_run_id = job_run_id,
                     task_id = task_id,
                     step_id = step_id.as_str(),
@@ -98,6 +101,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             } else {
                 tracing::error!(
                     target: "orbit.job.step_finished",
+                    lock_wait_ms,
                     job_run_id = job_run_id,
                     task_id = task_id,
                     step_id = step_id.as_str(),

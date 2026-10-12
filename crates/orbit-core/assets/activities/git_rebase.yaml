@@ -68,5 +68,20 @@ spec:
         type: [string, "null"]
       rewritten:
         type: boolean
+      # Host diagnostics retained when the step was recovered after a conflict.
+      conflicting_paths:
+        type: array
+        items:
+          type: string
+      conflicting_files:
+        type: array
+        items:
+          type: object
+          required: [path, deterministically_resolvable]
+          properties:
+            path:
+              type: string
+            deterministically_resolvable:
+              type: boolean
   action: git_rebase
   config: {}

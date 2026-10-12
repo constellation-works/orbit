@@ -450,12 +450,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_host_resource_minutes,
     },
+    Migration {
+        version: 46,
+        name: "job_run_step_lock_wait",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_job_run_step_lock_wait,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 45;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 46;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

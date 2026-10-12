@@ -234,7 +234,7 @@ fn post_recovery_attempt(
 
     match reattempt {
         Ok(outcome) if outcome.success => PostRecovery::Settled(Ok(outcome)),
-        Err(conflict @ DispatchError::RecoverableVcsConflict { .. })
+        Err(conflict @ DispatchError::RecoverableVcsConflict(_))
             if recovered_conflict
                 .as_deref()
                 .is_some_and(|recovered| recovered != conflict.to_string()) =>

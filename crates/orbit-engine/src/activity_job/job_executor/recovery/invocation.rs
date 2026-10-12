@@ -73,15 +73,17 @@ pub(super) fn dispatch_recovery(
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
-    if let StepFailure::Error(DispatchError::RecoverableVcsConflict {
-        operation,
-        original_base_sha,
-        target_base_sha,
-        conflicting_paths,
-        diagnostic,
-    }) = failure
+    if let StepFailure::Error(DispatchError::RecoverableVcsConflict(conflict)) = failure
         && let Some(object) = input.as_object_mut()
     {
+        let orbit_common::RecoverableVcsConflict {
+            operation,
+            original_base_sha,
+            target_base_sha,
+            conflicting_paths,
+            conflicting_files,
+            diagnostic,
+        } = conflict.as_ref();
         object.insert(
             "recovery_kind".to_string(),
             Value::String("vcs_conflict".to_string()),
@@ -104,6 +106,10 @@ pub(super) fn dispatch_recovery(
                     .map(Value::String)
                     .collect(),
             ),
+        );
+        object.insert(
+            "conflicting_files".to_string(),
+            serde_json::json!(conflicting_files),
         );
         object.insert("diagnostic".to_string(), Value::String(diagnostic.clone()));
     }

@@ -362,6 +362,14 @@ fn redact_recoverable_vcs_conflict(
             .into_iter()
             .map(|path| redact(&path))
             .collect(),
+        conflicting_files: conflict
+            .conflicting_files
+            .into_iter()
+            .map(|file| crate::ConflictedFile {
+                path: redact(&file.path),
+                deterministically_resolvable: file.deterministically_resolvable,
+            })
+            .collect(),
         diagnostic: redact(&conflict.diagnostic),
     })
 }

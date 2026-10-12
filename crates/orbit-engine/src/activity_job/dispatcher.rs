@@ -253,16 +253,11 @@ pub enum DispatchError {
     /// recovery agent repairs the stop and the step is retried, again for each
     /// later commit of the same rebase that stops, within a fixed round bound.
     #[error(
-        "recoverable VCS conflict during '{operation}': original base '{original_base_sha}', target base '{target_base_sha}'; {diagnostic}; conflicting paths: {}",
-        conflicting_paths.join(", ")
+        "recoverable VCS conflict during '{}': original base '{}', target base '{}'; {}; conflicting paths: {}",
+        .0.operation, .0.original_base_sha, .0.target_base_sha, .0.diagnostic,
+        .0.conflicting_paths.join(", ")
     )]
-    RecoverableVcsConflict {
-        operation: String,
-        original_base_sha: String,
-        target_base_sha: String,
-        conflicting_paths: Vec<String>,
-        diagnostic: String,
-    },
+    RecoverableVcsConflict(Box<RecoverableVcsConflict>),
 
     /// Tool-allowlist denial (§6). Non-retryable — the retry wrapper must not
     /// re-attempt a denied call. Phase 2 formerly translated this to
@@ -329,7 +324,7 @@ impl DispatchError {
                 | DispatchError::InspectionToolsUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
-                | DispatchError::RecoverableVcsConflict { .. }
+                | DispatchError::RecoverableVcsConflict(_)
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
                 | DispatchError::ReviewGateRefused { .. }
@@ -349,7 +344,7 @@ impl DispatchError {
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
-            DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
+            DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
             DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
             DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
             _ if wf::is_validation_environment_failure(None, Some(&text())) => {
@@ -375,7 +370,7 @@ impl DispatchError {
     pub fn allows_recovery(&self) -> bool {
         matches!(
             self,
-            DispatchError::WorktreeIntegrity { .. } | DispatchError::RecoverableVcsConflict { .. }
+            DispatchError::WorktreeIntegrity { .. } | DispatchError::RecoverableVcsConflict(_)
         )
     }
 }
@@ -398,19 +393,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
         }
-        DispatchError::RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        } => OrbitError::RecoverableVcsConflict(Box::new(RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        })),
+        DispatchError::RecoverableVcsConflict(conflict) => {
+            OrbitError::RecoverableVcsConflict(conflict)
+        }
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
@@ -616,13 +601,7 @@ fn run_deterministic(
             )
             .map_err(|error| match error {
                 OrbitError::RecoverableVcsConflict(conflict) => {
-                    DispatchError::RecoverableVcsConflict {
-                        operation: conflict.operation,
-                        original_base_sha: conflict.original_base_sha,
-                        target_base_sha: conflict.target_base_sha,
-                        conflicting_paths: conflict.conflicting_paths,
-                        diagnostic: conflict.diagnostic,
-                    }
+                    DispatchError::RecoverableVcsConflict(conflict)
                 }
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
