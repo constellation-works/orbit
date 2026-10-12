@@ -6,9 +6,9 @@ use orbit_common::security::release::sha256_hex;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
 use orbit_types::workflow::{
-    BaselineRedFailures, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, ReviewCertificate,
-    ReviewEvidenceKind, ReviewExternalEvidence, ReviewTiming, ValidationOutcome, ValidationRole,
-    handoff::*,
+    BaselineRedFailures, EvidenceHostOs, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+    ReviewCertificate, ReviewEvidenceKind, ReviewExternalEvidence, ReviewTiming, ValidationOutcome,
+    ValidationRole, handoff::*,
 };
 
 use super::TaskCommitBoundary;
@@ -279,6 +279,30 @@ impl TaskCommitBoundary {
                 "certificate does not bind this attempt, verdict, reviewer, task, repository, \
                  base and final candidate",
             ));
+        }
+        // [ORB-15677] A check the certificate owes the owner instead of
+        // holding is one the owner's captured rule declared a pull request's
+        // hosted check runs, on a before-landing review whose landing waits
+        // for that check. Anything else would land unverified.
+        for owed in &certificate.owner_owed_evidence {
+            let declared = captured == ReviewTiming::BeforeLanding
+                && contract.host_evidence.iter().any(|rule| {
+                    rule.kind == ReviewEvidenceKind::CodeQl
+                        && owed.kind == rule.kind
+                        && rule.os == EvidenceHostOs::Linux
+                        && owed.os == Some(rule.os)
+                        && rule.command == owed.command
+                        && rule.artifact == owed.artifact
+                        && rule.hosted_check.is_some()
+                        && rule.hosted_check == owed.hosted_check
+                });
+            if !declared {
+                return Err(certificate_refused(&format!(
+                    "owner-owed `{}` is not a before-landing check the owner's captured \
+                     host-evidence rules declare a hosted check runs",
+                    owed.command
+                )));
+            }
         }
         // [ORB-14478] Every host run the certificate counted is pinned, and
         // each pinned result binds this candidate's tree, its OS and a

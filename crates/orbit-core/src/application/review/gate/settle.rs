@@ -418,7 +418,8 @@ fn settle(
     // Checks a host-evidence rule owes for what this candidate changed are
     // required whatever the reviewer reported.
     // [ORB-15630] Linux CodeQL a macOS host cannot run is the owner's and
-    // the pull request's hosted CI's on a before-landing review.
+    // the pull request's hosted CI's on a before-landing review, when its
+    // rule names the hosted check that runs it [ORB-15677].
     let defers = defers_linux_codeql(runtime, context);
     let (owed, owner_owed) = match &held {
         Some((_, certificate)) => (

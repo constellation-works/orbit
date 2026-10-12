@@ -7,14 +7,18 @@
 //! reads those results from the run, hands them to the reviewer in its
 //! manifest, and settles each gate from them: a host pass outweighs a
 //! sandboxed failure or skip, and a host failure rejects whatever the
-//! reviewer reported. On a macOS host, Linux CodeQL is the owner's and the
-//! pull request's hosted CI's, not the review's.
+//! reviewer reported. On a macOS host, Linux CodeQL whose rule names the
+//! pull request's hosted check that runs it is the owner's and that check's,
+//! not the review's; any other Linux CodeQL still holds the review.
 
-use super::claimed_owed_evidence::{artifact, ci_fast, codeql_rule, owed, record, report};
-use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
+use super::claimed_owed_evidence::{
+    artifact, ci_fast, codeql_rule, hosted_codeql_rule, hosted_owed, owed, record, report,
+};
+use super::claimed_review::{REVIEW_CREW, ReviewedLeaf, revision};
 use super::*;
 
 use orbit_types::task::HostOs;
+use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{
     BaselineRedFailures, EvidenceHostOs, FindingDisposition, KnownRedValidation,
     REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
@@ -106,6 +110,7 @@ fn a_sandboxed_reviewers_gate_failure_settles_on_the_hosts_pass() {
         command: CI_FAST.into(),
         artifact: "evidence/ci-fast.json".into(),
         os: Some(EvidenceHostOs::Macos),
+        hosted_check: None,
     };
     for (verdict, reviewed, evidence) in [
         (ReviewVerdict::Reject, sandbox_failure(), Vec::new()),
@@ -270,24 +275,25 @@ fn a_host_gate_pass_never_clears_an_open_finding() {
 }
 
 /// The Mac reviewer's only gap is the Linux CodeQL run a host-evidence rule
-/// owes. Before landing it is the owner's and the pull request's hosted CI's:
-/// admission hands it over as owner-owed, the review settles `accept`
-/// without a hold, and the certificate records what the owner owes.
+/// owes, and the rule declares the pull request's hosted check that runs it.
+/// Before landing it is the owner's and that check's: admission hands it
+/// over as owner-owed, the review settles `accept` without a hold, and the
+/// certificate records what the owner owes.
 #[test]
-fn a_mac_before_landing_review_records_linux_codeql_as_owner_owed() {
+fn a_mac_before_landing_review_records_hosted_linux_codeql_as_owner_owed() {
     if !isolated(
         module_path!(),
-        "a_mac_before_landing_review_records_linux_codeql_as_owner_owed",
+        "a_mac_before_landing_review_records_hosted_linux_codeql_as_owner_owed",
     ) {
         return;
     }
-    let mut leaf = mac_landing_leaf(&codeql_rule("**/*.rs"));
+    let mut leaf = mac_landing_leaf(&hosted_codeql_rule("**/*.rs"));
     host_validated(&leaf, 0, None);
     let admitted = leaf.admit_review();
     assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
     assert_eq!(
         admitted["owner_owed_evidence"],
-        json!([owed()]),
+        json!([hosted_owed()]),
         "{admitted}"
     );
     let mut reviewer_report = report(
@@ -308,10 +314,224 @@ fn a_mac_before_landing_review_records_linux_codeql_as_owner_owed() {
     let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert!(certificate.validation_complete);
     assert!(certificate.owed_evidence.is_empty());
-    assert_eq!(certificate.owner_owed_evidence, vec![owed()]);
+    assert_eq!(certificate.owner_owed_evidence, vec![hosted_owed()]);
     assert!(
         artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
         "nothing is held"
+    );
+}
+
+/// [ORB-15677] The owner's handoff acceptance judges what a before-landing
+/// certificate owes it against the rules it captured: it accepts owner-owed
+/// CodeQL its rule declared a hosted check runs, and refuses a certificate
+/// — as an earlier leaf build wrote for a rule without one — that owes it a
+/// check no hosted run stands in for.
+#[test]
+fn the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted() {
+    if !isolated(
+        module_path!(),
+        "the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted",
+    ) {
+        return;
+    }
+    let mut leaf = ReviewedLeaf::admit_from(
+        &format!(
+            "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
+            hosted_codeql_rule("**/*.rs")
+        ),
+        "",
+    );
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.gate_input["before_landing"] = json!(true);
+    let admitted = leaf.admit_review();
+    leaf.put_report(&report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![
+            ci_fast(),
+            record("V2", &owed().command, ValidationOutcome::NotRun),
+        ],
+        Some("Rust CodeQL cannot run on macOS"),
+    ));
+    let settled = leaf.settle().expect("owner-owed CodeQL holds nothing");
+    assert_eq!(settled["verdict"], "accept", "{settled}");
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(certificate.owner_owed_evidence, vec![hosted_owed()]);
+
+    let evidence: HandoffReviewEvidence =
+        serde_json::from_value(settled["handoff_evidence"].clone()).expect("handoff evidence");
+    let head = revision(&leaf.pair.follower_repo, "HEAD");
+    let landing = |evidence: HandoffReviewEvidence| HandoffReview {
+        policy: ReviewTiming::BeforeLanding,
+        disposition: HandoffReviewDisposition::BeforeLanding(Box::new(evidence)),
+    };
+    // The certificate an earlier leaf build wrote for a rule without a
+    // hosted check: it owes the owner a check no hosted run stands in for.
+    let mut undeclared = certificate.clone();
+    undeclared.owner_owed_evidence[0].hosted_check = None;
+    let forged = serde_json::to_vec(&undeclared).unwrap();
+    let mut forged_evidence = evidence.clone();
+    forged_evidence.certificate = HandoffArtifactRef {
+        path: "undeclared-review-gate.json".into(),
+        sha256: sha256_hex(&forged),
+    };
+    let source = leaf
+        .pair
+        .follower_repo
+        .join(".orbit/tmp")
+        .join(&forged_evidence.certificate.path);
+    std::fs::write(&source, forged).unwrap();
+    leaf.bound
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": leaf.task,
+                "path": forged_evidence.certificate.path,
+                "source_path": source,
+            }),
+        )
+        .expect("the leaf's binding writes the certificate to the owner");
+    let refused = leaf
+        .owner_accepts_review(landing(forged_evidence), &head)
+        .expect_err("an undeclared owner-owed check never reaches landing");
+    assert!(
+        refused.to_string().contains("review_certificate_mismatch")
+            && refused.to_string().contains("owner-owed"),
+        "{refused}"
+    );
+    leaf.owner_accepts_review(landing(evidence), &head)
+        .expect("the owner accepts the check its rule declared hosted");
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
+}
+
+/// [ORB-15677] A custom CodeQL query no hosted check runs stays the review's
+/// obligation on a Mac before-landing leaf, even beside a rule whose hosted
+/// check covers the standard suite: the custom query holds the review for
+/// the owner's Linux run with its record still required, and only the
+/// declared check becomes the owner's.
+#[test]
+fn a_custom_codeql_query_without_a_hosted_check_holds_a_mac_before_landing_review() {
+    if !isolated(
+        module_path!(),
+        "a_custom_codeql_query_without_a_hosted_check_holds_a_mac_before_landing_review",
+    ) {
+        return;
+    }
+    const POLICY: &str = "scripts/codeql-rust-local.sh queries/company-policy.ql";
+    let policy = ReviewEvidenceRequirement {
+        kind: ReviewEvidenceKind::CodeQl,
+        name: "Company policy CodeQL (Linux)".into(),
+        command: POLICY.into(),
+        artifact: "evidence/codeql-policy.json".into(),
+        os: Some(EvidenceHostOs::Linux),
+        hosted_check: None,
+    };
+    let mut leaf = mac_landing_leaf(&format!(
+        "{}\n[[review.host_evidence]]\nkind = \"codeql\"\nname = \"{}\"\n\
+         paths = [\"**/*.rs\"]\nos = \"linux\"\ncommand = \"{POLICY}\"\nartifact = \"{}\"\n",
+        hosted_codeql_rule("**/*.rs"),
+        policy.name,
+        policy.artifact
+    ));
+    host_validated(&leaf, 0, None);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["owed_evidence"], json!([policy]), "{admitted}");
+    assert_eq!(
+        admitted["owner_owed_evidence"],
+        json!([hosted_owed()]),
+        "{admitted}"
+    );
+    leaf.put_report(&report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![
+            ci_fast(),
+            record("V2", &owed().command, ValidationOutcome::NotRun),
+            record("V3", POLICY, ValidationOutcome::NotRun),
+        ],
+        Some("Rust CodeQL cannot run on macOS"),
+    ));
+    let refused = leaf
+        .settle()
+        .expect_err("an unrun custom query never lands");
+    assert!(refused.contains("review_awaiting_evidence"), "{refused}");
+
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the custom query holds for the owner's Linux run");
+    assert_eq!(hold.requirements, vec![policy]);
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+    assert_eq!(certificate.owner_owed_evidence, vec![hosted_owed()]);
+    let outcome = |command: &str| {
+        let record = certificate
+            .validation
+            .iter()
+            .find(|record| record.command == command)
+            .unwrap_or_else(|| panic!("no record of {command}"));
+        (record.role, record.outcome)
+    };
+    assert_eq!(
+        outcome(POLICY),
+        (ValidationRole::Required, ValidationOutcome::NotRun),
+        "the pending query is never excluded for the hosted one"
+    );
+    assert_eq!(
+        outcome(&owed().command),
+        (ValidationRole::Excluded, ValidationOutcome::NotRun)
+    );
+    leaf.leaf_holds(&hold);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+}
+
+/// [ORB-15677] A workspace whose Linux CodeQL rule names no hosted check —
+/// it runs no hosted CodeQL — keeps the obligation on a Mac before-landing
+/// leaf: admission hands the reviewer the rule as owed evidence, nothing is
+/// owner-owed, and the review holds for the owner's Linux run instead of
+/// accepting the check as excluded.
+#[test]
+fn a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation() {
+    if !isolated(
+        module_path!(),
+        "a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation",
+    ) {
+        return;
+    }
+    let mut leaf = mac_landing_leaf(&codeql_rule("**/*.rs"));
+    host_validated(&leaf, 0, None);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["owed_evidence"], json!([owed()]), "{admitted}");
+    assert_eq!(admitted["owner_owed_evidence"], json!([]), "{admitted}");
+    leaf.put_report(&report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![
+            ci_fast(),
+            record("V2", &owed().command, ValidationOutcome::NotRun),
+        ],
+        Some("Rust CodeQL cannot run on macOS; a Linux run is owed"),
+    ));
+    let refused = leaf
+        .settle()
+        .expect_err("an unrun CodeQL check never lands");
+    assert!(refused.contains("review_awaiting_evidence"), "{refused}");
+
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the rule holds for the owner's Linux run");
+    assert_eq!(hold.requirements, vec![owed()]);
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert!(certificate.owner_owed_evidence.is_empty());
+    let codeql = certificate
+        .validation
+        .iter()
+        .find(|record| record.command == owed().command)
+        .unwrap();
+    assert_eq!(
+        (codeql.role, codeql.outcome),
+        (ValidationRole::Required, ValidationOutcome::NotRun)
     );
 }
 
@@ -325,7 +545,7 @@ fn a_failed_codeql_record_still_blocks_a_mac_before_landing_review() {
     ) {
         return;
     }
-    let mut leaf = mac_landing_leaf(&codeql_rule("**/*.rs"));
+    let mut leaf = mac_landing_leaf(&hosted_codeql_rule("**/*.rs"));
     host_validated(&leaf, 0, None);
     let admitted = leaf.admit_review();
     leaf.put_report(&report(

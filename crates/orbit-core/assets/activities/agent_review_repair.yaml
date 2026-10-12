@@ -153,9 +153,10 @@ spec:
        another reviewer. Settlement adds them whatever the report says.
        The manifest's `owner_owed_evidence` lists checks the owner and the
        pull request's hosted CI run instead of this review, such as Linux
-       CodeQL for a before-landing review on a macOS host. Do not attempt
-       them, record them, or name them in `external_evidence`; they never
-       hold this review.
+       CodeQL a named hosted check runs, for a before-landing review on a
+       macOS host; any other Linux CodeQL still holds this review. Do not
+       attempt them, record them, or name them in `external_evidence`; they
+       never hold this review.
        The manifest's `host_validation` lists the results the claim host
        recorded when it ran the owner's required commands on this exact
        candidate, natively and outside any agent sandbox. Settlement decides

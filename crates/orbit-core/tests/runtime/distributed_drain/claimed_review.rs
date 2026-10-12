@@ -336,6 +336,7 @@ impl ReviewedLeaf {
                 command: command.into(),
                 artifact: "evidence/codeql-rust-linux.json".into(),
                 os: None,
+                hosted_check: None,
             }],
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: attempt_id.into(),

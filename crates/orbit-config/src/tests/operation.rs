@@ -279,6 +279,21 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
         orbit_types::workflow::EvidenceHostOs::Linux
     );
 
+    assert_eq!(rules.value[0].hosted_check, None);
+
+    write_config(
+        workspace.path(),
+        &format!("{CODEQL_RULE}hosted_check = \" CodeQL / Analyze (rust) \"\n"),
+    );
+    let declared = ResolvedConfig::load(&roots(global.path(), workspace.path()))
+        .expect("a linux codeql rule may name its hosted check");
+    assert_eq!(
+        declared.operation.review_host_evidence.value[0]
+            .hosted_check
+            .as_deref(),
+        Some("CodeQL / Analyze (rust)")
+    );
+
     let (unset, _) = load_workspace("[review]\nbefore_pr = true\n");
     assert!(unset.operation.review_host_evidence.value.is_empty());
 }
@@ -336,6 +351,16 @@ fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
             ),
         ),
         format!("{CODEQL_RULE}timeout = 5\n"),
+        format!("{CODEQL_RULE}hosted_check = \" \"\n"),
+        format!(
+            "{}hosted_check = \"CI\"\n",
+            rule(
+                "host_sandbox_test",
+                "[\"**/*.rs\"]",
+                "cargo test -p x --test y",
+                "evidence/a.json"
+            )
+        ),
     ] {
         write_config(workspace.path(), &body);
         assert!(

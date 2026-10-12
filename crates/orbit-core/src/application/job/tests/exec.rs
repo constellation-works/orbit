@@ -78,6 +78,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                         command: "native fixture".into(),
                         artifact: "evidence/native.json".into(),
                         os: None,
+                        hosted_check: None,
                     }],
                     published_ref: None,
                     candidate_carry: None,

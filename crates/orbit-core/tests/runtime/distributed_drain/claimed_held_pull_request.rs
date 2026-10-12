@@ -47,6 +47,7 @@ fn macos_owed() -> ReviewEvidenceRequirement {
         command: SWIFT_CODEQL.into(),
         artifact: SWIFT_ARTIFACT.into(),
         os: Some(EvidenceHostOs::Macos),
+        hosted_check: None,
     }
 }
 

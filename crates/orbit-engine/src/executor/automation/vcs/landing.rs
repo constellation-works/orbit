@@ -46,7 +46,10 @@ use super::super::ci::bounded_u64;
 use super::super::input::input_string_field;
 use super::git::{fetch_remote_base, git_command_success, git_output};
 use super::operations;
-use super::pr::{DeliveryPin, PrMergeState, classify_pr_state, resolve_merge_capabilities};
+use super::pr::{
+    DeliveryPin, OwedHostedChecks, PrMergeState, classify_pr_state, owed_hosted_checks,
+    resolve_merge_capabilities,
+};
 use super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 
 /// Budget for waiting out required checks on a pull request before the attempt
@@ -86,6 +89,17 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
         HandoffDelivery::PullRequest { number } => {
             land_pull_request(host, &context, number, input, &view)
         }
+        // [ORB-15677] Only a pull request's hosted CI runs the checks the
+        // review owed it; a local candidate has none to wait for.
+        HandoffDelivery::LocalCandidate if !context.owed_hosted_checks.is_empty() => Err(stop(
+            host,
+            &context,
+            &format!(
+                "the review owed hosted checks ({}) to a pull request, but the candidate is \
+                 delivered locally; the candidate stays in review",
+                context.owed_hosted_checks.join(", ")
+            ),
+        )?),
         HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, input, &view),
         HandoffDelivery::NoDiff { .. } => land_no_diff(host, &context, &view),
         HandoffDelivery::AlreadyLanded {
@@ -316,6 +330,20 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         if let Err(error) = pin.ensure_pinned_candidate(&status, &pr_number) {
             return Err(stop(host, context, &error.to_string())?);
         }
+        // [ORB-15677] The review owed these checks to the pull request's
+        // hosted CI instead of running them: nothing merges until each has
+        // passed on the pinned head, whatever branch protection requires.
+        let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
+        if let OwedHostedChecks::Failed(reason) = &owed {
+            return Err(stop(
+                host,
+                context,
+                &format!(
+                    "pull request #{pr_number}: {reason}; the review owed it to that check, so \
+                     the candidate stays in review"
+                ),
+            )?);
+        }
         match state {
             PrMergeState::Merged => unreachable!("merged is handled above"),
             PrMergeState::Closed => {
@@ -362,7 +390,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                     ),
                 )?);
             }
-            PrMergeState::Mergeable if intent.is_none() => {
+            PrMergeState::Mergeable if intent.is_none() && owed == OwedHostedChecks::Passed => {
                 let capabilities = resolve_merge_capabilities(host, &workspace_path, &pr_number)
                     .map_err(|error| {
                         OrbitError::Execution(format!(
@@ -415,17 +443,23 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 // Merged is what the provider reports, not what we asked for.
                 continue;
             }
-            // Requested already, or still waiting for required checks.
+            // Requested already, or still waiting for required or owed checks.
             PrMergeState::Mergeable | PrMergeState::Pending => {}
         }
 
         if waited_seconds >= max_wait_seconds {
+            let waiting = match &owed {
+                OwedHostedChecks::Waiting(names) if intent.is_none() => {
+                    format!(" (owed hosted checks not yet passed: {})", names.join(", "))
+                }
+                _ => String::new(),
+            };
             return Err(stop(
                 host,
                 context,
                 &format!(
                     "pull request #{pr_number} did not reach a merged state within \
-                     {max_wait_seconds}s; the candidate stays in review"
+                     {max_wait_seconds}s{waiting}; the candidate stays in review"
                 ),
             )?);
         }

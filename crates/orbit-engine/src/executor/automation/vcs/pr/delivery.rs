@@ -412,6 +412,75 @@ enum CheckState {
     Failed,
 }
 
+/// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
+    /// Every named check reported a pass, and none is still running.
+    Passed,
+    /// A named check has not reported yet or is still running.
+    Waiting(Vec<String>),
+    /// A named check failed, or its state is unreadable.
+    Failed(String),
+}
+
+/// Judge the hosted checks `names` against the pull request's status rollup.
+/// A rollup entry answers a name by its own name or as `<workflow> / <job>`,
+/// as the forge displays it. A name no entry answers has not reported yet.
+pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
+    pull_request: &Value,
+    names: &[String],
+) -> OwedHostedChecks {
+    if names.is_empty() {
+        return OwedHostedChecks::Passed;
+    }
+    let checks = pull_request
+        .get("statusCheckRollup")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut waiting = Vec::new();
+    for name in names {
+        let mut answered = false;
+        let mut pending = false;
+        for check in checks {
+            let own = check
+                .get("name")
+                .or_else(|| check.get("context"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            let qualified = check
+                .get("workflowName")
+                .and_then(Value::as_str)
+                .map(|workflow| format!("{} / {own}", workflow.trim()));
+            if own != name && qualified.as_deref() != Some(name.as_str()) {
+                continue;
+            }
+            answered = true;
+            match classify_check(check) {
+                Some(CheckState::Passed) => {}
+                Some(CheckState::Pending) => pending = true,
+                Some(CheckState::Failed) => {
+                    return OwedHostedChecks::Failed(format!("hosted check '{name}' failed"));
+                }
+                None => {
+                    return OwedHostedChecks::Failed(format!(
+                        "hosted check '{name}' reports an unreadable state"
+                    ));
+                }
+            }
+        }
+        if !answered || pending {
+            waiting.push(name.clone());
+        }
+    }
+    if waiting.is_empty() {
+        OwedHostedChecks::Passed
+    } else {
+        OwedHostedChecks::Waiting(waiting)
+    }
+}
+
 /// `statusCheckRollup` contains both CheckRun (`status`/`conclusion`) and
 /// StatusContext (`state`) entries. Unknown values cannot authorize waiting.
 fn classify_check(check: &Value) -> Option<CheckState> {

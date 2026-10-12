@@ -901,7 +901,9 @@ The owner checks the head on every poll, resolves candidate and base in its own 
 verifies the validated base is reachable from `origin/<landing branch>`, fetched once from `origin`
 per attempt so a commit landed from another machine is not misread as missing. Changed identity, a
 conflict, unsatisfied protection or an exhausted check budget records a durable stop and leaves the
-task in `review`, except that a repairable stop starts the automatic repair above. Owner-local candidates fast-forward the local landing branch and are verified
+task in `review`, except that a repairable stop starts the automatic repair above. A hosted check the
+accepted before-landing review owed the owner (`owner_owed_evidence`) must also report a pass on the
+pinned head before the merge is sent; a failed one stops the landing [ORB-15677]. Owner-local candidates fast-forward the local landing branch and are verified
 from the ref; before the branch moves, the owner retains a direct landing intent naming the
 handoff's task, so delivery consumers attribute the fast-forward. No-diff delivery verifies its covering commit on the landing ref with no external
 call. Every completion re-runs authorization, candidate and validation checks inside the

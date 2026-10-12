@@ -40,7 +40,8 @@ use orbit_types::identity::validate_machine_id;
 use orbit_types::policy::compile_glob_regex;
 use orbit_types::task::validate_relative_artifact_path;
 use orbit_types::workflow::{
-    DEFAULT_REVIEW_MINUTES, HostEvidenceRule, HostSandboxCommand, ReviewBudget, ReviewEvidenceKind,
+    DEFAULT_REVIEW_MINUTES, EvidenceHostOs, HostEvidenceRule, HostSandboxCommand, ReviewBudget,
+    ReviewEvidenceKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,9 @@ use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
 /// only the timing it resolved for the claim's executor. Nor did the
 /// `operation.review_crew` pool [ORB-15195]: a single crew is captured
 /// exactly as before, and a pool is captured in a field of its own that an
-/// older snapshot never carries.
+/// older snapshot never carries. Nor did a rule's `hosted_check`
+/// [ORB-15677]: an older snapshot never carries it, and a rule without it
+/// keeps the review's hold.
 pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
@@ -517,6 +520,10 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
                 name: rule.name.trim().to_string(),
                 command: rule.command.trim().to_string(),
                 artifact: rule.artifact.trim().to_string(),
+                hosted_check: rule
+                    .hosted_check
+                    .as_deref()
+                    .map(|check| check.trim().to_string()),
                 paths: rule
                     .paths
                     .iter()
@@ -554,6 +561,17 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
                     index,
                     format!("repeats artifact `{}`", rule.artifact),
                 ));
+            }
+            if let Some(check) = &rule.hosted_check {
+                if rule.kind != ReviewEvidenceKind::CodeQl || rule.os != EvidenceHostOs::Linux {
+                    return Err(invalid(
+                        index,
+                        "names a hosted_check, which only a linux codeql rule may".to_string(),
+                    ));
+                }
+                if check.is_empty() {
+                    return Err(invalid(index, "has an empty hosted_check".to_string()));
+                }
             }
             if rule.kind == ReviewEvidenceKind::HostSandboxTest {
                 HostSandboxCommand::admit(&rule.command, &[])

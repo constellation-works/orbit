@@ -17,7 +17,7 @@ pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
 pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation::vcs) use delivery::{
-    DeliveryPin, PrMergeState, classify_pr_state,
+    DeliveryPin, OwedHostedChecks, PrMergeState, classify_pr_state, owed_hosted_checks,
 };
 pub(in crate::executor::automation) use merge::git_merge;
 pub(in crate::executor::automation::vcs) use merge::resolve_merge_capabilities;

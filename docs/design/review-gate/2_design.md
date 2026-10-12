@@ -962,13 +962,26 @@ an owed check cannot ship the candidate unverified. The certificate records
 the requirements in `owed_evidence`.
 
 [ORB-15630] A before-landing review on a claim host of a known OS other than
-Linux does not hold for Linux CodeQL. Its candidate is already published, the
-pull request's hosted CI runs CodeQL on it, and the owner's landing decision
-reads that run. Admission and settlement split such a requirement out as
+Linux does not hold for Linux CodeQL that the pull request's hosted CI runs.
+[ORB-15677] Only a rule that names that hosted check (`hosted_check`) makes
+its requirement owner-owed: its candidate is already published, the named
+check runs the rule's command on it, and the owner's landing waits for that
+check to pass. Admission and settlement split such a requirement out as
 owner-owed (`owner_owed_evidence` in the manifest, the admission output and
 the certificate). The reviewer neither attempts nor names it. Settlement
-removes any Linux CodeQL the reviewer named and excludes a CodeQL record that
-did not fail, with a note naming the owner. A failed record still blocks.
+removes Linux CodeQL the reviewer named for the same command and excludes a
+record of the check that did not fail, with a note naming the owner and the
+hosted check. A failed record still blocks, and a record of a check still
+pending is never excluded. A rule without `hosted_check` and Linux CodeQL the
+reviewer names that no such rule covers hold the review as above, so a custom
+query or a workspace without hosted CodeQL never loses its obligation.
+
+The owner enforces owner-owed evidence. Handoff acceptance refuses a
+certificate whose `owner_owed_evidence` names a check its captured rules did
+not declare hosted for a before-landing review. `handoff_land` merges only once
+each owed hosted check reports a pass in the pull request's status rollup for
+the pinned head; it waits while one is absent or running and stops when one
+failed, independent of branch protection.
 
 The same review decides the owner's required gates from the claim host's own
 runs. `claim_validate` ran them natively, outside the agent sandbox, on the

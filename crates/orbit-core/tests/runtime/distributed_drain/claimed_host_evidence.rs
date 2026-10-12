@@ -61,6 +61,7 @@ fn reviewer_needs_host(leaf: &ReviewedLeaf, attempt_id: &str, command: &str, os:
             command: command.into(),
             artifact: ARTIFACT.into(),
             os: Some(os),
+            hosted_check: None,
         }],
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.into(),
