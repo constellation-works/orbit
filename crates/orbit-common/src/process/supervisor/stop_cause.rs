@@ -6,6 +6,8 @@ pub const OUTPUT_CAPTURE_LIMIT_NOTE: &str = "process output capture limit exceed
 pub const INTERRUPTED_SIGNAL_NOTE: &str = "process interrupted by signal ";
 /// Prefix of the supervisor note when a child terminates without an exit code.
 pub const TERMINATION_STATUS_NOTE: &str = "process terminated with ";
+/// Supervisor note when a periodic check stops a process.
+pub const PERIODIC_STOP_NOTE: &str = "process stopped by a periodic supervision check";
 
 /// A stop observed by the process supervisor, independently of child output.
 ///
@@ -22,6 +24,8 @@ pub enum ProcessStopCause {
     InterruptedSignal { signal: i32 },
     /// The child terminated without an exit code, such as by a Unix signal.
     TerminationStatus { status: std::process::ExitStatus },
+    /// The request's periodic check asked the supervisor to stop the run.
+    Periodic,
 }
 
 impl std::fmt::Display for ProcessStopCause {
@@ -40,6 +44,7 @@ impl std::fmt::Display for ProcessStopCause {
                 }
             }
             Self::TerminationStatus { status } => write!(f, "{TERMINATION_STATUS_NOTE}{status}"),
+            Self::Periodic => f.write_str(PERIODIC_STOP_NOTE),
         }
     }
 }

@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 
 use super::super::OwnedChild;
 use super::super::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
-use super::drain::{DrainStop, StopWatch, spawn_sink_drain, spawn_stdin_write};
+use super::drain::{DrainStop, PipeFd, StopWatch, spawn_sink_drain, spawn_stdin_write};
 use super::seam;
 #[cfg(unix)]
 use super::signal_guard::SignalHandlerGuard;
-use super::{Outcome, ProcessStopCause, Stdin, Supervision, Termination};
+use super::{Outcome, ProcessStopCause, Stdin, Stream, Supervision, Termination};
 use crate::OrbitError;
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -165,6 +165,7 @@ impl SupervisedChild {
             stdout,
             stderr,
             timeout,
+            clock,
             extendable_deadline,
             termination,
             cancelled,
@@ -213,32 +214,20 @@ impl SupervisedChild {
             spawn_stdin_thread(child.process.child_mut(), stdin, || drain_stop.watch())?;
         // Each of the two drain threads reports a sink stop at most once.
         let (sink_stop_tx, sink_stop_rx) = mpsc::sync_channel(2);
-        let stdout_thread = match child.process.child_mut().stdout.take() {
-            Some(out) => Some(spawn_sink_drain(
-                out,
-                stdout,
-                sink_stop_tx.clone(),
-                drain_stop.watch(),
-            )),
-            None => {
-                stdout.finish();
-                None
-            }
-        };
-        let stderr_thread = match child.process.child_mut().stderr.take() {
-            Some(err) => Some(spawn_sink_drain(
-                err,
-                stderr,
-                sink_stop_tx,
-                drain_stop.watch(),
-            )),
-            None => {
-                stderr.finish();
-                None
-            }
-        };
+        let stdout_thread = attach_stream(
+            child.process.child_mut().stdout.take(),
+            stdout,
+            sink_stop_tx.clone(),
+            || drain_stop.watch(),
+        );
+        let stderr_thread = attach_stream(
+            child.process.child_mut().stderr.take(),
+            stderr,
+            sink_stop_tx,
+            || drain_stop.watch(),
+        );
 
-        let mut deadline = Deadline::new(timeout, extendable_deadline);
+        let mut deadline = Deadline::new(timeout, extendable_deadline, clock);
         let mut next_periodic = every
             .as_ref()
             .map(|periodic| Instant::now() + periodic.interval);
@@ -308,7 +297,9 @@ impl SupervisedChild {
 
             let now = Instant::now();
             let mut wait_slice = WAIT_POLL_INTERVAL;
-            if let Some(end) = deadline.current() {
+            if let Some(remaining) = deadline.clock_remaining() {
+                wait_slice = wait_slice.min(remaining);
+            } else if let Some(end) = deadline.current() {
                 wait_slice = wait_slice.min(end.saturating_duration_since(now));
             }
             if let Some(next) = next_periodic {
@@ -457,14 +448,29 @@ impl SupervisedChild {
 /// one, cached for [`DEADLINE_REFRESH_INTERVAL`].
 struct Deadline<'a> {
     fixed: Option<Instant>,
+    clock: Option<(Instant, Duration, &'a dyn Fn() -> Instant)>,
     extendable: Option<&'a dyn Fn() -> Instant>,
     cached: Option<(Instant, Instant)>,
 }
 
 impl<'a> Deadline<'a> {
-    fn new(timeout: Option<Duration>, extendable: Option<&'a dyn Fn() -> Instant>) -> Self {
+    fn new(
+        timeout: Option<Duration>,
+        extendable: Option<&'a dyn Fn() -> Instant>,
+        clock: Option<&'a dyn Fn() -> Instant>,
+    ) -> Self {
+        let clock = if extendable.is_none() {
+            clock
+                .zip(timeout)
+                .map(|(clock, limit)| (clock(), limit, clock))
+        } else {
+            None
+        };
         let mut deadline = Self {
-            fixed: timeout.map(|timeout| Instant::now() + timeout),
+            fixed: timeout
+                .filter(|_| clock.is_none())
+                .map(|timeout| Instant::now() + timeout),
+            clock,
             extendable,
             cached: None,
         };
@@ -486,9 +492,19 @@ impl<'a> Deadline<'a> {
         }
     }
 
+    /// Remaining timeout when the caller supplied its own clock.
+    fn clock_remaining(&self) -> Option<Duration> {
+        self.clock.map(|(origin, limit, clock)| {
+            limit.saturating_sub(clock().saturating_duration_since(origin))
+        })
+    }
+
     /// Whether the deadline has passed, reading an extendable one afresh
     /// before saying so.
     fn passed(&mut self) -> bool {
+        if let Some(remaining) = self.clock_remaining() {
+            return remaining.is_zero();
+        }
         match self.current() {
             Some(end) if Instant::now() >= end => match self.extendable {
                 Some(read) => {
@@ -505,6 +521,30 @@ impl<'a> Deadline<'a> {
         let deadline = read();
         self.cached = Some((deadline, now));
         deadline
+    }
+}
+
+fn attach_stream<R>(
+    pipe: Option<R>,
+    stream: Stream,
+    stop_tx: mpsc::SyncSender<ProcessStopCause>,
+    watch: impl FnOnce() -> StopWatch,
+) -> Option<JoinHandle<Vec<u8>>>
+where
+    R: std::io::Read + PipeFd + Send + 'static,
+{
+    match stream {
+        Stream::Redirected => {
+            drop(pipe);
+            None
+        }
+        Stream::Sink(sink) => match pipe {
+            Some(pipe) => Some(spawn_sink_drain(pipe, sink, stop_tx, watch())),
+            None => {
+                sink.finish();
+                None
+            }
+        },
     }
 }
 

@@ -8,7 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use orbit_common::process::supervisor::{
-    CaptureSink, Periodic, ProcessStopCause, Stdin, SupervisedChild, Supervision, Termination,
+    CaptureSink, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision,
+    Termination,
 };
 
 #[test]
@@ -32,9 +33,10 @@ fn periodic_checks_continue_until_the_caller_requests_a_stop() {
     let outcome = SupervisedChild::adopt(child)
         .supervise(Supervision {
             stdin: Stdin::Null,
-            stdout: Box::new(CaptureSink::new("stdout", 1024)),
-            stderr: Box::new(CaptureSink::new("stderr", 1024)),
+            stdout: Stream::Sink(Box::new(CaptureSink::new("stdout", 1024))),
+            stderr: Stream::Sink(Box::new(CaptureSink::new("stderr", 1024))),
             timeout: Some(Duration::from_secs(10)),
+            clock: None,
             extendable_deadline: None,
             termination: Termination::Grace(Duration::from_millis(100)),
             cancelled: None,

@@ -13,7 +13,8 @@ use orbit_common::OrbitError;
 use orbit_common::process::output_capture::capture_limit_from_env;
 use orbit_common::process::stopped_descendants::stopped_descendant_threshold;
 use orbit_common::process::supervisor::{
-    CaptureSink, Outcome, OutputSink, RelaySink, Stdin, SupervisedChild, Supervision, Termination,
+    CaptureSink, Outcome, OutputSink, RelaySink, Stdin, Stream, SupervisedChild, Supervision,
+    Termination,
 };
 
 pub(crate) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -58,10 +59,13 @@ pub(crate) fn supervise(
     };
     let mut outcome = child.supervise(Supervision {
         stdin: run.stdin_payload.map_or(Stdin::Null, Stdin::Payload),
-        stdout,
-        stderr: Box::new(CaptureSink::new("stderr", limit).with_redacting_echo(run.debug)),
+        stdout: Stream::Sink(stdout),
+        stderr: Stream::Sink(Box::new(
+            CaptureSink::new("stderr", limit).with_redacting_echo(run.debug),
+        )),
         timeout: run.timeout_ms.map(Duration::from_millis),
         extendable_deadline: None,
+        clock: None,
         termination: if run.kill_at_once {
             Termination::KillNow
         } else {

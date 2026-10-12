@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
 use orbit_common::process::stopped_descendants::StoppedDescendant;
 use orbit_common::process::supervisor::{
-    Periodic, Stdin, SupervisedChild, Supervision, Termination,
+    Periodic, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
 
 use super::super::super::dispatcher::ResolvedSandbox;
@@ -185,15 +185,16 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     };
     let outcome = child.supervise(Supervision {
         stdin,
-        stdout: Box::new(TracedCaptureSink::new(
+        stdout: Stream::Sink(Box::new(TracedCaptureSink::new(
             Arc::clone(&stdout_buf),
             line_context("stdout"),
-        )),
-        stderr: Box::new(TracedCaptureSink::new(
+        ))),
+        stderr: Stream::Sink(Box::new(TracedCaptureSink::new(
             Arc::clone(&stderr_buf),
             line_context("stderr"),
-        )),
+        ))),
         timeout: None,
+        clock: None,
         extendable_deadline: Some(&extendable_deadline),
         termination: Termination::KillNow,
         cancelled: None,

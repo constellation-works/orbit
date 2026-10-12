@@ -25,7 +25,18 @@ impl BudgetClock {
         }
     }
 
+    /// The elapsed reading does not advance. `SOURCE_ELAPSED_ENV` freezes it
+    /// for a whole process, including commands that outlive a wall-clock budget.
+    #[cfg(feature = "test-support")]
+    pub(super) fn is_frozen(&self) -> bool {
+        self.frozen.is_some()
+    }
+
     /// A command gets its own timer with the source's clock policy.
+    ///
+    /// Only the test-support path restarts a clock: a frozen elapsed is copied
+    /// as-is, so a fixture that has already spent the command budget stays spent.
+    #[cfg(feature = "test-support")]
     pub(super) fn restart(&self) -> Self {
         Self {
             started: super::budget_now(),

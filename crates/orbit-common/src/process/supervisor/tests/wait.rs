@@ -2,7 +2,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use super::super::{CaptureSink, Outcome, Stdin, SupervisedChild, Supervision, Termination};
+use super::super::{
+    CaptureSink, Outcome, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision,
+    Termination,
+};
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const GRACE: Duration = Duration::from_secs(5);
@@ -41,10 +44,11 @@ fn supervision<'a>(
 ) -> Supervision<'a> {
     Supervision {
         stdin,
-        stdout: Box::new(CaptureSink::new("stdout", output_limit)),
-        stderr: Box::new(CaptureSink::new("stderr", output_limit)),
+        stdout: Stream::Sink(Box::new(CaptureSink::new("stdout", output_limit))),
+        stderr: Stream::Sink(Box::new(CaptureSink::new("stderr", output_limit))),
         timeout,
         extendable_deadline: None,
+        clock: None,
         termination: Termination::Grace(GRACE),
         cancelled,
         intercept_signals: true,
@@ -262,6 +266,128 @@ fn stdin_broken_pipe_reports_exit_status_and_stderr() {
     assert_eq!(result.exit_code, Some(3));
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("boom-stderr-tail"), "stderr was {stderr:?}");
+}
+
+fn clocked<'a>(
+    timeout: Option<Duration>,
+    clock: &'a dyn Fn() -> std::time::Instant,
+) -> Supervision<'a> {
+    let mut run = supervision(timeout, Stdin::Null, OUTPUT_LIMIT, None, None);
+    run.clock = Some(clock);
+    run
+}
+
+/// A caller clock that does not advance must not spend a wall-clock deadline.
+/// Delivery fixtures freeze source time this way and still run real commands.
+#[cfg(unix)]
+#[test]
+fn a_stalled_caller_clock_does_not_apply_the_wall_clock_deadline() {
+    let frozen = std::time::Instant::now();
+    let started = std::time::Instant::now();
+    let child = command("/bin/sleep", &["0.2"], false)
+        .spawn()
+        .expect("spawn sleeper");
+    let outcome = SupervisedChild::adopt(child)
+        .supervise(clocked(Some(Duration::from_millis(10)), &|| frozen))
+        .expect("supervise stalled clock");
+    assert!(
+        outcome.success && !outcome.timed_out,
+        "a clock that does not advance must not time out: {outcome:?}"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(150),
+        "the child must have been allowed to finish: {:?}",
+        started.elapsed()
+    );
+}
+
+/// A caller clock that jumps past the timeout stops the run on that reading.
+#[cfg(unix)]
+#[test]
+fn a_jumped_caller_clock_stops_at_the_deadline_without_the_wall_wait() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let ticks = AtomicUsize::new(0);
+    let origin = std::time::Instant::now();
+    let started = std::time::Instant::now();
+    let child = command("/bin/sleep", &["2"], false)
+        .spawn()
+        .expect("spawn sleeper");
+    let outcome = SupervisedChild::adopt(child)
+        .supervise(clocked(Some(Duration::from_secs(30)), &|| {
+            let tick = ticks.fetch_add(1, Ordering::SeqCst);
+            if tick == 0 {
+                origin
+            } else {
+                origin + Duration::from_secs(60)
+            }
+        }))
+        .expect("supervise jumped clock");
+    assert!(outcome.timed_out, "{outcome:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the jumped clock must stop before the wall-clock sleep: {:?}",
+        started.elapsed()
+    );
+}
+
+/// Redirected stdout is not a pipe, so a sink never sees it. The periodic
+/// check stops the writer once the caller's file crosses the limit.
+#[cfg(unix)]
+#[test]
+fn redirected_output_stops_when_the_periodic_check_crosses_its_limit() {
+    let output = tempfile::tempfile().expect("stdout file");
+    let stdout = output.try_clone().expect("clone stdout");
+    let mut command = command(
+        "/bin/sh",
+        &[
+            "-c",
+            "dd if=/dev/zero bs=1024 count=1024 status=none; sleep 30",
+        ],
+        false,
+    );
+    command.stdout(Stdio::from(stdout)).stderr(Stdio::null());
+    let child = command.spawn().expect("spawn writer");
+    let started = std::time::Instant::now();
+    let outcome = SupervisedChild::adopt(child)
+        .supervise(Supervision {
+            stdin: Stdin::Null,
+            stdout: Stream::Redirected,
+            stderr: Stream::Redirected,
+            timeout: Some(Duration::from_secs(5)),
+            clock: None,
+            every: Some(Periodic {
+                interval: Duration::from_millis(10),
+                run: &mut || {
+                    let over = output
+                        .metadata()
+                        .map(|meta| meta.len() > 4096)
+                        .unwrap_or(true);
+                    over.then_some(ProcessStopCause::Periodic)
+                },
+            }),
+            termination: Termination::KillNow,
+            cancelled: None,
+            intercept_signals: false,
+            drain_budget: DRAIN_BUDGET,
+            stopped_descendants: None,
+            on_spawn: None,
+            on_stopped_descendant: None,
+            extendable_deadline: None,
+        })
+        .expect("supervise redirected writer");
+    assert!(
+        outcome.stop_causes.contains(&ProcessStopCause::Periodic),
+        "{outcome:?}"
+    );
+    assert!(!outcome.timed_out && !outcome.success);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the size check must stop the writer before the deadline: {:?}",
+        started.elapsed()
+    );
+    let len = output.metadata().expect("stdout len").len();
+    assert!(len > 4096, "stdout must pass the limit, got {len}");
 }
 
 /// Escaped-descendant fixtures. The supervised `/bin/sh` starts this test
