@@ -7,6 +7,12 @@ use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
 
 #[test]
 fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
+    if !isolated(
+        module_path!(),
+        "claimed_flaky_evidence_records_history_and_reuses_local_signature",
+    ) {
+        return;
+    }
     let pair = Pair::with_owner_config(
         "[workflow]\nrequired_validation_commands = [\"test\"]\n",
         &[None],

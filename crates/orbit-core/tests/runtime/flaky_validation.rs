@@ -10,11 +10,45 @@ use tempfile::TempDir;
 
 #[test]
 fn flaky_signatures_are_filed_once_across_runs_and_tasks() {
+    if !super::dispatch_admission::isolated(
+        "flaky_validation::flaky_signatures_are_filed_once_across_runs_and_tasks",
+    ) {
+        return;
+    }
     let root = TempDir::new().unwrap();
     let repo = root.path().join("repo");
     let workspace = repo.join(".orbit");
+    let global = root.path().join("global");
     std::fs::create_dir_all(&workspace).unwrap();
-    let runtime = OrbitRuntime::from_roots(&root.path().join("global"), &workspace).unwrap();
+    std::fs::create_dir_all(&global).unwrap();
+    let mut git = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        git.env_remove(key);
+    });
+    let boundary = git
+        .args(["init", "--bare", "--initial-branch=main", "-q"])
+        .arg(repo.join(".git"))
+        .output()
+        .unwrap();
+    assert!(
+        boundary.status.success(),
+        "initialize fixture Git discovery boundary: {}",
+        String::from_utf8_lossy(&boundary.stderr)
+    );
+    // Discovery must stop at this checkout even when TMPDIR is inside a
+    // managed repository. Verify the task tool's workspace before any writes.
+    let repo = repo.canonicalize().unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    let global = global.canonicalize().unwrap();
+    let roots = OrbitRuntime::resolve_roots_for_cwd(&repo, None).unwrap();
+    assert_eq!(roots.shared_root, workspace);
+    assert_eq!(roots.local_root, workspace);
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    assert_eq!(runtime.paths().repo_root, repo);
+    assert_eq!(runtime.paths().orbit_dir, workspace);
+    assert_eq!(runtime.global_root(), global);
+    assert_eq!(runtime.data_root(), workspace);
+    assert_eq!(runtime.local_root(), workspace);
     let mut record = FlakyValidation {
         command: "make ci-test-affected".into(),
         base_sha: "a".repeat(40),
