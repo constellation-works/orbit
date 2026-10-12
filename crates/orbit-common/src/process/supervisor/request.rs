@@ -30,7 +30,19 @@ pub enum Termination {
     KillNow,
 }
 
-/// A hook supervision runs on its own thread while the child lives.
+/// Where one of the child's output streams goes.
+pub enum Stream {
+    /// The child was spawned with this stream piped. The sink receives it.
+    /// When the child has no pipe, the sink is finished and its bytes are
+    /// discarded: nothing was read.
+    Sink(Box<dyn OutputSink>),
+    /// The caller redirected the stream before spawn (a file, or null).
+    /// The supervisor attaches no sink and starts no reader. A pipe left on
+    /// the child is closed so a full buffer cannot stall it.
+    Redirected,
+}
+
+/// A check the supervisor runs while the child is still alive.
 pub struct Periodic<'a> {
     /// Time between runs; the first runs one interval after supervision
     /// starts. Must be nonzero.
@@ -45,17 +57,22 @@ pub struct Periodic<'a> {
 /// One supervised run of a [`SupervisedChild`](super::SupervisedChild).
 pub struct Supervision<'a> {
     pub stdin: Stdin,
-    /// Receives the child's stdout when it was spawned piped.
-    pub stdout: Box<dyn OutputSink>,
-    /// Receives the child's stderr when it was spawned piped.
-    pub stderr: Box<dyn OutputSink>,
-    /// Wall-clock limit from the start of supervision; `None` waits forever.
+    /// The child's stdout. [`Stream::Redirected`] attaches nothing.
+    pub stdout: Stream,
+    /// The child's stderr. [`Stream::Redirected`] attaches nothing.
+    pub stderr: Stream,
+    /// Limit from the start of supervision, measured by [`Self::clock`] or
+    /// wall time when that is absent. `None` waits forever.
     pub timeout: Option<Duration>,
     /// A deadline the caller can move while the child runs, such as one
     /// extended by credit for time spent queued on a shared resource. When
     /// set it replaces `timeout`. Supervision reads it at the start, again at
     /// most every 100 ms, and afresh before acting on its passing.
     pub extendable_deadline: Option<&'a dyn Fn() -> Instant>,
+    /// Measures [`Self::timeout`]. `None` uses [`Instant::now`]. A clock that
+    /// does not advance never reaches the timeout. The periodic check stays
+    /// on the wall clock.
+    pub clock: Option<&'a dyn Fn() -> Instant>,
     pub termination: Termination,
     /// Kills the group at once when set; checked every poll.
     pub cancelled: Option<&'a AtomicBool>,
@@ -81,7 +98,7 @@ pub struct Supervision<'a> {
     /// Called once with the child's pid when supervision starts, before any
     /// pipe setup.
     pub on_spawn: Option<&'a dyn Fn(u32)>,
-    /// Run a hook periodically while the child lives.
+    /// Check periodically while the child lives; a returned cause stops the run.
     pub every: Option<Periodic<'a>>,
 }
 
@@ -98,8 +115,8 @@ pub struct Outcome {
     /// The deadline elapsed and the supervisor ended the child's group.
     pub timed_out: bool,
     /// Every stop the supervisor observed, most significant first: a
-    /// termination without an exit code, then periodic and sink stops, then an intercepted
-    /// signal.
+    /// termination without an exit code, then periodic and sink stops, then an
+    /// intercepted signal.
     pub stop_causes: Vec<ProcessStopCause>,
     /// Descendants the stopped-descendant watch ended.
     pub stopped_descendants: Vec<StoppedDescendant>,

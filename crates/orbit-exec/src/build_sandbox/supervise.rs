@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::process::supervisor::{
-    OutputSink, Periodic, ProcessStopCause, SinkVerdict, Stdin, SupervisedChild, Supervision,
-    Termination,
+    OutputSink, Periodic, ProcessStopCause, SinkVerdict, Stdin, Stream, SupervisedChild,
+    Supervision, Termination,
 };
 
 use super::{BuildPhaseEnd, BuildPhaseRequest};
@@ -146,9 +146,10 @@ pub(super) fn run<G>(
     };
     let outcome = child.supervise(Supervision {
         stdin: Stdin::Null,
-        stdout: Box::new(BuildLogSink(Arc::clone(&shared))),
-        stderr: Box::new(BuildLogSink(Arc::clone(&shared))),
+        stdout: Stream::Sink(Box::new(BuildLogSink(Arc::clone(&shared)))),
+        stderr: Stream::Sink(Box::new(BuildLogSink(Arc::clone(&shared)))),
         timeout: Some(request.timeout),
+        clock: None,
         extendable_deadline: None,
         termination: Termination::Grace(crate::supervision::TERMINATION_GRACE_PERIOD),
         cancelled: None,

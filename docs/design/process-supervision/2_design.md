@@ -334,6 +334,19 @@ returning it from `finish`, because progress sampling reads it while the
 child runs. The remaining options and `SuperviseError` arrive with the steps
 that need them.
 
+Step 7 adds the options automation source needs. Each output is a `Stream`:
+`Sink` keeps the pipe worker, and `Redirected` means the caller already
+pointed the descriptor at a file or null, so the supervisor attaches no sink
+and starts no reader. `every` reuses `Periodic::run`, on the wall clock, at
+a nonzero interval measured from the end of the previous check. It may stop
+the run with `ProcessStopCause::Periodic`. `clock`, when set,
+measures `timeout` instead of wall time, so a stalled caller clock does not
+spend the deadline. The engine progress hook returns no stop cause and
+keeps its interval.
+`extendable_deadline` still takes precedence over `timeout` and uses wall-clock
+instants; its cached value is refreshed before supervision acts on expiry.
+`SuperviseError` remains deferred to a step that needs it.
+
 ### 4.3 How each caller group maps
 
 | Caller group | stdin | sinks | termination | other options |
