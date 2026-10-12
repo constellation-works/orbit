@@ -112,11 +112,18 @@ so the local proxy never sees or rewrites an MCP message. SSH handles transport,
 host verification, encryption, and access to the remote shell.
 
 The direct proxy and federated destination sessions share OpenSSH connections.
-Orbit supplies a generated `-F` config under `~/.orbit/ssh/` that includes the
-user's SSH config and `/etc/ssh/ssh_config` before setting `ControlMaster auto`,
+Orbit supplies a generated `-F` config under `~/.orbit/ssh/` that includes
+`~/.ssh/config` and `/etc/ssh/ssh_config` before setting `ControlMaster auto`,
 `ControlPersist 60`, and a `ControlPath` based on OpenSSH's `%C` connection hash.
 Explicit SSH settings take precedence. Set `ControlMaster no` and
 `ControlPath none` to opt out of both creating and attaching to a master.
+The user file is included by that tilde path rather than by its absolute path
+with percent signs doubled. `ControlPath` has always expanded `%` tokens, so a
+home directory containing `%` must be escaped there, but OpenSSH did not expand
+those tokens in `Include` until 9.9. On Ubuntu 24.04's OpenSSH 9.6 an escaped
+absolute include names a different path; the missing file is skipped and these
+defaults, including the relative `%C` fallback, override an explicit opt-out.
+`~` has expanded from `HOME` for as long as `Include` has existed.
 The socket directory is owner-only (`0700`), and an idle master expires after
 60 seconds. Each call still starts its own remote MCP process and handshakes;
 only the authenticated SSH connection is shared.
