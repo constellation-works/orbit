@@ -77,7 +77,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use orbit_common::process::OwnedChild;
+use orbit_common::process::{OwnedChild, run_bounded};
 
 struct GroupPeer(Child);
 
@@ -192,4 +192,131 @@ fn completed_ownership_and_unsafe_group_ids_never_signal_live_peers() {
             .expect("peer after disarmed cleanup")
             .is_none()
     );
+}
+
+#[test]
+fn bounded_timeout_reaps_a_child_that_moves_into_the_callers_group() {
+    use std::io::{Read, Write};
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+    use std::thread::{self, JoinHandle};
+
+    const TEST: &str = "bounded_timeout_reaps_a_child_that_moves_into_the_callers_group";
+    const CHILD_ENV: &str = "ORBIT_MOVED_GROUP_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output_dir = tempfile::tempdir().expect("isolated test output");
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD_ENV, "1");
+        let output = orbit_common::test_env::run_child_test(&mut command, TEST, output_dir.path());
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            output.stdout,
+            output.stderr,
+        );
+        return;
+    }
+
+    // This re-executed test leads its own group. Surviving the timeout proves
+    // teardown never signals the caller's group after the child joins it.
+    // SAFETY: getpgrp only queries the calling process's group.
+    let own_group = unsafe { libc::getpgrp() };
+    assert_eq!(own_group, std::process::id() as i32);
+    let (parent, mut child_socket) = UnixStream::pair().expect("readiness socket");
+    for socket in [&parent, &child_socket] {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bounded readiness wait");
+    }
+
+    struct Fixture {
+        socket: UnixStream,
+        pid: Option<libc::pid_t>,
+        worker: Option<JoinHandle<()>>,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = self.socket.shutdown(Shutdown::Both);
+            if let Some(pid) = self.pid {
+                // SAFETY: only clean up this fixture's still-owned direct
+                // child, never its new group. A reaped child gives ECHILD.
+                unsafe {
+                    if libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) == 0 {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    let deadline = Duration::from_millis(100);
+    let mut command = Command::new("/bin/sleep");
+    command.arg("60");
+    // SAFETY: the post-fork callback uses only process syscalls and socket IO
+    // on an existing descriptor, without allocation or locks. Command sets
+    // the original process group before this callback. Spawn cannot finish
+    // (and the bounded runner's deadline cannot start) until we acknowledge.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setpgid(0, own_group) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let pid = libc::getpid();
+            if libc::getpgid(0) != own_group || own_group == pid {
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidData));
+            }
+            child_socket.write_all(&pid.to_ne_bytes())?;
+            child_socket.read_exact(&mut [0])?;
+            Ok(())
+        });
+    }
+    let (tx, rx) = mpsc::sync_channel(1);
+    let mut fixture = Fixture {
+        socket: parent,
+        pid: None,
+        worker: Some(thread::spawn(move || {
+            let result = run_bounded(&mut command, deadline);
+            let _ = tx.send(result);
+        })),
+    };
+    let mut pid_bytes = [0; size_of::<libc::pid_t>()];
+    fixture
+        .socket
+        .read_exact(&mut pid_bytes)
+        .expect("child moved");
+    let pid = libc::pid_t::from_ne_bytes(pid_bytes);
+    fixture.pid = Some(pid);
+    // SAFETY: query only the child waiting for this test's acknowledgment.
+    assert_eq!(unsafe { libc::getpgid(pid) }, own_group);
+    assert_ne!(pid, own_group, "the original child group must be empty");
+    let started = Instant::now();
+    fixture.socket.write_all(&[1]).expect("start bounded run");
+    let result = rx.recv_timeout(deadline + Duration::from_secs(2));
+    let elapsed = started.elapsed();
+    // On a regression the assertion unwinds through Fixture, which kills the
+    // moved child and joins the runner, rather than leaving a hung thread.
+    assert!(
+        result.is_ok() && elapsed < deadline + Duration::from_secs(2),
+        "runner exceeded deadline plus cleanup grace: {elapsed:?}"
+    );
+    assert!(matches!(
+        result.expect("bounded completion"),
+        Err(orbit_common::OrbitError::ProcessTimeout {
+            timeout_ms: 100,
+            ..
+        })
+    ));
+    assert!(elapsed >= deadline, "timeout returned before the deadline");
+    // SAFETY: ECHILD proves the runner reaped its child, not just killed it.
+    let waited = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+    let error = std::io::Error::last_os_error().raw_os_error();
+    assert_eq!((waited, error), (-1, Some(libc::ECHILD)));
+    fixture.pid = None;
+    assert_eq!(probe_process_group_liveness(pid), KernelLiveness::Exited);
 }

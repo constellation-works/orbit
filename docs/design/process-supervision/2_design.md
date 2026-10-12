@@ -41,7 +41,10 @@ loop drains both pipes nonblocking, with each turn capped at 64 KiB or
 to the group, waits 200 ms, then SIGKILL. When the leader exits it kills
 the group and drains for up to 500 ms more. Group signals go through
 `OwnedChild::signal_group`, which skips the caller's own group and a pid
-that no longer leads its group. Capture keeps a prefix and keeps reading past the
+that no longer leads its group. Termination waits for both the direct child
+and its original group to exit. If the child joins another group while alive,
+it is killed directly and reaped after the grace period; its new group is
+never signalled. Capture keeps a prefix and keeps reading past the
 limit (`BoundedOutputCapture`, ending with `OUTPUT_TRUNCATED_MARKER`). The
 `complete` mode also needs both pipes at EOF before the deadline. The
 `_typed` variants return a spawn failure as its `io::Error`.

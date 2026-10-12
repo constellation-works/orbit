@@ -55,7 +55,9 @@ pub struct CapturedOutput {
 /// [`Command::output`](std::process::Command::output). The child is placed in
 /// its own process group on Unix. When the deadline elapses the group is
 /// signalled (SIGTERM, then SIGKILL) and the leader is reaped; the returned
-/// error is [`OrbitError::ProcessTimeout`]. A non-zero exit inside the deadline
+/// error is [`OrbitError::ProcessTimeout`]. A direct child that leaves its
+/// original group is still killed and reaped after the termination grace;
+/// its new group is never signalled. A non-zero exit inside the deadline
 /// is success of the wait: the status is in [`CapturedOutput`].
 ///
 /// # Errors

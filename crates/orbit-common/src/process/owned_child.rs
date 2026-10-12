@@ -61,7 +61,8 @@ impl OwnedChild {
         Self::signal_spawned_group(self.pid(), signal)
     }
 
-    /// Send TERM, wait for the entire group for `grace`, then kill and reap.
+    /// Send TERM, wait for the child and its original group for `grace`, then
+    /// kill and reap. A child that leaves the group is still killed and reaped.
     ///
     /// # Errors
     /// Returns a child wait error; ownership remains armed on failure.
@@ -165,9 +166,9 @@ impl OwnedChild {
             let _ = Self::signal_spawned_group(pid, signal);
             let deadline = Instant::now() + grace;
             loop {
-                child.try_wait()?;
-                if group_exited(pid) {
-                    let _ = child.wait();
+                // An empty original group does not imply the child exited:
+                // it may have joined another group that we must not signal.
+                if child.try_wait()?.is_some() && group_exited(pid) {
                     return Ok(());
                 }
                 if Instant::now() >= deadline {
