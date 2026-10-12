@@ -39,9 +39,10 @@ impl TaskRegistryStore {
         // workspace, against about 15 ms through the `(task_id, tag)` key.
         let mut stmt = conn
             .prepare(
-                "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag
+                "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag, r.target_task_id
                  FROM task_bundle_index i
                  LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND +t.workspace_id = i.workspace_id
+                 LEFT JOIN task_bundle_relations r ON r.source_task_id = i.task_id AND r.relation_type = 'child_of'
                  WHERE i.workspace_id = ?1",
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -56,19 +57,24 @@ impl TaskRegistryStore {
                         created_at: row.get(4)?,
                         updated_at: row.get(5)?,
                         tags: BTreeSet::new(),
+                        child_of_targets: BTreeSet::new(),
                     },
                     row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        // One statement keeps scalar fields and tags in the same SQLite
-        // snapshot when a writer replaces both in a concurrent transaction.
+        // One statement keeps scalar fields, tags and parent targets in the
+        // same SQLite snapshot when a writer replaces them in a transaction.
         let mut indexed = BTreeMap::new();
         for row in rows {
-            let (task_id, row, tag) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (task_id, row, tag, parent) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
             let entry = indexed.entry(task_id).or_insert(row);
             if let Some(tag) = tag {
                 entry.tags.insert(tag);
+            }
+            if let Some(parent) = parent {
+                entry.child_of_targets.insert(parent);
             }
         }
         Ok(indexed)

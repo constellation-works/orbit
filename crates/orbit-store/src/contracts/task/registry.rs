@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskStatus, normalize_task_tags};
+use orbit_types::task::{
+    TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus, normalize_task_tags,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -107,14 +109,22 @@ pub struct IndexedTaskRow {
     pub created_at: String,
     pub updated_at: String,
     pub tags: BTreeSet<String>,
+    /// All generated `child_of` targets, verified before parent selection.
+    pub child_of_targets: BTreeSet<String>,
 }
 
 impl IndexedTaskRow {
     /// Whether the index row projects exactly the fields listing filters and
     /// orders by, so a selection answered from the index agrees with the
-    /// envelope — including an edit that kept `updated_at` but changed a tag.
+    /// envelope — including an edit that kept `updated_at` but changed a tag or parent.
     pub fn matches(&self, envelope: &TaskEnvelopeV2) -> bool {
         let tags = normalize_task_tags(envelope.tags.clone());
+        let child_of_targets = envelope
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_type == TaskRelationType::ChildOf)
+            .map(|relation| relation.target.clone())
+            .collect::<BTreeSet<_>>();
         self.updated_at == envelope.updated_at.to_rfc3339()
             && self.created_at == envelope.created_at.to_rfc3339()
             && self.status == envelope.status.to_string()
@@ -122,13 +132,21 @@ impl IndexedTaskRow {
             && self.job_run_id == envelope.job_run_id
             && tags.len() == self.tags.len()
             && tags.iter().all(|tag| self.tags.contains(tag))
+            && child_of_targets == self.child_of_targets
     }
 
     /// Every field [`Self::matches`] compares, in one string. A persisted
     /// envelope stamp is recorded against it, so any rewrite of the row
-    /// retires the stamp.
+    /// retires the stamp. Older fingerprints without parent targets fail to
+    /// match, even when the task has no parent, and cost a fresh parse.
     pub fn fingerprint(&self) -> String {
         let tags = self.tags.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
+        let parents = self
+            .child_of_targets
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
         [
             self.status.as_str(),
             self.priority.as_str(),
@@ -136,6 +154,7 @@ impl IndexedTaskRow {
             self.created_at.as_str(),
             self.updated_at.as_str(),
             tags.as_str(),
+            parents.as_str(),
         ]
         .join("\u{1e}")
     }

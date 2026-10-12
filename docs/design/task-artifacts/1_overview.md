@@ -96,6 +96,8 @@ Typed links live in a single directed `relations` array on the envelope. Task-to
 
 The canonical bundle lives in the local task store under `~/.orbit/tasks/workspaces/<partition-id>/<task-id>/`. `~/.orbit/tasks/index.sqlite` holds the machine-local allocator, workspace bindings, local execution overlays, and generated indexes. Task and artifact tools resolve the canonical bundle from that registry; checkouts do not expose task-bundle symlinks.
 
+Before narrowing a listing by parent, the store verifies the generated `child_of` targets against every registered envelope, alongside indexed scalar fields and tags. A relation-only bundle restoration therefore triggers bundle fallback and, for writable readers, index repair even if `updated_at` is unchanged. Persisted envelope proofs include the parent targets in their index fingerprint; older proofs without those targets require a new parse.
+
 ---
 
 ## 3. At a Glance

@@ -374,3 +374,159 @@ fn open_task_selection_reads_only_open_envelopes() {
         baseline.as_secs_f64() / selection.as_secs_f64().max(f64::EPSILON)
     );
 }
+
+/// A restored envelope can move a child without changing scalar metadata.
+/// Both observation and repair must find it before narrowing by parent.
+#[test]
+fn parent_selection_detects_relation_only_envelope_changes() {
+    if !isolated("task_index::parent_selection_detects_relation_only_envelope_changes") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let first = owner.create_task("Original parent");
+    let second = owner.create_task("Restored parent");
+    let child = owner.create_task_with_status(
+        "Restored child",
+        &["src/child.rs"],
+        TaskStatus::Done,
+        Some(first.id.clone()),
+    );
+    owner.backends.task.task.list_tasks().unwrap();
+    let path = owner
+        .registry
+        .canonical_task_bundle_path(PARTITION_ID, &child.id)
+        .unwrap()
+        .join(TASK_ENVELOPE_FILE_NAME);
+    let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+        serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let old_row = owner
+        .registry
+        .indexed_task_rows_for_workspace(PARTITION_ID)
+        .unwrap()[&child.id]
+        .clone();
+    for relation in &mut envelope.relations {
+        if relation.relation_type == orbit_types::task::TaskRelationType::ChildOf {
+            relation.target = second.id.clone();
+        }
+    }
+    assert_eq!(envelope.updated_at, child.updated_at);
+    let restored = path.with_extension("restored");
+    std::fs::write(&restored, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+    std::fs::rename(restored, path).unwrap();
+    assert!(!old_row.matches(&envelope));
+
+    let filter = TaskListFilter {
+        parent_id: Some(second.id.clone()),
+        ..Default::default()
+    };
+    let read_only = observer(root.path());
+    for _ in 0..2 {
+        let selected = read_only.task.task_candidates(&filter, 1).unwrap();
+        assert_eq!(selected.total, 1);
+        assert_eq!(selected.items[0].id, child.id);
+    }
+    assert_eq!(
+        owner
+            .registry
+            .indexed_task_rows_for_workspace(PARTITION_ID)
+            .unwrap()[&child.id],
+        old_row,
+        "observation leaves the stale projection untouched"
+    );
+    let selected = owner
+        .backends
+        .task
+        .task
+        .task_candidates(&filter, 1)
+        .unwrap();
+    assert_eq!(selected.items[0].id, child.id);
+    let repaired = owner
+        .registry
+        .indexed_task_rows_for_workspace(PARTITION_ID)
+        .unwrap();
+    assert!(repaired[&child.id].matches(&envelope));
+    assert_ne!(repaired[&child.id].fingerprint(), old_row.fingerprint());
+    assert_eq!(
+        read_only
+            .task
+            .task_candidates(
+                &TaskListFilter {
+                    parent_id: Some(first.id),
+                    ..Default::default()
+                },
+                1
+            )
+            .unwrap()
+            .total,
+        0
+    );
+}
+
+/// Proofs from before parent validation must cost a new envelope parse,
+/// even when the file and scalar index row have not changed.
+#[test]
+fn older_envelope_proofs_are_reparsed_before_parent_selection() {
+    if !isolated("task_index::older_envelope_proofs_are_reparsed_before_parent_selection") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let parent = owner.create_task("Parent");
+    let child = owner.create_task_with_status(
+        "Child",
+        &["src/child.rs"],
+        TaskStatus::Done,
+        Some(parent.id.clone()),
+    );
+    owner.backends.task.task.list_tasks().unwrap();
+    let rows = owner
+        .registry
+        .indexed_task_rows_for_workspace(PARTITION_ID)
+        .unwrap();
+    let sql = rusqlite::Connection::open(task_registry_path(root.path())).unwrap();
+    for (id, row) in rows {
+        // The legacy proof covered exactly these six fields, never parents.
+        let tags = row.tags.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
+        let legacy = [
+            row.status.as_str(),
+            row.priority.as_str(),
+            row.job_run_id.as_deref().unwrap_or(""),
+            row.created_at.as_str(),
+            row.updated_at.as_str(),
+            tags.as_str(),
+        ]
+        .join("\u{1e}");
+        assert_eq!(
+            sql.execute(
+                "UPDATE task_envelope_stamps SET fingerprint = ?1 WHERE task_id = ?2",
+                rusqlite::params![legacy, id],
+            )
+            .unwrap(),
+            1
+        );
+    }
+    drop(owner);
+    let (selected, reads, _) = cold_selection(
+        root.path(),
+        &TaskListFilter {
+            parent_id: Some(parent.id),
+            ..Default::default()
+        },
+    );
+    assert_eq!(selected, 1);
+    assert!(
+        reads >= 2,
+        "legacy proofs must reparse both envelopes: read {reads}"
+    );
+    let owner = Coordinated::open(root.path());
+    let proofs = owner
+        .registry
+        .envelope_stamps_for_workspace(PARTITION_ID)
+        .unwrap();
+    let rows = owner
+        .registry
+        .indexed_task_rows_for_workspace(PARTITION_ID)
+        .unwrap();
+    assert_eq!(proofs[&child.id].fingerprint, rows[&child.id].fingerprint());
+}

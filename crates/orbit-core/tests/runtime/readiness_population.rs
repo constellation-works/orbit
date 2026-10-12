@@ -231,3 +231,79 @@ fn readiness_reads_open_work_and_the_closed_tasks_its_rules_reach() {
         );
     }
 }
+
+#[test]
+fn restored_closed_child_retains_inherited_epic_footprint() {
+    if !isolated("readiness_population::restored_closed_child_retains_inherited_epic_footprint") {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let previous = add(
+        &runtime,
+        "previous parent",
+        TaskStatus::Done,
+        None,
+        &[],
+        &[],
+    );
+    let epic = add(&runtime, "epic", TaskStatus::Backlog, None, &["epic"], &[]);
+    let child = add(
+        &runtime,
+        "closed descendant",
+        TaskStatus::Done,
+        Some(&previous),
+        &[],
+        &["file:src/child.rs"],
+    );
+    runtime.list_tasks().unwrap();
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(&global),
+    )
+    .unwrap();
+    let path = registry
+        .canonical_task_bundle_path(&runtime.workspace_id().unwrap(), &child)
+        .unwrap()
+        .join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
+    let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+        serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for relation in &mut envelope.relations {
+        if relation.relation_type == orbit_types::task::TaskRelationType::ChildOf {
+            relation.target = epic.clone();
+        }
+    }
+    let restored = path.with_extension("restored");
+    std::fs::write(&restored, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+    std::fs::rename(restored, path).unwrap();
+    drop(runtime);
+
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap()
+        .with_host_resource_probe(PressureProbe::calm());
+    let report = readiness(&runtime, std::slice::from_ref(&epic)).unwrap();
+    assert_eq!(entry(&report, &epic)["eligible"], false, "{report}");
+    assert_eq!(
+        entry(&report, &epic)["reason"],
+        "inherited_only_epic_root",
+        "{report}"
+    );
+    let backlog = runtime
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert!(
+        backlog["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["id"] == epic && entry["reason"] == "inherited_only_epic_root"),
+        "{backlog}"
+    );
+}

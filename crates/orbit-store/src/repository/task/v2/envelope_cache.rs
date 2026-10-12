@@ -25,8 +25,8 @@
 //! are identical. An in-place overwrite that preserved identity, length, and
 //! timestamp would go unnoticed, and a filesystem with coarse timestamps or no
 //! inode numbers narrows the evidence further. Reuse therefore never stands
-//! alone: the caller still compares every reused envelope's `updated_at`
-//! against the generated index, and `reindex_workspace` re-reads and
+//! alone: the caller still compares every reused envelope's indexed scalar
+//! fields, tags and `child_of` targets against the generated index, and `reindex_workspace` re-reads and
 //! re-validates every bundle from disk with no reference to this cache.
 //!
 //! Entries are bounded by the tasks registered to the workspace, which the
