@@ -225,6 +225,29 @@ fn non_orb_task_accepts_valid_foreign_prefix_relation() {
     )
     .success();
 
+    let routing = run_orbit_json(
+        &repo,
+        &home,
+        &["--root", root_arg, "workspace", "show", "--format", "json"],
+    );
+    assert_eq!(routing["registered"], true);
+    assert_eq!(
+        routing["checkout"]["repo_root"],
+        fs::canonicalize(&repo)
+            .expect("canonical fixture repo")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(
+        fs::canonicalize(
+            routing["checkout"]["orbit_dir"]
+                .as_str()
+                .expect("selected fixture orbit directory")
+        )
+        .expect("canonical selected orbit directory"),
+        fs::canonicalize(&root).expect("canonical fixture orbit directory")
+    );
+
     // 1. Create a non-ORB task under configured SHR prefix with a foreign-prefix dependency (DANI-00001)
     let created = run_orbit_json(
         &repo,

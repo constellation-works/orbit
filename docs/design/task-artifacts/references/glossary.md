@@ -13,7 +13,7 @@ This glossary covers Orbit-specific task artifact terms. Generic issue-tracker o
 |------|---------|
 | **Acceptance document** | `acceptance.md`, the Markdown source of truth for validation expectations. See [2_design.md §2.3](../2_design.md). |
 | **Artifact manifest** | `artifacts/manifest.yaml`, the structured index of files stored under a task's `artifacts/` directory. See [2_design.md §2.5](../2_design.md). |
-| **Authority-scoped task ID** | The canonical `<prefix>-<digits>` identity (for example, `ORB-00000`) allocated by one configured machine or registry authority under its configured task prefix (2–5 uppercase ASCII letters, minimum five-digit decimal suffix). See [2_design.md §9](../2_design.md). |
+| **Authority-scoped task ID** | The canonical `<prefix>-<digits>` identity (for example, `ORB-00000`) allocated by one configured machine or registry authority under its configured task prefix (2–5 uppercase ASCII letters excluding `ADR`, `L`, and `F`; a non-empty ASCII decimal suffix). Five digits is the minting minimum width, not a validation requirement. `ORB` is accepted for migrated machines but reserved for new identities. See [2_design.md §9](../2_design.md). |
 | **Bundle** | The directory and files that together represent one task. See [1_overview.md §2.1](../1_overview.md). |
 | **Envelope** | `task.yaml`, the small structured metadata file in a task bundle. See [1_overview.md §2.2](../1_overview.md). |
 | **Canonical task bundle** | The active local task copy under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`. See [2_design.md §2.1](../2_design.md). |
