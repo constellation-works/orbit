@@ -312,12 +312,16 @@ class LocalCodeqlTests(unittest.TestCase):
         self.scratch = self.root / "run scratch"
         # The host toolchain cache and slot locks; never the real ~/.orbit/cache.
         self.cache = self.root / "host cache"
+        self.meminfo = self.root / "meminfo"
+        self.meminfo.write_text(f"MemTotal: {128 * 1024 * 1024} kB\n")
         self.env = dict(git_env, PATH=f"{self.bin}:{self.tool_path}",
                         STUB_CALLS=str(self.calls_file),
                         ORBIT_SCRATCH_DIR=str(self.scratch),
                         ORBIT_CODEQL_CACHE_DIR=str(self.cache),
+                        _ORBIT_CODEQL_MEMINFO_PATH=str(self.meminfo),
                         RUSTUP_HOME=str(self.global_dirs[0]),
                         CARGO_HOME=str(self.global_dirs[1]))
+        self.env.pop("ORBIT_CODEQL_SLOTS", None)
 
     # The timeout only guards against a hung script. A stubbed run takes about
     # 2 s, but a busy executor stretched runs past 20 s on a managed macOS leaf
@@ -405,6 +409,68 @@ class LocalCodeqlTests(unittest.TestCase):
         self.assertEqual(len(list(self.root.rglob("results.sarif"))), 1)
         self.assert_selects_only_production_source()
         self.assert_isolated()
+
+    def test_ram_is_capped_by_host_memory_and_resolved_slots(self):
+        # Include fractional MiB to prove the budget rounds down. Exercise both
+        # the default count and the persistent count with an environment override.
+        total_kib = 28 * 1024 * 1024 + 17
+        self.meminfo.write_text(f"MemFree: 100 kB\nMemTotal: {total_kib} kB\n")
+        self.cache.mkdir()
+        for count, override in ((None, None), (3, None), (3, "1")):
+            with self.subTest(count=count, override=override):
+                if count is not None:
+                    (self.cache / "slot-count").write_text(f"{count}\n")
+                result = self.run_script("--fresh", "fixture.ql", ORBIT_CODEQL_SLOTS=override or "")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                slots = int(override) if override else count or 2
+                expected = min(16384, total_kib * 3 // (5 * 1024 * slots))
+                create, analyze = [call for call in self.calls() if call["name"] == "codeql"][-2:]
+                for call in (create, analyze):
+                    self.assertIn(f"--ram={expected}", call["args"])
+                self.assertEqual("clamping --ram" in result.stderr, expected < 16384)
+
+    def test_sufficient_memory_preserves_requested_ram(self):
+        for requested in (8192, 16384):
+            with self.subTest(requested=requested):
+                result = self.run_script("--fresh", "--ram", str(requested), "fixture.ql")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for call in [call for call in self.calls() if call["name"] == "codeql"][-2:]:
+                    self.assertIn(f"--ram={requested}", call["args"])
+                self.assertNotIn("clamping --ram", result.stderr)
+
+    def test_ram_below_minimum_refuses_before_extraction(self):
+        for total_kib, requested in ((4096 * 1024, 16384), (128 * 1024 * 1024, 2047)):
+            with self.subTest(total_kib=total_kib, requested=requested):
+                self.meminfo.write_text(f"MemTotal: {total_kib} kB\n")
+                result = self.run_script("--ram", str(requested), "fixture.ql")
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("below the minimum 2048 MiB", result.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(list(self.root.rglob("results.sarif")), [])
+        result = self.run_script("--ram", "2048", "fixture.ql")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for call in self.calls()[-2:]:
+            self.assertIn("--ram=2048", call["args"])
+        # A retained passing run must not bypass admission on a smaller host.
+        self.calls_file.write_text("")
+        self.meminfo.write_text("MemTotal: 1024 kB\n")
+        result = self.run_script("fixture.ql")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("below the minimum 2048 MiB", result.stderr)
+
+    def test_unreadable_or_invalid_meminfo_preserves_requested_ram(self):
+        for contents in (None, "MemFree: 100 kB\n", "MemTotal: invalid kB\n", "MemTotal: 0 kB\n"):
+            with self.subTest(contents=contents):
+                path = self.root / "missing meminfo" if contents is None else self.meminfo
+                if contents is not None:
+                    self.meminfo.write_text(contents)
+                result = self.run_script("--fresh", "--ram", "8192", "fixture.ql",
+                                         _ORBIT_CODEQL_MEMINFO_PATH=str(path))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for call in [call for call in self.calls() if call["name"] == "codeql"][-2:]:
+                    self.assertIn("--ram=8192", call["args"])
+                self.assertNotIn("clamping --ram", result.stderr)
 
     def test_scratch_inside_checkout_is_never_extracted(self):
         nested = self.repo / "work/nested scratch"
@@ -762,7 +828,7 @@ os.execv({real_mv!r}, sys.argv)
 ''')
         mv.chmod(0o755)
         result = self.run_script("fixture.ql", ORBIT_CODEQL_SLOTS="2")
-        self.assert_no_result(result, ["rustup"])
+        self.assert_no_result(result, [])
         self.assertIn("cannot migrate", result.stderr)
         self.assertNotIn("running without a host slot", result.stderr)
         self.assertEqual(legacy.read_text(), "1\n")
@@ -774,7 +840,7 @@ os.execv({real_mv!r}, sys.argv)
         legacy.write_text("1\n")
         current.write_text("2\n")
         result = self.run_script("fixture.ql")
-        self.assert_no_result(result, ["rustup"])
+        self.assert_no_result(result, [])
         self.assertIn("reconcile the CodeQL slot counts", result.stderr)
         self.assertEqual(legacy.read_text(), "1\n")
         self.assertEqual(current.read_text(), "2\n")

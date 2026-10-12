@@ -3,7 +3,7 @@ type: runbook
 summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-10-11
+last_validated: 2026-10-12
 ---
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
@@ -53,9 +53,20 @@ scripts/codeql-rust-local.sh --ram 16384 \
   codeql/rust-queries:codeql-suites/rust-security-extended.qls
 ```
 
-`--ram` is in MiB and applies to extraction and analysis. The default is 16384;
-a previous targeted query exhausted the heap at 4096. Choose a value appropriate
-to the executor's available memory.
+`--ram` is in MiB and applies to extraction and analysis. The requested default
+is 16384. On Linux, the effective value is
+`min(requested, floor(MemTotal * 0.6 / slots))`, with `/proc/meminfo`'s
+`MemTotal` converted from KiB to MiB and the [resolved slot count](#concurrent-runs).
+This reserves 40% of host memory for the OS and other work. The script prints a
+note when it clamps, and refuses before extraction if the effective value is
+below the minimum **2048 MiB**. Reduce the slot count or use a host with more
+memory in that case. Unreadable or invalid meminfo keeps the requested value;
+non-Linux hosts retain their exit-3 refusal without reading meminfo.
+A previous targeted query exhausted the heap at 4096, so the minimum is only
+an admission floor, not a guarantee that every query fits. Choose a requested
+value appropriate to the query and executor; the clamp cannot account for
+other processes' actual memory use. The behavior harness overrides the meminfo
+path with `_ORBIT_CODEQL_MEMINFO_PATH` to exercise budgets deterministically.
 
 Run it once per delivery, after the last Rust change, against the final
 candidate. A run takes minutes, plus any wait for a [slot](#concurrent-runs),
