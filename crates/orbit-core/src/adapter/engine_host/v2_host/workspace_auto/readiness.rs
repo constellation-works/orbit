@@ -247,6 +247,7 @@ pub fn explain_workspace_auto_readiness(
         &holders,
         free_slots,
         footprint,
+        None,
     );
     let candidate_pool_truncated =
         pending.len() > examined.len() && selection.selected.len() < free_slots;

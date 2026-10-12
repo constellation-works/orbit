@@ -17,9 +17,10 @@ related_artifacts: [ORB-15757]
 # Auto-concurrency — Overview
 
 > **Status: Draft proposal, partly implemented.** Recording, profiles, the
-> load forecast and the host admission lock exist in code
-> ([2_design.md](./2_design.md) §2–§4 and §5.2); nothing admits on the
-> forecast yet.
+> load forecast, the host admission lock and gap-fit admission in local
+> drains exist in code ([2_design.md](./2_design.md) §2–§5);
+> `machine.auto_concurrency.mode` defaults to `off`, and pull drains do not
+> admit on the forecast yet.
 
 A drain's concurrency today is a number the operator picks.
 **Auto-concurrency** admits tasks by predicted host load instead, up to that

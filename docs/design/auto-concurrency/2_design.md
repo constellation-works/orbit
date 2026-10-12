@@ -8,7 +8,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/gap_fit.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
@@ -16,11 +16,15 @@ related_artifacts: [ORB-15757]
 # Auto-concurrency — Design
 
 > **Status: Draft proposal; rollout steps 1 (Record, §2) and 2 (Profiles
-> report, §3) are implemented, and so are the load forecast (§4) and the host
-> admission lock (§5.2) that step 3 builds on.** §1 describes today's code and
-> cites it. §2 describes the recording that ships, §3 the profiles
-> `orbit run profiles` reports, and §4 and §5.2 the forecast and lock, which
-> no drain calls yet; everything else is the proposed design.
+> report, §3) are implemented, and so are the load forecast (§4), the host
+> admission lock (§5.2) and, for local drains, steps 3 and 4 (Shadow and
+> Enforce): gap fit (§5.1) and the starvation guard (§5.3).** §1 describes
+> today's code and cites it, with `mode = off` still the default. §2
+> describes the recording that ships, §3 the profiles `orbit run profiles`
+> reports, §4 and §5 the forecast and local admission, and the
+> `drain_last_pass` row of §7 the record a local pass writes; pull drains
+> (§6), the other surfaces of §7 and the shadow report of §8 are the
+> proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -380,6 +384,38 @@ Default thresholds are CPU 80% and memory 75%. Both sit below the throttle's
 90% high and 85% resume marks, so forecast admission and the throttle do not
 fight each other.
 
+Implemented for local drains in `admission/gap_fit.rs`, over
+`HostLoadForecast::gap` (`runtime/host_resource/forecast/fit.rs`):
+
+- **Where.** `select_admissions` asks gap fit about each candidate that
+  passed the ceiling, the footprint guard and the conflict checks. A
+  candidate it refuses is recorded by gap fit, not as a deferral, and the
+  walk continues.
+- **Modes.** `off` builds no forecast. `shadow` builds it and selects the wave
+  with gap fit under the host lock, records that, writes no reservation, and
+  admits the wave `off` selects. `enforce` admits the gap-fit wave and
+  reserves each task it admitted in the same lock; a candidate the pull
+  admission section refuses afterwards keeps its reservation until it
+  expires.
+- **No lock without a choice.** A pass with no free slot, because of the
+  ceiling or the throttle, or with no candidate, builds no forecast and takes
+  no lock.
+- **Lookup.** A candidate's profile is looked up by its work class from its
+  tags now, its complexity, and `no-diff-expected` for a template's base
+  class.
+- **Unmeasured host.** A host whose cores or memory cannot be read has no
+  threshold to fit under, so every candidate fits, as on a host with no
+  profiles.
+- **Record.** `drain_last_pass.admission_forecast` holds the mode, the CPU
+  and memory peaks of the forecast before the pass admitted, as values and
+  percentages of the host, the admitted and skipped candidates with their
+  profile source, and each skip's resource, minute, percentage and detail
+  (`cpu 94% at +6m`). In `enforce` a skip is also a `gap_fit` deferral in
+  `deferred`.
+- **Waiting.** A pass whose candidates gap fit refused still has a pending
+  backlog, so it sleeps `poll_sleep_seconds`. The forecast is per minute, so
+  no gap it shows opens sooner than that poll.
+
 ### 5.2 Serializing drains on one host
 
 Two drains on one host must not fill the same gap. Each takes a host lock
@@ -416,7 +452,14 @@ Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
 A gap that small tasks keep filling can block a heavy task forever. When the
 first candidate in priority order has failed gap fit for longer than
 `head_max_wait_minutes` (30), the drain admits nothing else until that
-candidate fits. Smarter backfilling is an open question
+candidate fits.
+
+Implemented with the head as the first candidate gap fit judges in a pass, so
+one a lock or the footprint guard holds back is not the head. Its
+`failing_since` is carried in `drain_last_pass.admission_forecast.head` from
+pass to pass while it keeps failing, and through passes that judge no head
+while it is still pending. A head that fits, or leaves the backlog, ends the
+wait. Smarter backfilling is an open question
 ([3_vision.md §1](./3_vision.md#1-open-questions)).
 
 ### 5.4 Without profiles
@@ -450,7 +493,7 @@ the forecast.
 | Surface | Proposed change |
 |---|---|
 | Machine config | Global-only `[machine.auto_concurrency]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because Linux throttle CPU is load-based and can exceed 100%. |
-| `drain_last_pass` | an `admission_forecast` block: the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource, and whether the head is being protected |
+| `drain_last_pass` | Implemented for local drains (§5.1): an `admission_forecast` block with the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource and their profile source, and whether the head is being protected |
 | `orbit run show` | an `Admission:` line, e.g. `forecast — skipped ORB-123 (cpu 94% at +6m)` |
 | `orbit run readiness` | the host's forecast peak, its headroom, and the profile source per waiting task |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |

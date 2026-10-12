@@ -24,6 +24,11 @@
 //! every call and never cached: each drain is its own process, and only the
 //! database shows what another just admitted. Profiles come from the
 //! profile cache.
+//!
+//! [`HostLoadForecast::gap`] is the room a local drain's gap fit admits
+//! into: a candidate joins its pass only if, at every minute of its horizon,
+//! the forecast plus its profile stays under `admit_cpu_percent` of the
+//! host's cores and `admit_memory_percent` of its memory.
 
 use std::sync::Arc;
 
@@ -33,9 +38,11 @@ use serde::Serialize;
 use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, ProfileSource};
 
 mod build;
+mod fit;
 mod host_load;
 
 pub(crate) use build::build_forecast;
+pub use fit::{ForecastGap, GapMiss, GapResource};
 pub(crate) use host_load::HostLoadProbe;
 
 /// Minutes after which a reservation whose run never appeared leaves the

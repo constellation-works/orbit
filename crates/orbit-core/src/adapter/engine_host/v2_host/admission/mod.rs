@@ -6,6 +6,7 @@ pub(super) mod backlog_exclusion;
 pub(super) mod claim_holders;
 pub(super) mod cpu_light;
 pub(super) mod duplicate_tasks;
+pub(super) mod gap_fit;
 pub(super) mod leaf_occupancy;
 pub(super) mod scan_unresolved;
 pub(super) mod surface_reservation;

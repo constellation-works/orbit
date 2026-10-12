@@ -1,0 +1,597 @@
+//! Gap-fit admission in a local drain (`machine.auto_concurrency.mode`).
+//!
+//! Every fixture is a host of 10 cores and 32 GiB with 2 GiB in use, gap fit
+//! admitting up to 80% CPU (8 cores) and 75% memory, and one-delivery `change`
+//! profiles: `hard` is 1, 1, 1, 6, 1 cores, `medium` 1, 6, 1 and `low` 0.5,
+//! 0.5, each at 1 GiB a minute. A `hard` delivery running for two minutes
+//! puts its 6-core spike at +1m, where `medium` would put its own.
+
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Duration, Utc};
+use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
+use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_engine::RuntimeHost;
+use orbit_store::contracts::{ResourceUsageStoreBackend, RunResourceMinute};
+use orbit_tools::ToolContext;
+use orbit_types::workflow::{DrainAdmissionForecast, JobRun, JobRunState};
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+use super::{PressureProbe, isolated, running_run};
+
+const GIB: u64 = 1024 * 1024 * 1024;
+
+struct Fixture {
+    _root: TempDir,
+    global: PathBuf,
+    workspace: PathBuf,
+    proc_root: PathBuf,
+    probe: std::sync::Arc<PressureProbe>,
+    runtime: OrbitRuntime,
+    next: std::cell::Cell<u32>,
+}
+
+impl Fixture {
+    /// A host in `mode`, with `extra` config lines, and no profiles yet.
+    fn new(mode: &str, extra: &str) -> Self {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let workspace = root.path().join("repo/.orbit");
+        let proc_root = root.path().join("proc");
+        for dir in [&global, &workspace, &proc_root] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        write_proc(&proc_root);
+        let probe = PressureProbe::calm();
+        let runtime = build(&global, &workspace, &proc_root, &probe, mode, extra);
+        Self {
+            _root: root,
+            global,
+            workspace,
+            proc_root,
+            probe,
+            runtime,
+            next: std::cell::Cell::new(0),
+        }
+    }
+
+    /// The same host and store under another mode.
+    fn with_mode(&self, mode: &str, extra: &str) -> OrbitRuntime {
+        build(
+            &self.global,
+            &self.workspace,
+            &self.proc_root,
+            &self.probe,
+            mode,
+            extra,
+        )
+    }
+
+    fn workspace_id(&self) -> String {
+        self.runtime.workspace_id().unwrap()
+    }
+
+    /// The `hard`, `medium` and `low` profiles.
+    fn seed_profiles(&self) {
+        self.finished_delivery("hard", &[1.0, 1.0, 1.0, 6.0, 1.0]);
+        self.finished_delivery("medium", &[1.0, 6.0, 1.0]);
+        self.finished_delivery("low", &[0.5, 0.5]);
+    }
+
+    /// One finished `change` delivery of `complexity`, admitted days ago and
+    /// lasting a minute per sample.
+    fn finished_delivery(&self, complexity: &str, cpu: &[f64]) {
+        let index = self.next.get();
+        self.next.set(index + 1);
+        let task = format!("ORB-done-{index}");
+        let admitted = Utc::now() - Duration::days(2) + Duration::hours(i64::from(index));
+        let finished = admitted + Duration::minutes(cpu.len() as i64);
+        let run = JobRun {
+            executed_on: None,
+            run_id: format!("jrun-gap-fit-{index}"),
+            job_id: "task_pr_pipeline".into(),
+            attempt: 1,
+            state: JobRunState::Success,
+            scheduled_at: admitted,
+            started_at: Some(admitted),
+            finished_at: Some(finished),
+            duration_ms: None,
+            created_at: admitted,
+            pid: None,
+            pid_start_time: None,
+            input: Some(json!({"task_id": task})),
+            retry_source_run_id: None,
+            knowledge_metrics: None,
+            resolved_crew: None,
+            crew_model: None,
+            steps: Vec::new(),
+        };
+        let store = self.runtime.sqlite_store().unwrap();
+        let workspace = self.workspace_id();
+        store
+            .upsert_job_run_for_workspace(&workspace, &run, None)
+            .unwrap();
+        for (minute, cores) in cpu.iter().enumerate() {
+            store
+                .record_run_resource_minute(&RunResourceMinute {
+                    workspace_id: workspace.clone(),
+                    run_id: run.run_id.clone(),
+                    minute_index: minute as u32,
+                    minute_started_at: admitted + Duration::minutes(minute as i64),
+                    task_id: task.clone(),
+                    work_class: "change".to_string(),
+                    complexity: Some(complexity.to_string()),
+                    resumed: false,
+                    delivery_admitted_at: Some(admitted),
+                    cpu_cores: *cores,
+                    memory_bytes: GIB,
+                    samples: 12,
+                })
+                .unwrap();
+        }
+    }
+
+    /// A backlog task of `complexity` touching its own file.
+    fn task(&self, title: &str, priority: TaskPriority, complexity: TaskComplexity) -> String {
+        let file = format!("{title}.txt");
+        std::fs::write(self.runtime.paths().repo_root.join(&file), "fixture\n").unwrap();
+        self.runtime
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                description: format!("Fixture task: {title}"),
+                acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+                plan: "Fixture plan.".to_string(),
+                context_files: vec![format!("file:{file}")],
+                priority,
+                complexity,
+                task_type: Some(TaskType::Chore),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    /// A `hard` delivery of a new task, admitted two minutes ago and still
+    /// running; returns its run.
+    fn running_hard_delivery(&self) -> String {
+        let task = self.task("running", TaskPriority::Low, TaskComplexity::Hard);
+        running_run(
+            &self.runtime,
+            "task_auto_pipeline",
+            json!({
+                "task_ids": [task],
+                "resource_class": {
+                    "task_id": task,
+                    "work_class": "change",
+                    "complexity": "hard",
+                    "admitted_at": Utc::now() - Duration::seconds(130),
+                },
+            }),
+        )
+    }
+
+    fn drain(&self) -> String {
+        running_run(&self.runtime, "workspace_auto_pipeline", json!({}))
+    }
+
+    /// The reservations on the host now.
+    fn reserved(&self, runtime: &OrbitRuntime) -> Vec<String> {
+        runtime
+            .admit_against_forecast(|forecast: &HostLoadForecast| {
+                Ok(ForecastDecision {
+                    outcome: forecast
+                        .reservations
+                        .iter()
+                        .map(|reservation| reservation.task_id.clone())
+                        .collect(),
+                    admitted: Vec::new(),
+                })
+            })
+            .unwrap()
+    }
+}
+
+fn build(
+    global: &Path,
+    workspace: &Path,
+    proc_root: &Path,
+    probe: &std::sync::Arc<PressureProbe>,
+    mode: &str,
+    extra: &str,
+) -> OrbitRuntime {
+    std::fs::write(
+        global.join("config.toml"),
+        format!(
+            "[machine.auto_concurrency]\nmode = \"{mode}\"\nmin_profile_deliveries = 1\n\
+             horizon_cap_minutes = 10\nadmit_cpu_percent = 80\nadmit_memory_percent = 75\n{extra}"
+        ),
+    )
+    .unwrap();
+    OrbitRuntime::from_roots(global, workspace)
+        .unwrap()
+        .with_host_resource_probe(probe.clone())
+        .with_host_load_proc_root(proc_root.to_path_buf())
+}
+
+/// Ten CPUs whose ticks never move, so the CPU baseline is unknown and
+/// counts as zero, and 2 GiB of 32 GiB in use.
+fn write_proc(proc_root: &Path) {
+    let mut stat = "cpu  1000 0 0 9000 0 0 0 0 0 0\n".to_string();
+    for cpu in 0..10 {
+        stat.push_str(&format!("cpu{cpu} 100 0 0 900 0 0 0 0 0 0\n"));
+    }
+    std::fs::write(proc_root.join("stat"), stat).unwrap();
+    let total_kb = 32 * GIB / 1024;
+    let available_kb = 30 * GIB / 1024;
+    std::fs::write(
+        proc_root.join("meminfo"),
+        format!("MemTotal: {total_kb} kB\nMemFree: 1024 kB\nMemAvailable: {available_kb} kB\n"),
+    )
+    .unwrap();
+}
+
+fn classify(runtime: &OrbitRuntime, drain: &str, slots: u32) -> Value {
+    runtime
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({
+                "run_id": drain,
+                "max_active_leaf_runs": slots,
+                "poll_sleep_seconds": 7,
+                "idle_sleep_seconds": 70,
+            }),
+            ToolContext::default(),
+        )
+        .expect("classify")
+}
+
+fn admitted(output: &Value) -> Vec<String> {
+    serde_json::from_value(output["loose_task_ids"].clone()).unwrap()
+}
+
+/// The pass's recorded block, which must match what the classifier returned.
+fn recorded(runtime: &OrbitRuntime, drain: &str, output: &Value) -> DrainAdmissionForecast {
+    let record = runtime
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("last pass")
+        .admission_forecast
+        .expect("the pass records its gap fit");
+    assert_eq!(
+        serde_json::to_value(&record).unwrap(),
+        output["admission_forecast"],
+        "{output:#}"
+    );
+    record
+}
+
+fn ids(entries: impl IntoIterator<Item = String>) -> Vec<String> {
+    entries.into_iter().collect()
+}
+
+/// A `medium` candidate whose spike lands on the running `hard` delivery's
+/// is skipped with the minute and resource, a lighter `low` one behind it is
+/// admitted in the same pass, and the admission is reserved for the next
+/// admitter on the host.
+#[test]
+fn enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it() {
+    if !isolated(
+        "dispatch_admission::gap_fit::enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "");
+    fixture.seed_profiles();
+    fixture.running_hard_delivery();
+    let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+    let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    let pass = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&pass), vec![light.clone()], "{pass:#}");
+    let record = recorded(&fixture.runtime, &drain, &pass);
+    assert_eq!(record.mode, "enforce");
+    let cpu_peak = record.cpu_peak.as_ref().unwrap();
+    assert_eq!(cpu_peak.minute, 1, "{record:#?}");
+    assert!((cpu_peak.value - 6.0).abs() < 1e-9, "{record:#?}");
+    assert!(
+        cpu_peak
+            .percent
+            .is_some_and(|percent| (percent - 60.0).abs() < 1e-9),
+        "{record:#?}"
+    );
+    let [skip] = record.skipped.as_slice() else {
+        panic!("{record:#?}");
+    };
+    assert_eq!(skip.task_id, heavy);
+    assert_eq!(skip.resource.as_deref(), Some("cpu"));
+    assert_eq!(skip.minute, Some(1));
+    assert_eq!(skip.detail, "cpu 120% at +1m");
+    assert_eq!(skip.profile_source, "exact");
+    assert_eq!(
+        ids(record.admitted.iter().map(|a| a.task_id.clone())),
+        vec![light.clone()]
+    );
+    assert_eq!(record.admitted[0].profile_source, "exact");
+    let head = record.head.as_ref().expect("the head failed gap fit");
+    assert_eq!(head.task_id, heavy);
+    assert!(!head.protected);
+
+    let pass_record = fixture
+        .runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .unwrap();
+    let waiting = pass_record
+        .deferred
+        .iter()
+        .find(|waiting| waiting.task_id == heavy)
+        .expect("the skipped candidate waits");
+    assert_eq!(waiting.reason.as_deref(), Some("gap_fit"));
+    assert_eq!(waiting.detail.as_deref(), Some("cpu 120% at +1m"));
+    assert_eq!(fixture.reserved(&fixture.runtime), vec![light]);
+}
+
+/// Each admitted candidate is in the forecast before the next is judged:
+/// on an idle host two 3-core `low` deliveries fit under 8 cores, and the
+/// third, which would make 9, does not.
+#[test]
+fn candidates_admitted_in_one_pass_count_each_other() {
+    if !isolated("dispatch_admission::gap_fit::candidates_admitted_in_one_pass_count_each_other") {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "");
+    fixture.finished_delivery("low", &[3.0, 3.0]);
+    let first = fixture.task("first", TaskPriority::High, TaskComplexity::Low);
+    let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Low);
+    let third = fixture.task("third", TaskPriority::Low, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    let pass = classify(&fixture.runtime, &drain, 5);
+    assert_eq!(
+        admitted(&pass),
+        vec![first.clone(), second.clone()],
+        "{pass:#}"
+    );
+    let record = recorded(&fixture.runtime, &drain, &pass);
+    assert_eq!(record.skipped.len(), 1, "{record:#?}");
+    assert_eq!(record.skipped[0].task_id, third);
+    assert_eq!(record.skipped[0].detail, "cpu 90% at +0m");
+    let mut reserved = fixture.reserved(&fixture.runtime);
+    reserved.sort();
+    let mut expected = vec![first, second];
+    expected.sort();
+    assert_eq!(reserved, expected);
+}
+
+/// `shadow` admits what `off` admits for the same inputs, records the
+/// decisions `enforce` would have made, and reserves nothing. `off` builds
+/// no forecast and records no block.
+#[test]
+fn shadow_admits_as_off_and_records_what_enforce_would_do() {
+    if !isolated(
+        "dispatch_admission::gap_fit::shadow_admits_as_off_and_records_what_enforce_would_do",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("off", "");
+    fixture.seed_profiles();
+    fixture.running_hard_delivery();
+    let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+    let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    let off = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(
+        admitted(&off),
+        vec![heavy.clone(), light.clone()],
+        "{off:#}"
+    );
+    assert_eq!(off["admission_forecast"], Value::Null, "{off:#}");
+    let off_pass = fixture
+        .runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .unwrap();
+    assert!(off_pass.admission_forecast.is_none());
+
+    let shadow_runtime = fixture.with_mode("shadow", "");
+    let shadow = classify(&shadow_runtime, &drain, 4);
+    assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
+    let record = recorded(&shadow_runtime, &drain, &shadow);
+    assert_eq!(record.mode, "shadow");
+    assert_eq!(
+        ids(record.skipped.iter().map(|s| s.task_id.clone())),
+        vec![heavy.clone()]
+    );
+    assert_eq!(record.skipped[0].detail, "cpu 120% at +1m");
+    assert_eq!(
+        ids(record.admitted.iter().map(|a| a.task_id.clone())),
+        vec![light]
+    );
+    let shadow_pass = shadow_runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .unwrap();
+    assert!(
+        shadow_pass.deferred.iter().all(|w| w.task_id != heavy),
+        "shadow leaves nothing waiting on gap fit: {shadow_pass:#?}"
+    );
+    assert!(
+        fixture.reserved(&shadow_runtime).is_empty(),
+        "shadow writes no reservation"
+    );
+}
+
+/// `max_active_leaf_runs` is enforced before gap fit: with one free slot,
+/// two candidates that both fit admit one, and the other is queued, not
+/// skipped.
+#[test]
+fn the_ceiling_holds_before_gap_fit() {
+    if !isolated("dispatch_admission::gap_fit::the_ceiling_holds_before_gap_fit") {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "");
+    fixture.seed_profiles();
+    let first = fixture.task("first", TaskPriority::High, TaskComplexity::Low);
+    fixture.task("second", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    let pass = classify(&fixture.runtime, &drain, 1);
+    assert_eq!(admitted(&pass), vec![first.clone()], "{pass:#}");
+    let record = recorded(&fixture.runtime, &drain, &pass);
+    assert_eq!(
+        ids(record.admitted.iter().map(|a| a.task_id.clone())),
+        vec![first]
+    );
+    assert!(record.skipped.is_empty(), "{record:#?}");
+}
+
+/// Sustained pressure holds the pass whatever the forecast says: nothing is
+/// admitted, and no forecast is built for a pass that cannot admit.
+#[test]
+fn the_throttle_holds_enforce_whatever_the_forecast_says() {
+    if !isolated(
+        "dispatch_admission::gap_fit::the_throttle_holds_enforce_whatever_the_forecast_says",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "");
+    fixture.seed_profiles();
+    fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    fixture.probe.sustain_memory(&fixture.runtime, 95.0);
+    let pass = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&pass), Vec::<String>::new(), "{pass:#}");
+    assert!(pass["resource_throttle"].is_object(), "{pass:#}");
+    assert_eq!(pass["sleep_seconds"], 7, "{pass:#}");
+    let record = recorded(&fixture.runtime, &drain, &pass);
+    assert!(record.forecast_at.is_none(), "{record:#?}");
+    assert!(record.admitted.is_empty() && record.skipped.is_empty());
+    assert!(fixture.reserved(&fixture.runtime).is_empty());
+}
+
+/// A host with no profiles admits in `enforce` exactly what `off` admits.
+#[test]
+fn a_host_without_profiles_admits_in_enforce_as_off_does() {
+    if !isolated(
+        "dispatch_admission::gap_fit::a_host_without_profiles_admits_in_enforce_as_off_does",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("off", "");
+    let first = fixture.task("first", TaskPriority::High, TaskComplexity::Hard);
+    let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Medium);
+    let drain = fixture.drain();
+
+    let off = classify(&fixture.runtime, &drain, 4);
+    let enforce_runtime = fixture.with_mode("enforce", "");
+    let enforce = classify(&enforce_runtime, &drain, 4);
+    assert_eq!(admitted(&off), vec![first.clone(), second.clone()]);
+    assert_eq!(admitted(&enforce), admitted(&off), "{enforce:#}");
+    let record = recorded(&enforce_runtime, &drain, &enforce);
+    assert!(record.skipped.is_empty(), "{record:#?}");
+    assert!(
+        record
+            .admitted
+            .iter()
+            .all(|admission| admission.profile_source == "none"),
+        "{record:#?}"
+    );
+}
+
+/// Once the head has failed gap fit for longer than `head_max_wait_minutes`
+/// (zero here, so from its second failing pass), nothing behind it is
+/// admitted, even work that fits, and the drain polls rather than idles.
+/// When the head fits it is admitted and the guard lifts.
+#[test]
+fn a_starving_head_holds_backfill_until_it_fits() {
+    if !isolated("dispatch_admission::gap_fit::a_starving_head_holds_backfill_until_it_fits") {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "head_max_wait_minutes = 0\n");
+    fixture.seed_profiles();
+    let running = fixture.running_hard_delivery();
+    let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+    let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let later = fixture.task("later", TaskPriority::Low, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    let first = classify(&fixture.runtime, &drain, 5);
+    assert_eq!(
+        admitted(&first),
+        vec![light.clone(), later.clone()],
+        "{first:#}"
+    );
+    let head = recorded(&fixture.runtime, &drain, &first).head.unwrap();
+    assert_eq!(head.task_id, heavy);
+    assert!(!head.protected, "it has not waited yet");
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let second = classify(&fixture.runtime, &drain, 5);
+    assert_eq!(admitted(&second), Vec::<String>::new(), "{second:#}");
+    assert_eq!(
+        second["sleep_seconds"], 7,
+        "a held backlog polls: {second:#}"
+    );
+    let record = recorded(&fixture.runtime, &drain, &second);
+    let protected = record.head.as_ref().unwrap();
+    assert_eq!(protected.task_id, heavy);
+    assert_eq!(protected.failing_since, head.failing_since);
+    assert!(protected.protected, "{record:#?}");
+    let held = record
+        .skipped
+        .iter()
+        .find(|skip| skip.task_id == light)
+        .expect("the light task is held");
+    assert!(held.resource.is_none(), "{held:#?}");
+    assert!(held.detail.contains(&heavy), "{held:#?}");
+
+    // The running delivery ends: the head fits, and work behind it is
+    // admitted again.
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fixture.runtime.sqlite_store().unwrap(),
+        fixture.workspace_id(),
+    );
+    jobs.finalize_job_run(&running, JobRunState::Success, Utc::now(), Some(0))
+        .unwrap();
+    let third = classify(&fixture.runtime, &drain, 5);
+    assert_eq!(admitted(&third)[0], heavy, "{third:#}");
+    assert!(admitted(&third).contains(&light), "{third:#}");
+    assert!(recorded(&fixture.runtime, &drain, &third).head.is_none());
+}
+
+/// When gap fit refuses every candidate while the backlog has work, the pass
+/// waits the short poll, not the idle wait.
+#[test]
+fn a_pass_gap_fit_refuses_entirely_polls() {
+    if !isolated("dispatch_admission::gap_fit::a_pass_gap_fit_refuses_entirely_polls") {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "");
+    fixture.seed_profiles();
+    fixture.running_hard_delivery();
+    let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+    let drain = fixture.drain();
+
+    let pass = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&pass), Vec::<String>::new(), "{pass:#}");
+    assert_eq!(pass["idle"], true, "{pass:#}");
+    assert_eq!(pass["sleep_seconds"], 7, "{pass:#}");
+    let record = recorded(&fixture.runtime, &drain, &pass);
+    assert_eq!(record.skipped[0].task_id, heavy);
+    let _: DateTime<Utc> = record.forecast_at.unwrap();
+}

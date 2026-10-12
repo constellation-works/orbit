@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_engine::DispatchError;
 use orbit_store::contracts::OwnerWaveCandidate;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
-use orbit_types::workflow::{DrainAdmissionPass, DrainCapacity, DrainWaitingTask};
+use orbit_types::workflow::{
+    DrainAdmissionForecast, DrainAdmissionPass, DrainCapacity, DrainWaitingTask, GapFitHead,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -16,9 +18,11 @@ use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
 };
 use crate::adapter::engine_host::v2_host::admission::claim_holders::ClaimHolders;
 use crate::adapter::engine_host::v2_host::admission::cpu_light::{LightBudget, ResourceGate};
+use crate::adapter::engine_host::v2_host::admission::gap_fit::{GapFit, GapFitMode, HeadWait};
 use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
     FootprintGuard, whole_tree_holder,
 };
+use crate::runtime::host_resource::forecast::ForecastDecision;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
 use super::drains::{
@@ -230,21 +234,55 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     );
     // [ORB-15191] Work with no footprint waits for its pilot or goes alone,
     // unless this drain runs one leaf at a time.
-    let footprint = FootprintGuard {
-        enabled: max_active_leaf_runs > 1,
-        leaves_in_flight: occupancy.occupied > 0,
-        whole_tree_holder: whole_tree_holder(&claimed, &snapshot.task_lookup),
-        waits: &snapshot.footprint_waits,
+    let whole_tree = whole_tree_holder(&claimed, &snapshot.task_lookup);
+    let select = |gap_fit: Option<&mut GapFit<'_>>| {
+        select_admissions(
+            examined,
+            &snapshot.task_lookup,
+            runtime.paths().repo_root.as_path(),
+            &holders,
+            free_slots,
+            FootprintGuard {
+                enabled: max_active_leaf_runs > 1,
+                leaves_in_flight: occupancy.occupied > 0,
+                whole_tree_holder: whole_tree.clone(),
+                waits: &snapshot.footprint_waits,
+            },
+            gap_fit,
+        )
     };
-    let mut selection = select_admissions(
-        examined,
-        &snapshot.task_lookup,
-        runtime.paths().repo_root.as_path(),
-        &holders,
-        free_slots,
-        footprint,
-    );
+    // Gap fit (`machine.auto_concurrency.mode`) judges the wave against the
+    // host load forecast after every check above, so it only removes
+    // candidates; the ceiling and the throttle have already set
+    // `free_slots`. `off` never builds a forecast.
+    let gap_fit_mode =
+        GapFitMode::from_setting(&runtime.context.settings().auto_concurrency().mode);
+    let (mut selection, admission_forecast) = match gap_fit_mode {
+        None => (select(None), None),
+        Some(mode) => {
+            let can_admit = free_slots > 0 && !examined.is_empty();
+            gap_fit_selection(runtime, action, input, mode, &pending, can_admit, &select)?
+        }
+    };
     admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)?;
+    // What `enforce` kept out is waiting like a deferral; `shadow` only
+    // records what it would have done.
+    let gap_fit_waiting: Vec<DrainWaitingTask> = admission_forecast
+        .as_ref()
+        .filter(|_| gap_fit_mode == Some(GapFitMode::Enforce))
+        .map(|record| {
+            record
+                .skipped
+                .iter()
+                .map(|skip| DrainWaitingTask {
+                    task_id: skip.task_id.clone(),
+                    reason: Some(GAP_FIT_REASON.to_string()),
+                    blocked_by: Vec::new(),
+                    detail: Some(skip.detail.clone()),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // [ORB-15514] A lock wait whose blocker a follower's claim holds says so.
     let claim_holders = ClaimHolders::read(runtime);
     // `max_tasks` bounds how much of the backlog one iteration expands lock
@@ -266,7 +304,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // empty workspace waits the long one.
     let idle = !has_leaves;
     // A throttled drain polls for recovery rather than settling into the
-    // long wait an empty backlog gets.
+    // long wait an empty backlog gets, and so does one whose candidates gap
+    // fit refused: they are still pending. The forecast is per minute, so no
+    // gap it shows can open sooner than the poll.
     let sleep_seconds = if pending.is_empty() && resource.throttle.is_none() {
         idle_sleep_seconds
     } else {
@@ -299,8 +339,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                         blocked_by,
                     }
                 })
+                .chain(gap_fit_waiting.iter().cloned())
                 .collect(),
-            deferred_total: selection.deferred.len() as u64,
+            deferred_total: (selection.deferred.len() + gap_fit_waiting.len()) as u64,
             excluded: waiting_excluded(&snapshot.excluded, &claim_holders),
             excluded_total: snapshot.excluded.len() as u64,
             waiting_recorded_at: None,
@@ -312,6 +353,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
             last_pass_error: None,
             consecutive_pass_failures: 0,
             degraded: false,
+            admission_forecast: admission_forecast.clone(),
         },
     );
 
@@ -327,6 +369,8 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         // that looks under-filled can be read as contention rather than as an
         // empty backlog.
         "deferred_conflicts": selection.deferred_json(),
+        // Gap fit's decisions under `shadow` or `enforce`; absent with `off`.
+        "admission_forecast": admission_forecast,
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": occupancy.occupied,
@@ -347,6 +391,97 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         // [ORB-14624] Light slots a CPU-only throttle still admits into.
         "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
     }))
+}
+
+/// The waiting reason of a candidate `enforce` gap fit kept out of a pass.
+const GAP_FIT_REASON: &str = "gap_fit";
+
+/// Select the wave with gap fit, under the host admission lock.
+///
+/// The forecast is built, the wave chosen and, in `enforce`, a reservation
+/// written for each admitted task, all in one host lock, so another drain on
+/// the host counts them before their runs exist. `shadow` reserves nothing
+/// and admits what `select(None)` admits, as `off` does. A pass that can
+/// admit nothing takes no lock and carries only the starvation guard's head.
+///
+/// A candidate the pull admission section refuses afterwards keeps its
+/// reservation until it expires, which can only hold back admission.
+fn gap_fit_selection(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    mode: GapFitMode,
+    pending: &[String],
+    can_admit: bool,
+    select: &dyn Fn(Option<&mut GapFit<'_>>) -> AdmissionSelection,
+) -> Result<(AdmissionSelection, Option<DrainAdmissionForecast>), DispatchError> {
+    let settings = runtime.context.settings().auto_concurrency();
+    let previous = previous_head(runtime, input);
+    let head_wait = HeadWait {
+        previous: previous.as_ref(),
+        max_wait: Duration::minutes(i64::from(settings.head_max_wait_minutes)),
+        now: Utc::now(),
+    };
+    if !can_admit {
+        return Ok((
+            select(None),
+            Some(head_wait.record_without_forecast(mode, pending)),
+        ));
+    }
+    let workspace_id = runtime
+        .workspace_id()
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    let decided = runtime.admit_against_forecast(|forecast| {
+        let mut gap_fit = GapFit::new(
+            mode,
+            forecast,
+            settings.admit_cpu_percent,
+            settings.admit_memory_percent,
+            &workspace_id,
+            head_wait,
+        );
+        let selection = select(Some(&mut gap_fit));
+        let (record, reservations) = gap_fit.finish(pending);
+        Ok(ForecastDecision {
+            outcome: (selection, record),
+            admitted: match mode {
+                GapFitMode::Enforce => reservations,
+                GapFitMode::Shadow => Vec::new(),
+            },
+        })
+    });
+    match (mode, decided) {
+        (GapFitMode::Enforce, Ok((selection, record))) => Ok((selection, Some(record))),
+        (GapFitMode::Shadow, Ok((_, record))) => Ok((select(None), Some(record))),
+        (GapFitMode::Enforce, Err(error)) => Err(DispatchError::action_failed(
+            action,
+            format!("admit against the host load forecast: {error}"),
+        )),
+        (GapFitMode::Shadow, Err(error)) => {
+            tracing::warn!(
+                target: "orbit.core.job_run",
+                %error,
+                "shadow gap fit could not forecast the host; the pass admits as it would without it"
+            );
+            Ok((select(None), None))
+        }
+    }
+}
+
+/// The starvation guard's head as the drain's previous pass recorded it.
+fn previous_head(runtime: &OrbitRuntime, input: &Value) -> Option<GapFitHead> {
+    let run_id = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    runtime
+        .read_run_state(run_id)
+        .ok()
+        .flatten()?
+        .drain_last_pass?
+        .admission_forecast?
+        .head
 }
 
 /// How many excluded tasks one pass records; the total is recorded beside the

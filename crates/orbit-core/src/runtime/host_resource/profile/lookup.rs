@@ -73,6 +73,20 @@ pub enum ProfileSource {
     None,
 }
 
+impl ProfileSource {
+    /// The step's name, as it serializes.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::WithoutComplexity => "without_complexity",
+            Self::BaseClass => "base_class",
+            Self::HeaviestOfClass => "heaviest_of_class",
+            Self::HeaviestOnHost => "heaviest_on_host",
+            Self::None => "none",
+        }
+    }
+}
+
 /// A lookup's answer.
 #[derive(Debug, Clone)]
 pub struct ProfileMatch {

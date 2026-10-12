@@ -74,11 +74,16 @@ task_prefix = "ORB"
 
 ### `[machine.auto_concurrency]` — host forecast admission
 
-Global-only host thresholds for forecast-based delivery admission. These are
-settings only for admission today: no admission path reads them yet, so the
-default `off` leaves behavior unchanged. `profile_window`,
-`min_profile_deliveries` and `horizon_cap_minutes` already shape the
-resource profiles `orbit run profiles` reports.
+Global-only host thresholds for forecast-based delivery admission. Local
+drains read them; pull drains do not yet. `off`, the default, leaves
+admission unchanged. `shadow` makes each local drain pass build the host load
+forecast and record in `drain_last_pass.admission_forecast` what gap fit
+would admit, while it admits as `off` and reserves nothing. `enforce` admits
+only candidates whose profile fits under the forecast within
+`admit_cpu_percent` and `admit_memory_percent`, after the drain's ceiling,
+the resource throttle and the conflict checks. `profile_window`,
+`min_profile_deliveries` and `horizon_cap_minutes` also shape the resource
+profiles `orbit run profiles` reports.
 
 ```toml
 [machine.auto_concurrency]
@@ -99,7 +104,7 @@ head_max_wait_minutes = 30
 | `machine.auto_concurrency.profile_window` | `50` deliveries | Most recent completed deliveries retained per profile key; must be at least `min_profile_deliveries`. |
 | `machine.auto_concurrency.min_profile_deliveries` | `10` deliveries | Minimum samples before using a profile key rather than falling back along the profile chain. |
 | `machine.auto_concurrency.horizon_cap_minutes` | `120` minutes | Maximum forecast horizon for a candidate. |
-| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard for the head of the queue. |
+| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits. |
 
 CPU utilization is bounded at 100% and is not compared with the resource
 throttle's CPU percentage. The auto-concurrency memory forecast and the

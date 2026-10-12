@@ -12,13 +12,14 @@
 //! the class when it starts; the leaf is the whole delivery.
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
-use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, JobRun, JobRunState};
+use orbit_types::task::Task;
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 pub(crate) use crate::runtime::host_resource::delivery::DeliveryResourceClass;
+pub(crate) use crate::runtime::host_resource::delivery::work_class;
 use crate::runtime::host_resource::delivery::{
     RESOURCE_CLASS_KEY, SUBMITTED_DELIVERY_JOBS, resource_class_in,
 };
@@ -26,21 +27,6 @@ use crate::runtime::run_input::singular_task_id_from_input;
 
 /// Run-input key of a repair claim's candidate (`orbit-store` pull leaf).
 const CLAIM_REPAIR_KEY: &str = "claim_repair";
-
-/// The work class of a task with these tags.
-pub(crate) fn work_class(tags: &[String]) -> String {
-    if let Some(template) = tags
-        .iter()
-        .find_map(|tag| tag.strip_prefix(AUTO_TASK_TAG_PREFIX))
-        .filter(|template| !template.is_empty())
-    {
-        return format!("{AUTO_TASK_TAG_PREFIX}{template}");
-    }
-    if tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
-        return "no-diff".to_string();
-    }
-    "change".to_string()
-}
 
 impl OrbitRuntime {
     /// Record the delivery's class in a delivery pipeline's input. A child

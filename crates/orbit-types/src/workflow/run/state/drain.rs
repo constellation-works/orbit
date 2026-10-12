@@ -415,6 +415,96 @@ pub struct DrainAdmissionPass {
     /// Start a new drain after fixing the cause.
     #[serde(default)]
     pub degraded: bool,
+    /// The gap-fit decisions of a local pass under
+    /// `machine.auto_concurrency.mode` `shadow` or `enforce`. Absent with the
+    /// mode `off`, and in pull passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_forecast: Option<DrainAdmissionForecast>,
+}
+
+/// One local pass's gap-fit admission against the host load forecast.
+///
+/// In `enforce` it is what the pass admitted; in `shadow` it is what enforce
+/// would have admitted from the same candidates, while the pass admitted as
+/// `off` does.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DrainAdmissionForecast {
+    /// `shadow` or `enforce`.
+    pub mode: String,
+    /// When the forecast was built; absent when the pass had no free slot or
+    /// candidate to fit, so it built none and carries only `head`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forecast_at: Option<DateTime<Utc>>,
+    /// The forecast's highest CPU over its horizon, before this pass admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_peak: Option<ForecastPeak>,
+    /// The forecast's highest memory over its horizon, before this pass
+    /// admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_peak: Option<ForecastPeak>,
+    /// Candidates that fit, in the order the pass admitted them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admitted: Vec<GapFitAdmission>,
+    /// Candidates that did not fit, or that the starvation guard held.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<GapFitSkip>,
+    /// The first candidate in priority order while it fails gap fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<GapFitHead>,
+}
+
+/// A forecast resource's highest value over the horizon.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForecastPeak {
+    /// Minutes from the forecast.
+    pub minute: u32,
+    /// Cores for CPU, bytes for memory.
+    pub value: f64,
+    /// The value as a share of the host's cores or memory; absent when the
+    /// host could not be measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<f64>,
+}
+
+/// A candidate gap fit admitted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapFitAdmission {
+    pub task_id: String,
+    /// The fallback step that found its profile: `exact`,
+    /// `without_complexity`, `base_class`, `heaviest_of_class`,
+    /// `heaviest_on_host`, or `none` on a host without profiles.
+    pub profile_source: String,
+}
+
+/// A candidate gap fit kept out of the pass.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapFitSkip {
+    pub task_id: String,
+    pub profile_source: String,
+    /// `cpu` or `memory`; absent when the starvation guard held it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// The first minute the forecast with this candidate exceeds its
+    /// threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minute: Option<u32>,
+    /// The forecast at that minute, with the candidate, as a share of the
+    /// host's cores or memory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<f64>,
+    /// `cpu 94% at +6m`, or the head the starvation guard protects.
+    pub detail: String,
+}
+
+/// The queue head while it fails gap fit, for the starvation guard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapFitHead {
+    pub task_id: String,
+    /// The first pass, of an unbroken run of passes, in which it failed.
+    pub failing_since: DateTime<Utc>,
+    /// It has failed for longer than `head_max_wait_minutes`, so nothing else
+    /// is admitted until it fits.
+    pub protected: bool,
 }
 
 /// One host resource whose sustained pressure holds new admissions.

@@ -16,6 +16,9 @@
 //!   nears its deadline sorts ahead of same-priority backlog.
 //! - Unknown footprints [ORB-15191]: a multi-slot drain or ship waits for the
 //!   task pilot to prepare empty-context backlog work, else runs it alone.
+//! - Gap fit: under `machine.auto_concurrency.mode` `enforce` a local drain
+//!   admits only what fits under the host load forecast; `shadow` records
+//!   those decisions and admits as `off`.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -48,6 +51,7 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod gap_fit;
 mod replay_crew;
 mod reservation_grants;
 mod unknown_footprint;
