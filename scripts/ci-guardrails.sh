@@ -81,6 +81,8 @@ fi
 "$repo_root/scripts/test-ci-test-affected.py"
 "$repo_root/scripts/test-codeql-extension-schema.py"
 "$repo_root/scripts/test-codeql-rust-local.py"
+"$repo_root/scripts/test-codeql-production-paths.py"
+"$repo_root/scripts/check-codeql-production-paths.py"
 "$repo_root/scripts/check-codeql-extension-schema.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
