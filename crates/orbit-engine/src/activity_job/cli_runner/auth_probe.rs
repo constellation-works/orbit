@@ -11,7 +11,8 @@ use super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::orchestrator::provider_child_environment;
 use super::spawn::{SpawnError, prepare_sandbox_for_dispatch};
 use super::supervisor::{
-    SpawnTraceContext, SpawnWithTimeoutRequest, spawn_for_supervision, spawn_with_timeout,
+    SpawnTraceContext, SpawnWithTimeoutRequest, kill_child_process_tree, spawn_for_supervision,
+    spawn_with_timeout,
 };
 use crate::{DispatchError, RuntimeHost};
 
@@ -130,8 +131,7 @@ pub fn run_auth_probe(
             }
         });
     if let Err(error) = registered {
-        let _ = spawned.child.kill();
-        let _ = spawned.child.wait();
+        kill_child_process_tree(&mut spawned.child);
         return Err(DispatchError::CliInvocationPermanent(error.to_string()));
     }
     let cwd_text = cwd.display().to_string();

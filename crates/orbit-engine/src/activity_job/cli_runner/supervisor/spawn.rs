@@ -448,7 +448,11 @@ fn spawn_stdin_writer(_stdin: ChildStdin, _bytes: &[u8]) -> io::Result<StdinWrit
     ))
 }
 
-fn kill_child_process_tree(child: &mut Child) {
+/// Kills the child's whole process group, reaps the leader and waits for the
+/// group to drain. A caller that abandons a spawned child must use this, not
+/// `Child::kill`: descendants the child forked share its group, and only the
+/// group kill reaches them.
+pub(in crate::activity_job::cli_runner) fn kill_child_process_tree(child: &mut Child) {
     #[cfg(unix)]
     {
         let child_id = child.id();

@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
@@ -21,7 +23,9 @@ use orbit_engine::{
 use orbit_store::Store;
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
-use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, V2AuditEventKind,
+};
 use serde_json::{Value, json};
 
 /// A pipeline step's id is not its activity: `task_claimed_pr_pipeline` step
@@ -110,6 +114,7 @@ fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
         }),
         broker_runs: Mutex::new(Vec::new()),
         denial_activities: Mutex::new(Vec::new()),
+        refuse_registration_after: None,
     };
     let audit = V2AuditWriter::with_disk_sinks(
         &root.join("audit"),
@@ -196,6 +201,9 @@ struct RecordingHost {
     sandbox: Option<ResolvedSandbox>,
     broker_runs: Mutex<Vec<PluginBrokerRun>>,
     denial_activities: Mutex<Vec<String>>,
+    /// Refuses worker registration once the provider has published its
+    /// grandchild's pid to this file, so the refusal lands while it is alive.
+    refuse_registration_after: Option<PathBuf>,
 }
 
 impl RuntimeHost for RecordingHost {
@@ -263,6 +271,14 @@ impl RuntimeHost for RecordingHost {
     ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
         self.broker_runs.lock().unwrap().push(run.clone());
         Ok(None)
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        let Some(pid_file) = &self.refuse_registration_after else {
+            return Ok(());
+        };
+        wait_until(Duration::from_secs(10), || pid_file.exists());
+        Err(OrbitError::Execution("worker registration refused".into()))
     }
 }
 
@@ -504,6 +520,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
         }),
         broker_runs: Mutex::new(vec![]),
         denial_activities: Mutex::new(vec![]),
+        refuse_registration_after: None,
     };
     let mut probe = AuthProbe {
         args: vec!["sandbox".into(), "ORBIT_AUTH_OK".into(), "0".into()],
@@ -544,6 +561,170 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
         host.broker_runs.lock().unwrap().is_empty(),
         "auth probes grant no activity broker"
     );
+}
+
+/// A provider that forks a grandchild and then has its registration refused.
+/// The refused child and the grandchild share a process group, and the
+/// grandchild is not in the worker registry, so only the group kill ends it.
+#[test]
+fn auth_probe_refused_registration_ends_the_grandchild() {
+    use orbit_engine::activity_job::cli_runner::run_auth_probe;
+    use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let grandchild = Grandchild(root.join("grandchild.pid"));
+    let command = root.join("claude");
+    write_grandchild_provider(&command, &grandchild.0);
+    let host = RecordingHost {
+        command,
+        worktree: root.clone(),
+        sandbox: None,
+        broker_runs: Mutex::new(Vec::new()),
+        denial_activities: Mutex::new(Vec::new()),
+        refuse_registration_after: Some(grandchild.0.clone()),
+    };
+    let probe = AuthProbe {
+        args: vec!["grandchild".into()],
+        stdin: "Minimal model call".into(),
+        timeout_seconds: 5,
+        success: AuthProbeSuccess::ExitZero,
+        relogin_hint: "Run `claude login`.".into(),
+    };
+
+    let outcome = run_auth_probe(&host, "claude", &probe, "registration-refusal", &root);
+    assert!(
+        outcome.is_err(),
+        "a refused registration must fail the probe"
+    );
+    grandchild.assert_ended();
+}
+
+/// The dispatch path has the same refusal: a provider step whose registration
+/// is refused must end the grandchild its provider started.
+#[test]
+fn dispatch_refused_registration_ends_the_grandchild() {
+    use orbit_engine::activity_job::cli_runner::run_cli_backend;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let grandchild = Grandchild(root.join("grandchild.pid"));
+    let command = root.join("codex");
+    write_grandchild_provider(&command, &grandchild.0);
+    let host = RecordingHost {
+        command,
+        worktree: root.clone(),
+        sandbox: None,
+        broker_runs: Mutex::new(Vec::new()),
+        denial_activities: Mutex::new(Vec::new()),
+        refuse_registration_after: Some(grandchild.0.clone()),
+    };
+    let spec: AgentLoopSpec = serde_json::from_value(json!({
+        "instruction": "review fixture",
+        "provider": "codex",
+        "tool_disallow_list": ["proc.*"],
+        "wall_clock_timeout_seconds": 30
+    }))
+    .unwrap();
+    let audit = V2AuditWriter::with_disk_sinks(
+        &root.join("audit"),
+        Arc::new(Store::open_in_memory().unwrap()),
+        "ws-registration",
+        "registration-refusal",
+        "codex".to_string(),
+        None,
+    )
+    .unwrap();
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "agent_review_repair",
+        "registration-refusal",
+        audit,
+        &json!({"prompt": "review"}),
+        None,
+    );
+    assert!(
+        matches!(&outcome, Err(DispatchError::CliInvocationPermanent(message))
+            if message.contains("worker registration refused")),
+        "a refused registration must fail the dispatch permanently"
+    );
+    grandchild.assert_ended();
+}
+
+/// Writes a provider stand-in that starts a sleeping grandchild, publishes
+/// the grandchild's pid at `pid_file`, and then waits on it.
+fn write_grandchild_provider(command: &Path, pid_file: &Path) {
+    let staging = pid_file.with_extension("staging");
+    fs::write(
+        command,
+        format!(
+            "#!/bin/sh\nsleep 300 &\nprintf '%s\\n' \"$!\" > '{staging}' && mv '{staging}' '{pid_file}'\nwait\n",
+            staging = staging.display(),
+            pid_file = pid_file.display(),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(command, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// The grandchild a fake provider published. Dropping it kills the grandchild
+/// if an assertion failed before the test saw it end, so no sleep outlives the
+/// test.
+struct Grandchild(PathBuf);
+
+impl Grandchild {
+    fn assert_ended(&self) {
+        let text = fs::read_to_string(&self.0).expect("the provider publishes its grandchild");
+        let pid: u32 = text.trim().parse().expect("grandchild pid");
+        assert!(
+            wait_until(Duration::from_secs(5), || !process_is_running(pid)),
+            "grandchild {pid} outlived the refused worker registration"
+        );
+    }
+}
+
+impl Drop for Grandchild {
+    fn drop(&mut self) {
+        let Some(pid) = fs::read_to_string(&self.0)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        else {
+            return;
+        };
+        if process_is_running(pid) {
+            // SAFETY: the pid was published by this test's own provider, and
+            // signalling it only ends the sleep that provider started.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
+/// A zombie has ended but still answers `kill(pid, 0)` until its parent reaps
+/// it, so `ps` decides whether the process still runs.
+fn process_is_running(pid: u32) -> bool {
+    let Ok(output) = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return true;
+    };
+    output.status.success()
+        && !String::from_utf8_lossy(&output.stdout)
+            .trim_start()
+            .starts_with('Z')
+}
+
+fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    condition()
 }
 
 /// A host whose implementer lane has no sandbox, or whose sandbox cannot be
