@@ -348,10 +348,11 @@ try {
   await page.locator('#workspace-select').selectOption('ws_orbit');
   await switchHost('');
   await until('ws_orbit kept on the serving host', async () => (await page.evaluate(() => new URL(location.href).searchParams.get('workspace'))) === 'ws_orbit');
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
   assert(await page.locator('#workspace-select').inputValue() === 'ws_orbit', 'a workspace id both hosts list stays selected');
-  routeLog = [];
   await switchHost('hostb');
   await taskRow('hostb-RUN').waitFor({ state: 'visible' });
+  routeLog = [];
   await page.locator('#workspace-select').selectOption('');
   await until('hostb aggregate', () => logged(/^GET \/api\/on\/hostb\/tasks\/all/));
   assert(!routeLog.some((entry) => entry.path.startsWith('/api/tasks')), 'All workspaces aggregates the selected host only');
@@ -416,7 +417,7 @@ try {
   try {
     await linkedTab.goto(new URL(await remoteLink.getAttribute('href'), page.url()).href);
     await linkedTab.waitForFunction(async () => {
-      const { getHost, getWorkspace, getWindow } = await import('/js/common.js');
+      const { getHost, getWorkspace, getWindow } = await import('/static/js/common.js');
       return getHost() === 'hostb' && getWorkspace() === 'ws_orbit' && getWindow() === '7d'
         && document.querySelector('.tab-pane.active')?.dataset.tab === 'run-detail';
     });
@@ -584,12 +585,14 @@ try {
   // host. A host switch rewrites its own entry, so the entry before it keeps
   // the earlier host.
   const scopeNow = () => page.evaluate(async () => {
-    const { getHost, getWorkspace, withHost, withWorkspace } = await import('/js/common.js');
+    const { getHost, getWorkspace, isAggregateView, isAggregateLinked, withHost, withWorkspace } = await import('/static/js/common.js');
     const query = new URL(window.location.href).searchParams;
     const workspaceSelect = document.getElementById('workspace-select');
     return {
       host: getHost(),
       workspace: getWorkspace(),
+      aggregate: isAggregateView(),
+      aggregateLinked: isAggregateLinked(),
       read: withHost('/api/tasks'),
       write: withWorkspace('/api/tasks/x/approve'),
       addressHost: query.get('host'),
@@ -704,6 +707,79 @@ try {
   forwardWrites = { authorized: true, reason: null };
   await page.close();
 
+  // 11. Aggregate history must survive leaving a single-workspace host.
+  // Hold destination discovery to check that the URL's intent is kept before
+  // eligibility is known and no default-workspace panel request slips through.
+  const settleWorkspaces = (host) => {
+    workspaceHolds.delete(host);
+    const index = heldWorkspaces.findIndex((entry) => entry.host === host);
+    assert(index >= 0, `a held ${host} workspace list to settle`);
+    const [{ res }] = heldWorkspaces.splice(index, 1);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(WORKSPACES[host]));
+  };
+  const assertAggregate = async (label, endpoint) => {
+    const now = await scopeNow();
+    assert(now.host === 'hostb' && now.hostPicker === 'hostb' && now.addressHost === 'hostb'
+      && now.workspace === null && now.aggregate && now.aggregateLinked
+      && now.workspacePicker === '' && now.workspaces === HOSTB_WORKSPACES && now.addressWorkspace === 'all',
+    `${label} restores aggregate state, both pickers and the URL: ${JSON.stringify(now)}`);
+    await until(`${label} aggregate panel request`, () => routeLog.some((entry) => entry.method === 'GET'
+      && entry.path.startsWith(`/api/on/hostb/${endpoint}?`)));
+    assert(!logged(/^GET \/api\/on\/hostb\/(?:tasks|job-runs|crews|audit\/summary)\?/),
+      `${label} sends no concrete-workspace panel request: ${JSON.stringify(routeLog)}`);
+    return { scope: now, routes: routeLog.slice() };
+  };
+  const restoreAggregate = async (step, label, endpoint) => {
+    workspaceHolds.add('hostb');
+    routeLog = [];
+    await page.evaluate((step) => history.go(step), step);
+    await until(`${label} held destination list`, () => heldWorkspaces.some((entry) => entry.host === 'hostb'));
+    const pending = await scopeNow();
+    assert(pending.host === 'hostb' && pending.workspace === null && pending.aggregateLinked && pending.addressWorkspace === 'all',
+      `${label} retains aggregate intent during discovery: ${JSON.stringify(pending)}`);
+    assert(!logged(/^GET \/api\/on\/hostb\/(?:tasks|job-runs|crews|audit\/summary)(?:[/?]|$)/),
+      `${label} waits for destination discovery before fetching panels: ${JSON.stringify(routeLog)}`);
+    settleWorkspaces('hostb');
+    await until(`${label} aggregate picker`, async () => {
+      const now = await scopeNow();
+      return now.aggregate && now.workspacePicker === '' && now.workspaces === HOSTB_WORKSPACES;
+    });
+    return assertAggregate(label, endpoint);
+  };
+  await openPage('/?host=hostb&workspace=all#tasks', { fresh: true });
+  await until('initial hostb aggregate picker', async () => (await scopeNow()).aggregate);
+  await openRuns();
+  await openTasks();
+  await switchHost('skewhost');
+  await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
+  scope = await scopeNow();
+  assert(scope.workspace === 'ws_skew' && !scope.aggregate && scope.workspacePicker === null && scope.addressWorkspace === 'ws_skew',
+    `the single-workspace destination resolves aggregate intent to its only workspace: ${JSON.stringify(scope)}`);
+  evidenceLog.historyAggregateBack = await restoreAggregate(-1, 'Back from a single-workspace host', 'job-runs/all');
+  await traverse(1, 'Forward to the single-workspace host', (now) => now.host === 'skewhost' && now.workspace === 'ws_skew' && !now.aggregate);
+  await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
+  await page.close();
+
+  // Reverse the history order so Forward also enters an aggregate host from
+  // a single-workspace host, instead of merely reusing the Back case.
+  await openPage('/?host=skewhost&workspace=all#tasks', { fresh: true });
+  await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
+  scope = await scopeNow();
+  assert(scope.workspace === 'ws_skew' && !scope.aggregateLinked && scope.addressWorkspace === 'ws_skew',
+    `an explicit aggregate link on a single-workspace host repairs its URL: ${JSON.stringify(scope)}`);
+  await openRuns();
+  await openTasks();
+  await switchHost('hostb');
+  await until('hostb default picker before choosing aggregate', async () => (await scopeNow()).workspacePicker === 'ws_b');
+  await page.locator('#workspace-select').selectOption('');
+  await until('hostb aggregate before Back', async () => (await scopeNow()).aggregate);
+  routeLog = [];
+  await traverse(-1, 'Back to the single-workspace host', (now) => now.host === 'skewhost' && now.workspace === 'ws_skew' && !now.aggregate);
+  await until('the single-workspace Runs request after Back', () => logged(/^GET \/api\/on\/skewhost\/job-runs\?.*workspace=ws_skew/));
+  evidenceLog.historyAggregateForward = await restoreAggregate(1, 'Forward from a single-workspace host', 'tasks/all');
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
@@ -718,6 +794,7 @@ try {
       'browser-host-picker-keyboard-and-focus',
       'browser-log-tail-retires-the-old-host-at-the-switch',
       'browser-history-restores-the-host-each-entry-names',
+      'browser-history-restores-aggregate-after-a-single-workspace-host',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,
