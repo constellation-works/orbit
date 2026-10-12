@@ -3,6 +3,8 @@
 //! and the forecast all agree on one key and one clock.
 
 use chrono::{DateTime, Utc};
+use orbit_types::task::NO_DIFF_EXPECTED_TAG;
+use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -53,4 +55,20 @@ pub(crate) fn resource_class_in(input: &Value, task_id: &str) -> Option<Delivery
     serde_json::from_value::<DeliveryResourceClass>(input.get(RESOURCE_CLASS_KEY)?.clone())
         .ok()
         .filter(|class| class.task_id == task_id)
+}
+
+/// The work class of a task with these tags: `auto-task:<template>` from its
+/// `auto-task:` tag, else `no-diff` for `no-diff-expected`, else `change`.
+pub(crate) fn work_class(tags: &[String]) -> String {
+    if let Some(template) = tags
+        .iter()
+        .find_map(|tag| tag.strip_prefix(AUTO_TASK_TAG_PREFIX))
+        .filter(|template| !template.is_empty())
+    {
+        return format!("{AUTO_TASK_TAG_PREFIX}{template}");
+    }
+    if tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
+        return "no-diff".to_string();
+    }
+    "change".to_string()
 }

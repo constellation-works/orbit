@@ -795,6 +795,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 consecutive_pass_failures: 1,
                 admission_refusal: None,
                 degraded: true,
+                admission_forecast: None,
             });
             fixture
                 .runtime

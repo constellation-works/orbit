@@ -164,6 +164,7 @@ impl crate::OrbitRuntime {
                     degraded: was_degraded
                         || error_code == Some("protocol_skew")
                         || consecutive_pass_failures >= PASS_FAILURE_THRESHOLD,
+                    admission_forecast: None,
                 };
                 state.drain_last_pass = Some(pass.clone());
                 recorded = Some(pass);

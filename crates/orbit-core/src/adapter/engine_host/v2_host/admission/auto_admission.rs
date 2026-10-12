@@ -35,6 +35,7 @@ use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::claim_holders::claim_detail;
+use super::gap_fit::GapFit;
 use super::unknown_footprint::{FootprintGuard, FootprintWave};
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -159,7 +160,8 @@ impl DeferredAdmission {
 pub(in crate::adapter::engine_host::v2_host) struct AdmissionSelection {
     /// Mutually compatible tasks, in the candidate order they were offered in.
     pub(in crate::adapter::engine_host::v2_host) selected: Vec<String>,
-    /// Examined against a free slot and blocked.
+    /// Examined against a free slot and blocked. A candidate gap fit refused
+    /// is recorded by the gap fit instead.
     pub(in crate::adapter::engine_host::v2_host) deferred: Vec<DeferredAdmission>,
     /// Never examined: the wave was already full when they came up. These are
     /// saturated, not conflicted, and saying so keeps the two diagnoses apart.
@@ -311,6 +313,10 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 /// function adds two rules: a candidate joins the wave only if nothing it
 /// would touch is already spoken for, and a candidate that declares no
 /// footprint is held to `footprint`'s rules [ORB-15191].
+///
+/// With `gap_fit`, a candidate that passed every other check must also fit
+/// under the host load forecast; one that does not is left out of the wave
+/// and recorded by the gap fit, not in [`AdmissionSelection::deferred`].
 pub(in crate::adapter::engine_host::v2_host) fn select_admissions(
     ordered_candidates: &[String],
     task_lookup: &BTreeMap<String, Task>,
@@ -318,6 +324,7 @@ pub(in crate::adapter::engine_host::v2_host) fn select_admissions(
     holders: &AdmissionHolders,
     free_slots: usize,
     footprint: FootprintGuard<'_>,
+    mut gap_fit: Option<&mut GapFit<'_>>,
 ) -> AdmissionSelection {
     let mut selection = AdmissionSelection::default();
     // Selectors this wave has already promised, and the task each was promised
@@ -358,6 +365,11 @@ pub(in crate::adapter::engine_host::v2_host) fn select_admissions(
         conflicts.dedup();
 
         if conflicts.is_empty() {
+            if let Some(gap_fit) = gap_fit.as_deref_mut()
+                && !gap_fit.admits(task)
+            {
+                continue;
+            }
             for selector in selectors {
                 wave.insert(&selector, candidate_id.clone());
             }

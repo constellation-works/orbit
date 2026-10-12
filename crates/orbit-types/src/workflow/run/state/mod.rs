@@ -10,10 +10,11 @@ mod recovery;
 mod tests;
 
 pub use drain::{
-    CrewExclusion, CrewExclusionSource, DrainAdmissionPass, DrainAdmissionsStop,
-    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWindowExtension,
-    DrainWorkerLimit, PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight,
-    PullSinglePass, PullWindowClose, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
+    CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
+    DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask,
+    DrainWindowExtension, DrainWorkerLimit, ForecastPeak, GapFitAdmission, GapFitHead, GapFitSkip,
+    PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullSinglePass,
+    PullWindowClose, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
 };
 pub use failure::{
     CONTRACT_REFUSAL_MARKER, ClaimFailureClass, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,

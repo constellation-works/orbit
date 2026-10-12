@@ -1842,6 +1842,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         consecutive_pass_failures: 0,
         admission_refusal: None,
         degraded: false,
+        admission_forecast: None,
         resource_throttle: Some(orbit_types::workflow::ResourceThrottle {
             resources: vec![
                 orbit_types::workflow::ResourcePressure {
@@ -1947,6 +1948,7 @@ fn run_show_counts_local_deferred_tasks_once() {
         consecutive_pass_failures: 0,
         admission_refusal: None,
         degraded: false,
+        admission_forecast: None,
     });
     runtime.write_run_state(id, &state).unwrap();
 
@@ -2068,6 +2070,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
         consecutive_pass_failures: 0,
         admission_refusal: None,
         degraded: false,
+        admission_forecast: None,
     });
     runtime.write_run_state(id, &state).unwrap();
 
@@ -2172,6 +2175,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
         consecutive_pass_failures: 0,
         admission_refusal: None,
         degraded: false,
+        admission_forecast: None,
     });
     runtime.write_run_state(id, &state).unwrap();
 
@@ -2302,6 +2306,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         consecutive_pass_failures: 3,
         admission_refusal: None,
         degraded: true,
+        admission_forecast: None,
     });
     runtime.write_run_state(id, &state).unwrap();
     let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
