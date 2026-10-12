@@ -27,6 +27,7 @@ const MAX_PARTITION_SIZE: usize = 5;
 struct Prepared {
     status: TaskStatus,
     history_len: usize,
+    finding_fingerprint: Option<String>,
     crew: String,
     tier: TaskComplexity,
     prior: Vec<VerifierVerdict>,
@@ -79,6 +80,10 @@ pub(in super::super) fn apply(
                 Prepared {
                     status: prepared_field(entry, "status", action)?,
                     history_len: prepared_field(entry, "history_len", action)?,
+                    finding_fingerprint: entry
+                        .get("finding_fingerprint")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
                     crew: required_string(entry, "crew", action)?.to_string(),
                     tier: prepared_field(entry, "tier", action)?,
                     prior: prepared_field(entry, "prior", action)?,
@@ -183,6 +188,9 @@ pub(in super::super) fn apply(
                         .collect::<Vec<_>>();
                     let mut entry = task_snapshot(&task, snapshot.history_len, &verifier, &prior);
                     entry["status"] = json!(snapshot.status);
+                    // The second verifier decides the same finding as the
+                    // first, even if this re-read sees edited task material.
+                    entry["finding_fingerprint"] = json!(snapshot.finding_fingerprint);
                     escalations
                         .entry(verifier.crew.clone())
                         .or_default()
@@ -195,6 +203,7 @@ pub(in super::super) fn apply(
                 &report,
                 crews,
                 &source.source_revision,
+                snapshot.finding_fingerprint.as_deref(),
                 &source.base_branch,
                 run_id,
             );

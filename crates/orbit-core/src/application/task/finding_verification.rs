@@ -66,17 +66,20 @@ pub fn is_review_finding(task: &Task) -> bool {
 }
 
 /// Whether `task` still needs a verdict: a review finding in a verifiable
-/// status whose latest verdict is not CONFIRMED.
+/// status whose latest verdict is not CONFIRMED for its current material.
 pub(crate) fn needs_verification(task: &Task, history: &[TaskHistoryEntry]) -> bool {
     is_review_finding(task)
         && VERIFIABLE_STATUSES.contains(&task.status)
-        && latest_verification(history).map(|record| record.verdict)
-            != Some(FindingVerdict::Confirmed)
+        && !latest_verification(history).is_some_and(|record| {
+            record.verdict == FindingVerdict::Confirmed
+                && record.finding_fingerprint.as_deref() == Some(&finding_fingerprint(task))
+        })
 }
 
 /// What a verdict judges: the finding as filed. A state trigger claims a
-/// finding at this fingerprint, and an edit to any of these fields releases
-/// the claim; status, comments and attribution are not part of it.
+/// finding at this fingerprint, and a verdict is bound to it. An edit to any
+/// of these fields releases the claim and invalidates confirmation; status,
+/// comments and attribution are not part of it.
 pub(crate) fn finding_fingerprint(task: &Task) -> String {
     let mut tags = task.tags.clone();
     tags.sort();
@@ -280,6 +283,10 @@ pub struct FindingVerification {
     pub confidence: VerdictConfidence,
     /// The commit the verifiers inspected and the evidence cites.
     pub verified_sha: String,
+    /// The prepared finding material this verdict judges. Legacy records
+    /// without a fingerprint remain readable but cannot authorize admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_fingerprint: Option<String>,
     pub base_branch: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub severity: Option<FindingSeverity>,
@@ -303,6 +310,7 @@ impl FindingVerification {
         report: &VerifierReport,
         crews: Vec<VerifierVerdict>,
         verified_sha: &str,
+        finding_fingerprint: Option<&str>,
         base_branch: &str,
         run_id: Option<&str>,
     ) -> Self {
@@ -311,6 +319,7 @@ impl FindingVerification {
             verdict: report.verdict,
             confidence: report.confidence,
             verified_sha: verified_sha.to_string(),
+            finding_fingerprint: finding_fingerprint.map(ToOwned::to_owned),
             base_branch: base_branch.to_string(),
             severity: report.severity,
             evidence: report
@@ -558,7 +567,8 @@ impl OrbitRuntime {
     /// `history_len` history entries: the trusted history entry, the verdict
     /// comment and, for REJECTED, the move to `rejected` — one write under
     /// the task lock. A task that left that status, is no longer a review
-    /// finding, or was verified by another run since is left untouched.
+    /// finding, changed its material, or was verified by another run since is
+    /// left untouched. Legacy prepared records without a fingerprint are stale.
     pub(crate) fn record_finding_verification(
         &self,
         task_id: &str,
@@ -589,6 +599,14 @@ impl OrbitRuntime {
                     outcome = Some(VerdictWrite::Superseded {
                         reason: "not_a_review_finding",
                         detail: "task is no longer a review-filed bug".into(),
+                    });
+                    return Ok(());
+                }
+                if record.finding_fingerprint.as_deref() != Some(&finding_fingerprint(&task)) {
+                    outcome = Some(VerdictWrite::Superseded {
+                        reason: "material_changed",
+                        detail: "finding material changed or its prepared fingerprint is missing"
+                            .into(),
                     });
                     return Ok(());
                 }

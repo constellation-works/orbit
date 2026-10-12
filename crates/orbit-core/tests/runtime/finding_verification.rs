@@ -636,3 +636,300 @@ fn the_state_trigger_picks_up_only_unverified_review_findings() {
     assert_eq!(due.batch.len(), 1);
     assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&owed.id));
 }
+
+#[test]
+fn material_edits_supersede_prepared_verdicts() {
+    if !isolated("finding_verification::material_edits_supersede_prepared_verdicts") {
+        return;
+    }
+    let fixture = Fixture::new();
+    let edits = [
+        TaskUpdateParams {
+            title: Some("Changed title".into()),
+            ..Default::default()
+        },
+        TaskUpdateParams {
+            description: Some("A different defect".into()),
+            ..Default::default()
+        },
+        TaskUpdateParams {
+            acceptance_criteria: Some(vec!["Different repair".into()]),
+            ..Default::default()
+        },
+        TaskUpdateParams {
+            context_files: Some(vec!["file:src/lib.rs".into()]),
+            ..Default::default()
+        },
+        TaskUpdateParams {
+            tags: Some(vec!["code-review".into(), "changed-evidence".into()]),
+            ..Default::default()
+        },
+    ];
+    for (index, edit) in edits.into_iter().enumerate() {
+        for reject in [false, true] {
+            let task = fixture.finding(
+                &format!("Material {index} reject={reject}"),
+                TaskComplexity::Medium,
+            );
+            let prepared = fixture.prepare(&[&task.id]);
+            fixture
+                .runtime
+                .update_task_with_identity(&task.id, edit.clone(), None, None)
+                .unwrap();
+            let report = if reject {
+                rejected(&task, "high")
+            } else {
+                confirmed(&task, "high")
+            };
+            let applied = fixture.apply(&prepared, &[report], None);
+            assert_eq!(
+                outcome(&applied, &task)["outcome"],
+                "superseded",
+                "{applied}"
+            );
+            assert_eq!(
+                outcome(&applied, &task)["reason"],
+                "material_changed",
+                "{applied}"
+            );
+            assert!(fixture.verification(&task).is_none());
+            assert_eq!(fixture.status(&task), TaskStatus::Proposed);
+        }
+    }
+    let legacy = fixture.finding("Old prepared checkpoint", TaskComplexity::Medium);
+    let mut prepared = fixture.prepare(&[&legacy.id]);
+    prepared["tasks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("finding_fingerprint");
+    let applied = fixture.apply(&prepared, &[confirmed(&legacy, "high")], None);
+    assert_eq!(
+        outcome(&applied, &legacy)["reason"],
+        "material_changed",
+        "{applied}"
+    );
+    assert!(fixture.verification(&legacy).is_none());
+}
+
+#[test]
+fn escalation_preserves_material_from_initial_preparation() {
+    if !isolated("finding_verification::escalation_preserves_material_from_initial_preparation") {
+        return;
+    }
+    let fixture = Fixture::new();
+    // Cover drift both before escalation is constructed and while the second
+    // verifier is working. Neither round may rebind the first report.
+    for before_escalation in [true, false] {
+        let task = fixture.finding(
+            &format!("Escalation drift {before_escalation}"),
+            TaskComplexity::Medium,
+        );
+        let prepared = fixture.prepare(&[&task.id]);
+        let edit = || {
+            fixture
+                .runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        description: Some("Replacement claim during verification".into()),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap()
+        };
+        if before_escalation {
+            edit();
+        }
+        let first = fixture.apply(&prepared, &[confirmed(&task, "low")], None);
+        assert_eq!(first["escalation_count"], 1, "{first}");
+        let escalation = &first["escalation_prepared"];
+        assert_eq!(
+            escalation["tasks"][0]["finding_fingerprint"],
+            prepared["tasks"][0]["finding_fingerprint"]
+        );
+        if !before_escalation {
+            edit();
+        }
+        let second = fixture.apply(
+            escalation,
+            &[rejected(&task, "high")],
+            Some(&first["task_outcomes"]),
+        );
+        assert_eq!(
+            outcome(&second, &task)["reason"],
+            "material_changed",
+            "{second}"
+        );
+        assert!(fixture.verification(&task).is_none());
+        assert_eq!(fixture.status(&task), TaskStatus::Proposed);
+        fixture.confirm(&task);
+        fixture.runtime.approve_task(&task.id, None, None).unwrap();
+    }
+}
+
+#[test]
+fn confirmation_is_fresh_for_promotion_admission_and_observation() {
+    if !isolated(
+        "finding_verification::confirmation_is_fresh_for_promotion_admission_and_observation",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let proposed = fixture.finding("Confirmed proposed", TaskComplexity::Medium);
+    let backlog = fixture.task(
+        "Confirmed backlog",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &["code-review"],
+        Some(TaskStatus::Backlog),
+    );
+    let commented = fixture.finding("Comment-only edit", TaskComplexity::Medium);
+    for task in [&proposed, &backlog, &commented] {
+        fixture.confirm(task);
+    }
+    // Promotion and material replacement in one write must also hold.
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &proposed.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                description: Some("Replacement at promotion".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("promotion cannot reuse a verdict for replaced material");
+    for task in [&proposed, &backlog] {
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    description: Some("New claim after confirmation".into()),
+                    acceptance_criteria: Some(vec!["Repair the new claim".into()]),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &commented.id,
+            TaskUpdateParams {
+                comment: Some("Extra discussion without changing the claim".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .approve_task(&proposed.id, None, None)
+        .expect_err("edited finding needs verification");
+    fixture
+        .runtime
+        .approve_task(&commented.id, None, None)
+        .unwrap();
+    let admission = fixture.action("list_backlog_tasks", json!({}));
+    let held = admission["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == backlog.id)
+        .unwrap();
+    assert_eq!(held["reason"], "unverified_review_finding", "{admission}");
+    let pending =
+        evaluate_routine(&fixture.runtime, &verification_routine(), false, Utc::now()).unwrap();
+    let members = pending.state.unwrap().members.unwrap();
+    for task in [&proposed, &backlog] {
+        assert!(members.pending.contains_key(&task.id));
+    }
+    assert!(!members.pending.contains_key(&commented.id));
+    for task in [&proposed, &backlog] {
+        fixture.confirm(task);
+    }
+    fixture
+        .runtime
+        .approve_task(&proposed.id, None, None)
+        .unwrap();
+    let admission = fixture.action("list_backlog_tasks", json!({}));
+    assert!(
+        !admission["excluded"].as_array().unwrap().iter().any(
+            |entry| entry["id"] == backlog.id && entry["reason"] == "unverified_review_finding"
+        ),
+        "{admission}"
+    );
+}
+
+#[test]
+fn legacy_confirmation_is_readable_but_cannot_authorize_promotion() {
+    if !isolated(
+        "finding_verification::legacy_confirmation_is_readable_but_cannot_authorize_promotion",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let task = fixture.finding("Legacy confirmation", TaskComplexity::Medium);
+    fixture.confirm(&task);
+    let mut legacy = serde_json::to_value(fixture.verification(&task).unwrap()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("finding_fingerprint");
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        fixture.runtime.workspace_id().unwrap(),
+        fixture.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task;
+    backends
+        .history
+        .update_task_history(
+            &task.id,
+            orbit_store::contracts::TaskHistoryUpdateParams {
+                actor: "finding-verification".into(),
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "finding-verification".into(),
+                    event: "finding_verified".into(),
+                    note: Some(legacy.to_string()),
+                    from_status: None,
+                    to_status: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.verification(&task).unwrap().verdict,
+        FindingVerdict::Confirmed
+    );
+    assert!(
+        fixture
+            .verification(&task)
+            .unwrap()
+            .finding_fingerprint
+            .is_none()
+    );
+    fixture
+        .runtime
+        .approve_task(&task.id, None, None)
+        .expect_err("legacy confirmation is stale");
+    fixture.confirm(&task);
+    fixture.runtime.approve_task(&task.id, None, None).unwrap();
+}
