@@ -859,6 +859,100 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
 }
 
 // ---------------------------------------------------------------------------
+// Batch merge of the checked head [ORB-15701]
+// ---------------------------------------------------------------------------
+
+fn batch_merge_input(fx: &Fixture) -> Value {
+    json!({
+        "job_run_id": RUN_ID,
+        "strategy": "pr_merge",
+        "base": BASE,
+        "workspace_path": fx.repo,
+    })
+}
+
+/// Open the candidate's pull request, promote it into review, and approve it,
+/// as the pipeline leaves a batch before `git_merge` runs.
+fn approve_batch(fx: &Fixture, host: &DeliveryHost) {
+    let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+    let opened = action(host, "pr_open", &input).expect("open the reviewed candidate");
+    input["pr_number"] = opened["pr_number"].clone();
+    input["pr_url"] = opened["pr_url"].clone();
+    action(host, "pr_promote", &input).expect("the published PR enters review");
+    host.tasks
+        .lock()
+        .unwrap()
+        .get_mut(TASK_ID)
+        .unwrap()
+        .pr_status = Some("APPROVED".into());
+}
+
+#[test]
+fn a_pr_merge_batch_lands_the_checked_head_at_its_pin() {
+    isolated(
+        "a_pr_merge_batch_lands_the_checked_head_at_its_pin",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            approve_batch(&fx, &host);
+
+            let merged = action(&host, "git_merge", &batch_merge_input(&fx))
+                .expect("merge the approved head");
+
+            assert_eq!(merged, json!({"merged": true, "strategy": "squash"}));
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={} merge_method=squash", fx.candidate)],
+                "one merge, conditional on the full commit that was checked"
+            );
+            assert_ne!(fx.remote_tip(BASE), fx.base_sha, "the remote base advanced");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        },
+    );
+}
+
+/// A PR head that moves after the freshness check must not merge: the batch
+/// pins the commit it checked, and the provider refuses the moved head.
+#[test]
+fn a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check() {
+    isolated(
+        "a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            approve_batch(&fx, &host);
+            // Lands after the freshness check, while the merge strategy resolves.
+            fs::write(fx.forge.join("push-before-merge"), "").unwrap();
+
+            action(&host, "git_merge", &batch_merge_input(&fx))
+                .expect_err("a head that moved must not merge");
+
+            assert_ne!(
+                fx.remote_tip(BRANCH),
+                fx.candidate,
+                "the PR head moved after the freshness check"
+            );
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={} merge_method=squash", fx.candidate)],
+                "the merge names the checked head, and the provider refuses it"
+            );
+            assert_eq!(
+                fx.remote_tip(BASE),
+                fx.base_sha,
+                "the remote base is untouched"
+            );
+            assert!(fx.forge_state("merged").is_none(), "the PR stays open");
+            assert_eq!(
+                host.status(TASK_ID),
+                TaskStatus::Review,
+                "the task stays in review"
+            );
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Synchronous merge refused by a concurrent base landing [ORB-14205]
 // ---------------------------------------------------------------------------
 
@@ -6244,6 +6338,25 @@ impl RuntimeHost for DeliveryHost {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
     }
 
+    fn list_tasks_filtered(
+        &self,
+        _status: Option<TaskStatus>,
+        _priority: Option<TaskPriority>,
+        _parent_id: Option<&str>,
+        job_run_id: Option<&str>,
+        _external_ref: Option<&ExternalRef>,
+        _has_external_ref_system: Option<&str>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        Ok(self
+            .tasks
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|task| job_run_id.is_none_or(|run| task.job_run_id.as_deref() == Some(run)))
+            .cloned()
+            .collect())
+    }
+
     fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
         Ok(self.comments(task_id))
     }
@@ -6701,6 +6814,12 @@ case "$1 ${2:-}" in
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
     "api graphql")
+        # An unreviewed push that lands after the freshness check, while the
+        # merge strategy is being resolved and before the merge request.
+        if [ -f "$forge/push-before-merge" ] && [ ! -f "$forge/pushed" ]; then
+            advance "$(cat "$forge/pr-head")" "Unreviewed push"
+            touch "$forge/pushed"
+        fi
         allowed=true
         [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
         printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;

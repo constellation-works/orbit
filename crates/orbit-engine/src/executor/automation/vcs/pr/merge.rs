@@ -180,6 +180,10 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     // Get the current branch from the workspace
     let head = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let head = head.trim().to_string();
+    // The full commit the checks below judge. The provider merges only this
+    // head, so a push that lands before the merge request is refused.
+    let reviewed_head_sha = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    let reviewed_head_sha = reviewed_head_sha.trim().to_string();
     let base = input_string_field(input, "base").unwrap_or_else(|| "main".to_string());
     let base_sync_mode = base_sync_mode_from_input(input)?;
 
@@ -214,6 +218,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         json!({
             "pr": pr_number,
             "strategy": merge_strategy.as_str(),
+            "reviewed_head_sha": reviewed_head_sha,
             "workspace_path": workspace_path,
         }),
     )?;
@@ -232,8 +237,8 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     let batch_author = batch_tasks.iter().find_map(ship_done_attribution);
 
     // Preserve ship attribution per task across the Review -> Done transition.
-    // See `merge_batch_pr_preserves_task_attribution_per_task`: the source of
-    // truth is task.implemented_by -> task.created_by -> system fallback.
+    // The source of truth is task.implemented_by -> task.created_by -> system
+    // fallback (see `ship_done_attribution`).
     for task in &batch_tasks {
         host.apply_task_automation_update(
             &task.id,
