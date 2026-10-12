@@ -47,7 +47,6 @@ use crate::application::task::{
 use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::super::task_pilot::{approval_disqualification, approved_by_drain, held_classification};
-use super::action_failed;
 use super::classify::templated_u64;
 use super::drains::live_admissions_stop;
 
@@ -276,8 +275,9 @@ fn read_pilots(
     action: &str,
     run_id: &str,
 ) -> Result<Vec<PilotChild>, DispatchError> {
-    pilot_children(runtime, run_id)
-        .map_err(|error| action_failed(action, format!("read task-pilot children: {error}")))
+    pilot_children(runtime, run_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task-pilot children: {error}"))
+    })
 }
 
 /// The tasks this drain approved, read back from the approve transition's
@@ -407,7 +407,7 @@ pub(in super::super) fn select_proposed_approvals(
     let enabled = match input.get("approve_proposed") {
         None | Some(Value::Null) => false,
         Some(value) => value.as_bool().ok_or_else(|| {
-            action_failed(action, "approve_proposed must be a boolean".to_string())
+            DispatchError::action_failed(action, "approve_proposed must be a boolean".to_string())
         })?,
     };
     let run_id = drain_run_id(input);
@@ -432,8 +432,9 @@ pub(in super::super) fn select_proposed_approvals(
     let pilot_live = !live_pilot_run_ids.is_empty();
     // A stopped drain admits nothing, so it approves and closes nothing either.
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = approval_snapshot(runtime, &pilots, !admissions_stopped)
-        .map_err(|error| action_failed(action, format!("read proposed tasks: {error}")))?;
+    let snapshot = approval_snapshot(runtime, &pilots, !admissions_stopped).map_err(|error| {
+        DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
+    })?;
     record_report(runtime, run_id, &snapshot, &[]);
     let task_ids = if admissions_stopped || pilot_live {
         Vec::new()
@@ -475,8 +476,9 @@ pub(in super::super) fn record_proposed_approvals(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let run_id = drain_run_id(input)
-        .ok_or_else(|| action_failed(action, "the drain run id is unavailable".to_string()))?;
+    let run_id = drain_run_id(input).ok_or_else(|| {
+        DispatchError::action_failed(action, "the drain run id is unavailable".to_string())
+    })?;
     let pilots = read_pilots(runtime, action, run_id)?;
     let recorded = pilots
         .iter()
@@ -490,8 +492,9 @@ pub(in super::super) fn record_proposed_approvals(
         })
         .collect::<Vec<_>>();
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = approval_snapshot(runtime, &pilots, !admissions_stopped)
-        .map_err(|error| action_failed(action, format!("read proposed tasks: {error}")))?;
+    let snapshot = approval_snapshot(runtime, &pilots, !admissions_stopped).map_err(|error| {
+        DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
+    })?;
     record_report(runtime, run_id, &snapshot, &recorded);
     let approved = recorded
         .iter()
@@ -523,11 +526,12 @@ pub(in super::super) fn await_approval_pilot(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let run_id = drain_run_id(input)
-        .ok_or_else(|| action_failed(action, "the drain run id is unavailable".to_string()))?;
+    let run_id = drain_run_id(input).ok_or_else(|| {
+        DispatchError::action_failed(action, "the drain run id is unavailable".to_string())
+    })?;
     let timeout_seconds = templated_u64(action, input, "timeout_seconds", 0)?;
     if timeout_seconds > MAX_PILOT_WAIT_SECONDS {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("`timeout_seconds` must be at most {MAX_PILOT_WAIT_SECONDS}"),
         ));

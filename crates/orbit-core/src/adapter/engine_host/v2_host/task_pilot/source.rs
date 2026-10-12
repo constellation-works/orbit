@@ -19,8 +19,6 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
-use super::action_failed;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in super::super) struct SourceSnapshot {
     pub base_branch: String,
@@ -59,9 +57,9 @@ impl SourceSnapshot {
         if source.is_null() {
             return Ok(None);
         }
-        let object = source
-            .as_object()
-            .ok_or_else(|| action_failed(action, "prepared.source must be an object or null"))?;
+        let object = source.as_object().ok_or_else(|| {
+            DispatchError::action_failed(action, "prepared.source must be an object or null")
+        })?;
         let source_revision = object
             .get("source_revision")
             .and_then(Value::as_str)
@@ -71,7 +69,7 @@ impl SourceSnapshot {
             return Ok(None);
         };
         if !is_commit_id(source_revision) {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!(
                     "prepared.source.source_revision {source_revision:?} is not a full commit id"
@@ -84,7 +82,7 @@ impl SourceSnapshot {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     "prepared.source.base_branch must be a non-empty string",
                 )
@@ -95,7 +93,7 @@ impl SourceSnapshot {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     "prepared.source.source_ref must be a non-empty string",
                 )
@@ -121,7 +119,7 @@ impl SourceSnapshot {
         if output.success {
             Ok(())
         } else {
-            Err(action_failed(
+            Err(DispatchError::action_failed(
                 action,
                 format!(
                     "prepared source revision {} ({}) is not a commit in this repository: {}",
@@ -182,7 +180,7 @@ impl SourceSnapshot {
             ],
         )?;
         if !output.success {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("read {path} at the pinned source: {}", output.stderr.trim()),
             ));
@@ -210,7 +208,7 @@ impl SourceSnapshot {
             )?
         } else {
             let relative = git_tree_path(anchor).ok_or_else(|| {
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     format!(
                         "selector anchor {} is not a repository-relative path",
@@ -231,7 +229,7 @@ impl SourceSnapshot {
             )?
         };
         if !output.success {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("read pinned source tree: {}", output.stderr.trim()),
             ));
@@ -263,7 +261,7 @@ pub(in super::super) fn resolve_source_snapshot(
         .filter(|s| !s.is_empty())
     {
         if !is_commit_id(revision) {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 "source_revision must be a full commit ID",
             ));
@@ -295,7 +293,9 @@ pub(in super::super) fn resolve_source_snapshot(
     })
     .map_err(|error| match error {
         FetchLockError::Dispatch(error) => error,
-        FetchLockError::Io(error) => action_failed(action, format!("git fetch lock: {error}")),
+        FetchLockError::Io(error) => {
+            DispatchError::action_failed(action, format!("git fetch lock: {error}"))
+        }
     })?;
 
     Ok(Some(SourceSnapshot {
@@ -323,13 +323,13 @@ fn normalize_base_branch(action: &str, base: &str) -> Result<String, DispatchErr
         .unwrap_or_else(|| base.trim())
         .trim();
     if branch.is_empty() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "base_branch must be a non-empty branch name",
         ));
     }
     if branch.starts_with('-') {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("base_branch {base:?} must not start with '-'"),
         ));
@@ -386,7 +386,7 @@ pub(super) fn fetch_origin_branch(
                     OrbitError::ProcessTimeout { .. } => "remote failure: timed out fetching",
                     _ => "failed to fetch",
                 };
-                action_failed(
+                DispatchError::action_failed(
                     action,
                     format!(
                         "{failure} origin/{branch} in '{}': {error}",
@@ -409,7 +409,7 @@ pub(super) fn fetch_origin_branch(
         }
         break;
     }
-    Err(action_failed(
+    Err(DispatchError::action_failed(
         action,
         format!(
             "remote failure: could not fetch origin/{branch} in '{}': {last_stderr}",
@@ -422,7 +422,7 @@ fn rev_parse_commit(action: &str, workspace: &Path, rev: &str) -> Result<String,
     let spec = format!("{rev}^{{commit}}");
     let output = git(action, workspace, &["rev-parse", "--verify", &spec])?;
     if !output.success {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "unable to resolve source revision `{rev}`: {}",
@@ -432,7 +432,7 @@ fn rev_parse_commit(action: &str, workspace: &Path, rev: &str) -> Result<String,
     }
     let sha = output.stdout.trim();
     if !is_commit_id(sha) {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("resolved `{rev}` to a non-commit id {sha:?}"),
         ));
@@ -469,7 +469,7 @@ fn git(
     args: &[&str],
 ) -> Result<orbit_common::fs::git::GitCommandOutput, DispatchError> {
     run_git(workspace, args).map_err(|error| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!(
                 "git {} failed in '{}': {error}",

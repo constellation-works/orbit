@@ -10,7 +10,6 @@ use serde_json::Value;
 use super::super::child_dispatch;
 use crate::OrbitRuntime;
 
-use super::action_failed;
 use super::gate_admission::{gate_admission_stop, wait_success_status};
 
 /// Submit a child v2 Job, link it durably, then block on its terminal state.
@@ -104,7 +103,7 @@ where
             &job_name,
             &message,
         );
-        action_failed(action, message)
+        DispatchError::action_failed(action, message)
     })?;
     if invoke_output_skipped(&invoke_output) {
         return Ok(serde_json::json!({
@@ -197,7 +196,7 @@ fn close_child_wait(
                 "unobserved",
                 Some(&message),
             )?;
-            return Err(action_failed(action, message));
+            return Err(DispatchError::action_failed(action, message));
         }
     };
 
@@ -265,7 +264,7 @@ fn required_job_name(action: &str, input: &Value) -> Result<String, DispatchErro
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| action_failed(action, "missing `job_name`".to_string()))
+        .ok_or_else(|| DispatchError::action_failed(action, "missing `job_name`".to_string()))
         .map(ToOwned::to_owned)
 }
 
@@ -359,7 +358,7 @@ pub(in super::super) fn invoke_detached(
                 &job_name,
                 &message,
             );
-            action_failed(action, message)
+            DispatchError::action_failed(action, message)
         })?;
     if invoke_output_skipped(&invoke_output) {
         return Ok(invoke_output);
@@ -405,7 +404,7 @@ fn child_invoke_context(
         parent_run_id.as_ref(),
     ) && owner.owner_run_id != *parent_run_id
     {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "activity parent run '{}' does not match trusted run owner '{}'",
@@ -417,13 +416,14 @@ fn child_invoke_context(
         return Ok(tool_context);
     };
     let mut metadata = match owner.owner_metadata_json.as_deref() {
-        Some(raw) => serde_json::from_str::<Value>(raw)
-            .map_err(|error| action_failed(action, format!("invalid run metadata: {error}")))?,
+        Some(raw) => serde_json::from_str::<Value>(raw).map_err(|error| {
+            DispatchError::action_failed(action, format!("invalid run metadata: {error}"))
+        })?,
         None => serde_json::json!({}),
     };
-    let object = metadata
-        .as_object_mut()
-        .ok_or_else(|| action_failed(action, "run metadata must be a JSON object".to_string()))?;
+    let object = metadata.as_object_mut().ok_or_else(|| {
+        DispatchError::action_failed(action, "run metadata must be a JSON object".to_string())
+    })?;
     object.insert(
         "pipeline_child_admission".to_string(),
         serde_json::json!({

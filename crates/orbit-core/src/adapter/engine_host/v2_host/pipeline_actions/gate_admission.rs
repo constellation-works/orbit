@@ -15,8 +15,6 @@ use crate::runtime::audit::system::{
 };
 use crate::runtime::task::locks::parse_task_ids;
 
-use super::action_failed;
-
 /// Re-check live workflow admission for `admission_task_ids` immediately before
 /// child dispatch, and return the synthetic child result when the bundle must
 /// not launch.
@@ -78,12 +76,12 @@ pub(super) fn gate_admission_stop(
             "admission-task-ids",
         ],
     )
-    .map_err(|err| action_failed(action, err.to_string()))?;
+    .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
     let Some(raw_task_ids) = raw_task_ids else {
         return Ok(None);
     };
     let task_ids = parse_task_ids(&serde_json::json!({ "task_ids": raw_task_ids }))
-        .map_err(|err| action_failed(action, err.to_string()))?;
+        .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
     let workflow = input
         .get("admission_workflow")
         .and_then(Value::as_str)
@@ -96,7 +94,9 @@ pub(super) fn gate_admission_stop(
     // the claim landed.
     let claimed: BTreeSet<String> = runtime
         .inspect_execution_claims()
-        .map_err(|err| action_failed(action, format!("read execution claims: {err}")))?
+        .map_err(|err| {
+            DispatchError::action_failed(action, format!("read execution claims: {err}"))
+        })?
         .into_iter()
         .map(|inspection| inspection.claim)
         .filter(|claim| claim.phase.protects_footprint())
@@ -112,9 +112,9 @@ pub(super) fn gate_admission_stop(
 
     for task_id in &task_ids {
         if claimed.contains(task_id) {
-            let task = runtime
-                .get_task(task_id)
-                .map_err(|err| action_failed(action, format!("load task {task_id}: {err}")))?;
+            let task = runtime.get_task(task_id).map_err(|err| {
+                DispatchError::action_failed(action, format!("load task {task_id}: {err}"))
+            })?;
             task_statuses.push(serde_json::json!({
                 "task_id": task.id,
                 "status": task.status.to_string(),
@@ -162,7 +162,7 @@ pub(super) fn gate_admission_stop(
     }
 
     if !admission_errors.is_empty() {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "workflow admission check before child dispatch failed: {}",
@@ -367,8 +367,9 @@ fn record_gate_admission_stop(
         "outcome": outcome,
         "parent_run_id": parent_run_id,
     });
-    let arguments_json = serde_json::to_string(&payload)
-        .map_err(|err| action_failed(action, format!("serialize gate.{outcome} payload: {err}")))?;
+    let arguments_json = serde_json::to_string(&payload).map_err(|err| {
+        DispatchError::action_failed(action, format!("serialize gate.{outcome} payload: {err}"))
+    })?;
     let command = format!("gate.{outcome}");
     let task_id = task_ids.first().map(String::as_str);
     record_system_audit_event(
@@ -388,5 +389,7 @@ fn record_gate_admission_stop(
             attribution: AuditRunAttribution::Run(parent_run_id),
         },
     )
-    .map_err(|err| action_failed(action, format!("record gate.{outcome} audit: {err}")))
+    .map_err(|err| {
+        DispatchError::action_failed(action, format!("record gate.{outcome} audit: {err}"))
+    })
 }

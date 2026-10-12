@@ -1,4 +1,4 @@
-//! Action-input readers and the shared task-pilot action error.
+//! Action-input readers shared by the v2 host's deterministic actions.
 
 use std::path::PathBuf;
 
@@ -13,7 +13,7 @@ pub(in super::super) fn requested_workspace_root(
     input: &Value,
 ) -> Result<PathBuf, DispatchError> {
     let runtime_root = runtime.paths().repo_root.canonicalize().map_err(|error| {
-        action_failed(action, format!("canonicalize runtime workspace: {error}"))
+        DispatchError::action_failed(action, format!("canonicalize runtime workspace: {error}"))
     })?;
     let requested = input
         .get("workspace_path")
@@ -28,7 +28,7 @@ pub(in super::super) fn requested_workspace_root(
         runtime_root.join(requested)
     };
     let requested = requested.canonicalize().map_err(|error| {
-        action_failed(
+        DispatchError::action_failed(
             action,
             format!(
                 "canonicalize requested workspace {}: {error}",
@@ -37,7 +37,7 @@ pub(in super::super) fn requested_workspace_root(
         )
     })?;
     if requested != runtime_root {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "requested workspace {} does not match active workspace {}",
@@ -61,7 +61,7 @@ pub(in super::super) fn bounded_usize(
         .and_then(Value::as_u64)
         .unwrap_or(default as u64);
     if value == 0 || value > max as u64 {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("`{field}` must be between 1 and {max}"),
         ));
@@ -87,13 +87,16 @@ pub(in super::super) fn string_array_value(
 ) -> Result<Vec<String>, DispatchError> {
     value
         .as_array()
-        .ok_or_else(|| action_failed(action, format!("`{field}` must be an array")))
+        .ok_or_else(|| DispatchError::action_failed(action, format!("`{field}` must be an array")))
         .and_then(|values| {
             values
                 .iter()
                 .map(|value| {
                     value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
-                        action_failed(action, format!("`{field}` must contain only strings"))
+                        DispatchError::action_failed(
+                            action,
+                            format!("`{field}` must contain only strings"),
+                        )
                     })
                 })
                 .collect()
@@ -105,20 +108,10 @@ pub(in super::super) fn required_string_array(
     field: &str,
     action: &str,
 ) -> Result<Vec<String>, DispatchError> {
-    input
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, format!("`{field}` must be an array")))
-        .and_then(|values| {
-            values
-                .iter()
-                .map(|value| {
-                    value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
-                        action_failed(action, format!("`{field}` must contain only strings"))
-                    })
-                })
-                .collect()
-        })
+    let value = input.get(field).ok_or_else(|| {
+        DispatchError::action_failed(action, format!("`{field}` must be an array"))
+    })?;
+    string_array_value(value, field, action)
 }
 
 pub(in super::super) fn required_string<'a>(
@@ -131,12 +124,7 @@ pub(in super::super) fn required_string<'a>(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| action_failed(action, format!("`{field}` must be a non-empty string")))
-}
-
-pub(in super::super) fn action_failed(action: &str, message: impl Into<String>) -> DispatchError {
-    DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: message.into(),
-    }
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, format!("`{field}` must be a non-empty string"))
+        })
 }

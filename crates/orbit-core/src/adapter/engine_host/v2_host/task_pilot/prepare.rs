@@ -10,7 +10,7 @@ use crate::OrbitRuntime;
 use crate::application::job::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
 use crate::application::task::TaskListFilter;
 
-use super::input::{action_failed, bounded_usize, requested_workspace_root, string_array};
+use super::input::{bounded_usize, requested_workspace_root, string_array};
 use super::persist::{no_target_assessment_marker, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
@@ -41,13 +41,13 @@ pub(in super::super) fn prepare(
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
     let claim = crate::application::automation::members::claim(runtime, input)
-        .map_err(|error| action_failed(action, error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
         && (source.as_ref().map(|s| &s.source_revision) != Some(&claim.member.source.commit)
             || input.get("task_ids") != Some(&json!(claim.task_ids())))
     {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             "state-trigger source or task membership changed",
         ));
@@ -71,7 +71,7 @@ pub(in super::super) fn prepare(
     let run_id = pilot_run_id(input);
     let mut active_preparations =
         crate::application::automation::preparation::active_task_pilot_preparations(runtime)
-            .map_err(|error| action_failed(action, error.to_string()))?;
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // A retried prepare is not held by its own run.
     if let Some(run_id) = run_id {
         active_preparations.retain(|_, holders| {
@@ -80,7 +80,7 @@ pub(in super::super) fn prepare(
         });
     }
     let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
-        .map_err(|error| action_failed(action, error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // A claimed task the branch already changed under is not piloted against
     // the frozen source: it settles superseded, and its member is claimed
     // afresh at the head [ORB-14476]. Apply carries these outcomes.
@@ -93,7 +93,7 @@ pub(in super::super) fn prepare(
             &claim.task_ids(),
             &BTreeMap::new(),
         )
-        .map_err(|error| action_failed(action, error.to_string()))?,
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
         None => BTreeMap::new(),
     };
 
@@ -121,14 +121,14 @@ pub(in super::super) fn prepare(
                 explicit_history_lens.insert(task_id.clone(), history.len());
             }
             Err(OrbitError::NotFound { .. }) => {}
-            Err(error) => return Err(action_failed(action, error.to_string())),
+            Err(error) => return Err(DispatchError::action_failed(action, error.to_string())),
         }
     }
 
     let (mode, task_ids, task_snapshots, mut excluded) = if explicit_mode {
-        let all_tasks = runtime
-            .list_tasks()
-            .map_err(|error| action_failed(action, format!("list workspace tasks: {error}")))?;
+        let all_tasks = runtime.list_tasks().map_err(|error| {
+            DispatchError::action_failed(action, format!("list workspace tasks: {error}"))
+        })?;
         let by_id = all_tasks
             .iter()
             .map(|task| (task.id.as_str(), task))
@@ -139,13 +139,13 @@ pub(in super::super) fn prepare(
             .iter()
             .map(|task_id| {
                 if !seen.insert(task_id.as_str()) {
-                    return Err(action_failed(
+                    return Err(DispatchError::action_failed(
                         action,
                         format!("explicit task_ids contains duplicate {task_id}"),
                     ));
                 }
                 by_id.get(task_id.as_str()).copied().ok_or_else(|| {
-                    action_failed(
+                    DispatchError::action_failed(
                         action,
                         format!("task {task_id} does not exist in the selected workspace"),
                     )
@@ -192,7 +192,10 @@ pub(in super::super) fn prepare(
         let candidates = runtime
             .task_candidates(&TaskListFilter::default(), usize::MAX)
             .map_err(|error| {
-                action_failed(action, format!("list workspace task envelopes: {error}"))
+                DispatchError::action_failed(
+                    action,
+                    format!("list workspace task envelopes: {error}"),
+                )
             })?;
         let mut envelopes = candidates.items;
         envelopes.sort_by(|left, right| {
@@ -256,7 +259,7 @@ pub(in super::super) fn prepare(
     };
 
     if task_ids.len() > max_tasks {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "{mode} task-pilot selection contains {} tasks, exceeding max_tasks {max_tasks}",
@@ -286,12 +289,12 @@ pub(in super::super) fn prepare(
         } else {
             runtime
                 .get_task_history(&task_id)
-                .map_err(|error| action_failed(action, error.to_string()))?
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
                 .len()
         };
         let task = runtime
             .get_task(&task_id)
-            .map_err(|error| action_failed(action, error.to_string()))?;
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if !explicit_mode {
             if let Some(outcome) = left_automatic_selection(&snapshot, &task) {
                 superseded_during_preparation.push(outcome);
@@ -310,7 +313,7 @@ pub(in super::super) fn prepare(
         snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
         let creation = runtime
             .context_creation_state(&task)
-            .map_err(|error| action_failed(action, error.to_string()))?;
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
         snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
 
@@ -321,7 +324,7 @@ pub(in super::super) fn prepare(
                 &source.source_revision,
                 &policy,
             )
-            .map_err(|error| action_failed(action, error.to_string()))?;
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             // Each task is checked against the batch member that claimed it.
             // A member edited since the claim is set aside alone, as apply
             // supersedes per member [ORB-14476]: it is claimed afresh while
@@ -332,7 +335,10 @@ pub(in super::super) fn prepare(
                     .iter()
                     .find(|member| member.task_ids.contains(&task_id))
                     .ok_or_else(|| {
-                        action_failed(action, "state-trigger task membership changed")
+                        DispatchError::action_failed(
+                            action,
+                            "state-trigger task membership changed",
+                        )
                     })?;
                 if member.fingerprint != fingerprints.material {
                     superseded_during_preparation.push(json!({
@@ -361,7 +367,9 @@ pub(in super::super) fn prepare(
             .map(|(task_id, _)| task_id.clone())
             .collect::<Vec<_>>(),
     )
-    .map_err(|error| action_failed(action, format!("reserve pilot tasks: {error}")))?;
+    .map_err(|error| {
+        DispatchError::action_failed(action, format!("reserve pilot tasks: {error}"))
+    })?;
     let held_reason = if explicit_mode {
         "already_preparing"
     } else {
@@ -478,9 +486,9 @@ fn fresh_no_target_assessment(
     source: Option<&SourceSnapshot>,
     policy: &orbit_types::workflow::automation::members::PreparationPolicy,
 ) -> Result<bool, DispatchError> {
-    let history = runtime
-        .get_task_history(task_id)
-        .map_err(|error| action_failed(action, format!("read task {task_id} history: {error}")))?;
+    let history = runtime.get_task_history(task_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task {task_id} history: {error}"))
+    })?;
     let marker = history
         .iter()
         .rev()
@@ -490,9 +498,9 @@ fn fresh_no_target_assessment(
     let Some((assessed_status, assessed_fingerprint)) = marker else {
         return Ok(false);
     };
-    let task = runtime
-        .get_task(task_id)
-        .map_err(|error| action_failed(action, format!("read task {task_id}: {error}")))?;
+    let task = runtime.get_task(task_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task {task_id}: {error}"))
+    })?;
     if task.status != assessed_status {
         return Ok(false);
     }
@@ -502,7 +510,9 @@ fn fresh_no_target_assessment(
         source.map(|source| source.source_revision.as_str()),
         policy,
     )
-    .map_err(|error| action_failed(action, format!("fingerprint task {task_id}: {error}")))?;
+    .map_err(|error| {
+        DispatchError::action_failed(action, format!("fingerprint task {task_id}: {error}"))
+    })?;
     Ok(current == assessed_fingerprint)
 }
 

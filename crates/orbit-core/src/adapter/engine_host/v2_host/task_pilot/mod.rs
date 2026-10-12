@@ -50,7 +50,7 @@ pub(super) use drain_promotion::{
     approval_disqualification, approved_by_drain, held_classification,
 };
 use input::{
-    action_failed, requested_workspace_root, required_string, required_string_array, string_array,
+    requested_workspace_root, required_string, required_string_array, string_array,
     string_array_value,
 };
 pub(super) use prepare::prepare;

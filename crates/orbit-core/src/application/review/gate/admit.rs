@@ -46,10 +46,6 @@ pub(crate) fn review_gate_admit(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let failed = |message: String| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message,
-    };
     let refused = |message: String| DispatchError::DeterministicActionRefused {
         action: action.to_string(),
         message,
@@ -58,7 +54,7 @@ pub(crate) fn review_gate_admit(
     // repeat; everything else (Git, store contention) may be transient.
     let refused_or_failed = |error: OrbitError| match error {
         OrbitError::CapabilityDenied(message) => refused(message),
-        other => failed(other.to_string()),
+        other => DispatchError::action_failed(action, other.to_string()),
     };
     // A run without a captured review admission predates the policy or was
     // never a delivery submission: it keeps the pre-existing behavior and
@@ -66,18 +62,19 @@ pub(crate) fn review_gate_admit(
     // Prefer the dispatcher-injected `run_id` (the admitted job) over
     // `job_run_id`, which a caller may spell as a stable worktree token that
     // has no run record [ORB-11520].
-    let run_id = admitted_run_id(input).map_err(|error| failed(error.to_string()))?;
+    let run_id = admitted_run_id(input)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let rebase = match input.get("re_review_after").and_then(Value::as_str) {
         Some(step_id) => match completion_rebase(runtime, &run_id, step_id, input)
-            .map_err(|error| failed(error.to_string()))?
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
         {
             Some(rebase) => Some(rebase),
             None => return Ok(not_applicable("re_review_not_required", None)),
         },
         None => None,
     };
-    let Some(admission) =
-        run_review_admission(runtime, &run_id).map_err(|error| failed(error.to_string()))?
+    let Some(admission) = run_review_admission(runtime, &run_id)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
     else {
         if rebase.is_some() {
             return Err(refused(
@@ -156,7 +153,7 @@ pub(crate) fn review_gate_admit(
         object.insert("base_sha".to_string(), json!(rebase.base_sha));
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let outcome = require_external_evidence(runtime, &context).and_then(|()| {
         if preflight {
             preflight_budget(runtime, &context)
@@ -190,7 +187,7 @@ pub(crate) fn review_gate_admit(
             audit_args,
             outcome.as_ref().err().map(ToString::to_string),
         )
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     outcome.map_err(refused_or_failed)
 }
 

@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 
-use super::action_failed;
 use super::drains::live_drain_state;
 
 /// Open or re-read a drain window [ORB-10819].
@@ -45,7 +44,7 @@ pub(in super::super) fn drain_window(
             let for_seconds = window_seconds(action, input)?;
             now.checked_add_signed(seconds_to_delta(action, for_seconds)?)
                 .ok_or_else(|| {
-                    action_failed(
+                    DispatchError::action_failed(
                         action,
                         format!("`for_seconds` {for_seconds} overflows the drain deadline"),
                     )
@@ -82,7 +81,12 @@ fn optional_deadline(action: &str, input: &Value) -> Result<Option<DateTime<Utc>
     };
     DateTime::parse_from_rfc3339(raw)
         .map(|parsed| Some(parsed.with_timezone(&Utc)))
-        .map_err(|err| action_failed(action, format!("`deadline` '{raw}' is not RFC3339: {err}")))
+        .map_err(|err| {
+            DispatchError::action_failed(
+                action,
+                format!("`deadline` '{raw}' is not RFC3339: {err}"),
+            )
+        })
 }
 
 /// Read `for_seconds`, tolerating the string a template renders when the
@@ -94,16 +98,16 @@ fn window_seconds(action: &str, input: &Value) -> Result<f64, DispatchError> {
     };
     let seconds = match raw {
         Value::Null => 0.0,
-        Value::Number(number) => number
-            .as_f64()
-            .ok_or_else(|| action_failed(action, "`for_seconds` is not a finite number".into()))?,
+        Value::Number(number) => number.as_f64().ok_or_else(|| {
+            DispatchError::action_failed(action, "`for_seconds` is not a finite number")
+        })?,
         Value::String(text) => {
             let text = text.trim();
             if text.is_empty() {
                 0.0
             } else {
                 text.parse::<f64>().map_err(|err| {
-                    action_failed(
+                    DispatchError::action_failed(
                         action,
                         format!("`for_seconds` '{text}' is not a number: {err}"),
                     )
@@ -111,14 +115,14 @@ fn window_seconds(action: &str, input: &Value) -> Result<f64, DispatchError> {
             }
         }
         other => {
-            return Err(action_failed(
+            return Err(DispatchError::action_failed(
                 action,
                 format!("`for_seconds` must be a number, got {other}"),
             ));
         }
     };
     if !seconds.is_finite() || !(0.0..=MAX_DRAIN_WINDOW_SECONDS as f64).contains(&seconds) {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!("`for_seconds` must be between 0 and {MAX_DRAIN_WINDOW_SECONDS}"),
         ));
@@ -127,6 +131,7 @@ fn window_seconds(action: &str, input: &Value) -> Result<f64, DispatchError> {
 }
 
 fn seconds_to_delta(action: &str, seconds: f64) -> Result<TimeDelta, DispatchError> {
-    TimeDelta::try_milliseconds((seconds * 1000.0).round() as i64)
-        .ok_or_else(|| action_failed(action, format!("`for_seconds` {seconds} is out of range")))
+    TimeDelta::try_milliseconds((seconds * 1000.0).round() as i64).ok_or_else(|| {
+        DispatchError::action_failed(action, format!("`for_seconds` {seconds} is out of range"))
+    })
 }

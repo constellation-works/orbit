@@ -7,8 +7,6 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
 
-use super::action_failed;
-
 /// The job that ships loose leaves. Its live runs are read for two things at
 /// once: how many slots are occupied, and which backlog tasks are already
 /// spoken for. The second matters because a leaf handed to a detached child
@@ -229,11 +227,12 @@ pub(super) fn live_leaf_runs(
     // by a reboot or an OOM — would occupy a slot forever, and the drain
     // would keep shipping at a quietly lower parallelism, which is exactly
     // the kind of thing nobody notices [ORB-12649].
-    runtime
-        .reconcile_stale_job_runs(None)
-        .map_err(|err| action_failed(action, format!("reconcile stale job runs: {err}")))?;
-    read_live_leaf_runs(runtime)
-        .map_err(|error| action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}")))
+    runtime.reconcile_stale_job_runs(None).map_err(|err| {
+        DispatchError::action_failed(action, format!("reconcile stale job runs: {err}"))
+    })?;
+    read_live_leaf_runs(runtime).map_err(|error| {
+        DispatchError::action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}"))
+    })
 }
 
 /// The one capacity reading legacy and pull admission share [ORB-12617].

@@ -40,7 +40,9 @@ pub(in crate::adapter::engine_host::v2_host) fn scan_unresolved_work(
             },
             usize::MAX,
         )
-        .map_err(|err| action_failed(action, format!("list workspace task envelopes: {err}")))?
+        .map_err(|err| {
+            DispatchError::action_failed(action, format!("list workspace task envelopes: {err}"))
+        })?
         .items
         .into_iter()
         .map(|task| task.id)
@@ -58,7 +60,9 @@ pub(in crate::adapter::engine_host::v2_host) fn scan_unresolved_work(
                     include_steps: false,
                     ..JobRunQuery::default()
                 })
-                .map_err(|err| action_failed(action, format!("list job runs: {err}")))?
+                .map_err(|err| {
+                    DispatchError::action_failed(action, format!("list job runs: {err}"))
+                })?
                 .into_iter()
                 .map(|run| run.run_id),
         );
@@ -72,7 +76,9 @@ pub(in crate::adapter::engine_host::v2_host) fn scan_unresolved_work(
                 unresolved_only: true,
                 ..SessionLogFilter::default()
             })
-            .map_err(|err| action_failed(action, format!("list session log: {err}")))?
+            .map_err(|err| {
+                DispatchError::action_failed(action, format!("list session log: {err}"))
+            })?
             .into_iter()
             .map(|entry| entry.id)
             .collect();
@@ -80,7 +86,7 @@ pub(in crate::adapter::engine_host::v2_host) fn scan_unresolved_work(
 
     let empty = task_ids.is_empty() && run_ids.is_empty() && check_later_ids.is_empty();
     if fail_if_nonempty && !empty {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "unresolved work remains after drain: tasks=[{}], runs=[{}], check_later=[{}]",
@@ -100,11 +106,4 @@ pub(in crate::adapter::engine_host::v2_host) fn scan_unresolved_work(
         "run_count": run_ids.len(),
         "check_later_count": check_later_ids.len(),
     }))
-}
-
-fn action_failed(action: &str, message: impl Into<String>) -> DispatchError {
-    DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: message.into(),
-    }
 }

@@ -361,12 +361,9 @@ pub(crate) fn refresh_baseline_holds_step(
     runtime: &OrbitRuntime,
     action: &str,
 ) -> Result<Value, DispatchError> {
-    let refresh = runtime.refresh_baseline_holds(None).map_err(|error| {
-        DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: error.to_string(),
-        }
-    })?;
+    let refresh = runtime
+        .refresh_baseline_holds(None)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     Ok(json!({
         "lifted": refresh.lifted,
         "held": refresh.held,

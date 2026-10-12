@@ -103,28 +103,25 @@ pub(crate) fn resolve_local_shell_executor(
     executor: &str,
 ) -> Result<ResolvedShellExecutor, DispatchError> {
     let Some(def) = runtime.get_executor_def(executor).map_err(|err| {
-        DispatchError::DeterministicActionFailed {
-            action: "local_shell".to_string(),
-            message: format!("load executor `{executor}`: {err}"),
-        }
+        DispatchError::action_failed("local_shell", format!("load executor `{executor}`: {err}"))
     })?
     else {
-        return Err(DispatchError::DeterministicActionFailed {
-            action: "local_shell".to_string(),
-            message: format!(
+        return Err(DispatchError::action_failed(
+            "local_shell",
+            format!(
                 "executor `{executor}` is not registered; run `orbit init` to seed the shipped \
                  definitions or register your own"
             ),
-        });
+        ));
     };
     if def.executor_type != ExecutorType::LocalShell {
-        return Err(DispatchError::DeterministicActionFailed {
-            action: "local_shell".to_string(),
-            message: format!(
+        return Err(DispatchError::action_failed(
+            "local_shell",
+            format!(
                 "executor `{executor}` has type `{}`; a local_shell step requires a local_shell executor",
                 def.executor_type
             ),
-        });
+        ));
     }
     Ok(ResolvedShellExecutor {
         command: def

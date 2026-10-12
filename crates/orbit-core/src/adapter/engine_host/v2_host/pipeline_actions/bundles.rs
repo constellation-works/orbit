@@ -11,9 +11,8 @@ pub(in super::super) fn validate_bundles(
         .get("bundles")
         .and_then(Value::as_array)
         .cloned()
-        .ok_or_else(|| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: "`bundles` must be an array".to_string(),
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "`bundles` must be an array".to_string())
         })?;
     let max_bundle_size = input
         .get("max_bundle_size")
@@ -33,12 +32,9 @@ pub(in super::super) fn validate_bundles(
     let mut violations: Vec<String> = Vec::new();
     let mut bundles: Vec<Vec<String>> = Vec::with_capacity(bundles_raw.len());
     for (idx, bundle) in bundles_raw.iter().enumerate() {
-        let items = bundle
-            .as_array()
-            .ok_or_else(|| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("bundle[{idx}] is not an array"),
-            })?;
+        let items = bundle.as_array().ok_or_else(|| {
+            DispatchError::action_failed(action, format!("bundle[{idx}] is not an array"))
+        })?;
         if items.len() > max_bundle_size {
             violations.push(format!(
                 "bundle[{idx}] size {} exceeds max_bundle_size {}",
@@ -48,12 +44,12 @@ pub(in super::super) fn validate_bundles(
         }
         let mut bundle_ids: Vec<String> = Vec::with_capacity(items.len());
         for item in items {
-            let id = item
-                .as_str()
-                .ok_or_else(|| DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("bundle[{idx}] contains a non-string task_id"),
-                })?;
+            let id = item.as_str().ok_or_else(|| {
+                DispatchError::action_failed(
+                    action,
+                    format!("bundle[{idx}] contains a non-string task_id"),
+                )
+            })?;
             if !known.is_empty() && !known.contains(id) {
                 violations.push(format!("bundle[{idx}] references unknown task_id {id}"));
             }
@@ -65,10 +61,10 @@ pub(in super::super) fn validate_bundles(
         bundles.push(bundle_ids);
     }
     if !violations.is_empty() {
-        return Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("invalid bundles: {}", violations.join("; ")),
-        });
+        return Err(DispatchError::action_failed(
+            action,
+            format!("invalid bundles: {}", violations.join("; ")),
+        ));
     }
     Ok(serde_json::json!({
         "bundles": bundles,

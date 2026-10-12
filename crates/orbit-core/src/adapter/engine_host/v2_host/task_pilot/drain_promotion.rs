@@ -29,7 +29,6 @@ use crate::OrbitRuntime;
 use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
 
 use super::admission::{PreparedTaskSnapshot, ValidatedTask};
-use super::input::action_failed;
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_findings};
 
@@ -100,9 +99,11 @@ impl DrainAuthority {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|run_id| !run_id.is_empty())
-            .ok_or_else(|| action_failed(action, "drain_promotion.run_id must be a string"))?;
+            .ok_or_else(|| {
+                DispatchError::action_failed(action, "drain_promotion.run_id must be a string")
+            })?;
         let refused = |reason: &str| {
-            action_failed(
+            DispatchError::action_failed(
                 action,
                 format!("drain promotion authority from run {run_id} refused: {reason}"),
             )
@@ -111,7 +112,7 @@ impl DrainAuthority {
             .stores()
             .jobs()
             .get_job_run(run_id)
-            .map_err(|error| action_failed(action, error.to_string()))?
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
             .ok_or_else(|| refused("no such run"))?;
         if drain.job_id != DRAIN_JOB {
             return Err(refused("it is not an auto drain"));
@@ -133,7 +134,7 @@ impl DrainAuthority {
             .stores()
             .jobs()
             .read_run_state(run_id)
-            .map_err(|error| action_failed(action, error.to_string()))?
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
             .is_some_and(|state| {
                 state
                     .child_dispatches

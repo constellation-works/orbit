@@ -16,7 +16,7 @@ use crate::application::task::{
 };
 
 use super::super::task_pilot::input::{
-    action_failed, requested_workspace_root, required_string, required_string_array,
+    requested_workspace_root, required_string, required_string_array,
 };
 use super::super::task_pilot::source::SourceSnapshot;
 use super::prepare::task_snapshot;
@@ -38,15 +38,15 @@ pub(in super::super) fn apply(
     input: &Value,
     run_id: Option<&str>,
 ) -> Result<Value, DispatchError> {
-    let failed = |error: OrbitError| action_failed(action, error.to_string());
+    let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
     let workspace_root = requested_workspace_root(runtime, action, input)?;
     let prepared = input
         .get("prepared")
         .filter(|prepared| prepared.is_object())
-        .ok_or_else(|| action_failed(action, "`prepared` must be an object"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "`prepared` must be an object"))?;
     let prepared_workspace = required_string(prepared, "workspace_path", action)?;
     if Path::new(prepared_workspace) != workspace_root {
-        return Err(action_failed(
+        return Err(DispatchError::action_failed(
             action,
             format!(
                 "prepared workspace {prepared_workspace} does not match active workspace {}",
@@ -54,8 +54,9 @@ pub(in super::super) fn apply(
             ),
         ));
     }
-    let source = SourceSnapshot::from_prepared(prepared, action)?
-        .ok_or_else(|| action_failed(action, "prepared.source must pin a revision"))?;
+    let source = SourceSnapshot::from_prepared(prepared, action)?.ok_or_else(|| {
+        DispatchError::action_failed(action, "prepared.source must pin a revision")
+    })?;
     source.ensure_commit(action, &workspace_root)?;
     let claim =
         crate::application::automation::members::claim(runtime, prepared).map_err(failed)?;
@@ -63,15 +64,17 @@ pub(in super::super) fn apply(
     let partitions = prepared
         .get("partitions")
         .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "prepared.partitions must be an array"))?;
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "prepared.partitions must be an array")
+        })?;
     let results = input
         .get("results")
         .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "`results` must be an array"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "`results` must be an array"))?;
     let snapshots = prepared
         .get("tasks")
         .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "prepared.tasks must be an array"))?
+        .ok_or_else(|| DispatchError::action_failed(action, "prepared.tasks must be an array"))?
         .iter()
         .map(|entry| {
             Ok((
@@ -114,10 +117,13 @@ pub(in super::super) fn apply(
             .and_then(Value::as_array);
         for task_id in &task_ids {
             let snapshot = snapshots.get(task_id).ok_or_else(|| {
-                action_failed(action, format!("task {task_id} was not in prepared.tasks"))
+                DispatchError::action_failed(
+                    action,
+                    format!("task {task_id} was not in prepared.tasks"),
+                )
             })?;
             if snapshot.crew != crew {
-                return Err(action_failed(
+                return Err(DispatchError::action_failed(
                     action,
                     format!(
                         "task {task_id} was prepared for crew {}, not {crew}",
@@ -346,8 +352,9 @@ fn prepared_field<T: serde::de::DeserializeOwned>(
     field: &str,
     action: &str,
 ) -> Result<T, DispatchError> {
-    serde_json::from_value(entry.get(field).cloned().unwrap_or(Value::Null))
-        .map_err(|error| action_failed(action, format!("prepared task {field}: {error}")))
+    serde_json::from_value(entry.get(field).cloned().unwrap_or(Value::Null)).map_err(|error| {
+        DispatchError::action_failed(action, format!("prepared task {field}: {error}"))
+    })
 }
 
 fn unverified(task_id: &str, reason: &str, detail: String) -> Value {

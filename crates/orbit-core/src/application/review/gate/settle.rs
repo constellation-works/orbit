@@ -58,10 +58,6 @@ pub(crate) fn review_gate_settle(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let failed = |message: String| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message,
-    };
     let admission_output = input.get("admission").cloned().unwrap_or(Value::Null);
     if admission_output.get("applies").and_then(Value::as_bool) != Some(true) {
         return Ok(json!({
@@ -83,9 +79,10 @@ pub(crate) fn review_gate_settle(
         object.insert("base_sha".to_string(), base_sha);
     }
     let mut context = GateContext::load(runtime, &settle_input, None)
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     if context.admission.is_none() {
-        return Err(failed(
+        return Err(DispatchError::action_failed(
+            action,
             "review_gate_stale: the run no longer carries a review admission".to_string(),
         ));
     }
@@ -93,10 +90,15 @@ pub(crate) fn review_gate_settle(
         .get("attempt_id")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| failed("review_gate_settle requires admission.attempt_id".to_string()))?
+        .ok_or_else(|| {
+            DispatchError::action_failed(
+                action,
+                "review_gate_settle requires admission.attempt_id".to_string(),
+            )
+        })?
         .to_string();
     let reviewer = reviewer_identity(runtime, &context, &admission_output)
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
 
     let outcome = settle(
         runtime,
@@ -152,7 +154,7 @@ pub(crate) fn review_gate_settle(
             }),
             error,
         )
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
 
     match outcome {
         Ok(Settled::Passed(value)) => Ok(value),
@@ -188,7 +190,7 @@ pub(crate) fn review_gate_settle(
                 candidate_standing(&admission_output)
             ),
         }),
-        Err(error) => Err(failed(error.to_string())),
+        Err(error) => Err(DispatchError::action_failed(action, error.to_string())),
     }
 }
 

@@ -25,12 +25,14 @@ pub(super) fn prepare(
     input: &Value,
     recovery_run_id: Option<&str>,
 ) -> Result<Value, DispatchError> {
-    let run_id = recovery_run_id
-        .ok_or_else(|| failed(action, "a recovery step must run inside a pipeline run"))?;
-    let episode = BlockedRecoveryInput::from_json(input).map_err(|error| failed(action, error))?;
+    let run_id = recovery_run_id.ok_or_else(|| {
+        DispatchError::action_failed(action, "a recovery step must run inside a pipeline run")
+    })?;
+    let episode = BlockedRecoveryInput::from_json(input)
+        .map_err(|error| DispatchError::action_failed(action, error))?;
     let preparation = runtime
         .prepare_blocked_task_recovery(&episode, run_id)
-        .map_err(|error| failed(action, error.to_string()))?;
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     Ok(match preparation {
         BlockedRecoveryPreparation::Skip { reason } => json!({
             "proceed": false,
@@ -69,28 +71,33 @@ pub(super) fn apply(
     input: &Value,
     recovery_run_id: Option<&str>,
 ) -> Result<Value, DispatchError> {
-    let run_id = recovery_run_id
-        .ok_or_else(|| failed(action, "a recovery step must run inside a pipeline run"))?;
+    let run_id = recovery_run_id.ok_or_else(|| {
+        DispatchError::action_failed(action, "a recovery step must run inside a pipeline run")
+    })?;
     let prepared = input
         .get("prepared")
-        .ok_or_else(|| failed(action, "`prepared` is required"))?;
+        .ok_or_else(|| DispatchError::action_failed(action, "`prepared` is required"))?;
     let episode = prepared
         .get("episode")
-        .ok_or_else(|| failed(action, "`prepared.episode` is required"))
+        .ok_or_else(|| DispatchError::action_failed(action, "`prepared.episode` is required"))
         .and_then(|value| {
-            BlockedRecoveryInput::from_json(value).map_err(|error| failed(action, error))
+            BlockedRecoveryInput::from_json(value)
+                .map_err(|error| DispatchError::action_failed(action, error))
         })?;
     let base_ref = prepared
         .pointer("/recovery/base_ref")
         .and_then(Value::as_str)
-        .ok_or_else(|| failed(action, "`prepared.recovery.base_ref` is required"))?;
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "`prepared.recovery.base_ref` is required")
+        })?;
     let decision = input.get("result").and_then(decision_result);
     let outcome =
         runtime.apply_blocked_task_recovery(&episode, run_id, base_ref, decision.as_ref());
     // The checkout is the run's own scratch; remove it whatever the outcome.
     let cleanup = runtime.remove_recovery_checkout(run_id);
-    let outcome = outcome.map_err(|error| failed(action, error.to_string()))?;
-    cleanup.map_err(|error| failed(action, error.to_string()))?;
+    let outcome =
+        outcome.map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    cleanup.map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     Ok(json!({
         "status": "succeeded",
         "task_id": episode.task_id,
@@ -132,12 +139,5 @@ fn outcome_name(outcome: &FinalRecoveryOutcome) -> &'static str {
         FinalRecoveryOutcome::Requeued => "requeued",
         FinalRecoveryOutcome::Escalated { .. } => "escalated",
         FinalRecoveryOutcome::Refused { .. } => "refused",
-    }
-}
-
-fn failed(action: &str, message: impl Into<String>) -> DispatchError {
-    DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: message.into(),
     }
 }
