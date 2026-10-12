@@ -7,7 +7,7 @@ use orbit_core::{
 };
 use serde_json::json;
 
-use super::support::{Fixture, isolated, json_ok};
+use super::support::{Fixture, isolated, json_ok, walk_audit_pages};
 
 #[test]
 fn failed_runs_tile_matches_filtered_terminal_runs() {
@@ -95,7 +95,11 @@ fn failed_runs_tile_matches_filtered_terminal_runs() {
     );
 }
 
-fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInsertParams {
+pub(super) fn row(
+    id: &str,
+    tool: Option<&str>,
+    status: AuditEventStatus,
+) -> AuditEventInsertParams {
     AuditEventInsertParams {
         execution_id: id.into(),
         command: "tool".into(),
@@ -154,37 +158,12 @@ fn audit_list_pages_through_the_window_by_cursor_and_keeps_filters() {
                 fixture.runtime.record_audit_event(&event).unwrap();
             }
             let server = fixture.server(false);
-            // Follows `x-audit-next-before` until the server stops offering
-            // one, returning every page's execution ids in order.
+            // Every page's execution ids, in the order the cursor yields them.
             let walk = |query: &str, limit: usize| {
-                let mut ids = Vec::new();
-                let mut pages = 0;
-                let mut before: Option<String> = None;
-                loop {
-                    let cursor = before
-                        .as_deref()
-                        .map(|value| format!("&before={value}"))
-                        .unwrap_or_default();
-                    let response = server.get(&format!(
-                        "/api/audit?workspace=ws_http_fixture&since=24h&limit={limit}&{query}{cursor}"
-                    ));
-                    before = response
-                        .headers()
-                        .get("x-audit-next-before")
-                        .map(|value| value.to_str().unwrap().to_string());
-                    let page = json_ok(response);
-                    let page = page.as_array().unwrap();
-                    assert!(page.len() <= limit);
-                    ids.extend(
-                        page.iter()
-                            .map(|event| event["execution_id"].as_str().unwrap().to_string()),
-                    );
-                    pages += 1;
-                    assert!(pages < 50, "cursor must make progress");
-                    if before.is_none() {
-                        return ids;
-                    }
-                }
+                walk_audit_pages(|path| server.get(path), "/api/audit", query, limit)
+                    .into_iter()
+                    .flat_map(|(ids, _)| ids)
+                    .collect::<Vec<_>>()
             };
             let expected = |keep: &dyn Fn(&str, AuditEventStatus) -> bool| {
                 seeded
