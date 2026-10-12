@@ -72,7 +72,11 @@ consulted, and stops 300 s after the last consult.
 - **Fail open.** Unknown readings never hold.
 - **Shared state.** Every drain on the host reads one shared state file,
   `<global>/cache/host-resource-pressure.json`. It holds hysteresis state, not
-  a time series.
+  a time series. History is keyed by resource and its high/resume threshold
+  pair: workspace throttle overrides affect that workspace's admission,
+  while identical thresholds share sustain windows and holds. The schema-1
+  envelope remains readable by older binaries, whose resource-only lookups
+  start fresh; matching legacy history is carried forward on upgrade.
 
 **Per-task resource accounting.** On Linux, each detached worker runs in its
 own systemd user scope, `orbit-worker-<run_id>-<nonce>.scope`
@@ -452,12 +456,6 @@ first.
   the host anyway, up to the operator's maximum.
 - **Starvation guard is crude.** The head-of-queue wait can idle a host for
   up to 30 minutes while it waits for one heavy task to fit.
-- **Shared pressure state across differing thresholds.** The throttle's
-  pressure evaluator resets a resource's state when the evaluating
-  workspace's thresholds differ from the recorded ones
-  (`runtime/host_resource/pressure.rs`). Workspaces with different throttle
-  settings may keep resetting each other, and weaken the backstop. This is
-  inferred from the code, not observed. Machine-level thresholds avoid it.
 - **Thresholds are guesses.** 80% CPU and 75% memory are starting points.
   The shadow report is where they get tuned.
 

@@ -176,7 +176,7 @@ Interactive init asks for the default crew by name, offering only enabled crews.
 
 ### `[workflow.resource_throttle]` — host pressure
 
-While CPU, memory or a watched filesystem stays at or above its high mark, this host starts no new task work until it falls below the resume mark; running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
+While CPU, memory or a watched filesystem stays at or above its high mark, admission using those thresholds starts no new task work until it falls below the resume mark; running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
 
 | Key | Default | What it does |
 |---|---|---|
@@ -189,7 +189,7 @@ While CPU, memory or a watched filesystem stays at or above its high mark, this 
 | `workflow.resource_throttle.disk_high_percent` | `90` | High-water mark for each watched filesystem. |
 | `workflow.resource_throttle.disk_resume_percent` | `85` | Resume below this filesystem percentage. |
 
-Percentages are integers `1..=100`; each resume mark must be below its high mark. Workspace runtimes use their resolved values. The host dashboard uses the serving machine's global values, read when its monitor first opens, so restart it after changing them.
+Percentages are integers `1..=100`; each resume mark must be below its high mark. A workspace override applies only to that workspace's admission. Each resource's hysteresis history is shared by workspaces with identical high and resume marks; different marks keep independent sustain windows and holds against the same host readings. The host dashboard uses the serving machine's global values, read when its monitor first opens, so restart it after changing them.
 
 `machine.auto_concurrency.admit_memory_percent` must stay below this table's
 global `memory_high_percent`, since both memory thresholds count non-reclaimable
