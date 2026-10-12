@@ -9,8 +9,9 @@ use super::{ReviewBudget, ReviewConsumption, ReviewVerdict};
 /// Typed lead of the refusal a settlement raises when the reviewer exited
 /// cleanly but left only its initial provisional report [ORB-15130]. The
 /// attempt is released, never settled, so it does not count as the
-/// candidate's review ([`ReviewLedger::reviewed`]); the failure handoff keys
-/// on this marker.
+/// candidate's review ([`ReviewLedger::reviewed`]). The marker is for
+/// readers; the failure handoff decides on
+/// [`ReviewGateRefusal::Abandoned`](super::ReviewGateRefusal::Abandoned).
 pub const REVIEW_ABANDONED_MARKER: &str = "review_abandoned:";
 
 /// What a before-landing review refusal says about its pull request: it

@@ -176,6 +176,16 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` refused: {message}")]
     DeterministicActionRefused { action: String, message: String },
 
+    /// A [`DispatchError::DeterministicActionRefused`] the review gate raised
+    /// for a refusal the failure handoff decides on. The handoff receives
+    /// `refusal` as the step's `error_code`; `message` is for readers.
+    #[error("deterministic action `{action}` refused: {message}")]
+    ReviewGateRefused {
+        action: String,
+        refusal: orbit_types::workflow::ReviewGateRefusal,
+        message: String,
+    },
+
     /// A settled review needs named external evidence. End the delivery run
     /// without retry, recovery, or the failure handoff; receipt queues review.
     #[error("review_awaiting_evidence: named external checks are pending")]
@@ -322,11 +332,38 @@ impl DispatchError {
                 | DispatchError::RecoverableVcsConflict { .. }
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
+                | DispatchError::ReviewGateRefused { .. }
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
                 | DispatchError::ProtocolSkew(_)
         )
+    }
+
+    /// The `error_code` the job's terminal failure handoff receives for this
+    /// step error. A typed error names its own code; a validation-environment,
+    /// red-base, agent-blocker, upgrade or provider failure is classified from
+    /// its text; anything else is `pipeline_step_failed`.
+    pub fn failure_code(&self) -> &'static str {
+        use orbit_types::workflow as wf;
+        let text = || self.to_string();
+        match self {
+            DispatchError::WorktreeIntegrity { code, .. } => code,
+            DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
+            DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+            DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
+            _ if wf::is_validation_environment_failure(None, Some(&text())) => {
+                wf::VALIDATION_ENVIRONMENT_ERROR_CODE
+            }
+            _ if wf::is_baseline_red_failure(None, Some(&text())) => wf::BASELINE_RED_ERROR_CODE,
+            _ if wf::is_task_blocked_by_agent(None, Some(&text())) => {
+                wf::TASK_BLOCKED_BY_AGENT_ERROR_CODE
+            }
+            _ if wf::is_upgrade_pending(None, Some(&text())) => wf::UPGRADE_PENDING_ERROR_CODE,
+            // [ORB-14266] The handoff preserves the candidate for the next run.
+            _ => wf::ProviderFailureClass::of(None, Some(&text()))
+                .map_or("pipeline_step_failed", wf::ProviderFailureClass::as_str),
+        }
     }
 
     /// Whether an error that bypasses normal retry may still reach an

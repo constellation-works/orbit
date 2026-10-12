@@ -77,6 +77,14 @@ The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate
 records `accept_with_fixes`.
 
+The failure handoff decides on the step's typed `error_code`, never on the
+refusal's wording. A settled non-approving verdict, an abandoned review, a
+reviewer timeout and an admission refusal for still-missing evidence reach it
+as `review_gate_blocked`, `review_abandoned`, `review_timeout_incomplete` and
+`review_awaiting_evidence`; before these codes, they reached it as
+`pipeline_step_failed`. Each refusal message still leads with the same
+`code:` for readers. Other review-gate refusals keep `pipeline_step_failed`.
+
 ### Before-landing review
 
 With `review.before_landing` captured, the table above applies to the

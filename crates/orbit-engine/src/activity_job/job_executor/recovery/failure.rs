@@ -14,37 +14,7 @@ pub(in crate::activity_job::job_executor) fn attempt_failure_activity(
         return;
     };
     let pipeline = ctx.pipeline_value();
-    let error_code = match original_err {
-        DispatchError::WorktreeIntegrity { code, .. } => *code,
-        DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
-        DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
-        error
-            if orbit_types::workflow::is_validation_environment_failure(
-                None,
-                Some(&error.to_string()),
-            ) =>
-        {
-            orbit_types::workflow::VALIDATION_ENVIRONMENT_ERROR_CODE
-        }
-        error if orbit_types::workflow::is_baseline_red_failure(None, Some(&error.to_string())) => {
-            orbit_types::workflow::BASELINE_RED_ERROR_CODE
-        }
-        error
-            if orbit_types::workflow::is_task_blocked_by_agent(None, Some(&error.to_string())) =>
-        {
-            orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE
-        }
-        error if orbit_types::workflow::is_upgrade_pending(None, Some(&error.to_string())) => {
-            orbit_types::workflow::UPGRADE_PENDING_ERROR_CODE
-        }
-        // [ORB-14266] The handoff preserves the candidate for the next run.
-        error => {
-            match orbit_types::workflow::ProviderFailureClass::of(None, Some(&error.to_string())) {
-                Some(class) => class.as_str(),
-                None => "pipeline_step_failed",
-            }
-        }
-    };
+    let error_code = original_err.failure_code();
     let input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),

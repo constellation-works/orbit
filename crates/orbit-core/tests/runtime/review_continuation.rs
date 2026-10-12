@@ -3,13 +3,13 @@
 use chrono::Utc;
 use orbit_core::TaskStatus;
 use orbit_engine::{
-    ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost, TaskAutomationUpdate,
-    execute_deterministic_action,
+    DispatchError, ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost,
+    TaskAutomationUpdate, execute_deterministic_action,
 };
 use orbit_types::workflow::{
     JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
     REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewEvidenceHold,
-    ReviewManifest, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome,
+    ReviewGateRefusal, ReviewManifest, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -420,16 +420,38 @@ fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
         }),
     )
     .unwrap();
+    // The executor's own timeout refusal; `review_fixes` in orbit-engine
+    // covers the executor raising it for a timed-out reviewer.
+    let timed_out = DispatchError::ReviewGateRefused {
+        action: "review".into(),
+        refusal: ReviewGateRefusal::TimeoutIncomplete,
+        message: "review_timeout_incomplete: reviewer exceeded its wall clock".into(),
+    };
+    review_gate_handoff(fixture, "review", &timed_out, &fixture.input["admission"])
+}
+
+/// Run the failure handoff the executor dispatches when `failed_step_id`
+/// fails with `refused`: its input carries the error code the executor
+/// derives from that error, as a run's terminal failure hook does.
+fn review_gate_handoff(
+    fixture: &Fixture,
+    failed_step_id: &str,
+    refused: &DispatchError,
+    admission: &Value,
+) -> Value {
+    let mut pipeline = json!({
+        "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
+        "sync_base": {"base": "main", "base_ref": "main"},
+    });
+    if !admission.is_null() {
+        pipeline["review_gate_admit"] = admission.clone();
+    }
     execute_deterministic_action(&fixture.runtime, "pr_failure_handoff", &json!({}), &json!({
-        "failed_step_id": "review", "error_code": "deterministic_action_refused",
-        "error_message": "review_timeout_incomplete: reviewer exceeded its wall clock",
+        "failed_step_id": failed_step_id, "error_code": refused.failure_code(),
+        "error_message": refused.to_string(),
         "run_id": fixture.input["job_run_id"],
         "job_input": {"task_ids": [fixture.task_id], "base_branch": "main", "base_sync": "local"},
-        "pipeline": {
-            "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
-            "sync_base": {"base": "main", "base_ref": "main"},
-            "review_gate_admit": fixture.input["admission"],
-        },
+        "pipeline": pipeline,
     }), false, &Default::default(), None).unwrap()
 }
 
@@ -912,6 +934,63 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
     }
 }
 
+/// [ORB-15714] Admission's refusal for a held candidate whose named external
+/// evidence has not arrived reaches the failure handoff under its typed code,
+/// so the task stays held in progress instead of being blocked as an
+/// escalation.
+#[test]
+fn an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold() {
+    if !super::dispatch_admission::isolated(
+        "review_continuation::an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
+    add_origin(&fixture);
+    fixture.admit();
+    let mut report = interrupted_report(&fixture);
+    report["external_evidence"] = json!([{"kind": "native_os", "name": "macOS native run",
+        "command": "native macos", "artifact": "evidence/macos.json"}]);
+    report["validation"].as_array_mut().unwrap().push(
+        json!({"id": "V2", "command": "native macos", "outcome": "not_run", "role": "required"}),
+    );
+    fixture.put_report(&report);
+    run_review_pipeline(&fixture);
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .is_some()
+    );
+
+    let refused = fixture
+        .runtime
+        .run_deterministic(
+            "review_gate_admit",
+            &json!({}),
+            &fixture.input,
+            Default::default(),
+        )
+        .expect_err("the held candidate's evidence has not arrived");
+    assert!(
+        matches!(
+            refused,
+            DispatchError::ReviewGateRefused {
+                refusal: ReviewGateRefusal::AwaitingEvidence,
+                ..
+            }
+        ),
+        "{refused}"
+    );
+    let handoff = review_gate_handoff(&fixture, "review_gate_admit", &refused, &Value::Null);
+    assert_eq!(handoff["decision"], "awaiting_review_evidence", "{handoff}");
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::InProgress
+    );
+}
+
 #[test]
 fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree() {
     if !super::dispatch_admission::isolated(
@@ -1023,6 +1102,7 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
         "meaning_changed",
     ] {
         let mut fixture = Fixture::new();
+        add_origin(&fixture);
         fixture.admit();
         let mut report = interrupted_report(&fixture);
         report["external_evidence"] = json!([{ "kind": "hosted_ci", "name": "Windows CI",
@@ -1078,7 +1158,13 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
         );
         let refused = fixture.settle().unwrap_err();
         assert!(
-            refused.to_string().contains("review_gate_blocked:"),
+            matches!(
+                refused,
+                DispatchError::ReviewGateRefused {
+                    refusal: ReviewGateRefusal::Blocked,
+                    ..
+                }
+            ),
             "{case}: {refused}"
         );
         assert!(
@@ -1088,6 +1174,26 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
                 .unwrap()
                 .is_none(),
             "{case}"
+        );
+        let handoff = review_gate_handoff(
+            &fixture,
+            "review_gate_settle",
+            &refused,
+            &fixture.input["admission"],
+        );
+        assert_eq!(
+            handoff["decision"], "blocked_review_gate",
+            "{case}: {handoff}"
+        );
+        assert_eq!(
+            fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+            TaskStatus::Blocked,
+            "{case}"
+        );
+        let note = latest_decision(&fixture).note.unwrap();
+        assert!(
+            note.contains("substantive review escalation"),
+            "{case}: {note}"
         );
     }
 }
@@ -1169,10 +1275,15 @@ fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
     );
     let refused = fixture
         .settle()
-        .expect_err("an abandoned review settles no verdict")
-        .to_string();
+        .expect_err("an abandoned review settles no verdict");
     assert!(
-        refused.contains(orbit_types::workflow::REVIEW_ABANDONED_MARKER),
+        matches!(
+            refused,
+            DispatchError::ReviewGateRefused {
+                refusal: ReviewGateRefusal::Abandoned,
+                ..
+            }
+        ),
         "{refused}"
     );
     let ledger = fixture
@@ -1189,17 +1300,12 @@ fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
     assert!(attempt.released_at.is_some());
     assert!(!ledger.reviewed(&attempt.candidate, &attempt.task_meaning_digest));
 
-    let handoff = execute_deterministic_action(&fixture.runtime, "pr_failure_handoff", &json!({}), &json!({
-        "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
-        "error_message": refused,
-        "run_id": fixture.input["job_run_id"],
-        "job_input": {"task_ids": [fixture.task_id], "base_branch": "main", "base_sync": "local"},
-        "pipeline": {
-            "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
-            "sync_base": {"base": "main", "base_ref": "main"},
-            "review_gate_admit": fixture.input["admission"],
-        },
-    }), false, &Default::default(), None).unwrap();
+    let handoff = review_gate_handoff(
+        &fixture,
+        "review_gate_settle",
+        &refused,
+        &fixture.input["admission"],
+    );
     assert_eq!(handoff["decision"], "blocked_review_gate", "{handoff}");
     assert_eq!(
         fixture.runtime.get_task(&fixture.task_id).unwrap().status,

@@ -90,8 +90,9 @@ pub(super) fn run_target(
     persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatch);
     if timed_out {
         record_pipeline(ctx, &step.id, dispatch.output.clone());
-        return Err(DispatchError::DeterministicActionRefused {
+        return Err(DispatchError::ReviewGateRefused {
             action: step.id.clone(),
+            refusal: orbit_types::workflow::ReviewGateRefusal::TimeoutIncomplete,
             message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
         });
     }

@@ -24,8 +24,8 @@ use orbit_engine::{
     FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
-use orbit_types::workflow::FinalRecoveryDecision;
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
+use orbit_types::workflow::{FinalRecoveryDecision, ReviewGateRefusal};
 use serde_json::{Value, json};
 
 #[test]
@@ -41,11 +41,11 @@ fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication()
     assert!(host.inputs("pr_open").is_empty());
     let handoff = host.inputs("pr_failure_handoff");
     assert_eq!(handoff.len(), 1);
-    assert!(
-        handoff[0]["error_message"]
-            .as_str()
-            .unwrap()
-            .contains("review_timeout_incomplete:")
+    assert_eq!(
+        handoff[0]["error_code"],
+        ReviewGateRefusal::TimeoutIncomplete.error_code(),
+        "the handoff decides on the executor's typed refusal: {}",
+        handoff[0]
     );
     assert_eq!(handoff[0]["pipeline"]["review"]["timed_out"], true);
     assert!(matches!(
@@ -303,10 +303,11 @@ fn reject_blocks_the_task_after_final_recovery() {
     let handoff = host.inputs("pr_failure_handoff");
     assert_eq!(handoff.len(), 1);
     assert_eq!(handoff[0]["failed_step_id"], "review_gate_settle");
-    let message = handoff[0]["error_message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("review_gate_blocked"),
-        "the handoff carries the gate's refusal: {message}"
+    assert_eq!(
+        handoff[0]["error_code"],
+        ReviewGateRefusal::Blocked.error_code(),
+        "the handoff carries the gate's typed refusal: {}",
+        handoff[0]
     );
 }
 
@@ -581,12 +582,11 @@ impl ScriptedHost {
                     "handoff_evidence": null,
                 }))
             }
-            Settlement::Reject | Settlement::Timeout => {
-                Err(DispatchError::DeterministicActionRefused {
-                    action: "review_gate_settle".to_string(),
-                    message: format!("review_gate_blocked: attempt {attempt} settled reject"),
-                })
-            }
+            Settlement::Reject | Settlement::Timeout => Err(DispatchError::ReviewGateRefused {
+                action: "review_gate_settle".to_string(),
+                refusal: ReviewGateRefusal::Blocked,
+                message: format!("review_gate_blocked: attempt {attempt} settled reject"),
+            }),
         }
     }
 }

@@ -60,7 +60,7 @@ use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
     DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobV2StepBody,
     KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PS_EXEC_PROBE, PipelineState,
-    ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
+    ReviewGateRefusal, ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -5442,7 +5442,7 @@ fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
             let handoff = action(&host, "pr_failure_handoff", &json!({
-            "failed_step_id": "review", "error_code": "deterministic_action_refused",
+            "failed_step_id": "review", "error_code": ReviewGateRefusal::TimeoutIncomplete.error_code(),
             "error_message": "review_timeout_incomplete: reviewer exceeded its wall clock",
             "run_id": RUN_ID, "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
             "pipeline": {
@@ -5484,7 +5484,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
             // Settlement never reaches the handoff with a hold: it ends the run
             // held. The hold reaches the handoff only as an admission refusal.
             let mut input = json!({
-                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
@@ -5495,6 +5495,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
             assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
             assert_eq!(fx.forge_state("pr-head"), None);
             input["failed_step_id"] = json!("review_gate_settle");
+            input["error_code"] = json!(ReviewGateRefusal::Blocked.error_code());
             input["error_message"] = json!("review_gate_blocked: changes_required; wrong approach");
             let rejected = action(&host, "pr_failure_handoff", &input).unwrap();
             assert_eq!(
@@ -5516,7 +5517,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
                 serde_json::to_vec(&forged_hold).unwrap(),
             );
             let forged = action(&forged_host, "pr_failure_handoff", &json!({
-                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": forged_fx.repo},
@@ -5568,7 +5569,7 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
             // Admission refused before reserving an attempt, so no
             // `review_gate_admit` output reaches the handoff.
             let mut input = json!({
-                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
                 "error_message": "review_awaiting_evidence: named external checks have not arrived for the held candidate",
                 "run_id": RERUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
@@ -5598,6 +5599,15 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
                 (TASK_ID.into(), "review-evidence-hold.json".into()),
                 serde_json::to_vec(&hold).unwrap(),
             );
+            host.set_status(TASK_ID, TaskStatus::InProgress);
+            input["error_code"] = json!("pipeline_step_failed");
+            let untyped = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(
+                untyped["decision"], "blocked_review_gate",
+                "ORB-15714: the handoff decides on the typed code, not on message text"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+
             host.set_status(TASK_ID, TaskStatus::InProgress);
             input["error_message"] = json!("review_gate_stale: completion rebased a reviewed head");
             let substantive = action(&host, "pr_failure_handoff", &input).unwrap();
