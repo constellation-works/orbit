@@ -1,8 +1,8 @@
 ---
 type: context
 summary: "Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests."
-last_updated: 2026-10-08
-last_validated: 2026-10-03
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 ---
 
 # Shipped workflow evidence
@@ -10,7 +10,7 @@ last_validated: 2026-10-03
 The process-boundary fixtures in `crates/orbit-cli/tests/process/` run update-root routing, stale-updater refusal, live-run cancellation and dashboard handover on Linux and macOS. `mcp_roundtrip::upgrade` also verifies drain handover and safe-point yielding across both hosts. Handover reads a live process's locked image registration rather than `/proc/<pid>/exe`; the updater race uses a nonblocking FIFO rendezvous available on both systems. The macOS workflow runs these suites. Linux `/proc` owner/namespace proofs and the Linux-only privileged host-preparation opt-out retain explicit gates, and Darwin libproc probes retain theirs.
 
 The shipped catalog is `DEFAULT_JOB_FILES` in
-[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 19 jobs;
+[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 21 jobs;
 `assets/jobs/examples/` is excluded. A catalog parse or a persisted row bearing
 one of these names does **not** prove that its shipped graph executed.
 
@@ -26,8 +26,12 @@ relative to `crates/orbit-engine/src/`.
 | Shipped job | Evidence level and named behavior | Owning test source |
 | --- | --- | --- |
 | `agent_invoke_pipeline` | Graph through MCP stdio: `a_remote_operator_session_invokes_an_agent_end_to_end` submits an invocation, polls terminal success and verifies the completed envelope plus persisted trusted-host admission. Provider executables return planted responses; the shipped graph is not replaced. Refusal: `a_remote_agent_session_cannot_invoke_an_agent`. Core admission refusals: `a_runs_own_runner_grant_cannot_admit_an_invocation`, `an_admitted_run_cannot_be_resumed`, `an_unauthorized_keyed_submission_claims_nothing`. | `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs`; Core `application/job/tests/agent_invoke.rs` |
+| `baseline_hold_refresh_pipeline` | Graph through the owner sweep runtime: `a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks` dispatches and executes the shipped refresh job outside the tick, records its verdict and lets other clock work continue. `a_checked_tip_is_judged_from_its_recorded_result_without_another_run` and `an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh` cover recorded results and bounded retry. | `crates/orbit-core/tests/runtime/baseline_hold_tick.rs` |
+| `blocked_task_recovery_pipeline` | Graph through the owner runtime: `recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw` runs the shipped recovery job for a settled follower failure, checks machine-bound failure evidence and crew selection, and verifies requeue. | `crates/orbit-core/tests/runtime/distributed_drain/recovery.rs` |
 | `ci_failure_sweep_pipeline` | Boundary: `ci_failure_fixture_goldens` drives `file_ci_failure_tasks` through `OrbitRuntime::run_deterministic` over captured log shapes, including rustfmt diffs ending in punctuation, symbols-only excerpts falling back to the step, and unusable signatures retaining exact-key deduplication without aborting unrelated filings. It reads the filed tasks back and reruns scenarios to verify persisted deduplication; `ci_failure_predating_a_landed_repair_is_held_not_refiled` holds a failure tested before a done repair of the same signature landed and files one tested after it. `ci_failure_claimed_branch_defers_attribution_until_the_claim_settles` keeps a follower-claimed task-branch failure out of the owner's bundle, files the landing failure in the same snapshot, and writes the observation when the claim is released. Collection's in-flight-descendant hold is covered by `orbit-engine`'s `executor::automation::ci::tests::pending`. Filing only; pilot admission and the shipped graph have no current test. | `crates/orbit-core/tests/ci_failure_goldens.rs` |
 | `dependabot_alert_sweep_pipeline` | Boundary: `sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields` files from a collected snapshot and checks that a credential never reaches output or task fields. Per-file grouping, unavailable families and the collector have no current test. | Core `adapter/engine_host/v2_host/dependabot/tests/filing.rs` |
+| `finding_verification_pipeline` | Graph through the job engine: `shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_error` applies the successful partition while retaining the failed partition's error; `shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop` verifies escalation, recording and empty-selection behavior. Verifier responses are fixture-controlled. | `crates/orbit-core/tests/runtime/finding_verification.rs` |
+| `review_evidence_fulfilment_pipeline` | Graph through the runtime: `a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review` runs the shipped fulfilment job with a stub CodeQL executable at the held commit and verifies accepted evidence and requeue. `an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason` covers refusal outcomes; real CodeQL is not run. | `crates/orbit-core/tests/runtime/review_evidence_fulfilment.rs` |
 | `store_gc_pipeline` | Graph through CLI: `audit_retention_plans_then_prunes_rows_and_unreferenced_blobs` runs the shipped job with `orbit job run --wait` after seeding the store, and verifies terminal success with both applied reports in its pipeline state. The same test proves the `gc audit` apply it wraps. | `crates/orbit-cli/tests/workspace/store_gc.rs` |
 | `task_auto_pipeline` | Boundary: `backlog_admission_orders_critical_then_corrective_then_priority_then_age`, `backlog_admission_waits_for_every_dependency_to_be_done` and `backlog_admission_excludes_work_locked_by_an_active_task` exercise the backlog selection every drain runs. Child dispatch, linking and the success guard have no current test. | `crates/orbit-core/tests/runtime/dispatch_admission.rs` |
 | `task_claimed_local_pipeline` | No graph, boundary or refusal evidence. | — |

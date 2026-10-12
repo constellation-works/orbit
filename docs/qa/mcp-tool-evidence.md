@@ -1,8 +1,8 @@
 ---
 type: context
 summary: "Behavioral evidence matrix for the advertised MCP tools and their verified limits."
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 ---
 
 # MCP behavioral evidence
@@ -80,7 +80,7 @@ refuses their canonical and advertised spellings before admission or mutation.
 They have no public compatibility aliases.
 
 `internal_drain::public_drain_calls_and_spoofed_initialize_are_refused_and_audited`
-uses production stdio and checks the 27-tool count, both retired spellings,
+uses production stdio and checks the 28-tool count, both retired spellings,
 operator and managed-agent discovery, spoofed client/initialize claims, denied
 custom RPC and durable refusal audit rows without changing task state.
 

@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Settings › Hosts, live identity probe, migration from mcp-destinations.toml"
-last_validated: 2026-10-07
+last_validated: 2026-10-12
 title: Spec — Host commands
 owner: opus
 status: Draft

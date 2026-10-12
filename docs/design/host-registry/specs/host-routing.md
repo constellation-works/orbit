@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: task ids route to the host their prefix names; --host names a host for workspace and pull selection"
-last_validated: 2026-10-07
+last_validated: 2026-10-12
 title: Spec — Host routing
 owner: opus
 status: Implemented
