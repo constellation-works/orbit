@@ -268,7 +268,7 @@ fn store_error(error: rusqlite::Error) -> OrbitError {
 }
 
 /// Add optional timing without inventing observations for historical steps.
+/// Idempotent: a rewound ledger replays this over a table that already has it.
 pub(super) fn apply_job_run_step_lock_wait(conn: &Connection) -> Result<(), OrbitError> {
-    conn.execute_batch("ALTER TABLE job_run_steps ADD COLUMN lock_wait_ms INTEGER")
-        .map_err(store_error)
+    add_column_if_missing(conn, "job_run_steps", "lock_wait_ms", "INTEGER")
 }
