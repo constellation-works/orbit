@@ -1,53 +1,36 @@
-//! Sweep-orchestration tests exercise the fire / idempotency /
-//! overlap / retry / outcome-sync logic in `routines/sweep.rs` that shipped
-//! untested in [ORB-10021].
-//!
-//! Two layers:
-//! - `run_sweep_core` against an in-memory store, a hand-built
-//!   [`RoutineCollection`], a fake [`RoutineDispatch`], and an explicit `now`
-//!   — deterministic, no pipeline workers spawned.
+//! Routine sweep dispatch through `run_sweep_core` against an in-memory store,
+//! a hand-built collection, a scriptable dispatch and an explicit `now`: the
+//! tick deadline and `overlap: forbid` with an interrupted source run
+//! [ORB-10597].
 
-use crate::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
-use crate::routines::sweep::RunOwnerLiveness;
-use crate::routines::sweep::{RoutineDispatch, SweepOptions, run_sweep_core};
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use orbit_automation::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
+use orbit_automation::routines::sweep::{
+    RoutineDispatch, RunOwnerLiveness, SweepOptions, run_sweep_core,
+};
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_store::{RoutineFireIntentParams, RoutineFireState, Store};
-
-use orbit_types::workflow::{JobRunState, RoutineDefinition};
+use orbit_store::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, Store};
+use orbit_types::workflow::JobRunState;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const SOURCE_DIR: &str = "/ws/.orbit";
 
-// ---- fixtures -------------------------------------------------------------
-
 /// Build a validated routine with the common knobs the tests vary.
-fn routine(
-    name: &str,
-    cron: &str,
-    enabled: bool,
-    overlap: &str,
-    retries_max: u32,
-) -> LoadedRoutine {
+fn routine(name: &str, overlap: &str) -> LoadedRoutine {
     let yaml = format!(
         "schemaVersion: 1\n\
          name: {name}\n\
-         enabled: {enabled}\n\
-         trigger:\n  cron: \"{cron}\"\n\
+         enabled: true\n\
+         trigger:\n  cron: \"* * * * *\"\n\
          target: job:noop\n\
          policy:\n  timeout_minutes: 10\n  overlap: {overlap}\n  \
-         retries: {{ max: {retries_max}, backoff_minutes: 1 }}\n"
+         retries: {{ max: 0, backoff_minutes: 1 }}\n"
     );
-    loaded(parse_routine_yaml(&yaml).expect("valid routine yaml"))
-}
-
-fn loaded(definition: RoutineDefinition) -> LoadedRoutine {
-    let name = definition.name.clone();
     LoadedRoutine {
-        definition,
+        definition: parse_routine_yaml(&yaml).expect("valid routine yaml"),
         origin: RoutineOrigin::Workspace,
         source_workspace: "polaris".to_string(),
         source_orbit_dir: PathBuf::from(SOURCE_DIR),
@@ -62,10 +45,6 @@ fn collection(routines: Vec<LoadedRoutine>) -> RoutineCollection {
     }
 }
 
-fn store() -> Store {
-    Store::open_in_memory().expect("in-memory store")
-}
-
 fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
         .single()
@@ -76,13 +55,11 @@ fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
 /// run ids, and answers `run_state` from a table the test primes.
 #[derive(Default)]
 struct FakeDispatch {
-    live_drain: RefCell<Option<String>>,
-    fail_submit: Cell<bool>,
     counter: Cell<u32>,
     submits: RefCell<Vec<(PathBuf, String)>>,
     states: RefCell<HashMap<String, JobRunState>>,
-    /// Owner liveness per run id [ORB-10597]. Absent means `Stopped` — the
-    /// historical assumption that a terminal run has finished working.
+    /// Owner liveness per run id. Absent means `Stopped`, the historical
+    /// assumption that a terminal run has finished working.
     liveness: RefCell<HashMap<String, RunOwnerLiveness>>,
 }
 
@@ -90,21 +67,11 @@ impl FakeDispatch {
     fn submit_count(&self) -> usize {
         self.submits.borrow().len()
     }
-
-    fn set_state(&self, run_id: &str, state: JobRunState) {
-        self.states.borrow_mut().insert(run_id.to_string(), state);
-    }
-
-    fn set_liveness(&self, run_id: &str, liveness: RunOwnerLiveness) {
-        self.liveness
-            .borrow_mut()
-            .insert(run_id.to_string(), liveness);
-    }
 }
 
 impl RoutineDispatch for FakeDispatch {
     fn live_workspace_drain(&self, _dir: &Path) -> Result<Option<String>, OrbitError> {
-        Ok(self.live_drain.borrow().clone())
+        Ok(None)
     }
 
     fn submit(
@@ -114,9 +81,6 @@ impl RoutineDispatch for FakeDispatch {
         _actor: &str,
         _slot: &str,
     ) -> Result<String, OrbitError> {
-        if self.fail_submit.get() {
-            return Err(OrbitError::Execution("dispatch boom".to_string()));
-        }
         let n = self.counter.get() + 1;
         self.counter.set(n);
         self.submits
@@ -138,12 +102,12 @@ impl RoutineDispatch for FakeDispatch {
     }
 }
 
-fn fires(store: &Store, name: &str) -> Vec<orbit_store::RoutineFireRecord> {
+fn fires(store: &Store, name: &str) -> Vec<RoutineFireRecord> {
     store.routine_recent_fires(name, 32).expect("recent fires")
 }
 
-/// Fault injection at dispatch: finish the in-flight fire, then leave the
-/// next workspace's cursor and history untouched for the next tick.
+/// A dispatch that overruns the tick deadline: finish the in-flight fire, then
+/// leave the next workspace's cursor and history untouched for the next tick.
 #[test]
 fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
     struct BlockingDispatch {
@@ -175,9 +139,9 @@ fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
             RunOwnerLiveness::Unknown
         }
     }
-    let store = store();
-    let first = routine("first", "* * * * *", true, "forbid", 0);
-    let mut next = routine("next", "* * * * *", true, "forbid", 0);
+    let store = Store::open_in_memory().expect("in-memory store");
+    let first = routine("first", "forbid");
+    let mut next = routine("next", "forbid");
     next.source_workspace = "following".into();
     next.source_orbit_dir = "/following/.orbit".into();
     let baseline = ts(2026, 1, 1, 0, 0, 0).to_rfc3339();
@@ -214,8 +178,6 @@ fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
-// ---- overlap: forbid + interrupted source run [ORB-10597] -----------------
-
 /// Seed an `overlap: forbid` routine with one dispatched fire whose run is
 /// marked `interrupted`, and return the store, dispatch, collection, and the
 /// seeded slot. `created_at` is real-clock now, so a `now_utc` in the fixture's
@@ -223,9 +185,9 @@ fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
 fn interrupted_forbid_fixture(
     liveness: RunOwnerLiveness,
 ) -> (Store, FakeDispatch, RoutineCollection, String) {
-    let store = store();
+    let store = Store::open_in_memory().expect("in-memory store");
     let dispatch = FakeDispatch::default();
-    let coll = collection(vec![routine("job", "* * * * *", true, "forbid", 0)]);
+    let coll = collection(vec![routine("job", "forbid")]);
 
     store
         .routine_record_baseline("job", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
@@ -245,8 +207,14 @@ fn interrupted_forbid_fixture(
 
     // Condemned to `interrupted`. Marking a run interrupted attaches no
     // teardown, so this says nothing about whether the worker stopped.
-    dispatch.set_state("condemned", JobRunState::Interrupted);
-    dispatch.set_liveness("condemned", liveness);
+    dispatch
+        .states
+        .borrow_mut()
+        .insert("condemned".into(), JobRunState::Interrupted);
+    dispatch
+        .liveness
+        .borrow_mut()
+        .insert("condemned".into(), liveness);
     (store, dispatch, coll, slot)
 }
 

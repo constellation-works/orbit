@@ -1,24 +1,78 @@
-use crate::routines::loader::{
-    LOCAL_ROUTINES_SUBDIR, ROUTINES_DIR, RoutineCatalogLookup, RoutineSource, collect_routines,
+//! Definition discovery never follows a symlink out of the Orbit directory:
+//! a linked definitions directory is refused and a linked definition file is
+//! ignored, for auto-tasks and routines alike.
+#![cfg(unix)]
+
+use orbit_automation::auto_tasks::loader::{auto_tasks_dir, collect_auto_tasks};
+use orbit_automation::routines::loader::{
+    LOCAL_ROUTINES_SUBDIR, ROUTINES_DIR, RoutineCatalogLookup, RoutineCollection, RoutineSource,
+    collect_routines,
 };
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use tempfile::tempdir;
 
-fn resolving_catalog(_orbit_dir: &Path, _job: &str) -> RoutineCatalogLookup {
-    RoutineCatalogLookup {
-        resolves: true,
-        error: None,
-    }
+fn write_valid_definition(definitions: &Path, name: &str) {
+    fs::write(
+        definitions.join(format!("{name}.yaml")),
+        format!(
+            r#"schemaVersion: 1
+name: {name}
+schedule:
+  every_minutes: 60
+template:
+  title: Fixture {name}
+"#
+        ),
+    )
+    .expect("definition fixture");
 }
 
-fn collect(orbit_dir: &Path) -> crate::routines::loader::RoutineCollection {
+#[test]
+fn rejects_auto_tasks_directory_symlink() {
+    let root = tempdir().expect("temporary Orbit root");
+    let outside = tempdir().expect("outside directory");
+    let outside_definitions = outside.path().join("auto_tasks");
+    fs::create_dir_all(&outside_definitions).expect("outside definitions directory");
+    write_valid_definition(&outside_definitions, "escaped");
+    symlink(&outside_definitions, auto_tasks_dir(root.path())).expect("directory symlink");
+
+    let collection = collect_auto_tasks(root.path());
+
+    assert!(collection.definitions.is_empty());
+    assert_eq!(collection.errors.len(), 1);
+    assert!(collection.errors[0].message.contains("directly under"));
+}
+
+#[test]
+fn ignores_symlinked_auto_task_definition_files() {
+    let root = tempdir().expect("temporary Orbit root");
+    let outside = tempdir().expect("outside directory");
+    let definitions = auto_tasks_dir(root.path());
+    fs::create_dir_all(&definitions).expect("auto-task definitions directory");
+    let outside_definition = outside.path().join("linked.yaml");
+    write_valid_definition(outside.path(), "linked");
+    symlink(&outside_definition, definitions.join("linked.yaml")).expect("definition symlink");
+    write_valid_definition(&definitions, "local");
+
+    let collection = collect_auto_tasks(root.path());
+
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "local");
+    assert!(collection.errors.is_empty());
+}
+
+fn collect(orbit_dir: &Path) -> RoutineCollection {
     collect_routines(
         &[RoutineSource {
             workspace: "polaris".to_string(),
             orbit_dir: orbit_dir.to_path_buf(),
         }],
-        &resolving_catalog,
+        &|_, _| RoutineCatalogLookup {
+            resolves: true,
+            error: None,
+        },
     )
 }
 
@@ -33,11 +87,8 @@ fn write_valid_routine(dir: &Path, name: &str) {
     .expect("routine fixture");
 }
 
-#[cfg(unix)]
 #[test]
 fn rejects_routines_directory_symlink() {
-    use std::os::unix::fs::symlink;
-
     let root = tempdir().expect("temporary Orbit root");
     let outside = tempdir().expect("outside directory");
     let outside_routines = outside.path().join(ROUTINES_DIR);
@@ -52,11 +103,8 @@ fn rejects_routines_directory_symlink() {
     assert!(collection.errors[0].message.contains("directly under"));
 }
 
-#[cfg(unix)]
 #[test]
 fn rejects_local_routines_directory_symlink() {
-    use std::os::unix::fs::symlink;
-
     let root = tempdir().expect("temporary Orbit root");
     let outside = tempdir().expect("outside directory");
     let routines = root.path().join(ROUTINES_DIR);
@@ -75,11 +123,8 @@ fn rejects_local_routines_directory_symlink() {
     assert!(collection.errors[0].message.contains("directly under"));
 }
 
-#[cfg(unix)]
 #[test]
-fn ignores_symlinked_definition_files() {
-    use std::os::unix::fs::symlink;
-
+fn ignores_symlinked_routine_definition_files() {
     let root = tempdir().expect("temporary Orbit root");
     let outside = tempdir().expect("outside directory");
     let routines = root.path().join(ROUTINES_DIR);

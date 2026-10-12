@@ -13,8 +13,6 @@ mod reconcile;
 pub mod recovery;
 pub mod reset;
 pub mod stall;
-#[cfg(test)]
-mod tests;
 mod waiver;
 
 pub(crate) use digest::json_definition_epoch;

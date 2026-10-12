@@ -11,8 +11,6 @@ pub mod incidents;
 mod observe;
 pub mod preparation;
 mod reconcile;
-#[cfg(test)]
-mod tests;
 
 pub use evaluate::evaluate;
 

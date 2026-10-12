@@ -41,12 +41,24 @@ use orbit_types::workflow::{
     MissedRunPolicy,
 };
 
+#[path = "scheduling/definition_symlinks.rs"]
+mod definition_symlinks;
+#[path = "scheduling/delivery.rs"]
+mod delivery;
+#[path = "scheduling/delivery_adopt.rs"]
+mod delivery_adopt;
+#[path = "scheduling/delivery_recovery.rs"]
+mod delivery_recovery;
 #[path = "scheduling/failed_members.rs"]
 mod failed_members;
+#[path = "scheduling/member_consumers.rs"]
+mod member_consumers;
 #[path = "scheduling/pending_mints.rs"]
 mod pending_mints;
 #[path = "scheduling/released_attempts.rs"]
 mod released_attempts;
+#[path = "scheduling/routine_sweep.rs"]
+mod routine_sweep;
 
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
@@ -371,6 +383,11 @@ fn interval_decisions_validate_ranges_and_preserve_the_anchor() {
             AutoTaskDueDecision::Fire {
                 slot: boundary.to_rfc3339()
             }
+        );
+        assert_eq!(
+            next_scheduled_slot(&schedule, Some(baseline), baseline).unwrap(),
+            Some(boundary),
+            "supported interval {minutes} still projects its next boundary"
         );
     }
     assert!(
