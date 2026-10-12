@@ -42,7 +42,7 @@ pub struct RemoteProxyArgs {
 /// Relay this process's MCP stdio directly through one non-PTY SSH child.
 pub fn serve_mcp_remote_proxy(args: RemoteProxyArgs) -> Result<(), OrbitError> {
     let caller_machine_id = local_caller_machine_id();
-    let mut command = ssh_command(&args, &caller_machine_id);
+    let mut command = ssh_command(&args, &caller_machine_id)?;
 
     tracing::info!(
         ssh_host = %args.ssh_host,
@@ -75,12 +75,9 @@ pub fn serve_mcp_remote_proxy(args: RemoteProxyArgs) -> Result<(), OrbitError> {
 /// `-T` is load-bearing: allocating a PTY can echo input and transform line or
 /// control bytes, corrupting the MCP JSON-RPC stream. Explicit inherited stdio
 /// keeps this process out of the protocol entirely.
-pub(super) fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Command {
-    let mut command = Command::new("ssh");
+fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Result<Command, OrbitError> {
+    let mut command = super::ssh_command(&args.ssh_host)?;
     command
-        .arg("-T")
-        .arg("--")
-        .arg(&args.ssh_host)
         .arg(remote_serve_command(
             caller_machine_id,
             args.orchestrator.as_deref(),
@@ -89,7 +86,7 @@ pub(super) fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Co
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    command
+    Ok(command)
 }
 
 /// Remote command whose hidden argument marks an SSH-originated MCP session.

@@ -1,6 +1,6 @@
 //! Short-lived SSH destination probes and routed MCP sessions.
 
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
@@ -269,10 +269,7 @@ fn spawn_destination_session(
     if worker_host {
         remote.push_str(" --worker-host");
     }
-    Command::new("ssh")
-        .arg("-T")
-        .arg("--")
-        .arg(ssh)
+    crate::remote::ssh_command(ssh)?
         .arg(remote)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
