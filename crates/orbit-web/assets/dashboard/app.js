@@ -1577,9 +1577,10 @@ function fetchAndRenderRunRetries() {
     renderRunGantt();
   }).catch((error) => {
     if (!runDetailFetchCurrent("retries", token)) return;
-    setActiveRunRetriesError(error.message);
+    if (error.status === 404) setActiveRunRetries([]);
+    else setActiveRunRetriesError(error.message);
     renderRunGantt();
-    throw error;
+    if (error.status !== 404) throw error;
   });
 }
 
