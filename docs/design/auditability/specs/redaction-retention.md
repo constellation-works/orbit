@@ -57,6 +57,11 @@ Run pipeline state:
 - Lives in `job_run_states`, beside the `job_runs` row.
 - Is dropped by `orbit gc runs --apply` for success, failed, timeout, cancelled and interrupted runs older than `retention.runs_days`, which also stamps `job_runs.archived_at`. Run rows, steps and summaries stay; held and non-terminal runs are never selected.
 
+Per-minute resource history:
+
+- Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
+- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, a fixed window independent of `retention.runs_days`.
+
 Invocation metrics:
 
 - Live in SQLite as usage records.

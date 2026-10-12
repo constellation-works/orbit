@@ -277,6 +277,14 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0043".to_string(),
                 "v2_audit_event_type_ts_index".to_string()
             ),
+            (
+                "migration.v0044".to_string(),
+                "run_resource_minutes".to_string()
+            ),
+            (
+                "migration.v0045".to_string(),
+                "host_resource_minutes".to_string()
+            ),
         ]
     );
 }
@@ -826,4 +834,46 @@ fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
     assert_eq!(workspace_of("jrun-only-a").as_deref(), Some("ws_a"));
     assert_eq!(workspace_of("jrun-shared"), None);
     assert_eq!(workspace_of("jrun-gone"), None);
+}
+
+/// The two resource-minute tables are additive: a binary without them keeps
+/// opening the migrated database read-write, and upgrade admission sees no
+/// new writer or reader floor, so they force no generation switch while old
+/// drains still run.
+#[test]
+fn resource_minute_tables_keep_an_older_binary_writing() {
+    let position = |name: &str| {
+        ledger::MIGRATIONS
+            .iter()
+            .position(|migration| migration.name == name)
+            .expect("registered migration")
+    };
+    let first = position("run_resource_minutes");
+    let last = position("host_resource_minutes");
+    let newer = &ledger::MIGRATIONS[..=last];
+    let older = &ledger::MIGRATIONS[..first];
+
+    let conn = Connection::open_in_memory().expect("open in-memory connection");
+    assert!(
+        ledger::run_migrations(&conn, newer)
+            .expect("migrate")
+            .is_none()
+    );
+    for table in ["run_resource_minutes", "host_resource_minutes"] {
+        assert!(table_exists(&conn, table).expect("introspect"), "{table}");
+    }
+    let open = ledger::run_migrations(&conn, older)
+        .expect("an older binary opens the database")
+        .expect("the database is newer than that binary");
+    assert!(open.writable, "{open}");
+
+    let floors = |registry: &[Migration]| {
+        let compatibility = orbit_common::fs::generation::LedgerCompatibility::from_registry(
+            registry
+                .iter()
+                .map(|m| (m.version, m.compat.is_write_safe(), !m.compat.is_breaking())),
+        );
+        (compatibility.writer_floor, compatibility.reader_floor)
+    };
+    assert_eq!(floors(newer), floors(older));
 }

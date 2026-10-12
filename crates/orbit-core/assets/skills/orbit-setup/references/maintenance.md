@@ -346,7 +346,10 @@ prunes the host-wide command audit and this workspace's run audit, then removes
 blobs that no remaining audit row, run step or pipeline state names. A blob
 written in the last 24 hours, or one a write in progress has marked as pending,
 is always kept. `gc runs` never touches a held run or one still in flight, so
-`orbit run show`, run history and the scoreboard keep working.
+`orbit run show`, run history and the scoreboard keep working. The same pass
+prunes the host's per-minute run and host resource history
+(`run_resource_minutes`, `host_resource_minutes`) older than 30 days, whatever
+the run window.
 
 Deletes run in batches of 1,000 rows, each its own short write transaction, so
 running workers are not starved. Freed pages stay inside the database file; each

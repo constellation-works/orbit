@@ -17,6 +17,7 @@ mod learning;
 mod ledger;
 mod operation_mode;
 mod plugins;
+mod resource_minutes;
 mod routine;
 mod task_commit_journal;
 mod task_reservations;
@@ -53,6 +54,7 @@ use plugins::{
     apply_plugin_archive_digest, apply_plugin_build_record, apply_plugin_certified_orbit_version,
     apply_plugins_and_audit_plugin_provenance,
 };
+use resource_minutes::{apply_host_resource_minutes, apply_run_resource_minutes};
 use routine::apply_routine_scheduler_schema;
 use task_commit_journal::apply_task_commit_journal;
 use task_reservations::apply_workspace_claim_scope;
