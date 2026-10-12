@@ -5,7 +5,7 @@ use orbit_common::protocol::tool_input::{
 };
 use orbit_types::task::{
     TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, backlog_footprint_warning,
-    is_task_show_projection_field, unknown_task_show_field_message,
+    is_task_show_projection_field, task_base_json, unknown_task_show_field_message,
     validate_relative_artifact_path,
 };
 use serde_json::{Value, json};
@@ -22,7 +22,7 @@ use super::input::{
 };
 use super::json::{
     serialize_error, serialize_task, serialize_task_artifact_read, serialize_task_lint_report,
-    serialize_task_write_response, task_fields_to_json, task_to_json,
+    serialize_task_write_response, task_fields_to_json,
 };
 
 /// The persisted identity travels beside the caller's response projection so
@@ -245,7 +245,7 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         .items
         .into_iter()
         .map(|row| match &fields {
-            None => Ok(task_to_json(&row.task, &status_by_id)),
+            None => Ok(Value::Object(task_base_json(&row.task, &status_by_id))),
             Some(fields) => project_listed_task(runtime, &row.task, fields),
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;

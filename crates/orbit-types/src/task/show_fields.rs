@@ -9,9 +9,14 @@
 //! `crew_unresolved`) still need a runtime fetch; the remaining fields are
 //! projected from the record itself.
 
-use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
-use crate::task::{Task, TaskOsRequirement, TaskStatus, task_readiness_json};
+use serde_json::{Map, Value, json};
+
+use crate::task::{
+    ArtifactManifestFileV2, Task, TaskOsRequirement, TaskStatus, resolve_task_dependencies,
+    resolve_task_relations, task_readiness_json,
+};
 
 /// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
 /// clap help and other const contexts.
@@ -64,11 +69,12 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "artifacts",
 ];
 
-/// Stable top-level keys in the unprojected public task DTO.
+/// Stable top-level keys of the base task JSON, in output order.
 ///
-/// A projector-vs-DTO drift test compares this policy with the actual DTO.
-/// Sidecars are deliberately absent because they are attached after the base
-/// DTO is serialized, but remain projectable through the vocabulary above.
+/// [`task_base_json`] emits exactly these keys, plus the conditional
+/// `os_requirement` and `readiness` enrichments. Sidecars are deliberately
+/// absent because each surface attaches them after the base is built, but
+/// remain projectable through the vocabulary above.
 pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "id",
     "parent_id",
@@ -96,6 +102,7 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "job_run_id",
     "job_run_machine",
     "crew",
+    "crew_source",
     "orchestrator",
     "created_at",
     "updated_at",
@@ -160,8 +167,8 @@ pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
 
 /// JSON for a Task-local (non-sidecar) projection field.
 ///
-/// Returns `None` for sidecar names, cross-task fields (`dependencies`,
-/// `resolved_dependencies`, `relations`), the crew enrichments a host resolves
+/// Returns `None` for sidecar names, cross-task fields
+/// (`resolved_dependencies`, `relations`), the crew enrichments a host resolves
 /// (`resolved_crew`, `crew_model`, `crew_unresolved`), and unknown names, so
 /// callers can keep those on their existing fetch paths.
 pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
@@ -171,6 +178,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "title" => Some(json!(task.title)),
         "description" => Some(json!(task.description)),
         "acceptance_criteria" => Some(json!(task.acceptance_criteria)),
+        "dependencies" => Some(json!(task.dependencies())),
         "tags" => Some(json!(task.tags)),
         "required_tools" => Some(json!(task.required_tools)),
         "plan" => Some(json!(task.plan)),
@@ -197,4 +205,87 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "updated_at" => Some(json!(task.updated_at.to_rfc3339())),
         _ => None,
     }
+}
+
+/// JSON for a projection field whose canonical form depends on other tasks:
+/// `resolved_dependencies` and `relations`, resolved against `status_by_id`.
+/// `None` for every other name.
+pub fn task_show_reference_field_json(
+    task: &Task,
+    field: &str,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Option<Value> {
+    match field {
+        "resolved_dependencies" => Some(json!(task_dependency_labels(task, status_by_id))),
+        "relations" => Some(json!(resolve_task_relations(task, status_by_id))),
+        _ => None,
+    }
+}
+
+/// The `resolved_dependencies` labels: each dependency with the status
+/// `status_by_id` gives it.
+pub fn task_dependency_labels(
+    task: &Task,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Vec<String> {
+    resolve_task_dependencies(task, status_by_id)
+        .into_iter()
+        .map(|dependency| dependency.label())
+        .collect()
+}
+
+/// The base task JSON every read surface shares: CLI `--json`, the tool host
+/// (`orbit.task.show`, `orbit.task.list`, write responses) and the dashboard.
+///
+/// It carries [`TASK_SHOW_PUBLIC_DTO_FIELDS`] in that order, each with the
+/// value its `--fields` projection answers, then `os_requirement` and
+/// `readiness` when the task has them. A surface adds its own sidecars and
+/// extras to the returned object and never re-lists a base key.
+pub fn task_base_json(
+    task: &Task,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Map<String, Value> {
+    let mut object = Map::new();
+    for &field in TASK_SHOW_PUBLIC_DTO_FIELDS {
+        let value = match field {
+            // Stored crew provenance; part of the record but not yet a
+            // `--fields` selector.
+            "crew_source" => json!(task.crew_source),
+            _ => task_show_record_field_json(task, field)
+                .or_else(|| task_show_reference_field_json(task, field, status_by_id))
+                .unwrap_or(Value::Null),
+        };
+        object.insert(field.to_string(), value);
+    }
+    if let Some(requirement) = task_os_requirement_json(task) {
+        object.insert("os_requirement".to_string(), requirement);
+    }
+    if let Some(readiness) = task_readiness_json(task) {
+        object.insert("readiness".to_string(), readiness);
+    }
+    object
+}
+
+/// The full-record `artifacts` manifest: every stored artifact's path, media
+/// type, size, digest and provenance, without content.
+///
+/// This is the shape `orbit task show --json`, `orbit.task.show` and the
+/// dashboard detail carry; the bounded `artifacts` field projection uses
+/// [`crate::task::serialize_task_artifacts`] instead.
+pub fn task_artifact_manifest_json(files: &[ArtifactManifestFileV2]) -> Value {
+    Value::Array(
+        files
+            .iter()
+            .map(|file| {
+                json!({
+                    "path": file.path,
+                    "media_type": file.media_type,
+                    "size_bytes": file.size_bytes,
+                    "sha256": file.sha256,
+                    "created_by": file.created_by,
+                    "created_at": file.created_at.to_rfc3339(),
+                })
+            })
+            .collect(),
+    )
 }

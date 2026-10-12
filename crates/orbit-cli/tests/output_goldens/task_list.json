@@ -24,11 +24,23 @@
     "relations": [],
     "source_task_id": null,
     "job_run_id": null,
+    "job_run_machine": null,
     "crew": null,
     "crew_source": null,
     "orchestrator": null,
     "created_at": "<TIMESTAMP>",
-    "updated_at": "<TIMESTAMP>"
+    "updated_at": "<TIMESTAMP>",
+    "readiness": {
+      "ready": false,
+      "gaps": [
+        {
+          "code": "missing_context_files",
+          "severity": "blocking",
+          "message": "No context files are declared, so a drain will not auto-approve it.",
+          "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
+        }
+      ]
+    }
   },
   {
     "id": "ORB-00001",
@@ -55,11 +67,23 @@
     "relations": [],
     "source_task_id": null,
     "job_run_id": null,
+    "job_run_machine": null,
     "crew": null,
     "crew_source": null,
     "orchestrator": null,
     "created_at": "<TIMESTAMP>",
-    "updated_at": "<TIMESTAMP>"
+    "updated_at": "<TIMESTAMP>",
+    "readiness": {
+      "ready": false,
+      "gaps": [
+        {
+          "code": "missing_context_files",
+          "severity": "blocking",
+          "message": "No context files are declared, so a drain will not auto-approve it.",
+          "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
+        }
+      ]
+    }
   },
   {
     "id": "ORB-00000",
@@ -86,10 +110,22 @@
     "relations": [],
     "source_task_id": null,
     "job_run_id": null,
+    "job_run_machine": null,
     "crew": null,
     "crew_source": null,
     "orchestrator": null,
     "created_at": "<TIMESTAMP>",
-    "updated_at": "<TIMESTAMP>"
+    "updated_at": "<TIMESTAMP>",
+    "readiness": {
+      "ready": false,
+      "gaps": [
+        {
+          "code": "missing_context_files",
+          "severity": "blocking",
+          "message": "No context files are declared, so a drain will not auto-approve it.",
+          "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
+        }
+      ]
+    }
   }
 ]

@@ -3,11 +3,12 @@ use orbit_core::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, OrbitError, OrbitRuntime, TaskPriority, TaskStatus,
     TaskType,
 };
+use orbit_types::task::task_base_json;
 use serde_json::Value;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::output::{TaskTableFilters, task_table, task_to_json, task_to_signal_json};
+use super::output::{TaskTableFilters, task_table, task_to_signal_json};
 
 /// List tasks with optional filters.
 ///
@@ -145,7 +146,7 @@ impl Execute for TaskListArgs {
         } else {
             tasks
                 .iter()
-                .map(|task| task_to_json(task, &status_by_id))
+                .map(|task| Value::Object(task_base_json(task, &status_by_id)))
                 .collect()
         };
 

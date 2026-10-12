@@ -236,6 +236,25 @@ pub enum TaskCrewRead {
     Unresolved { reason: String },
 }
 
+impl TaskCrewRead {
+    /// Add this read to a task projection. `crew` (the stored value) is part
+    /// of the record; `resolved_crew` / `crew_model` only annotate it when the
+    /// crew resolved, and `crew_unresolved` carries the reason when it did not,
+    /// so an unresolvable crew never fails the readout (ORB-10968).
+    pub fn insert_into(self, object: &mut serde_json::Map<String, Value>) {
+        match self {
+            Self::Absent => {}
+            Self::Resolved(projection) => {
+                object.insert("resolved_crew".to_string(), Value::String(projection.name));
+                object.insert("crew_model".to_string(), Value::String(projection.model));
+            }
+            Self::Unresolved { reason } => {
+                object.insert("crew_unresolved".to_string(), Value::String(reason));
+            }
+        }
+    }
+}
+
 impl OrbitRuntime {
     /// Project the selected runtime's effective crew configuration for clients.
     ///

@@ -4,55 +4,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
-    TaskHistoryEntry, TaskStatus, artifact_presentation, is_valid_orb_task_id,
-    resolve_task_dependencies, resolve_task_relations, serialize_task_artifacts,
-    task_os_requirement_json, task_readiness_json, task_show_record_field_json,
-    unknown_task_show_field_message,
+    ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskStatus,
+    artifact_presentation, is_valid_orb_task_id, task_base_json,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
-use crate::TaskCrewRead;
-use crate::application::task::TaskLintReport;
-
-pub(super) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStatus>) -> Value {
-    json!({
-        "id": task.id,
-        "parent_id": task.parent_id(),
-        "title": task.title,
-        "description": task.description,
-        "acceptance_criteria": task.acceptance_criteria,
-        "dependencies": task.dependencies(),
-        "resolved_dependencies": resolve_task_dependencies(task, status_by_id)
-            .into_iter()
-            .map(|dependency| dependency.label())
-            .collect::<Vec<_>>(),
-        "tags": task.tags,
-        "required_tools": task.required_tools,
-        "plan": task.plan,
-        "execution_summary": task.execution_summary,
-        "context_files": task.context_files,
-        "created_by": task.created_by,
-        "planned_by": task.planned_by,
-        "implemented_by": task.implemented_by,
-        "status": task.status.to_string(),
-        "priority": task.priority.to_string(),
-        "complexity": task.complexity.map(|value| value.to_string()),
-        "type": task.task_type.to_string(),
-        "pr_status": task.pr_status,
-        "external_refs": task.external_refs,
-        "relations": resolve_task_relations(task, status_by_id),
-        "source_task_id": task.source_task_id(),
-        "job_run_id": task.job_run_id,
-        "job_run_machine": task.job_run_machine,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "orchestrator": task.orchestrator,
-        "created_at": task.created_at.to_rfc3339(),
-        "updated_at": task.updated_at.to_rfc3339(),
-    })
-}
+use crate::application::task::{TaskLintReport, task_record_json, task_show_field_json};
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
     serialize_task_record(runtime, task, true)
@@ -60,11 +18,11 @@ pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Valu
 
 /// Serialize a task returned by a mutating tool.
 ///
-/// Write responses carry the task record by default. Append-heavy sidecars are
-/// included only when the caller explicitly projects them with `fields` or
-/// `field`, keeping a write from hydrating comments and history it does not
-/// need. The full `orbit.task.show` path remains available through
-/// [`serialize_task`].
+/// Write responses carry the base task record and its crew enrichment by
+/// default. The sidecars (`comments`, `history`, `artifacts`) are included only
+/// when the caller explicitly projects them with `fields` or `field`, keeping a
+/// write from hydrating records it does not need; the `review` gate stays on
+/// the full `orbit.task.show` record, available through [`serialize_task`].
 pub(super) fn serialize_task_write_response(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -82,36 +40,19 @@ fn serialize_task_record(
     include_sidecars: bool,
 ) -> Result<Value, OrbitError> {
     let status_by_id = task_reference_status_index(runtime, task)?;
-    let mut value = task_to_json(task, &status_by_id);
-    let object = value.as_object_mut().ok_or_else(|| {
-        OrbitError::Execution("task JSON projection did not produce an object".to_string())
-    })?;
     if include_sidecars {
-        object.insert(
-            "comments".to_string(),
-            serialize_comments(&runtime.get_task_comments(&task.id)?)?,
-        );
-        object.insert(
-            "history".to_string(),
-            serialize_history(&runtime.get_task_history(&task.id)?)?,
-        );
+        let row = runtime.task_row_with_sidecars(task.clone())?;
+        return task_record_json(runtime, &row, &status_by_id).map(Value::Object);
     }
-    insert_resolved_crew(runtime, task, object);
-    if let Some(requirement) = task_os_requirement_json(task) {
-        object.insert("os_requirement".to_string(), requirement);
-    }
-    // What a proposed or backlog task lacks before automation approves or
-    // admits it, so whoever just filed or edited it sees the gaps at once.
-    if let Some(readiness) = task_readiness_json(task) {
-        object.insert("readiness".to_string(), readiness);
-    }
-    Ok(value)
+    let mut object = task_base_json(task, &status_by_id);
+    runtime.task_crew_read(task).insert_into(&mut object);
+    Ok(Value::Object(object))
 }
 
 /// Resolve only the referenced task IDs needed by one task projection.
 ///
 /// The list surface already owns a bounded status page and passes its index to
-/// [`task_to_json`]. Individual task reads use the same registry projection,
+/// [`task_base_json`]. Individual task reads use the same registry projection,
 /// bounded to the handful of dependency and relation targets, so they resolve
 /// cross-workspace references without hydrating their bundles.
 ///
@@ -139,28 +80,6 @@ fn task_reference_status_index(
     Ok(status_by_id)
 }
 
-/// Enrich a task projection with its resolved crew, when this host can resolve
-/// one.
-///
-/// `crew` (the stored value) is part of the record; `resolved_crew` /
-/// `crew_model` only annotate it. A host whose `[crews.*]` table has no entry
-/// for the stored crew — a task authored elsewhere, or a config edited since —
-/// still owes the caller the task, so an unresolvable crew is reported as
-/// `crew_unresolved` rather than failing the whole readout (ORB-10968). The
-/// tolerance lives in `OrbitRuntime::task_crew_read`, shared with the CLI.
-fn insert_resolved_crew(runtime: &OrbitRuntime, task: &Task, object: &mut Map<String, Value>) {
-    match runtime.task_crew_read(task) {
-        TaskCrewRead::Absent => {}
-        TaskCrewRead::Resolved(projection) => {
-            object.insert("resolved_crew".to_string(), Value::String(projection.name));
-            object.insert("crew_model".to_string(), Value::String(projection.model));
-        }
-        TaskCrewRead::Unresolved { reason } => {
-            object.insert("crew_unresolved".to_string(), Value::String(reason));
-        }
-    }
-}
-
 pub(super) fn serialize_task_lint_report(report: &TaskLintReport) -> Result<Value, OrbitError> {
     serde_json::to_value(report).map_err(serialize_error("serialize task lint report"))
 }
@@ -180,79 +99,17 @@ pub(super) fn task_fields_to_json(
     };
 
     if fields.len() == 1 {
-        return task_field_to_json(runtime, task, &fields[0], status_by_id.as_ref());
+        return task_show_field_json(runtime, task, &fields[0], status_by_id.as_ref());
     }
 
     let mut object = Map::new();
     for field in fields {
         object.insert(
             field.clone(),
-            task_field_to_json(runtime, task, field, status_by_id.as_ref())?,
+            task_show_field_json(runtime, task, field, status_by_id.as_ref())?,
         );
     }
     Ok(Value::Object(object))
-}
-
-fn task_field_to_json(
-    runtime: &OrbitRuntime,
-    task: &Task,
-    field: &str,
-    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-) -> Result<Value, OrbitError> {
-    match field {
-        "comments" => serialize_comments(&runtime.get_task_comments(&task.id)?),
-        "plan" => Ok(Value::String(task.plan.clone())),
-        "execution_summary" => Ok(Value::String(task.execution_summary.clone())),
-        "description" => Ok(Value::String(task.description.clone())),
-        "acceptance_criteria" => serde_json::to_value(&task.acceptance_criteria)
-            .map_err(serialize_error("serialize acceptance criteria")),
-        "dependencies" => serde_json::to_value(task.dependencies())
-            .map_err(serialize_error("serialize dependencies")),
-        "tags" => serde_json::to_value(&task.tags).map_err(serialize_error("serialize tags")),
-        "required_tools" => serde_json::to_value(&task.required_tools)
-            .map_err(serialize_error("serialize required tools")),
-        "resolved_dependencies" => serde_json::to_value(
-            resolve_task_dependencies(
-                task,
-                status_by_id.ok_or_else(|| {
-                    OrbitError::Execution(
-                        "missing dependency status index for resolved_dependencies".to_string(),
-                    )
-                })?,
-            )
-            .into_iter()
-            .map(|dependency| dependency.label())
-            .collect::<Vec<_>>(),
-        )
-        .map_err(serialize_error("serialize resolved dependencies")),
-        "relations" => serde_json::to_value(resolve_task_relations(
-            task,
-            status_by_id.ok_or_else(|| {
-                OrbitError::Execution("missing task status index for relations".to_string())
-            })?,
-        ))
-        .map_err(serialize_error("serialize relations")),
-        "history" => serialize_history(&runtime.get_task_history(&task.id)?),
-        "context_files" => serde_json::to_value(&task.context_files)
-            .map_err(serialize_error("serialize context files")),
-        "crew" => serde_json::to_value(&task.crew).map_err(serialize_error("serialize crew")),
-        "orchestrator" => serde_json::to_value(&task.orchestrator)
-            .map_err(serialize_error("serialize orchestrator")),
-        "artifacts" => Ok(serialize_task_artifacts(
-            &runtime.get_task_artifact_manifest(&task.id)?,
-        )),
-        other => task_show_record_field_json(task, other)
-            .or_else(|| runtime.task_crew_field_json(task, other))
-            .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
-    }
-}
-
-fn serialize_comments(comments: &[TaskComment]) -> Result<Value, OrbitError> {
-    serde_json::to_value(comments).map_err(serialize_error("serialize comments"))
-}
-
-fn serialize_history(history: &[TaskHistoryEntry]) -> Result<Value, OrbitError> {
-    serde_json::to_value(history).map_err(serialize_error("serialize history"))
 }
 
 pub(super) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {

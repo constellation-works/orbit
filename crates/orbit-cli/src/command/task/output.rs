@@ -2,13 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::{
-    OrbitError, OrbitRuntime, TaskCrewRead, TaskStatus, resolve_task_dependencies,
-    resolve_task_relations,
-};
+use orbit_core::application::task::{task_record_json, task_show_field_json};
+use orbit_core::{OrbitError, OrbitRuntime, TaskStatus, resolve_task_relations};
 use orbit_types::task::{
-    ArtifactManifestFileV2, TaskComment, TaskHistoryEntry, serialize_task_artifacts,
-    task_show_record_field_json, unknown_task_show_field_message,
+    TaskComment, TaskHistoryEntry, task_dependency_labels, task_show_record_field_json,
+    unknown_task_show_field_message,
 };
 use serde_json::{Value, json};
 
@@ -49,43 +47,6 @@ pub(crate) fn task_to_signal_json(task: &orbit_core::Task) -> Value {
     })
 }
 
-pub(crate) fn task_to_json(
-    task: &orbit_core::Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Value {
-    json!({
-        "id": task.id,
-        "parent_id": task.parent_id(),
-        "title": task.title,
-        "description": task.description,
-        "acceptance_criteria": task.acceptance_criteria,
-        "dependencies": task.dependencies(),
-        "resolved_dependencies": dependency_labels(task, status_by_id),
-        "tags": task.tags,
-        "required_tools": task.required_tools,
-        "plan": task.plan,
-        "execution_summary": task.execution_summary,
-        "context_files": task.context_files,
-        "created_by": task.created_by,
-        "planned_by": task.planned_by,
-        "implemented_by": task.implemented_by,
-        "status": task.status.to_string(),
-        "priority": task.priority.to_string(),
-        "complexity": task.complexity.map(|value| value.to_string()),
-        "type": task.task_type.to_string(),
-        "pr_status": task.pr_status,
-        "external_refs": task.external_refs,
-        "relations": resolve_task_relations(task, status_by_id),
-        "source_task_id": task.source_task_id(),
-        "job_run_id": task.job_run_id,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "orchestrator": task.orchestrator,
-        "created_at": task.created_at.to_rfc3339(),
-        "updated_at": task.updated_at.to_rfc3339(),
-    })
-}
-
 pub(crate) fn task_to_json_for_runtime(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
@@ -105,67 +66,21 @@ pub(crate) fn task_to_json_with_sidecars(
     task: &orbit_core::Task,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<TaskJsonWithSidecars, OrbitError> {
-    let mut value = task_to_json(task, status_by_id);
-    let object = value.as_object_mut().ok_or_else(|| {
-        OrbitError::Execution("task JSON projection did not produce an object".to_string())
-    })?;
-    let comments = runtime.get_task_comments(&task.id)?;
-    let history = runtime.get_task_history(&task.id)?;
-    object.insert(
-        "comments".to_string(),
-        serde_json::to_value(&comments).map_err(|e| OrbitError::Io(e.to_string()))?,
-    );
-    object.insert(
-        "history".to_string(),
-        serde_json::to_value(&history).map_err(|e| OrbitError::Io(e.to_string()))?,
-    );
-    if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
-        object.insert("os_requirement".to_string(), requirement);
-    }
-    if let Some(readiness) = orbit_types::task::task_readiness_json(task) {
-        object.insert("readiness".to_string(), readiness);
-    }
-    let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
-    object.insert(
-        "artifacts".to_string(),
-        task_artifact_manifest_to_json(&artifacts),
-    );
-    // [ORB-11333] The settled before-PR review gate, when one exists, is
-    // durable evidence and travels with the record like the artifacts.
-    if let Some(review) =
-        orbit_core::application::review::task_review_projection(runtime, task, &artifacts)?
-    {
-        object.insert("review".to_string(), review);
-    }
-    // `resolved_crew` enriches the record; it does not define it. A task may
-    // name a crew this workspace has no `[crews.*]` entry for — a config gap,
-    // not a corrupt task — and the fields are simply absent then.
-    //
-    // This used to propagate, which was invisible while only `--json` built
-    // this projection. Since ORB-10586 every mode does (the payload is the
-    // same records in both), so propagating would mean `orbit task show`
-    // refusing to display a task whose crew is undefined here. ORB-10968 moved
-    // the rule itself into `OrbitRuntime::task_crew_read` so the tool host and
-    // MCP read the same contract; the reason still goes to stderr here rather
-    // than being swallowed.
-    match runtime.task_crew_read(task) {
-        TaskCrewRead::Resolved(projection) => {
-            object.insert("resolved_crew".to_string(), Value::String(projection.name));
-            object.insert("crew_model".to_string(), Value::String(projection.model));
-        }
-        TaskCrewRead::Absent => {}
-        TaskCrewRead::Unresolved { reason } => {
-            object.insert("crew_unresolved".to_string(), Value::String(reason.clone()));
-            eprintln!(
-                "warning: crew for task {} could not be resolved: {reason}",
-                task.id
-            );
-        }
+    let row = runtime.task_row_with_sidecars(task.clone())?;
+    let doc = task_record_json(runtime, &row, status_by_id)?;
+    // A crew this host cannot resolve is a configuration gap, not a corrupt
+    // task, so the record still renders (ORB-10968); the reason also goes to
+    // stderr rather than being swallowed.
+    if let Some(reason) = doc.get("crew_unresolved").and_then(Value::as_str) {
+        eprintln!(
+            "warning: crew for task {} could not be resolved: {reason}",
+            task.id
+        );
     }
     Ok(TaskJsonWithSidecars {
-        doc: value,
-        comments,
-        history,
+        doc: Value::Object(doc),
+        comments: row.comments,
+        history: row.history,
     })
 }
 
@@ -303,61 +218,6 @@ fn json_str_list(value: &Value) -> String {
         .unwrap_or_default()
 }
 
-pub(super) fn task_field_to_json(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-    field: &str,
-    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-) -> Result<Value, OrbitError> {
-    match field {
-        "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
-            .map_err(|e| OrbitError::Io(e.to_string())),
-        "plan" => Ok(Value::String(task.plan.clone())),
-        "execution_summary" => Ok(Value::String(task.execution_summary.clone())),
-        "description" => Ok(Value::String(task.description.clone())),
-        "acceptance_criteria" => serde_json::to_value(&task.acceptance_criteria)
-            .map_err(|e| OrbitError::Io(e.to_string())),
-        "dependencies" => {
-            serde_json::to_value(task.dependencies()).map_err(|e| OrbitError::Io(e.to_string()))
-        }
-        "tags" => serde_json::to_value(&task.tags).map_err(|e| OrbitError::Io(e.to_string())),
-        "required_tools" => {
-            serde_json::to_value(&task.required_tools).map_err(|e| OrbitError::Io(e.to_string()))
-        }
-        "resolved_dependencies" => serde_json::to_value(dependency_labels(
-            task,
-            status_by_id.ok_or_else(|| {
-                OrbitError::Execution(
-                    "missing dependency status index for resolved_dependencies".to_string(),
-                )
-            })?,
-        ))
-        .map_err(|e| OrbitError::Io(e.to_string())),
-        "relations" => serde_json::to_value(resolve_task_relations(
-            task,
-            status_by_id.ok_or_else(|| {
-                OrbitError::Execution("missing task status index for relations".to_string())
-            })?,
-        ))
-        .map_err(|e| OrbitError::Io(e.to_string())),
-        "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)
-            .map_err(|e| OrbitError::Io(e.to_string())),
-        "context_files" => {
-            serde_json::to_value(&task.context_files).map_err(|e| OrbitError::Io(e.to_string()))
-        }
-        "crew" => serde_json::to_value(&task.crew).map_err(|e| OrbitError::Io(e.to_string())),
-        "orchestrator" => {
-            serde_json::to_value(&task.orchestrator).map_err(|e| OrbitError::Io(e.to_string()))
-        }
-        "artifacts" => Ok(serialize_task_artifacts(
-            &runtime.get_task_artifact_manifest(&task.id)?,
-        )),
-        other => task_show_record_field_json(task, other)
-            .or_else(|| runtime.task_crew_field_json(task, other))
-            .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
-    }
-}
-
 pub(super) fn task_fields_to_json(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
@@ -365,14 +225,14 @@ pub(super) fn task_fields_to_json(
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
     if fields.len() == 1 {
-        return task_field_to_json(runtime, task, &fields[0], status_by_id);
+        return task_show_field_json(runtime, task, &fields[0], status_by_id);
     }
 
     let mut object = serde_json::Map::new();
     for field in fields {
         object.insert(
             field.clone(),
-            task_field_to_json(runtime, task, field, status_by_id)?,
+            task_show_field_json(runtime, task, field, status_by_id)?,
         );
     }
     Ok(Value::Object(object))
@@ -459,7 +319,7 @@ fn write_single_task_field(
             Ok(())
         }
         "resolved_dependencies" => {
-            for dependency in dependency_labels(
+            for dependency in task_dependency_labels(
                 task,
                 status_by_id.ok_or_else(|| {
                     OrbitError::Execution(
@@ -591,34 +451,6 @@ pub(crate) fn format_task_readiness(task: &orbit_core::Task) -> Option<String> {
         );
     }
     Some(text)
-}
-
-pub(crate) fn task_artifact_manifest_to_json(files: &[ArtifactManifestFileV2]) -> Value {
-    Value::Array(
-        files
-            .iter()
-            .map(|file| {
-                json!({
-                    "path": file.path,
-                    "media_type": file.media_type,
-                    "size_bytes": file.size_bytes,
-                    "sha256": file.sha256,
-                    "created_by": file.created_by,
-                    "created_at": file.created_at.to_rfc3339(),
-                })
-            })
-            .collect(),
-    )
-}
-
-fn dependency_labels(
-    task: &orbit_core::Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Vec<String> {
-    resolve_task_dependencies(task, status_by_id)
-        .into_iter()
-        .map(|dependency| dependency.label())
-        .collect()
 }
 
 fn format_task_table_timestamp(value: DateTime<Utc>) -> String {

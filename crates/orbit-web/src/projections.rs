@@ -1,24 +1,24 @@
-//! Minimal duplication of the `*_to_json` projection helpers that the dashboard
-//! API delegates to. These were originally in orbit-cli under command/* but are
-//! duplicated here (verbatim logic) so orbit-web compiles in isolation
-//! without a dependency on orbit-cli (per ARCHITECTURE layering rules).
+//! The `*_to_json` projections the dashboard API serves. A task builds on the
+//! base projection and full record every read surface shares
+//! (`orbit_types::task::task_base_json`,
+//! `orbit_core::application::task::task_record_json`) and adds only the
+//! dashboard's own extras; the other projections are dashboard-local.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskRow, task_status_transition_allowed,
+    PullRequestLinks, TaskRow, task_record_json, task_status_transition_allowed,
     task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{
     AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
-    resolve_task_dependencies,
 };
-use orbit_types::task::{ArtifactManifestFileV2, TaskEnvelopeV2};
+use orbit_types::task::{TaskEnvelopeV2, task_base_json};
 use orbit_types::workflow::{JobV2Step, JobV2StepBody};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
     let actor = event.actor();
@@ -145,63 +145,23 @@ fn job_v2_step_to_json(step: &JobV2Step) -> Value {
     value
 }
 
+/// The shared base task projection with the dashboard's one change to it:
 /// `links` fills the page of a `github-pr` ref recorded without one, so the
 /// dashboard can link every delivered pull request.
 pub(crate) fn task_to_json(
     task: &Task,
     status_by_id: &BTreeMap<String, TaskStatus>,
     links: &PullRequestLinks,
-) -> Value {
+) -> Map<String, Value> {
+    let mut object = task_base_json(task, status_by_id);
+    link_pull_requests(&mut object, task, links);
+    object
+}
+
+fn link_pull_requests(object: &mut Map<String, Value>, task: &Task, links: &PullRequestLinks) {
     let mut external_refs = task.external_refs.clone();
     links.link(&mut external_refs);
-    let mut value = json!({
-        "id": task.id,
-        "parent_id": task.parent_id(),
-        "title": task.title,
-        "description": task.description,
-        "acceptance_criteria": task.acceptance_criteria,
-        "dependencies": task.dependencies(),
-        "resolved_dependencies": dependency_labels(task, status_by_id),
-        "tags": task.tags,
-        "required_tools": task.required_tools,
-        "plan": task.plan,
-        "execution_summary": task.execution_summary,
-        "context_files": task.context_files,
-        "created_by": task.created_by,
-        "planned_by": task.planned_by,
-        "implemented_by": task.implemented_by,
-        "status": task.status.to_string(),
-        "priority": task.priority.to_string(),
-        "complexity": task.complexity.map(|value| value.to_string()),
-        "type": task.task_type.to_string(),
-        "pr_status": task.pr_status,
-        "external_refs": external_refs,
-        "relations": orbit_types::task::resolve_task_relations(task, status_by_id),
-        "source_task_id": task.source_task_id(),
-        "job_run_id": task.job_run_id,
-        // Host-qualified execution provenance [ORB-12516]. A pulled task's run
-        // lives in the executing host's own job store, so the run id alone is a
-        // dangling reference without the machine that ran it. Absent stays
-        // absent: a row recorded before execution provenance existed is
-        // *unknown*, never "the owner".
-        "job_run_machine": task.job_run_machine,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "orchestrator": task.orchestrator,
-        "created_at": task.created_at.to_rfc3339(),
-        "updated_at": task.updated_at.to_rfc3339(),
-    });
-    // The parsed `os:` tags, so the dashboard names the host a task waits
-    // for without re-parsing tag strings.
-    if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
-        value["os_requirement"] = requirement;
-    }
-    // What a proposed or backlog task lacks before automation approves or
-    // admits it; absent for every other status.
-    if let Some(readiness) = orbit_types::task::task_readiness_json(task) {
-        value["readiness"] = readiness;
-    }
-    value
+    object.insert("external_refs".to_string(), json!(external_refs));
 }
 
 /// Tasks an active task-pilot run is preparing. Their readiness gaps are about
@@ -233,32 +193,20 @@ pub(crate) fn task_to_json_with_sidecars(
     task_row_to_json(runtime, &row, status_by_id)
 }
 
-/// The full task projection: every body, the sidecars, the lifecycle
-/// transitions with their evidence requirements, the run-aware crew
-/// resolution, and the review gate. Served by `GET /api/tasks/:id` and every
-/// mutation response; the list endpoints serve [`TaskListProjection`] instead.
+/// The full task projection: the shared task record (every body, the
+/// sidecars, the review gate and the run-aware crew), plus the dashboard's
+/// extras — linked pull requests, the lifecycle transitions with their evidence
+/// requirements, run navigability and `readiness.preparing`. Served by
+/// `GET /api/tasks/:id` and every mutation response; the list endpoints serve
+/// [`TaskListProjection`] instead.
 pub(crate) fn task_row_to_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
     let task = &row.task;
-    let mut value = task_to_json(task, status_by_id, &PullRequestLinks::new(runtime));
-    let object = value.as_object_mut().ok_or_else(|| {
-        OrbitError::Execution("task JSON projection did not produce an object".to_string())
-    })?;
-    object.insert(
-        "comments".to_string(),
-        serde_json::to_value(&row.comments).map_err(|e| OrbitError::Io(e.to_string()))?,
-    );
-    object.insert(
-        "history".to_string(),
-        serde_json::to_value(&row.history).map_err(|e| OrbitError::Io(e.to_string()))?,
-    );
-    object.insert(
-        "artifacts".to_string(),
-        task_artifact_manifest_to_json(&row.artifacts),
-    );
+    let mut object = task_record_json(runtime, row, status_by_id)?;
+    link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
     object.insert(
         "status_transitions".to_string(),
         dashboard_status_transitions(runtime, task)?,
@@ -275,16 +223,7 @@ pub(crate) fn task_row_to_json(
             task,
         )),
     );
-    let registry = runtime.configured_crew_registry_projection();
-    if let Some(projection) = dashboard_resolved_crew_projection(runtime, &registry, task)? {
-        object.insert("resolved_crew".to_string(), Value::String(projection.name));
-        object.insert("crew_model".to_string(), Value::String(projection.model));
-    }
-    if let Some(review) =
-        orbit_core::application::review::task_review_projection(runtime, task, &row.artifacts)?
-    {
-        object.insert("review".to_string(), review);
-    }
+    let mut value = Value::Object(object);
     if value.get("readiness").is_some() {
         let preparing = tasks_in_pilot_preparation(runtime).contains(&task.id);
         mark_readiness_preparing(&mut value, preparing);
@@ -351,10 +290,7 @@ impl TaskListProjection {
         status_by_id: &BTreeMap<String, TaskStatus>,
     ) -> Result<Value, OrbitError> {
         let task = &row.task;
-        let mut value = task_to_json(task, status_by_id, &self.pull_request_links);
-        let object = value.as_object_mut().ok_or_else(|| {
-            OrbitError::Execution("task JSON projection did not produce an object".to_string())
-        })?;
+        let mut object = task_to_json(task, status_by_id, &self.pull_request_links);
         for body in TASK_SUMMARY_OMITTED_BODIES {
             object.remove(body);
         }
@@ -383,6 +319,7 @@ impl TaskListProjection {
                 task,
             )),
         );
+        let mut value = Value::Object(object);
         if value.get("readiness").is_some() {
             let preparing = self
                 .preparing
@@ -448,25 +385,17 @@ fn summary_status_transitions(task: &Task) -> Value {
     )
 }
 
-fn dashboard_resolved_crew_projection(
-    runtime: &OrbitRuntime,
-    registry: &ConfiguredCrewRegistryProjection,
-    task: &Task,
-) -> Result<Option<ResolvedCrewProjection>, OrbitError> {
-    if task_has_stale_explicit_crew(registry, task) {
-        let crew = runtime.lookup_crew_for_task(None, None)?;
-        return Ok(Some(ResolvedCrewProjection {
-            name: crew.name,
-            model: crew.assignment.model,
-        }));
-    }
-    runtime.resolved_crew_projection(task)
-}
-
 /// Registry-only crew resolution for summary rows: the task's explicit crew
 /// when the registry still configures it, otherwise the configured default,
-/// otherwise nothing. The run-recorded crew a detail row prefers needs a job-run
-/// read, which is exactly the per-row lookup the list path gives up.
+/// otherwise nothing.
+///
+/// This is the dashboard-only display rule the shared read contract
+/// (`OrbitRuntime::task_crew_read`, which the detail serves) names as its
+/// exception: the run-recorded crew needs a job-run read, which is exactly the
+/// per-row lookup the list path gives up, so a summary row never reports
+/// `crew_unresolved` and shows the default for a crew this host no longer
+/// configures. The dashboard reads `resolved_crew` only for a task with no
+/// explicit crew, and flags a stale explicit crew itself.
 fn registry_crew_projection(
     registry: &ConfiguredCrewRegistryProjection,
     task: &Task,
@@ -490,38 +419,6 @@ fn explicit_task_crew(task: &Task) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn task_has_stale_explicit_crew(registry: &ConfiguredCrewRegistryProjection, task: &Task) -> bool {
-    let Some(stored_crew) = explicit_task_crew(task) else {
-        return false;
-    };
-    !registry.crews.iter().any(|crew| crew.name == stored_crew)
-}
-
-pub(crate) fn task_artifact_manifest_to_json(files: &[ArtifactManifestFileV2]) -> Value {
-    Value::Array(
-        files
-            .iter()
-            .map(|file| {
-                json!({
-                    "path": file.path,
-                    "media_type": file.media_type,
-                    "size_bytes": file.size_bytes,
-                    "sha256": file.sha256,
-                    "created_by": file.created_by,
-                    "created_at": file.created_at.to_rfc3339(),
-                })
-            })
-            .collect(),
-    )
-}
-
-fn dependency_labels(task: &Task, status_by_id: &BTreeMap<String, TaskStatus>) -> Vec<String> {
-    resolve_task_dependencies(task, status_by_id)
-        .into_iter()
-        .map(|dependency| dependency.label())
-        .collect()
 }
 
 pub(crate) fn task_lock_to_json(task: &TaskEnvelopeV2) -> Value {
