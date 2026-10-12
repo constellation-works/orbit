@@ -429,6 +429,82 @@ fn run_retention_drops_terminal_state_and_keeps_run_history() {
     assert_eq!(check["status"], "ok");
 }
 
+/// The per-minute run and host resource history is pruned by run retention
+/// after 30 days, host-wide, whatever window the run sweep uses.
+#[test]
+fn run_retention_prunes_resource_minutes_past_thirty_days() {
+    const TEST: &str = "store_gc::run_retention_prunes_resource_minutes_past_thirty_days";
+    if !in_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let stamp = |days: i64| {
+        (chrono::Utc::now() - chrono::Duration::days(days))
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+    };
+    {
+        let db = fixture.db();
+        for (workspace, run_id, days) in [
+            ("ws_a", "jrun-old", 31),
+            ("ws_b", "jrun-other-workspace", 45),
+            ("ws_a", "jrun-recent", 29),
+        ] {
+            db.execute(
+                "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
+                     minute_started_at, task_id, work_class, complexity, resumed, \
+                     delivery_admitted_at, cpu_cores, memory_bytes, samples) \
+                 VALUES (?1, ?2, 0, ?3, 'ORB-1', 'change', 'hard', 0, ?3, 1.5, 1024, 12)",
+                params![workspace, run_id, stamp(days)],
+            )
+            .unwrap();
+        }
+        for days in [40, 31, 1] {
+            db.execute(
+                "INSERT INTO host_resource_minutes (minute_at, cpu_cores, cpu_count, \
+                     memory_bytes, memory_total_bytes, samples, recorded_by_run_id) \
+                 VALUES (?1, 3.0, 16, 1024, 4096, 12, 'jrun-old')",
+                params![stamp(days)],
+            )
+            .unwrap();
+        }
+    }
+
+    let plan = fixture.json(&["gc", "runs", "--json"]);
+    let tables = plan["resource_minutes"].as_array().unwrap();
+    assert_eq!(tables[0]["table"], "run_resource_minutes");
+    assert_eq!(tables[0]["retention_days"], 30);
+    assert_eq!(tables[0]["rows"], 2);
+    assert_eq!(tables[1]["table"], "host_resource_minutes");
+    assert_eq!(tables[1]["rows"], 2);
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM run_resource_minutes"),
+        3
+    );
+
+    let applied = fixture.json(&[
+        "gc",
+        "runs",
+        "--apply",
+        "--older-than-days",
+        "365",
+        "--json",
+    ]);
+    assert_eq!(applied["resource_minutes"][0]["rows_removed"], 2);
+    assert_eq!(applied["resource_minutes"][1]["rows_removed"], 2);
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM run_resource_minutes WHERE run_id = 'jrun-recent'"),
+        1
+    );
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM run_resource_minutes"),
+        1
+    );
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM host_resource_minutes"),
+        1
+    );
+}
+
 fn find_check<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
     match value {
         Value::Object(map) => {

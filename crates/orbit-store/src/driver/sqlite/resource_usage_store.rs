@@ -1,0 +1,218 @@
+//! Per-minute run and host resource history in `run_resource_minutes` and
+//! `host_resource_minutes`.
+//!
+//! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
+//! so SQLite orders and compares them as text.
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_common::OrbitError;
+use rusqlite::{TransactionBehavior, params};
+
+use crate::Store;
+use crate::contracts::{
+    HostResourceMinute, ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
+};
+
+fn stamp(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Micros, true)
+}
+
+fn store_error(error: rusqlite::Error) -> OrbitError {
+    OrbitError::Store(error.to_string())
+}
+
+/// SQLite integers are signed; a byte count past `i64::MAX` saturates.
+fn bytes(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn unsigned(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
+impl ResourceUsageStoreBackend for Store {
+    fn record_run_resource_minute(&self, minute: &RunResourceMinute) -> Result<(), OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    r#"
+                    INSERT INTO run_resource_minutes (
+                        workspace_id, run_id, minute_index, minute_started_at, task_id,
+                        work_class, complexity, resumed, delivery_admitted_at,
+                        cpu_cores, memory_bytes, samples
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    ON CONFLICT (workspace_id, run_id, minute_index) DO UPDATE SET
+                        minute_started_at = excluded.minute_started_at,
+                        task_id = excluded.task_id,
+                        work_class = excluded.work_class,
+                        complexity = excluded.complexity,
+                        resumed = excluded.resumed,
+                        delivery_admitted_at = excluded.delivery_admitted_at,
+                        cpu_cores = excluded.cpu_cores,
+                        memory_bytes = excluded.memory_bytes,
+                        samples = excluded.samples
+                    "#,
+                    params![
+                        minute.workspace_id,
+                        minute.run_id,
+                        minute.minute_index,
+                        stamp(minute.minute_started_at),
+                        minute.task_id,
+                        minute.work_class,
+                        minute.complexity,
+                        minute.resumed,
+                        minute.delivery_admitted_at.map(stamp),
+                        minute.cpu_cores,
+                        bytes(minute.memory_bytes),
+                        minute.samples,
+                    ],
+                )
+                .map(|_| ())
+                .map_err(store_error)
+        })
+    }
+
+    fn offer_host_resource_minute(&self, minute: &HostResourceMinute) -> Result<bool, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    r#"
+                    INSERT INTO host_resource_minutes (
+                        minute_at, cpu_cores, cpu_count, memory_bytes,
+                        memory_total_bytes, samples, recorded_by_run_id
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    ON CONFLICT (minute_at) DO NOTHING
+                    "#,
+                    params![
+                        stamp(minute.minute_at),
+                        minute.cpu_cores,
+                        minute.cpu_count,
+                        bytes(minute.memory_bytes),
+                        bytes(minute.memory_total_bytes),
+                        minute.samples,
+                        minute.recorded_by_run_id,
+                    ],
+                )
+                .map(|inserted| inserted > 0)
+                .map_err(store_error)
+        })
+    }
+
+    fn run_resource_minutes(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<RunResourceMinute>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT workspace_id, run_id, minute_index, minute_started_at, task_id,
+                       work_class, complexity, resumed, delivery_admitted_at,
+                       cpu_cores, memory_bytes, samples
+                FROM run_resource_minutes
+                WHERE workspace_id = ?1 AND run_id = ?2
+                ORDER BY minute_index
+                "#,
+            )
+            .map_err(store_error)?;
+        let rows = statement
+            .query_map(params![workspace_id, run_id], |row| {
+                Ok(RunResourceMinute {
+                    workspace_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    minute_index: row.get(2)?,
+                    minute_started_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
+                    task_id: row.get(4)?,
+                    work_class: row.get(5)?,
+                    complexity: row.get(6)?,
+                    resumed: row.get(7)?,
+                    delivery_admitted_at: row
+                        .get::<_, Option<String>>(8)?
+                        .map(|at| crate::parse_timestamp(&at))
+                        .transpose()?,
+                    cpu_cores: row.get(9)?,
+                    memory_bytes: unsigned(row.get(10)?),
+                    samples: row.get(11)?,
+                })
+            })
+            .map_err(store_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+    }
+
+    fn host_resource_minutes(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<HostResourceMinute>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT minute_at, cpu_cores, cpu_count, memory_bytes, memory_total_bytes,
+                       samples, recorded_by_run_id
+                FROM host_resource_minutes
+                WHERE minute_at >= ?1
+                ORDER BY minute_at
+                "#,
+            )
+            .map_err(store_error)?;
+        let rows = statement
+            .query_map(params![stamp(since)], |row| {
+                Ok(HostResourceMinute {
+                    minute_at: crate::parse_timestamp(&row.get::<_, String>(0)?)?,
+                    cpu_cores: row.get(1)?,
+                    cpu_count: row.get(2)?,
+                    memory_bytes: unsigned(row.get(3)?),
+                    memory_total_bytes: unsigned(row.get(4)?),
+                    samples: row.get(5)?,
+                    recorded_by_run_id: row.get(6)?,
+                })
+            })
+            .map_err(store_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+    }
+
+    fn resource_minutes_older_than(
+        &self,
+        table: ResourceMinutesTable,
+        cutoff: DateTime<Utc>,
+    ) -> Result<u64, OrbitError> {
+        let conn = self.read()?;
+        let sql = match table {
+            ResourceMinutesTable::Run => {
+                "SELECT COUNT(*) FROM run_resource_minutes WHERE minute_started_at < ?1"
+            }
+            ResourceMinutesTable::Host => {
+                "SELECT COUNT(*) FROM host_resource_minutes WHERE minute_at < ?1"
+            }
+        };
+        conn.query_row(sql, params![stamp(cutoff)], |row| row.get::<_, i64>(0))
+            .map(unsigned)
+            .map_err(store_error)
+    }
+
+    fn prune_resource_minutes_batch(
+        &self,
+        table: ResourceMinutesTable,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<usize, OrbitError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let sql = match table {
+            ResourceMinutesTable::Run => {
+                "DELETE FROM run_resource_minutes WHERE rowid IN ( \
+                     SELECT rowid FROM run_resource_minutes \
+                     WHERE minute_started_at < ?1 LIMIT ?2)"
+            }
+            ResourceMinutesTable::Host => {
+                "DELETE FROM host_resource_minutes WHERE rowid IN ( \
+                     SELECT rowid FROM host_resource_minutes WHERE minute_at < ?1 LIMIT ?2)"
+            }
+        };
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(sql, params![stamp(cutoff), limit])
+                .map_err(store_error)
+        })
+    }
+}

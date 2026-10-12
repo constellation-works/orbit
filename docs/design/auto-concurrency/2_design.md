@@ -1,22 +1,23 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Draft
 feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-config/src/registry/settings/machine.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-config/src/registry/settings/machine.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
 
 # Auto-concurrency — Design
 
-> **Status: Draft proposal, not implemented.** §1 describes today's code and
-> cites it; everything after it is the proposed design.
+> **Status: Draft proposal; rollout step 1 (Record, §2) is implemented.** §1
+> describes today's code and cites it. §2 describes the recording that ships;
+> everything after it is the proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -76,9 +77,10 @@ consulted, and stops 300 s after the last consult.
 own systemd user scope, `orbit-worker-<run_id>-<nonce>.scope`
 (`application/job/pipeline/worker/scope.rs`). `machine.worker_containment`
 defaults to true. Orbit reads the scope's `memory.events` and `pids.events`
-only to tell a limit breach from other failures. A worker can locate its own
-scope (`WorkerScopeCgroup::of_current_process`). Nothing records CPU or memory
-use per task. macOS has no scopes, so its workers run uncontained.
+to tell a limit breach from other failures. A worker locates its own scope
+(`WorkerScopeCgroup::of_current_process`) and records its CPU and memory per
+minute (§2). Admission reads none of it yet. macOS has no scopes, so its
+workers run uncontained and record nothing.
 
 **No-diff work still builds today.** Owner-run pipelines skip validation
 for a `no-diff-expected` task with a clean tree: `task_pr_pipeline.yaml`'s
@@ -102,25 +104,47 @@ fixes that.
 
 **History.** Each host keeps one SQLite database, `~/.orbit/orbit.db`, shared
 by its workspaces. The `job_runs` table holds each run's start, end and host.
-The task id is in `input_json`, and complexity is in the task index. No CPU
-or memory history is kept, for the host or for any task.
+The task id is in `input_json`, and complexity is in the task index. The
+`run_resource_minutes` and `host_resource_minutes` tables hold 30 days of
+per-minute CPU and memory history (§2).
 
 ## 2. Sampling each task
 
 A worker samples **its own** scope, so attribution is exact and no central
 sampler is needed.
 
-- **What.** Every 5 s, a background thread in the worker reads its scope's
-  `cpu.stat` `usage_usec` and `memory.current`. CPU is measured in cores
-  (CPU time over wall time), memory in bytes.
+Implemented in `application/job/pipeline/worker/usage.rs` (sampler) and
+`worker/delivery_class.rs` (work class), with the host reads in
+`runtime/host_resource/usage.rs`.
+
+- **What.** Every 5 s, a background thread in a delivery run's worker reads
+  its scope's `cpu.stat` `usage_usec` and memory. CPU is measured in cores
+  (CPU time over wall time).
+- **Memory is non-reclaimable bytes:** `memory.current − file + shmem` from
+  `memory.stat`. `memory.current` also counts page cache charged to the
+  scope, which the kernel can drop. `file` includes tmpfs and shared memory,
+  which it cannot, so `shmem` is added back; box tests use tmpfs. Live
+  dk-server-1 scopes on 2026-10-12 had 25–68% of `memory.current` in `file`:
+  across 8 scopes `memory.current` summed to 25.7 GB against 15.5 GB of anon
+  on a 27 GB host.
 - **Granularity.** Samples are aggregated per minute since the worker
   started: mean cores and maximum memory for that minute. Maximum, because a
   rustc or linker peak that lasts a few seconds is what triggers the OOM
-  killer.
-- **Storage.** Each minute is appended to a new `run_resource_minutes` table
-  in `orbit.db`, keyed by workspace, run id and minute index, with the task
-  id. The newest minute is also how admission learns each running task's
-  current use (§4).
+  killer. A minute is written as soon as it ends, and the last, partial
+  minute when the run ends.
+- **Storage.** Each minute is a row of `run_resource_minutes` in `orbit.db`,
+  keyed by workspace, run id and minute index. It also carries the task id,
+  the minute's start, the delivery's admission time, work class, complexity
+  and a `resumed` marker. A worker that restarts a run continues after the
+  minutes already recorded. The newest minute is also how admission learns
+  each running task's current use (§4).
+- **Work class, once per delivery.** The first submission of a delivery
+  pipeline that names one task records its class (§3.1), complexity and
+  admission time under the run input's `resource_class` key; every child run
+  of the delivery naming the same task inherits it, so a tag edit mid-delivery
+  changes nothing. A fresh submission always recaptures it. A claimed leaf is
+  created by the pull store, so its worker captures the class at start, from
+  the local task and the receipt's complexity.
 - **One delivery, several runs.** A local delivery is a chain of runs:
   `task_auto_pipeline`, then `task_gate_pipeline`, then `task_pr_pipeline`. A
   pull delivery is one `task_claimed_pr_pipeline`. Each run samples itself.
@@ -129,17 +153,26 @@ sampler is needed.
   admitted run's `created_at`.
 - **Exclusions.** Resumed or retried deliveries restart their clock part way
   through, so they are kept out of profiles. They still count toward the
-  current load.
-- **Retention.** 30 days. The table is pruned with the other stores.
+  current load. Rows are marked `resumed` for a resume or replay submission,
+  a retry run, an adopted run, a run resuming checkpoints or a carried
+  candidate (`resume_candidate`, `claim_repair`), and a run an earlier worker
+  already sampled.
+- **Retention.** 30 days for both tables, whatever `retention.runs_days` says.
+  `orbit gc runs --apply`, and so the `store-gc` routine, prunes them
+  host-wide.
 - **No scope, no samples.** A worker without a scope records nothing: macOS,
   containment disabled, or no user manager. That host stays on today's
   admission (§5.4) until it has samples. macOS gets a process-tree sampler
   later (§8).
 
 Workers also keep a host series, `host_resource_minutes`, holding host CPU
-and memory per wall-clock minute. Every worker offers a row for the current
-minute, and the first insert for that minute wins. Profiles do not need it.
-It is the ground truth for checking the forecast (§8).
+and memory per wall-clock minute in the same units: busy cores from
+`/proc/stat` tick deltas, and `MemTotal − MemAvailable` bytes. It does not use
+`/proc/loadavg`, which the throttle reads: load counts the run queue and runs
+far past 100% (load 36 on 15 cores at about 95% utilization on dk-server-1).
+Each worker offers every wall-clock minute it observed whole, and the first
+insert for that minute wins. Profiles do not need it. It is the ground truth
+for checking the forecast (§8).
 
 ## 3. Profiles
 

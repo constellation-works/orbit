@@ -148,7 +148,9 @@ impl Execute for AuditGcArgs {
                   interrupted runs of this workspace are selected; a held run, which review \
                   evidence can still resume, and every non-terminal run are never touched. The \
                   run row, its steps and its summary stay, so `orbit run show` and run history \
-                  keep working, and `archived_at` records when the state was dropped.\n\n\
+                  keep working, and `archived_at` records when the state was dropped. The \
+                  host's per-minute run and host resource history older than 30 days goes in \
+                  the same pass, whatever the window.\n\n\
                   Examples:\n  orbit gc runs\n  orbit gc runs --apply"
 )]
 pub struct RunGcArgs {
@@ -167,13 +169,17 @@ impl Execute for RunGcArgs {
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize run GC report: {error}"))
         })?;
-        let lines = [
+        let mut lines = vec![format!(
+            "table=job_run_states scope=workspace runs={} bytes={} runs_archived={}",
+            report.runs, report.state_bytes, report.runs_archived
+        )];
+        lines.extend(report.resource_minutes.iter().map(|table| {
             format!(
-                "table=job_run_states scope=workspace runs={} bytes={} runs_archived={}",
-                report.runs, report.state_bytes, report.runs_archived
-            ),
-            summary_line(&doc),
-        ];
+                "table={} scope=host retention_days={} rows={} rows_removed={}",
+                table.table, table.retention_days, table.rows, table.rows_removed
+            )
+        }));
+        lines.push(summary_line(&doc));
         Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
     }
 }

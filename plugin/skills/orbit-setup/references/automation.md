@@ -94,7 +94,7 @@ copy. Run `orbit routine list` to see their names on this host.
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
-| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days`. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). |
+| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). |
 | `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
 
 ## Built in: final recovery of blocked tasks

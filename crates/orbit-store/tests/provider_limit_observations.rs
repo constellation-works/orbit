@@ -146,9 +146,11 @@ fn an_existing_store_gains_the_provider_limit_table_additively() {
     conn.execute_batch(
         "DROP TABLE provider_limit_observations;
         DROP INDEX idx_v2_audit_events_ws_event_type_ts;
+        DROP TABLE run_resource_minutes;
+        DROP TABLE host_resource_minutes;
         CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
         DELETE FROM schema_meta WHERE key IN ('migration.v0040', 'migration.v0041',
-            'migration.v0042', 'migration.v0043');
+            'migration.v0042', 'migration.v0043', 'migration.v0044', 'migration.v0045');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",
@@ -197,8 +199,11 @@ fn a_v40_table_gains_the_reading_columns_additively() {
         ALTER TABLE provider_limit_observations DROP COLUMN window_minutes;
         ALTER TABLE provider_limit_observations DROP COLUMN gating;
         DROP INDEX idx_v2_audit_events_ws_event_type_ts;
+        DROP TABLE run_resource_minutes;
+        DROP TABLE host_resource_minutes;
         CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
-        DELETE FROM schema_meta WHERE key IN ('migration.v0041', 'migration.v0042', 'migration.v0043');
+        DELETE FROM schema_meta WHERE key IN ('migration.v0041', 'migration.v0042', 'migration.v0043',
+            'migration.v0044', 'migration.v0045');
         INSERT INTO provider_limit_observations (provider, model_scope, window_label,
             exhausted, source, resets_at, observed_at, run_id, crew, detail)
         VALUES ('codex', '', '', 1, 'error', NULL, '2026-10-08T14:00:00.000000Z',

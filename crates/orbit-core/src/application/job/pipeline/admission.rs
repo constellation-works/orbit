@@ -117,6 +117,12 @@ impl OrbitRuntime {
             resume.is_some(),
             &mut crew_pools::random_crew_ticket,
         )?;
+        self.install_resource_class_admission(
+            job_name,
+            &mut input,
+            admission.map(|admission| admission.parent_run_id.as_str()),
+            resume.is_some() || replay_source_run_id.is_some(),
+        );
         let result = (|| {
             let spec = match &definition {
                 SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,

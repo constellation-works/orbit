@@ -426,12 +426,29 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_v2_audit_event_type_ts_index,
     },
+    // Per-minute CPU and memory of each delivery run's worker scope, for
+    // auto-concurrency profiles. A new table only, which an older binary never
+    // names, so drains on older binaries keep writing.
+    Migration {
+        version: 44,
+        name: "run_resource_minutes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_run_resource_minutes,
+    },
+    // The host's CPU and memory per wall-clock minute, the ground truth for
+    // the forecast. A new table only, as v44.
+    Migration {
+        version: 45,
+        name: "host_resource_minutes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_host_resource_minutes,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 43;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 45;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

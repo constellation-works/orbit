@@ -1,6 +1,6 @@
 //! Retention for the host store: audit rows and unreferenced audit blobs
-//! (`orbit gc audit`), and the pipeline state of old terminal runs
-//! (`orbit gc runs`).
+//! (`orbit gc audit`), and the pipeline state of old terminal runs with the
+//! host's per-minute resource history (`orbit gc runs`).
 //!
 //! Both plan by default and delete only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
@@ -14,7 +14,8 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
-    AuditRetentionTable, RetentionSelection, StoreRetentionBackend, StoreSpace,
+    AuditRetentionTable, ResourceMinutesTable, ResourceUsageStoreBackend, RetentionSelection,
+    StoreRetentionBackend, StoreSpace,
 };
 use serde::Serialize;
 
@@ -24,6 +25,9 @@ use crate::{OrbitError, OrbitRuntime};
 const RETENTION_BATCH_ROWS: usize = 1_000;
 /// Pause between batches, so a queued writer gets the lock.
 const BATCH_PAUSE: Duration = Duration::from_millis(20);
+/// Per-minute run and host resource history is kept this long, whatever the
+/// configured windows: profiles read the last 30 days.
+pub const RESOURCE_MINUTES_RETENTION_DAYS: u32 = 30;
 /// A blob written or reused this recently is never swept, whatever the
 /// reference scan saw: it covers a write published while the scan ran.
 const BLOB_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -101,6 +105,16 @@ pub struct AuditGcReport {
     pub store: StoreSpaceReport,
 }
 
+/// Per-minute resource rows past [`RESOURCE_MINUTES_RETENTION_DAYS`] in one
+/// host-wide table, and how many an apply removed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceMinutesRetentionReport {
+    pub table: &'static str,
+    pub retention_days: u32,
+    pub rows: u64,
+    pub rows_removed: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunGcReport {
     pub apply: bool,
@@ -110,6 +124,8 @@ pub struct RunGcReport {
     pub runs: u64,
     pub state_bytes: u64,
     pub runs_archived: u64,
+    /// The host's per-minute resource history, pruned on its own fixed window.
+    pub resource_minutes: Vec<ResourceMinutesRetentionReport>,
     pub writes: BatchReport,
     pub store: StoreSpaceReport,
 }
@@ -207,7 +223,8 @@ impl OrbitRuntime {
     /// of this workspace's terminal runs that finished before the cutoff and
     /// stamp their `archived_at`. Run rows and steps stay, so `run show`, run
     /// history and the scoreboard keep working. `retention_days` overrides
-    /// `retention.runs_days`.
+    /// `retention.runs_days`. The host's per-minute resource history older
+    /// than [`RESOURCE_MINUTES_RETENTION_DAYS`] goes in the same pass.
     pub fn gc_runs(
         &self,
         apply: bool,
@@ -233,6 +250,24 @@ impl OrbitRuntime {
         } else {
             0
         };
+        let resource_cutoff = cutoff_for(RESOURCE_MINUTES_RETENTION_DAYS)?;
+        let mut resource_minutes = Vec::new();
+        for table in [ResourceMinutesTable::Run, ResourceMinutesTable::Host] {
+            let rows = store.resource_minutes_older_than(table, resource_cutoff)?;
+            let rows_removed = if apply && rows > 0 {
+                run_batches(&mut writes, || {
+                    store.prune_resource_minutes_batch(table, resource_cutoff, RETENTION_BATCH_ROWS)
+                })?
+            } else {
+                0
+            };
+            resource_minutes.push(ResourceMinutesRetentionReport {
+                table: table.table_name(),
+                retention_days: RESOURCE_MINUTES_RETENTION_DAYS,
+                rows,
+                rows_removed,
+            });
+        }
         Ok(RunGcReport {
             apply,
             retention_days: days,
@@ -240,6 +275,7 @@ impl OrbitRuntime {
             runs: rows,
             state_bytes: bytes,
             runs_archived,
+            resource_minutes,
             writes,
             store: store.store_space()?.into(),
         })

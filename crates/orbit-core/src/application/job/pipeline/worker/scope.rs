@@ -438,6 +438,45 @@ impl WorkerScopeCgroup {
             tasks_max: limit("pids.max"),
         })
     }
+
+    /// The scope's cumulative CPU time and current non-reclaimable memory, or
+    /// `None` when its cgroup is gone or a counter is unreadable.
+    ///
+    /// Memory is `memory.current - file + shmem` from `memory.stat`:
+    /// `memory.current` also counts page cache charged to the scope, which
+    /// the kernel can drop (25-68% of live dk-server-1 scopes on 2026-10-12).
+    /// `file` includes tmpfs and shared memory, which cannot be dropped, so
+    /// `shmem` is added back.
+    pub(crate) fn usage(&self) -> Option<ScopeUsage> {
+        let read = |name: &str| std::fs::read_to_string(self.directory.join(name)).ok();
+        let cpu_usage_usec = stat_value(&read("cpu.stat")?, "usage_usec")?;
+        let current: u64 = read("memory.current")?.trim().parse().ok()?;
+        let memory_stat = read("memory.stat")?;
+        let file = stat_value(&memory_stat, "file")?;
+        let shmem = stat_value(&memory_stat, "shmem").unwrap_or(0);
+        Some(ScopeUsage {
+            cpu_usage_usec,
+            memory_bytes: current.saturating_sub(file).saturating_add(shmem),
+        })
+    }
+}
+
+/// One reading of a worker scope's resource counters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScopeUsage {
+    /// `cpu.stat` `usage_usec`: CPU time the scope used since it was created.
+    pub(crate) cpu_usage_usec: u64,
+    /// `memory.current - file + shmem`, in bytes.
+    pub(crate) memory_bytes: u64,
+}
+
+/// The value of `key` in a cgroup flat-keyed file (`<key> <value>` lines).
+fn stat_value(content: &str, key: &str) -> Option<u64> {
+    content
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .find(|(name, _)| *name == key)
+        .and_then(|(_, value)| value.trim().parse().ok())
 }
 
 impl ScopeLimitBreach {
@@ -469,10 +508,5 @@ impl ScopeLimitBreach {
 
 /// The value of `key` in a cgroup `*.events` file (`<key> <count>` lines).
 pub(crate) fn event_count(events: &str, key: &str) -> u64 {
-    events
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .find(|(name, _)| *name == key)
-        .and_then(|(_, count)| count.trim().parse().ok())
-        .unwrap_or(0)
+    stat_value(events, key).unwrap_or(0)
 }
