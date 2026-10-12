@@ -5,7 +5,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { OrbitShip } from '../../../types'
-import { PIPELINE } from '../model'
+import { PIPELINE, shipPosition, track } from '../model'
 
 const SHIP_POLL_MS = 5000
 const SURFACES = ['terminal', 'desktop'] as const
@@ -133,9 +133,9 @@ for (const surface of SURFACES) {
         }
       }
       if (args[1] === 'events') return args[2] === 'jrun-leaf'
-        ? { events: completed ? PIPELINE.map(step => ({ event_type: 'step.finished', step_id: step.id })) : [
+        ? { events: completed ? PIPELINE.map(step => ({ event_type: 'step.finished', step_id: step.id, outcome: 'success' })) : [
             { event_type: 'step.started', step_id: 'worktree' },
-            { event_type: 'step.finished', step_id: 'worktree' },
+            { event_type: 'step.finished', step_id: 'worktree', outcome: 'success' },
             { event_type: 'step.started', step_id: 'implement_bundle' },
           ] }
         : { events: [{ event_type: 'step.started', step_id: 'gate_invoke' }] }
@@ -213,7 +213,7 @@ for (const state of ['held', 'skipped'] as const) {
       if (args[0] === 'task' && args[1] === 'list') return args.includes('done') ? [] : TASKS.map(task => task.id === 'ORB-1' ? { ...task, status: 'in-progress' } : task)
       if (args[0] !== 'run') return undefined
       if (args[1] === 'show') return { run: { job_id: 'task_pr_pipeline', state, error_message: null } }
-      if (args[1] === 'events') return { events: [{ event_type: 'step.finished', step_id: 'worktree' }] }
+      if (args[1] === 'events') return { events: [{ event_type: 'step.finished', step_id: 'worktree', outcome: 'success' }] }
       return undefined
     })
     const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
@@ -234,13 +234,18 @@ for (const state of ['held', 'skipped'] as const) {
   })
 }
 
-test('Board tracking reads the leaf directly and marks its active step failed', async ($, on) => {
+test('Board tracking reads the leaf directly and marks its failed finished step', async ($, on) => {
   const ship = observeShip(on)
   fakeOrbit(on, [], args => {
     if (args[0] === 'task' && args[1] === 'list') return args.includes('done') ? [] : TASKS.map(task => task.id === 'ORB-1' ? { ...task, status: 'in-progress' } : task)
     if (args[0] !== 'run') return undefined
     if (args[1] === 'show') return { run: { job_id: 'task_pr_pipeline', state: 'failed', error_message: 'Implementation failed' } }
-    if (args[1] === 'events') return { events: [{ event_type: 'step.finished', step_id: 'worktree' }, { event_type: 'step.started', step_id: 'implement_bundle' }] }
+    if (args[1] === 'events') return { run_id: 'jrun-1', job_id: 'task_pr_pipeline', events: [
+      { event_type: 'step.started', step_id: 'worktree' },
+      { event_type: 'step.finished', step_id: 'worktree', outcome: 'success', error_message: null },
+      { event_type: 'step.started', step_id: 'implement_bundle' },
+      { event_type: 'step.finished', step_id: 'implement_bundle', outcome: 'failed', error_message: 'Implementation failed' },
+    ] }
     return undefined
   })
   const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
@@ -253,6 +258,8 @@ test('Board tracking reads the leaf directly and marks its active step failed', 
   expect(stopped?.runId).toBe('jrun-1')
   expect(stopped?.phase).toBe('failed')
   expect(stopped?.steps.slice(0, 3)).toEqual(['done', 'failed', 'pending'])
+  expect(stopped === null ? null : shipPosition(stopped)).toEqual({ label: PIPELINE[1]?.label, done: 1 })
+  expect(track(stopped?.steps.slice(0, 3) ?? [])).toBe('●━✗─○')
   await ui.unmount()
 })
 

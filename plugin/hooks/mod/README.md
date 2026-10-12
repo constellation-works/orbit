@@ -34,7 +34,11 @@ this folder.
     track, retrying while delivery is waiting to start. The coordinator's
     terminal state decides whether the ship landed, failed, was held awaiting
     review evidence, or was skipped; each ends tracking. On desktop
-    and VS Code the trajectory is drawn as an SVG.
+    and VS Code the trajectory is drawn as an SVG. Only steps finished with
+    a successful outcome count as completed (●). Failed or error outcomes
+    show ✗ at the failed step; held, cancelled, or unrecognized finishes
+    show a stopped step (■). Skipped steps show ↷ and do not add to the
+    completed count. A later start or finish replaces that step's earlier state.
 - **Task cards.** A prompt that mentions a known task id, such as
   `ORB-123`, carries that task's card (status, priority, criteria) as
   context.

@@ -15,7 +15,7 @@ export type ShipData = {
   columns: number
 }
 
-const STEP_COLOR: Record<OrbitStepState, string | undefined> = { done: ACCENT, active: 'cyan', failed: 'red', pending: undefined }
+const STEP_COLOR: Record<OrbitStepState, string | undefined> = { done: ACCENT, active: 'cyan', failed: 'red', stopped: 'yellow', skipped: undefined, pending: undefined }
 
 const PHASE: Record<OrbitShip['phase'], { label: string; color: string | undefined }> = {
   preflight: { label: 'READY', color: undefined },
@@ -164,8 +164,8 @@ export function trajectory(steps: readonly OrbitStepState[]): string {
       .map((p, index) => `${index === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
       .join(' ')
   const reached = steps.reduce((last, state, index) => (state === 'pending' ? last : index), -1)
-  const fill: Record<OrbitStepState, string> = { done: ACCENT, active: '#0B0E14', failed: '#FF7A66', pending: 'none' }
-  const ring: Record<OrbitStepState, string> = { done: ACCENT, active: '#4CC9F0', failed: '#FF7A66', pending: '#6E788C' }
+  const fill: Record<OrbitStepState, string> = { done: ACCENT, active: '#0B0E14', failed: '#FF7A66', stopped: '#E9C46A', skipped: 'none', pending: 'none' }
+  const ring: Record<OrbitStepState, string> = { done: ACCENT, active: '#4CC9F0', failed: '#FF7A66', stopped: '#E9C46A', skipped: '#6E788C', pending: '#6E788C' }
 
   const nodes = steps
     .map((state, index) => {
