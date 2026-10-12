@@ -36,6 +36,7 @@ use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
     AuditRoleAggregate, AuditToolAggregate, AuditToolCallCountsByRole,
     AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall, TaskCompletionByComplexity,
+    TaskTerminalTransition,
 };
 
 pub trait TaskStoreBackend: Send + Sync {
@@ -384,6 +385,15 @@ pub trait TaskStoreBackend: Send + Sync {
     /// generated index. Used to facet invocation metrics without YAML reads.
     fn task_complexity_by_id(&self) -> Result<BTreeMap<OrbitId, String>, OrbitError> {
         Ok(BTreeMap::new())
+    }
+
+    /// Terminal tasks whose index `updated_at` is at or after `since`, oldest
+    /// first. Default is empty; the v2 store answers from the SQLite index.
+    fn task_terminal_transitions(
+        &self,
+        _since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<TaskTerminalTransition>, OrbitError> {
+        Ok(Vec::new())
     }
 }
 

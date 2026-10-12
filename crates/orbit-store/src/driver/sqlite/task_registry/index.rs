@@ -5,7 +5,8 @@ use super::partition_id::validate_partition_id;
 use super::queries::{TaskIndexWriter, task_bundle_by_id, task_ids_for_workspace};
 use super::relations::validate_replacement_relations;
 use super::store::TaskRegistryStore;
-use crate::contracts::{TaskCompletionByComplexity, TaskIndexFilter};
+use crate::contracts::{TaskCompletionByComplexity, TaskIndexFilter, TaskTerminalTransition};
+use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     TaskEnvelopeV2, TaskStatus, complexity_bucket, complexity_bucket_ord, normalize_task_tags,
@@ -266,6 +267,66 @@ impl TaskRegistryStore {
         out.sort_by(|left, right| {
             complexity_bucket_ord(&left.complexity).cmp(&complexity_bucket_ord(&right.complexity))
         });
+        Ok(out)
+    }
+
+    /// Every terminal row in the workspace whose `updated_at` is at or after
+    /// `since` (all of them for `None`), oldest first. `terminal_month` narrows
+    /// the read through its index; the exact bound is applied after parsing.
+    pub fn terminal_transitions(
+        &self,
+        partition_id: &str,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<TaskTerminalTransition>, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        let first_month = since
+            .map(|since| since.format("%Y-%m").to_string())
+            .unwrap_or_default();
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT task_id, status, complexity, updated_at FROM task_bundle_index
+                 WHERE workspace_id = ?1
+                   AND terminal_month IS NOT NULL
+                   AND terminal_month >= ?2",
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map([&partition_id, &first_month], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (task_id, raw_status, raw_complexity, raw_updated_at) =
+                row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let at = DateTime::parse_from_rfc3339(&raw_updated_at)
+                .map_err(|e| {
+                    OrbitError::Store(format!(
+                        "invalid indexed updated_at '{raw_updated_at}' for task '{task_id}': {e}"
+                    ))
+                })?
+                .with_timezone(&Utc);
+            if since.is_some_and(|since| at < since) {
+                continue;
+            }
+            let status = raw_status.parse::<TaskStatus>().map_err(|e| {
+                OrbitError::Store(format!(
+                    "invalid indexed status '{raw_status}' for task '{task_id}': {e}"
+                ))
+            })?;
+            out.push(TaskTerminalTransition {
+                status,
+                complexity: complexity_bucket(raw_complexity.as_deref()).to_string(),
+                at,
+            });
+        }
+        out.sort_by_key(|transition| transition.at);
         Ok(out)
     }
 

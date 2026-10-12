@@ -166,6 +166,10 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             "/diagnostics/implement_one",
             get(diagnostics::diagnostics_implement_one),
         )
+        .route(
+            "/diagnostics/completions",
+            get(diagnostics::diagnostics_completions),
+        )
         .route("/diagnostics/denials", get(denials::list_denials))
         // Audit › Codebase: per-path regression, contention, footprint-miss,
         // coupling, blocked and rejected rates from one cached scan.

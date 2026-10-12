@@ -24,6 +24,8 @@ mod host;
 mod host_forward;
 #[path = "http_api/log.rs"]
 mod log;
+#[path = "http_api/metrics_trends.rs"]
+mod metrics_trends;
 #[path = "http_api/pagination.rs"]
 mod pagination;
 #[path = "http_api/plugins.rs"]

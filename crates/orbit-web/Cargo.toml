@@ -43,6 +43,8 @@ libc.workspace = true
 orbit-engine = { path = "../orbit-engine" }
 orbit-store = { path = "../orbit-store" }
 reqwest.workspace = true
+# Dates terminal task index rows for the completion trend fixture.
+rusqlite.workspace = true
 # Substitute pipeline worker for tests that submit runs [ORB-12902].
 orbit-core = { path = "../orbit-core", features = ["test-support"] }
 serde_yaml.workspace = true

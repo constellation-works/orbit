@@ -312,7 +312,7 @@
       </main>
     </section>
     <section class="tab-pane" data-tab="diagnostics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <main class="tasks-layout" id="diagnostics-main" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr);">
+      <main class="tasks-layout" id="diagnostics-main" style="grid-template-columns: minmax(0, 1fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="diagnostics-panel">
             <header>
@@ -333,13 +333,31 @@
             </div>
           </section>
         </div>
-        <div id="diagnostics-side-col" style="display: flex; flex-direction: column; min-width: 0;">
-          <section class="panel" id="diagnostics-side-panel">
-            <header><span>Diagnostics summary</span></header>
-            <div class="body" id="diag-implement-one-body" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
+      </main>
+      <!-- ORB-15746: implement_one duration and task completion trends over
+           the shared window, by complexity, with the per-actor tables. -->
+      <main id="diagnostics-metrics-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="metrics-panel">
+          <header>
+            <span>Metrics</span>
+            <span class="count" id="metrics-count">-</span>
+          </header>
+          <div class="scoreboard-controls" id="metrics-controls">
+            <div class="scoreboard-control-group">
+              <span class="scoreboard-control-label">window</span>
+              <div class="scoreboard-window-selector" id="metrics-window-selector" role="tablist" aria-label="Metrics time window">
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1">all</button>
+              </div>
             </div>
-          </section>
-        </div>
+            <span class="scoreboard-controls-spacer"></span>
+            <span class="scoreboard-controls-meta">times in your time zone; 6h and wider buckets in UTC</span>
+          </div>
+          <div class="body metrics-body" id="metrics-body" tabindex="0" role="region" aria-label="Metrics"></div>
+        </section>
       </main>
       <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
            host. Read-only: the panel runs the checks on open and on Refresh,

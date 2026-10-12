@@ -260,6 +260,17 @@ impl OrbitRuntime {
         open_invocation_store(self)?.list_invocation_records(&filter)
     }
 
+    /// [`Self::invocation_records`] limited to the partition this runtime
+    /// records invocations under, whatever `filter.workspace_id` names: every
+    /// workspace on the host shares the invocation store.
+    pub fn workspace_invocation_records(
+        &self,
+        mut filter: InvocationQuery,
+    ) -> Result<Vec<InvocationRecord>, OrbitError> {
+        filter.workspace_id = Some(self.stores().jobs().workspace_id().to_string());
+        open_invocation_store(self)?.list_invocation_records(&filter)
+    }
+
     /// Records an invocation under this runtime's workspace, whatever
     /// workspace the caller-supplied params claim to come from.
     pub fn insert_invocation_trace_record(

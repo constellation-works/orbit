@@ -304,6 +304,13 @@ impl TaskStoreBackend for TaskV2Store {
     fn task_complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
         self.in_boundary(|| self.task_complexity_by_id())
     }
+
+    fn task_terminal_transitions(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<crate::contracts::TaskTerminalTransition>, OrbitError> {
+        self.in_boundary(|| self.task_terminal_transitions(since))
+    }
 }
 
 impl ScopedStore<Task> for TaskV2Store {

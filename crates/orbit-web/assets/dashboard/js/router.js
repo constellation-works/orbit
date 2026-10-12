@@ -52,6 +52,7 @@ const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
+  metrics: "diagnostics-metrics-main",
   doctor: "diagnostics-doctor-main",
   scoreboard: "diagnostics-scoreboard-main",
   reliability: "diagnostics-reliability-main",
@@ -144,7 +145,6 @@ function setRunDetailSubtabImpl(ctx, name) {
 
 const DIAG_TITLES = {
   runs: "Runs",
-  metrics: "Step metrics",
   errors: "Errors",
   incidents: "Incidents",
 };
@@ -166,30 +166,18 @@ function setDiagSubtabImpl(ctx, name) {
     subIndicator.style.left = `${activeBtn.offsetLeft}px`;
   }
 
-  // ORB-10444/ORB-10588: Scoreboard and Reliability are diagnostics subtabs
-  // that render into their own full-width <main>, so the two-column
-  // diagnostics layout (list + summary side card) is swapped out for them
-  // while the subtab nav stays reachable.
+  // ORB-10444/ORB-10588: Scoreboard, Reliability, Doctor and Metrics are
+  // diagnostics subtabs that render into their own full-width <main>, so the
+  // list panel is swapped out for them while the subtab nav stays reachable.
   const fullWidthMain = DIAG_FULL_WIDTH_MAINS[name];
-  const sideCol = $("diagnostics-side-col");
   const diagMain = $("diagnostics-main");
   for (const [subtab, mainId] of Object.entries(DIAG_FULL_WIDTH_MAINS)) {
     const node = $(mainId);
     if (node) node.style.display = subtab === name ? "grid" : "none";
   }
-  // The summary card (completion by complexity, implement_one durations) is
-  // about metrics, so it only rides beside Metrics; every other list gets the
-  // full width it needs for job names and messages.
-  const withSummary = !fullWidthMain && name === "metrics";
-  if (sideCol) sideCol.style.display = withSummary ? "flex" : "none";
   // A full-width subtab brings its own panels; the list panel above it would
   // otherwise sit there as an empty, titled box.
   if (diagMain) diagMain.style.display = fullWidthMain ? "none" : "";
-  if (diagMain) {
-    diagMain.style.gridTemplateColumns = withSummary
-      ? "minmax(0, 2fr) minmax(280px, 1.15fr)"
-      : "minmax(0, 1fr)";
-  }
   document.body.classList.toggle("reliability-active", name === "reliability");
   markWorkspaceSelectorScope(name === "reliability");
   if (fullWidthMain) {
@@ -198,6 +186,10 @@ function setDiagSubtabImpl(ctx, name) {
     // Reliability aggregates across workspaces server-side, so it stays live
     // in the aggregate view; the scoreboard is per-workspace and does not.
     if (name === "scoreboard" && isAggregateView()) renderPanelPlaceholder("scoreboard-body");
+    // Metrics reads as soon as it opens, not on the next refresh tick.
+    if (name === "metrics" && ctx.fetchMetrics) {
+      ctx.fetchMetrics();
+    }
     if (name === "reliability" && ctx.fetchReliability) {
       ctx.fetchReliability();
     }

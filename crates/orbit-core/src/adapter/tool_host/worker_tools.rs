@@ -104,6 +104,9 @@ pub(crate) fn execute(
                     .collect::<Vec<_>>(),
             ),
             "complexity_by_id" => serde_json::to_value(runtime.task_complexity_by_id()?),
+            "terminal_transitions" => serde_json::to_value(
+                runtime.task_terminal_transitions(optional_field(input, "since")?)?,
+            ),
             "task" => serde_json::to_value(runtime.get_task(id)?),
             "artifacts" => serde_json::to_value(runtime.get_task_artifacts(id)?),
             "manifest" => serde_json::to_value(runtime.get_task_artifact_manifest(id)?),

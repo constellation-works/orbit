@@ -116,7 +116,8 @@ pub use contracts::{
     SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams, TaskCompletionByComplexity,
     TaskCreateParams, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
     TaskReservationReleaseReason, TaskReservationReserveParams, TaskStoreBackend,
-    ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow,
+    TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams,
+    V2AuditEventRow,
 };
 pub use driver::file::session_log_store::SessionLogStore;
 pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;

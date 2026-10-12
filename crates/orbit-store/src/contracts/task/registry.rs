@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskStatus, normalize_task_tags};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct BindWorkspaceParams {
@@ -191,4 +192,15 @@ pub struct TaskCompletionByComplexity {
     pub complexity: String,
     pub total: i64,
     pub by_status: BTreeMap<String, i64>,
+}
+
+/// One terminal task as the generated index holds it. `at` is the row's
+/// `updated_at`: the moment the task reached `status`, unless a later write
+/// (a comment, an artifact) touched the terminal bundle again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskTerminalTransition {
+    pub status: TaskStatus,
+    /// Complexity bucket, as in [`TaskCompletionByComplexity::complexity`].
+    pub complexity: String,
+    pub at: DateTime<Utc>,
 }

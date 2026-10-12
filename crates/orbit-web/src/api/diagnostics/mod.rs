@@ -1,11 +1,15 @@
-//! `/diagnostics/{metrics,errors,friction}` aggregation endpoints.
+//! `/diagnostics/{metrics,errors,friction,implement_one,completions}`
+//! aggregation endpoints.
 
 mod audit;
+mod completions;
 mod durations;
 mod errors;
 mod friction;
 mod metrics;
+mod trend;
 
+pub(super) use completions::diagnostics_completions;
 pub(super) use durations::diagnostics_implement_one;
 pub(super) use errors::list_diagnostics_errors;
 pub(super) use friction::list_diagnostics_friction;

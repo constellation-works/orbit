@@ -2098,6 +2098,7 @@ dependencies = [
  "orbit-store",
  "orbit-types",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
