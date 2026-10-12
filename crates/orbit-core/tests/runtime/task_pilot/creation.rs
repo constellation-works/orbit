@@ -5,7 +5,7 @@
 //! a real repository, in isolated children.
 
 use orbit_core::application::task::{
-    ContextCreationAuthorization, TaskAddParams, TaskUpdateParams,
+    TaskAddParams, TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen,
 };
 use orbit_core::{Task, TaskStatus};
 use orbit_types::task::TaskArtifact;
@@ -24,52 +24,45 @@ impl Workspace {
     /// A proposed task over `context_files`, with every missing selector in
     /// `authorized` declared the way an operator surface declares it.
     fn scoped_task(&self, title: &str, context_files: &[&str], authorized: bool) -> Task {
-        let context_files = owned(context_files);
-        let context_creation = if authorized {
-            self.runtime
-                .authorize_missing_context(&context_files)
-                .unwrap()
-        } else {
-            ContextCreationAuthorization::default()
+        let params = TaskAddParams {
+            title: title.into(),
+            description: format!("Prepare {title}."),
+            acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
+            plan: "Inspect README.md.".into(),
+            status: Some(TaskStatus::Proposed),
+            context_files: owned(context_files),
+            ..Default::default()
         };
-        self.runtime
-            .add_task(TaskAddParams {
-                title: title.into(),
-                description: format!("Prepare {title}."),
-                acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
-                plan: "Inspect README.md.".into(),
-                status: Some(TaskStatus::Proposed),
-                context_files,
-                context_creation,
-                ..Default::default()
-            })
-            .unwrap()
+        // An undeclared missing selector is the shape an internal writer or an
+        // older release stored, which the permissive core add still accepts.
+        if authorized {
+            self.runtime
+                .add_task_screened(params, &TaskWriteScreen::unbound(true), None, None)
+                .unwrap()
+                .task
+        } else {
+            self.runtime.add_task(params).unwrap()
+        }
     }
 
     /// Replace `task`'s scope through the operator update path, declaring
     /// missing selectors when `allow_missing` is set and otherwise applying
     /// the strict check every surface runs.
     fn rescope(&self, task_id: &str, context_files: &[&str], allow_missing: bool) -> Task {
-        let context_files = owned(context_files);
-        let context_creation = if allow_missing {
-            self.runtime.authorize_missing_context(&context_files)
-        } else {
-            self.runtime
-                .ensure_context_selectors_exist_for_update(task_id, &context_files)
-        }
-        .unwrap();
         self.runtime
-            .update_task_with_identity(
+            .update_task_screened(
                 task_id,
                 TaskUpdateParams {
-                    context_files: Some(context_files),
-                    context_creation,
+                    context_files: Some(owned(context_files)),
                     ..Default::default()
                 },
+                &TaskWriteScreen::unbound(allow_missing),
+                TaskUpdateAuthority::Lifecycle,
                 Some("codex".into()),
                 Some("fixture-model".into()),
             )
             .unwrap()
+            .task
     }
 
     /// Apply one agent assessment for the single task `prepared` holds.
@@ -338,9 +331,17 @@ fn legacy_missing_target_is_reported_and_reauthorized_through_task_update() {
     // target revokes it, and re-adding it strictly is refused.
     workspace.rescope(&legacy.id, &[EXISTING, NEW_MODULE], false);
     workspace.rescope(&legacy.id, &[EXISTING], false);
-    let refused = workspace
-        .runtime
-        .ensure_context_selectors_exist_for_update(&legacy.id, &owned(&[EXISTING, NEW_MODULE]));
+    let refused = workspace.runtime.update_task_screened(
+        &legacy.id,
+        TaskUpdateParams {
+            context_files: Some(owned(&[EXISTING, NEW_MODULE])),
+            ..Default::default()
+        },
+        &TaskWriteScreen::unbound(false),
+        TaskUpdateAuthority::Lifecycle,
+        Some("codex".into()),
+        Some("fixture-model".into()),
+    );
     assert!(refused.is_err(), "a revoked grant must not revive");
 }
 

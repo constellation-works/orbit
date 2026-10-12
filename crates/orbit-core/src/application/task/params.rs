@@ -121,9 +121,9 @@ pub struct TaskAddParams {
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
     /// Creation intent an operator surface's selector screening established
-    /// for `context_files` ([`OrbitRuntime::authorize_missing_context`]).
+    /// for `context_files` ([`OrbitRuntime::add_task_screened`]).
     ///
-    /// [`OrbitRuntime::authorize_missing_context`]: crate::OrbitRuntime::authorize_missing_context
+    /// [`OrbitRuntime::add_task_screened`]: crate::OrbitRuntime::add_task_screened
     pub context_creation: ContextCreationAuthorization,
 }
 

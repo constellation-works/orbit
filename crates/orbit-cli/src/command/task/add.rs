@@ -1,13 +1,12 @@
 use clap::{ArgAction, Args};
-use orbit_core::application::task::{ContextCreationAuthorization, TaskAddParams};
+use orbit_core::application::task::{TaskAddParams, TaskWriteScreen};
 use orbit_core::{
     ExternalRef, OrbitRuntime, TaskComplexity, TaskCreateStatus, TaskPriority, TaskType,
 };
-use orbit_types::task::backlog_footprint_warning;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::output::task_to_json_for_runtime;
+use super::output::screened_write_json;
 
 #[derive(Args)]
 pub struct TaskAddArgs {
@@ -83,23 +82,8 @@ pub struct TaskAddArgs {
 
 impl Execute for TaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let required_tool_warnings = runtime.validate_required_tools(&self.required_tools)?;
         let (agent, model) = super::mutation_identity(self.model);
-        let context_creation = if self.allow_missing_context {
-            runtime.authorize_missing_context(&self.context)?
-        } else {
-            runtime.ensure_context_selectors_exist(&self.context)?;
-            ContextCreationAuthorization::default()
-        };
-        if let Some(parent_id) = self.parent_id.as_deref()
-            && runtime.get_task(parent_id).is_err()
-        {
-            eprintln!("warning: parent task '{parent_id}' was not found; creating subtask anyway");
-        }
-
-        super::warn_unreadable_dependencies(runtime, &self.dependencies);
-
-        let task = runtime.add_task_with_identity(
+        let written = runtime.add_task_screened(
             TaskAddParams {
                 parent_id: self.parent_id,
                 title: self.title,
@@ -126,25 +110,13 @@ impl Execute for TaskAddArgs {
                 crew: self.crew,
                 crew_source: None,
                 orchestrator: self.orchestrator,
-                context_creation,
+                context_creation: Default::default(),
             },
+            &TaskWriteScreen::from_process(self.allow_missing_context),
             agent,
             model,
         )?;
-
-        let mut warnings = required_tool_warnings;
-        // [ORB-15191] Filed straight into the backlog with no footprint, a
-        // live drain admits it before a pilot can prepare one.
-        if let Some(warning) = backlog_footprint_warning(&task) {
-            eprintln!("warning: {warning}");
-            warnings.push(warning);
-        }
-        let mut document = task_to_json_for_runtime(runtime, &task)?;
-        if !warnings.is_empty()
-            && let Some(object) = document.as_object_mut()
-        {
-            object.insert("warnings".to_string(), serde_json::json!(warnings));
-        }
-        Ok(Payload::detail(document, task.id).into())
+        let document = screened_write_json(runtime, &written)?;
+        Ok(Payload::detail(document, written.task.id).into())
     }
 }

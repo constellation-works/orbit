@@ -9,8 +9,9 @@
 //!
 //! ORB-12731: the worker bound to a run may also declare, from that run's
 //! worktree, a file it has not created yet — for the task the run owns only —
-//! and the write reports those selectors as `context_files_unverified`. Every
-//! other missing-target rejection names the escape hatch.
+//! and the write reports those selectors as `context_files_unverified`, through
+//! `orbit.task.update` and `orbit task update` alike. Every other
+//! missing-target rejection names the escape hatch.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -118,6 +119,18 @@ impl Workspace {
             cwd,
             &["tool", "run", "orbit.task.update", "--input", &input],
         );
+        command
+            .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+            .env("ORBIT_RUN_ID", run_id);
+        command.output().expect("run orbit as managed worker")
+    }
+
+    /// Run `orbit task update <args>` from `cwd` carrying the managed-run
+    /// envelope that binds the call to `run_id`, as a worker's shell does.
+    fn cli_update_as_run(&self, cwd: &Path, run_id: &str, args: &[&str]) -> Output {
+        let mut argv = vec!["task", "update"];
+        argv.extend_from_slice(args);
+        let mut command = self.orbit(cwd, &argv);
         command
             .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
             .env("ORBIT_RUN_ID", run_id);
@@ -446,6 +459,75 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
     assert!(
         response.get("context_files_unverified").is_none(),
         "a verified write must not report unverified selectors: {response}"
+    );
+}
+
+/// The relaxation is a property of the core update, so the owning worker's
+/// `orbit task update` gets it as `orbit.task.update` does: the same response
+/// key, the same stored scope, and the strict check for a task its run does
+/// not own or a shell outside a managed run.
+#[test]
+fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
+    let workspace = Workspace::init();
+    let run_id = "jrun-fixture-owner";
+    let task_id = workspace.author_task("Owned task updated from the CLI");
+    workspace.bind_task_to_run(&task_id, run_id);
+    let foreign = workspace.author_task("Task the run does not own");
+    let worktree = workspace.add_worktree_with_new_file(
+        &workspace
+            .repo
+            .join(".orbit/state/worktrees/orbit-jrun-fixture-owner"),
+        "orbit-context-owner-cli",
+        "src/brand_new.rs",
+    );
+
+    let response = Workspace::assert_success(
+        &workspace.cli_update_as_run(
+            &worktree,
+            run_id,
+            &[
+                &task_id,
+                "--context",
+                "file:src/lib.rs,file:src/brand_new.rs,file:src/not_yet.rs",
+                "--json",
+            ],
+        ),
+        "owning worker's CLI update declaring a to-be-created target",
+    );
+    assert_eq!(
+        response["context_files_unverified"],
+        json!(["file:src/not_yet.rs"]),
+        "only the selector no checkout could verify is reported: {response}"
+    );
+    assert_eq!(
+        workspace.stored_context_files(&task_id),
+        vec![
+            "file:src/lib.rs".to_string(),
+            "file:src/brand_new.rs".to_string(),
+            "file:src/not_yet.rs".to_string(),
+        ],
+    );
+
+    let rejected = Workspace::assert_failure(
+        &workspace.cli_update_as_run(
+            &worktree,
+            run_id,
+            &[&foreign, "--context", "file:src/not_yet.rs"],
+        ),
+        "owning worker's CLI update of a task its run does not own",
+    );
+    assert!(
+        rejected.contains("file:src/not_yet.rs") && rejected.contains("--allow-missing-context"),
+        "the strict rejection must name the selector and the flag: {rejected}"
+    );
+
+    let rejected = workspace.run_failure(
+        &worktree,
+        &["task", "update", &task_id, "--context", "file:src/later.rs"],
+    );
+    assert!(
+        rejected.contains("file:src/later.rs"),
+        "a shell outside the managed run gets the strict check: {rejected}"
     );
 }
 

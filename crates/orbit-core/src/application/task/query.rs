@@ -53,7 +53,7 @@ impl OrbitRuntime {
     /// `false` covers both an id the registered owners do not hold and one
     /// whose prefix belongs to another host; neither is an error, since a
     /// dependency may be recorded before its target exists here.
-    pub fn dependency_task_is_readable(&self, id: &str) -> Result<bool, OrbitError> {
+    pub(crate) fn dependency_task_is_readable(&self, id: &str) -> Result<bool, OrbitError> {
         Ok(matches!(
             self.resolve_dependency_task(id)?,
             RegisteredTaskResolution::Resolved(_)

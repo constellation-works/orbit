@@ -169,10 +169,15 @@ containment and file/directory kind are still checked, and comments, plans or
 agent proposals never grant intent. When task-pilot reports a missing selector
 that carries no such record, re-declare it through that update path.
 
-A worker updating its own task through `orbit.task.update` from its run's
-linked worktree gets the existence relaxation automatically for that task,
-without recording creation intent, and the response lists the
-stored-but-unresolved selectors as `context_files_unverified`.
+A worker updating its own task through `orbit.task.update` or `orbit task
+update` from its run's linked worktree gets the existence relaxation
+automatically for that task, without recording creation intent, and the
+response lists the stored-but-unresolved selectors as
+`context_files_unverified`. A dashboard request is never bound to a run, so it
+keeps the strict check. Task writes on every surface return the same advisory
+`warnings` (a disabled required tool, an unreadable parent or dependency, a
+non-chore task added without `context_files`, a backlog task with no
+footprint, and task-pilot blockers on approval); they never refuse the write.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an

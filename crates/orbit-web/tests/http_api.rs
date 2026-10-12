@@ -39,6 +39,8 @@ mod reliability;
 mod runs;
 #[path = "http_api/support.rs"]
 mod support;
+#[path = "http_api/task_writes.rs"]
+mod task_writes;
 #[path = "http_api/workflows.rs"]
 mod workflows;
 

@@ -4,16 +4,15 @@ use orbit_common::protocol::tool_input::{
     optional_string_list_alias, required_string,
 };
 use orbit_types::task::{
-    TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, backlog_footprint_warning,
-    is_task_show_projection_field, task_base_json, unknown_task_show_field_message,
-    validate_relative_artifact_path,
+    TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, is_task_show_projection_field,
+    task_base_json, unknown_task_show_field_message, validate_relative_artifact_path,
 };
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    ContextCreationAuthorization, TaskAddParams, TaskEligibilityQuery, TaskUpdateParams,
-    compute_task_add_warnings, is_operator_rescue_close,
+    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskEligibilityQuery,
+    TaskUpdateParams, TaskWriteScreen, is_operator_rescue_close,
 };
 
 use super::input::{
@@ -48,21 +47,15 @@ pub(super) fn add(
     // this runtime before dispatch reaches here; context selectors always
     // canonicalize against the repository root regardless of its value.
     let _ = required_string(&input, &["workspace"], "workspace")?;
-    let raw_context_files =
+    let context_files =
         optional_csv_or_string_list_alias(&input, &["context_files"])?.unwrap_or_default();
-    let context_creation = if allows_missing_context(&input)? {
-        runtime.authorize_missing_context(&raw_context_files)?
-    } else {
-        runtime.ensure_context_selectors_exist(&raw_context_files)?;
-        ContextCreationAuthorization::default()
-    };
-    let raw_required_tools = optional_csv_or_string_list_alias(
+    let screen = TaskWriteScreen::unbound(allows_missing_context(&input)?);
+    let required_tools = optional_csv_or_string_list_alias(
         &input,
         &["required_tools", "requiredTools", "required-tool"],
     )?
     .unwrap_or_default();
-    let mut warnings = runtime.validate_required_tools(&raw_required_tools)?;
-    let task = runtime.add_task_with_identity(
+    let written = runtime.add_task_screened(
         TaskAddParams {
             parent_id: None,
             title,
@@ -79,7 +72,7 @@ pub(super) fn add(
             dependencies: Vec::new(),
             relations: parse_relations(&input)?.unwrap_or_default(),
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default(),
-            required_tools: raw_required_tools,
+            required_tools,
             plan: String::new(),
             crew_source: None,
             comment: filed_by.map(|binding| {
@@ -88,7 +81,7 @@ pub(super) fn add(
                     binding.claim_id, binding.bound_run_id, binding.execution.machine_id
                 )
             }),
-            context_files: raw_context_files.clone(),
+            context_files,
             priority: optional_string(&input, "priority")?
                 .map(|value| parse_task_priority("priority", &value))
                 .transpose()?
@@ -106,25 +99,13 @@ pub(super) fn add(
             source_task_id: None,
             crew: optional_string(&input, "crew")?,
             orchestrator: optional_string(&input, "orchestrator")?,
-            context_creation,
+            context_creation: ContextCreationAuthorization::default(),
         },
+        &screen,
         agent,
         model,
     )?;
-    let mut response = serialize_task_write_response(runtime, &task, response_fields.as_deref())?;
-    warnings.extend(compute_task_add_warnings(
-        &raw_context_files,
-        task.task_type,
-    ));
-    if !warnings.is_empty()
-        && let Some(obj) = response.as_object_mut()
-    {
-        obj.insert("warnings".to_string(), json!(warnings));
-    }
-    Ok(TaskWriteOutput {
-        response,
-        persisted_id: task.id,
-    })
+    screened_write_response(runtime, written, response_fields.as_deref())
 }
 
 pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -407,52 +388,37 @@ pub(super) fn update(
     let requested_status = optional_string(&input, "status")?
         .map(|value| parse_task_status("status", &value))
         .transpose()?;
+    let screen = TaskWriteScreen::bound(
+        allows_missing_context(&input)?,
+        owner.map(|owner| owner.owner_run_id),
+    );
     if let Some(target) = requested_status
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
         let current = runtime.get_task(&id)?;
         if let Some(kind) = guarded_lifecycle_write(current.status, target, &input, operator)? {
-            let (task, unverified) = match kind {
-                GuardedLifecycleWrite::Approve => (
-                    runtime.transition_task_to_backlog_with_identity(
-                        &id,
-                        optional_string(&input, "note")?,
-                        optional_string(&input, "comment")?,
-                        agent,
-                        model,
-                    )?,
-                    Vec::new(),
-                ),
+            let written = match kind {
+                GuardedLifecycleWrite::Approve => runtime.transition_task_to_backlog_screened(
+                    &id,
+                    optional_string(&input, "note")?,
+                    optional_string(&input, "comment")?,
+                    agent,
+                    model,
+                )?,
                 GuardedLifecycleWrite::Start => {
                     let mut params = task_update_params_from_input(&input, requested_status)?;
                     params.trusted_artifact_origin = origin.clone();
-                    let unverified = ensure_context_selectors_if_required(
-                        runtime,
+                    runtime.start_task_screened(
                         &id,
-                        &input,
-                        &mut params,
-                        owner.as_ref(),
-                    )?;
-                    let task = runtime.start_task_with_identity_and_crew(
-                        &id,
+                        params,
+                        &screen,
                         optional_string(&input, "note")?,
-                        params.comment.clone(),
                         agent,
                         model,
-                        params.crew.clone().flatten(),
-                        params.plan.clone(),
-                        params,
-                        owner.map(|owner| owner.owner_run_id),
-                    )?;
-                    (task, unverified)
+                    )?
                 }
             };
-            return write_response_with_unverified_context(
-                runtime,
-                &task,
-                response_fields.as_deref(),
-                unverified,
-            );
+            return screened_write_response(runtime, written, response_fields.as_deref());
         }
     }
     let note = optional_string(&input, "note")?;
@@ -463,45 +429,40 @@ pub(super) fn update(
     }
     let mut params = task_update_params_from_input(&input, requested_status)?;
     params.trusted_artifact_origin = origin.clone();
-    let unverified =
-        ensure_context_selectors_if_required(runtime, &id, &input, &mut params, owner.as_ref())?;
-    let task = runtime.update_task_with_owner(
-        &id,
-        params,
-        agent,
-        model,
-        note,
-        owner.map(|owner| owner.owner_run_id),
-    )?;
-    write_response_with_unverified_context(runtime, &task, response_fields.as_deref(), unverified)
+    let written =
+        runtime.update_task_screened_for_tool(&id, params, &screen, agent, model, note)?;
+    screened_write_response(runtime, written, response_fields.as_deref())
 }
 
-/// Response key listing the canonical selectors this write stored without a
-/// verified anchor because the owning worker declared them from its worktree.
-/// Present only when the relaxation actually applied, so the response stays
-/// unchanged for every strict write.
-const CONTEXT_FILES_UNVERIFIED_KEY: &str = "context_files_unverified";
-
-fn write_response_with_unverified_context(
+/// The write response: the task projection plus, only when non-empty, the
+/// write's `warnings` and the `context_files_unverified` selectors the
+/// owning worker's relaxation stored, so a strict write's response is the
+/// bare projection.
+fn screened_write_response(
     runtime: &OrbitRuntime,
-    task: &orbit_types::task::Task,
+    written: ScreenedTaskWrite,
     fields: Option<&[String]>,
-    unverified: Vec<String>,
 ) -> Result<TaskWriteOutput, OrbitError> {
-    let mut response = serialize_task_write_response(runtime, task, fields)?;
+    let ScreenedTaskWrite {
+        task,
+        warnings,
+        context_files_unverified,
+    } = written;
+    let mut response = serialize_task_write_response(runtime, &task, fields)?;
     if let Some(obj) = response.as_object_mut() {
-        if !unverified.is_empty() {
-            obj.insert(CONTEXT_FILES_UNVERIFIED_KEY.to_string(), json!(unverified));
+        if !context_files_unverified.is_empty() {
+            obj.insert(
+                "context_files_unverified".to_string(),
+                json!(context_files_unverified),
+            );
         }
-        // [ORB-15191] A write that leaves the task in the backlog with no
-        // footprint says so as loudly as an add does.
-        if let Some(warning) = backlog_footprint_warning(task) {
-            obj.insert("warnings".to_string(), json!([warning]));
+        if !warnings.is_empty() {
+            obj.insert("warnings".to_string(), json!(warnings));
         }
     }
     Ok(TaskWriteOutput {
         response,
-        persisted_id: task.id.clone(),
+        persisted_id: task.id,
     })
 }
 
@@ -666,7 +627,7 @@ fn task_update_params_from_input(
         },
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
-        // Derived from the selector screening, never from tool input.
+        // Derived from the core's selector screening, never from tool input.
         context_creation: ContextCreationAuthorization::default(),
         upsert_artifacts: parse_artifacts(input)?,
         // Discarding a preserved candidate is an operator decision taken
@@ -683,38 +644,6 @@ fn task_update_params_from_input(
         )?
         .unwrap_or(false),
     })
-}
-
-/// Screen an update's replacement selectors, record the creation intent the
-/// screening established on `params`, and return the selectors the owning
-/// worker's relaxation let through unverified (see
-/// [`OrbitRuntime::ensure_context_selectors_exist_for_task_write`]).
-///
-/// With `allow_missing_context` every missing selector becomes a durable
-/// creation grant ([`OrbitRuntime::authorize_missing_context`]); otherwise
-/// the strict check runs, keeping selectors the task already holds a grant for.
-fn ensure_context_selectors_if_required(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-    input: &Value,
-    params: &mut TaskUpdateParams,
-    owner: Option<&orbit_tools::ReservationOwnerContext>,
-) -> Result<Vec<String>, OrbitError> {
-    let allow_missing = allows_missing_context(input)?;
-    let Some(candidates) = params.context_files.as_deref() else {
-        return Ok(Vec::new());
-    };
-    if allow_missing {
-        params.context_creation = runtime.authorize_missing_context(candidates)?;
-        return Ok(Vec::new());
-    }
-    let (unverified, creation) = runtime.ensure_context_selectors_exist_for_task_write(
-        task_id,
-        owner.map(|owner| owner.owner_run_id.as_str()),
-        candidates,
-    )?;
-    params.context_creation = creation;
-    Ok(unverified)
 }
 
 /// Whether the caller explicitly declared that missing `context_files`
