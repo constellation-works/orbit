@@ -87,6 +87,48 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.auto_concurrency.admit_cpu_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.auto_concurrency.admit_memory_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.auto_concurrency.head_max_wait_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.auto_concurrency.horizon_cap_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.auto_concurrency.min_profile_deliveries": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.auto_concurrency.mode": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.auto_concurrency.profile_window": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.id": {
       "scope": "built-in",
       "state": "unset",

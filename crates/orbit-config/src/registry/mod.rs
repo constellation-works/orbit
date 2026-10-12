@@ -159,7 +159,8 @@ pub use keys::{
     describe, immutable_key_note, is_global_only_key,
 };
 pub(crate) use settings::read_optional;
+pub(crate) use settings::resolve_percent;
 pub use settings::{
-    CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings, ResourceThrottleSettings,
-    WorkerContainmentSettings,
+    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings,
+    ResourceThrottleSettings, WorkerContainmentSettings,
 };

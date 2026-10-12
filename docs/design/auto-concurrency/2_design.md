@@ -364,7 +364,7 @@ the forecast.
 
 | Surface | Proposed change |
 |---|---|
-| Machine config | `[workflow.auto_concurrency]` beside `[workflow.resource_throttle]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (80), `admit_memory_percent` (75), `profile_window` (50), `min_profile_deliveries` (10), `horizon_cap_minutes` (120), `head_max_wait_minutes` (30) |
+| Machine config | Global-only `[machine.auto_concurrency]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because Linux throttle CPU is load-based and can exceed 100%. |
 | `drain_last_pass` | an `admission_forecast` block: the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource, and whether the head is being protected |
 | `orbit run show` | an `Admission:` line, e.g. `forecast — skipped ORB-123 (cpu 94% at +6m)` |
 | `orbit run readiness` | the host's forecast peak, its headroom, and the profile source per waiting task |

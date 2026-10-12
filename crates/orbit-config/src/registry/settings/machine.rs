@@ -114,3 +114,36 @@ pub struct ResourceThrottleSettings {
     /// Disk recovery percentage.
     pub disk_resume_percent: u8,
 }
+
+/// Host-wide delivery admission thresholds and profile bounds.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AutoConcurrencySettings {
+    /// Whether forecast-based admission is disabled, observed, or enforced.
+    pub mode: String,
+    /// Maximum forecast CPU utilization as a share of host cores.
+    pub admit_cpu_percent: u8,
+    /// Maximum forecast non-reclaimable memory as a share of host memory.
+    pub admit_memory_percent: u8,
+    /// Number of recent completed deliveries retained per profile key.
+    pub profile_window: u32,
+    /// Minimum completed deliveries a profile key needs before use without fallback.
+    pub min_profile_deliveries: u32,
+    /// Maximum forecast horizon for a candidate, in minutes.
+    pub horizon_cap_minutes: u32,
+    /// Maximum time the queue head may wait before it blocks backfilling, in minutes.
+    pub head_max_wait_minutes: u32,
+}
+
+impl AutoConcurrencySettings {
+    pub(crate) fn validate_memory_high_percent(
+        &self,
+        resource_throttle_memory_high_percent: u8,
+    ) -> Result<(), OrbitError> {
+        if self.admit_memory_percent >= resource_throttle_memory_high_percent {
+            return Err(OrbitError::InvalidInput(format!(
+                "machine.auto_concurrency.admit_memory_percent must be less than global workflow.resource_throttle.memory_high_percent ({resource_throttle_memory_high_percent})"
+            )));
+        }
+        Ok(())
+    }
+}

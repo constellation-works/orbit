@@ -6,7 +6,9 @@ use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 
-use super::machine::{MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings};
+use super::machine::{
+    AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
+};
 use super::resolve::{DEFAULT_FINAL_RECOVERY_CREWS, resolve_default_crew};
 use super::table::ConfigSnapshot;
 
@@ -62,6 +64,13 @@ impl ConfigSnapshot {
             ));
         }
         let resources = self.resource_throttle();
+        let auto_concurrency = self.auto_concurrency();
+        if auto_concurrency.profile_window < auto_concurrency.min_profile_deliveries {
+            return Err(OrbitError::InvalidInput(
+                "machine.auto_concurrency.profile_window must be at least machine.auto_concurrency.min_profile_deliveries"
+                    .to_string(),
+            ));
+        }
         for (resource, high, resume) in [
             (
                 "cpu",
@@ -194,6 +203,19 @@ fn admit_final_recovery_crews(
 }
 
 impl ConfigSnapshot {
+    /// The admitted host-wide `[machine.auto_concurrency]` thresholds.
+    pub fn auto_concurrency(&self) -> AutoConcurrencySettings {
+        AutoConcurrencySettings {
+            mode: self.machine_auto_concurrency_mode.clone(),
+            admit_cpu_percent: self.machine_auto_concurrency_admit_cpu_percent,
+            admit_memory_percent: self.machine_auto_concurrency_admit_memory_percent,
+            profile_window: self.machine_auto_concurrency_profile_window,
+            min_profile_deliveries: self.machine_auto_concurrency_min_profile_deliveries,
+            horizon_cap_minutes: self.machine_auto_concurrency_horizon_cap_minutes,
+            head_max_wait_minutes: self.machine_auto_concurrency_head_max_wait_minutes,
+        }
+    }
+
     /// Admitted host resource thresholds, shared by dashboard and admission consumers.
     pub fn resource_throttle(&self) -> ResourceThrottleSettings {
         ResourceThrottleSettings {

@@ -274,10 +274,10 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.task_pilot_freshness.material_fields` | array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields whose edit makes an accepted task-pilot assessment stale. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. |
 | `workflow.task_pilot_freshness.source_sensitivity` | string · **Default:** `ignore`<br>Whether a branch-head move makes an accepted task-pilot assessment stale: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
 | `workflow.resource_throttle.enabled` | bool · **Default:** `true`<br>Start no new task while host CPU, memory, or disk pressure stays high. Disabled, pressure is still reported. |
-| `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. |
+| `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. On Linux this is load average divided by online CPUs, includes the run queue, and can exceed 100%; it differs from `machine.auto_concurrency.admit_cpu_percent`, which measures forecast utilization. |
 | `workflow.resource_throttle.cpu_resume_percent` | integer · **Default:** `85`<br>Resume below this CPU percentage. |
 | `workflow.resource_throttle.cpu_light_leaves` | integer · **Default:** `2`<br>While CPU alone holds admissions, a local drain still starts up to this many `no-diff-expected` auto-tasks (reviews, curation). Memory and disk pressure hold them too; `0` holds them with everything else. |
-| `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. |
+| `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. It and `machine.auto_concurrency.admit_memory_percent` measure non-reclaimable memory; the global auto-concurrency threshold must stay below this global high mark. |
 | `workflow.resource_throttle.memory_resume_percent` | integer · **Default:** `85`<br>Resume below this memory percentage. |
 | `workflow.resource_throttle.disk_high_percent` | integer · **Default:** `90`<br>Disk high-water mark, per observed filesystem. |
 | `workflow.resource_throttle.disk_resume_percent` | integer · **Default:** `85`<br>Resume below this disk percentage. |
@@ -294,6 +294,13 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `machine.worker_memory_max` | string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. |
 | `machine.worker_tasks_max` | integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=`. |
 | `machine.worker_cpu_quota` | integer · **Default:** unset<br>Global only. Worker scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` or unset sets no CPU limit. Linux only. |
+| `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission mode: `off`, `shadow`, or `enforce`. No admission path reads it yet. |
+| `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Forecast CPU utilization as a percentage of host cores (1–100); distinct from the Linux load-based `workflow.resource_throttle.cpu_high_percent`. |
+| `machine.auto_concurrency.admit_memory_percent` | integer · **Default:** `75`<br>Global only. Forecast non-reclaimable memory as a percentage of host memory (1–100), strictly below global `workflow.resource_throttle.memory_high_percent`. |
+| `machine.auto_concurrency.profile_window` | integer · **Default:** `50`<br>Global only. Most recent completed deliveries retained per profile key; at least `min_profile_deliveries`. |
+| `machine.auto_concurrency.min_profile_deliveries` | integer · **Default:** `10`<br>Global only. Minimum completed deliveries before using a profile key rather than falling back. |
+| `machine.auto_concurrency.horizon_cap_minutes` | integer · **Default:** `120`<br>Global only. Maximum forecast horizon for a candidate, in minutes. |
+| `machine.auto_concurrency.head_max_wait_minutes` | integer · **Default:** `30`<br>Global only. Maximum queue-head wait before the starvation guard stops backfilling, in minutes. |
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `ci_failure.operator_suppression_hours` | integer · **Default:** `6`<br>Hours an archived/rejected CI sweep finding without `covered_by` holds its exact failure key (0–720). Explicit task/PR covers hold while open or until a failing checkout contains the landed fix; operator holds report their owner and reason. |
 | `automation.stall_window_minutes` | integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
