@@ -619,6 +619,7 @@ export function positiveIntParam(name, fallback) {
 
 export function el(tag, opts = {}, children = []) {
   const node = document.createElement(tag);
+  if (opts.id) node.id = opts.id;
   if (opts.class) node.className = opts.class;
   if (opts.text != null) node.textContent = opts.text;
   if (opts.title != null) node.title = opts.title;

@@ -113,9 +113,46 @@ try {
       }
     }
   }
-  fs.writeFileSync(path.join(evidence, 'measurements.json'), `${JSON.stringify({ browser: browser.version(), measurements, failures }, null, 2)}\n`);
-  assert.deepEqual(failures, [], 'Rail labels and counts must remain readable, separate and inside their buttons');
-  console.log(`PASS: rail label/count geometry at seven viewport widths, both two-count entries, large and cleared counts; screenshots: ${evidence}`);
+  // Drive the shipped router through repeated destination and Health subtab
+  // changes; each bar must keep reusing one indicator instead of gaining a node
+  // per transition. The stand-in context answers every router callback.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const indicators = await page.evaluate(async () => {
+    const router = await import('/static/js/router.js');
+    const state = { diagSubtab: 'runs' };
+    router.initRouter(new Proxy({}, {
+      get: (_, name) => name === 'getDiagSubtab' ? () => state.diagSubtab
+        : name === 'setDiagSubtab' ? value => { state.diagSubtab = value; }
+        : name === 'getLastRuns' ? () => []
+        : () => {},
+    }));
+    const count = () => ({
+      tabs: document.querySelectorAll('#tabs > .tab-indicator').length,
+      subtabs: document.querySelectorAll('#diag-subtabs > .tab-indicator').length,
+      tabIndicator: Boolean(document.getElementById('tab-indicator')),
+      subtabIndicator: Boolean(document.getElementById('subtab-indicator')),
+    });
+    const counts = [];
+    for (let round = 0; round < 3; round += 1) {
+      for (const route of ['tasks', 'plugins', 'diagnostics/runs', 'diagnostics/metrics', 'diagnostics/errors', 'tasks']) {
+        router.setActiveTab(route, { refresh: false, updateHash: false });
+        counts.push({ route, ...count() });
+      }
+    }
+    return counts;
+  });
+  // The Health subtab bar gains its indicator on the first Health route.
+  const firstHealth = indicators.findIndex(step => step.route.startsWith('diagnostics/'));
+  for (const [index, step] of indicators.entries()) {
+    if (step.tabs !== 1 || !step.tabIndicator) failures.push(`${step.route}: ${step.tabs} top-level indicators, #tab-indicator ${step.tabIndicator ? 'present' : 'missing'}`);
+    const expected = index >= firstHealth ? 1 : 0;
+    if (step.subtabs !== expected || step.subtabIndicator !== Boolean(expected)) {
+      failures.push(`${step.route}: ${step.subtabs} Health subtab indicators, expected ${expected}`);
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'measurements.json'), `${JSON.stringify({ browser: browser.version(), measurements, indicators, failures }, null, 2)}\n`);
+  assert.deepEqual(failures, [], 'Rail labels and counts must remain readable, separate and inside their buttons, and navigation must reuse one indicator per bar');
+  console.log(`PASS: rail label/count geometry at seven viewport widths, both two-count entries, large and cleared counts; one indicator per bar across ${indicators.length} route changes; screenshots: ${evidence}`);
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));
