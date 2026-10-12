@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Decisions"
 owner: codex
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-11
 status: Draft
 feature: task-artifacts
 doc_role: decisions
@@ -27,7 +27,7 @@ The current `T<YYYYMMDD>-<N>` format is allocated by scanning one workspace's ta
 
 ### Decision
 
-Adopt `ORB-00000` as the canonical v2 task ID example: `ORB-` plus a decimal suffix formatted with at least five digits and allocated by an explicit authority. The ID is unique inside that authority, not across unrelated local registries. V2 task bundles do not preserve old `T...` identifiers as aliases.
+Adopt `ORB-00000` as the canonical v2 task ID example: `ORB-` plus a decimal suffix formatted with at least five digits and allocated by an explicit authority. The ID is unique inside that authority, not across unrelated local registries. V2 task bundles do not preserve old `T...` identifiers as aliases. *(Qualification: Under the shipped multi-host model [ORB-10721], `ORB` is the default/example prefix; each host configures its own distinct 2–5 uppercase-letter task prefix such as `DANI-` or `SHR-` to ensure disjoint per-host ID namespaces, with five digits maintained as the formatting minimum.)*
 
 ### Consequences
 
@@ -214,7 +214,7 @@ Task records already carry a typed `relations` array, but every relation type wa
 
 ### Decision
 
-Add two cross-artifact relation types to the task envelope: `produces` for artifacts created during execution and `resolves` for artifacts closed or superseded by the task. These two relation types accept task, friction, and ADR ID shapes (`ORB-`, `FYYYY-MM-NNN`, `ADR-NNNN+`). Retired learning IDs are not valid relation targets. Existing relation types remain task-only. Friction auto-close is the only v1 side effect: when a task moves from Review to Done, `resolves -> F...` transitions the friction to `resolved` and records `resolved_by_task`.
+Add two cross-artifact relation types to the task envelope: `produces` for artifacts created during execution and `resolves` for artifacts closed or superseded by the task. These two relation types accept task, friction, and ADR ID shapes (task IDs under any configured prefix such as `ORB-`, `FYYYY-MM-NNN`, `ADR-NNNN+`). Retired learning IDs are not valid relation targets. Existing relation types remain task-only. Friction auto-close is the only v1 side effect: when a task moves from Review to Done, `resolves -> F...` transitions the friction to `resolved` and records `resolved_by_task`.
 
 ### Consequences
 

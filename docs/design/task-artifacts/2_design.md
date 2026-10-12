@@ -80,7 +80,7 @@ created_at: 2026-05-11T00:00:00Z
 updated_at: 2026-05-11T00:00:00Z
 ```
 
-The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (`ORB-`, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Legacy task relation types remain task-only. `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
+The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (valid task IDs under any configured prefix, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Task-only relation types target valid task IDs under any configured prefix (for example, `ORB-00000` or `DANI-00001`). `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
 
 ## 3. Prose Documents
 
@@ -271,15 +271,23 @@ Task lock reservations in v2 mode require `.orbit/config.yaml` to provide the wo
 
 ### 9.1 Format
 
-The target canonical ID format is:
+The target canonical ID format follows the grammar:
+
+```text
+<prefix>-<digits>
+```
+
+For example:
 
 ```text
 ORB-00000
 ```
 
-`ORB` names the product namespace. The suffix is decimal, zero-padded to five digits for the initial range (`ORB-00000` through `ORB-99999`). The string is the task identity inside one allocation authority. Consumers may parse the numeric suffix only for validation and ordering.
+`<prefix>` is 2 to 5 uppercase ASCII letters excluding reserved artifact namespaces (`ADR`, `L`, and `F`). `ORB` is the canonical example and historical single-machine default prefix. Under the shipped multi-host model, each host configures its own distinct task prefix (e.g. `ORB`, `DANI`, `SHR`) in `[machine].task_prefix` in `~/.orbit/config.toml`, projected into the local allocator before any runtime opens.
 
-The local OSS authority is one `~/.orbit/tasks/index.sqlite` allocator shared across all local workspaces, so a single machine will not mint the same `ORB-00042` for two repositories. Bare IDs are still not universally unique across unrelated machines or hosted tenants. Cross-registry references must carry registry/workspace context through the sync registry, hosted tenant, or an explicit external reference. Code should not infer universal uniqueness from the `ORB-` prefix alone.
+The suffix is decimal, zero-padded to at least five digits for formatting (for example, `ORB-00000` through `ORB-99999` or `DANI-00001`). Five digits is a formatting minimum width; parsers accept wider decimal suffixes and the numeric value is bounded by `u32::MAX`. The string is the task identity inside one allocation authority. Consumers may parse the numeric suffix only for validation and ordering.
+
+The local OSS authority is one `~/.orbit/tasks/index.sqlite` allocator shared across all local workspaces, minting under the host's configured prefix. Two hosts with distinct prefixes (such as `ORB-` and `DANI-`) cannot collide regardless of counter values, establishing disjoint per-host ID namespaces. Cross-registry references carry the owner's prefix; tasks and relations referencing foreign host prefixes remain valid and portable across registries.
 
 ### 9.2 Flat storage
 
@@ -289,15 +297,16 @@ Canonical task bundles live under `~/.orbit/tasks/workspaces/<workspace-id>/<tas
 
 Uniqueness requires an authority:
 
-- Local-only OSS allocates from one machine-local registry under `~/.orbit/tasks/index.sqlite`, guarded by a process/file lock.
-- Synced workspaces allocate against the task registry before materializing a bundle.
+- Local OSS allocates from one machine-local registry under `~/.orbit/tasks/index.sqlite`, guarded by a process/file lock, under the host's configured task prefix.
+- The host whose prefix a task carries is its sole mutating authority (owner authority). Tasks copied elsewhere remain read-only foreign mirrors.
+- Synced workspaces allocate against the owning task registry before materializing a bundle.
 - Hosted team mode allocates through the hosted API.
 
 The implementation should not claim authority-scoped uniqueness by scanning filesystem directories. Allocation reserves an ID. Workspace binding, canonical materialization, sync upload, and hosted publication are separate APIs.
 
 ### 9.4 No legacy aliases
 
-V2 task bundles do not carry `legacy_ids`, and lookup surfaces should not resolve old `T<YYYYMMDD>-<N>` values. During a one-time cutover, Orbit may print a local report that maps old IDs to new IDs, but that report is an operator aid rather than part of the task schema. New commits and docs should cite only `ORB-00000` IDs.
+V2 task bundles do not carry `legacy_ids`, and lookup surfaces should not resolve old `T<YYYYMMDD>-<N>` values. During a one-time cutover, Orbit may print a local report that maps old IDs to new IDs, but that report is an operator aid rather than part of the task schema. New commits and docs should cite task IDs under the configured prefix (using `ORB-00000` as the standard example).
 
 ---
 
@@ -314,7 +323,7 @@ CLI and tool selectors may keep friendly names such as `description`, `plan`, an
 
 The public `Task` DTO should not embed legacy relation fields (`parent_id`, `dependencies`, `source_task_id`), local workspace bindings (`workspace_path`, `repo_root`), append-heavy streams (`comments`, `history`), or internal execution-routing fields (`agent`, `model`). It carries typed `relations`, `job_run_id`, envelope metadata, and durable attribution fields. Consumers that need comments, history, or workspace binding metadata should call the dedicated bundle/registry APIs.
 
-`orbit.task.locks.*` remains a local operational surface, not a task artifact. Lock reservations live in SQLite keyed by workspace binding and canonical `ORB-*` task IDs, and expire by TTL.
+`orbit.task.locks.*` remains a local operational surface, not a task artifact. Lock reservations live in SQLite keyed by workspace binding and canonical task IDs (e.g. `ORB-*`, `DANI-*`), and expire by TTL.
 
 ---
 
@@ -333,7 +342,7 @@ Status and retention views are generated indexes. CLI/list surfaces can group te
 The reset should be a one-time cutover rather than a long-lived compatibility layer:
 
 1. Create or reuse a `workspace_id` in `.orbit/config.yaml`.
-2. Allocate or derive a canonical `ORB-00000` ID for every existing task.
+2. Allocate or derive a canonical task ID (for example, `ORB-00000`) for every existing task.
 3. Record the authority allocation and workspace binding in `~/.orbit/tasks/index.sqlite`.
 4. Materialize each task into `~/.orbit/tasks/workspaces/<workspace-id>/<canonical-id>/`.
 5. Register and index the canonical bundle for authoritative task and artifact lookup.
@@ -353,7 +362,7 @@ The cutover command may emit a human-readable mapping from old IDs to new IDs, b
 
 ## 13. Concerns & Honest Limitations
 
-`ORB-00000` IDs look universal but are only unique inside an allocation authority. Local-only Orbit uses one machine-local authority across all repos, but sync and hosted modes need shared allocation. That is a deliberate tradeoff: a context-free global ID cannot be produced across machines without a registry.
+Task IDs (such as `ORB-00000`) look universal but are unique inside an allocation authority. In the multi-host model, disjoint configured prefixes (such as `ORB-` and `DANI-`) prevent cross-host ID collisions, and the host that minted a task is its sole writer.
 
 Markdown acceptance criteria are friendlier to authors but weaker than typed checks. Automation gates that require structured checks should add a future `checks.yaml` instead of keeping the old YAML array alive.
 
