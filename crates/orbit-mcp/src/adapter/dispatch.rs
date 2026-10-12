@@ -15,7 +15,6 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
 
-use super::OrbitToolServer;
 use super::name_map::{advertise_tool_names, advertise_tool_names_in_schema, build_name_map};
 use super::presentation;
 use super::schema::{
@@ -23,16 +22,29 @@ use super::schema::{
     schema_to_tool,
 };
 use super::structured::mcp_tool_call_result;
+use super::{OrbitToolServer, ToolSurface};
 use crate::error::tool_error_result;
 
 impl OrbitToolServer {
-    /// The host's definitions, loaded and validated once and then shared.
-    fn load_tool_definitions(&self) -> Result<Arc<Vec<McpToolDefinition>>, OrbitError> {
-        if let Some(definitions) = self.definitions.get() {
-            return Ok(Arc::clone(definitions));
+    /// Load and validate once per immutable or live host surface snapshot.
+    fn load_tool_surface(&self) -> Result<Arc<ToolSurface>, OrbitError> {
+        let mut cached = self
+            .tool_surface
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dynamic = self.host.dynamic_mcp_tool_definitions()?;
+        if let Some(surface) = cached.as_ref()
+            && dynamic
+                .as_ref()
+                .is_none_or(|source| Arc::ptr_eq(source, &surface.source))
+        {
+            return Ok(Arc::clone(surface));
         }
-
-        let mut definitions = self.host.list_mcp_tool_definitions()?;
+        let source = match dynamic {
+            Some(source) => source,
+            None => Arc::new(self.host.list_mcp_tool_definitions()?),
+        };
+        let mut definitions = source.as_ref().clone();
         definitions
             .retain(|definition| crate::internal_drain_name(&definition.schema.name).is_none());
         if definitions.iter().any(|definition| {
@@ -54,33 +66,32 @@ impl OrbitToolServer {
                 schema.name
             )));
         }
-        Ok(Arc::clone(
-            self.definitions.get_or_init(|| Arc::new(definitions)),
-        ))
+        let schemas = definitions
+            .iter()
+            .map(|definition| definition.schema.clone())
+            .collect::<Vec<_>>();
+        let name_map = build_name_map(&schemas).map(Arc::new).map_err(|error| {
+            invalid_definitions_mcp_error(OrbitError::InvalidInput(error.to_string()))
+        });
+        let surface = Arc::new(ToolSurface {
+            source,
+            definitions: Arc::new(definitions),
+            name_map,
+            lists: Default::default(),
+        });
+        *cached = Some(Arc::clone(&surface));
+        Ok(surface)
+    }
+
+    fn load_tool_definitions(&self) -> Result<Arc<Vec<McpToolDefinition>>, OrbitError> {
+        self.load_tool_surface()
+            .map(|surface| Arc::clone(&surface.definitions))
     }
 
     fn name_map(&self) -> Result<Arc<std::collections::HashMap<String, String>>, McpError> {
-        self.name_map
-            .get_or_init(|| {
-                let result = self
-                    .load_tool_definitions()
-                    .map(|definitions| {
-                        definitions
-                            .iter()
-                            .map(|definition| definition.schema.clone())
-                            .collect::<Vec<_>>()
-                    })
-                    .map_err(invalid_definitions_mcp_error)
-                    .and_then(|schemas| {
-                        build_name_map(&schemas).map(Arc::new).map_err(|error| {
-                            invalid_definitions_mcp_error(OrbitError::InvalidInput(
-                                error.to_string(),
-                            ))
-                        })
-                    });
-                Arc::new(result)
-            })
-            .as_ref()
+        self.load_tool_surface()
+            .map_err(invalid_definitions_mcp_error)?
+            .name_map
             .clone()
     }
 
@@ -553,9 +564,12 @@ impl ServerHandler for OrbitToolServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        let surface = self
+            .load_tool_surface()
+            .map_err(invalid_definitions_mcp_error)?;
         let advertisement = self.selector_advertisement();
         let cache_key = (advertisement, self.session_context().workspace);
-        if let Ok(cache) = self.list_tools_cache.lock()
+        if let Ok(cache) = surface.lists.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
             return self.without_hidden_tools((**cached).clone());
@@ -564,12 +578,8 @@ impl ServerHandler for OrbitToolServer {
         // Build and validate the map on the same first pass as the list. This
         // keeps malformed advertised names from being hidden by the response
         // cache while avoiding a rebuild on later calls.
-        self.name_map()?;
-        let mut definitions = self
-            .load_tool_definitions()
-            .map_err(invalid_definitions_mcp_error)?
-            .as_ref()
-            .clone();
+        surface.name_map.clone()?;
+        let mut definitions = surface.definitions.as_ref().clone();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         // Prose names other tools by their canonical dotted id; the client can
         // only call the advertised alias, so say that in what it reads.
@@ -606,7 +616,7 @@ impl ServerHandler for OrbitToolServer {
             tools.sort_by(|left, right| left.name.cmp(&right.name));
         }
         let result = ListToolsResult::with_all_items(tools);
-        if let Ok(mut cache) = self.list_tools_cache.lock() {
+        if let Ok(mut cache) = surface.lists.lock() {
             cache.insert(cache_key, Arc::new(result.clone()));
         }
         self.without_hidden_tools(result)

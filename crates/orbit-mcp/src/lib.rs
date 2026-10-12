@@ -48,6 +48,16 @@ pub use stdio_session::{RESUME_ENV, StdioExit, stdin_supports_handover};
 pub trait McpHost: Send + Sync + 'static {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError>;
 
+    /// A live tool surface, when the host supports changes during a session.
+    /// Return the same Arc until discovery inputs change. The adapter refreshes
+    /// definitions, wire-name translation and tool lists together on replacement.
+    /// Hosts returning `None` retain their immutable session cache.
+    fn dynamic_mcp_tool_definitions(
+        &self,
+    ) -> Result<Option<std::sync::Arc<Vec<McpToolDefinition>>>, OrbitError> {
+        Ok(None)
+    }
+
     /// Return the bound workspace's friction taxonomy for tools/list schema
     /// decoration. An unbound or routing-only host returns `None`, which makes
     /// the schema advertise the shipped defaults.

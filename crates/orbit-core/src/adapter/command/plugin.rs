@@ -1,6 +1,10 @@
 //! Plugin lifecycle as the command surfaces reach it, plus the host-global
 //! plugin tool surface the MCP server advertises.
 
+mod mcp_surface;
+
+pub use mcp_surface::{HostPluginMcpCache, HostPluginMcpSurface};
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

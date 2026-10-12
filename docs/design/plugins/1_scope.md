@@ -1026,6 +1026,12 @@ removed. A typed task field would do the same job as the tag but change the pers
   enabled row, no manifest read). Manifests are cached per process and shared by CLI, runtime
   and host-global MCP discovery; a changed `plugin.yaml` stamp re-checks the digest before the
   symlink walk and schema resolution are repeated.
+- A running MCP server also caches the host plugin tool surface. It retains global config
+  and a read-only store handle, compares plugin rows and file stamps for config, manifests
+  and admission witnesses, and rebuilds only when those inputs change. Audit writes alone
+  leave the surface reusable. The adapter replaces definitions, wire-name translation and
+  tool-list caches together, so install, upgrade and host toggles reach the next request.
+  Workspace toggles are applied to each list and enforced by workspace dispatch.
 
 ### 4.7 Dashboard
 

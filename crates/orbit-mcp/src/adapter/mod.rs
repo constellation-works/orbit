@@ -13,7 +13,7 @@ mod test_support;
 mod tests;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
@@ -25,10 +25,19 @@ use crate::McpHost;
 type CachedNameMap = Result<Arc<HashMap<String, String>>, rmcp::ErrorData>;
 type ListToolsCache = HashMap<(SelectorAdvertisement, Option<String>), Arc<ListToolsResult>>;
 
+/// Keep derived caches with the snapshot they were built from, so an older
+/// concurrent request cannot publish a list into a replacement surface.
+struct ToolSurface {
+    source: Arc<Vec<McpToolDefinition>>,
+    definitions: Arc<Vec<McpToolDefinition>>,
+    name_map: CachedNameMap,
+    lists: Mutex<ListToolsCache>,
+}
+
 /// An rmcp server that delegates the complete tool surface to an [`McpHost`].
 ///
 /// The validated advertised-name map and selector-specific tool lists are
-/// cached for the server session. Blocking host implementations run on a
+/// cached per host surface snapshot. Blocking host implementations run on a
 /// blocking worker. Canonical dotted names are advertised with underscores
 /// and translated back before dispatch.
 pub struct OrbitToolServer {
@@ -46,9 +55,7 @@ pub struct OrbitToolServer {
     /// rather than inheriting the previous client's claim.
     launch_workspace: Option<String>,
     session_context: RwLock<ToolSessionContext>,
-    definitions: OnceLock<Arc<Vec<McpToolDefinition>>>,
-    name_map: OnceLock<Arc<CachedNameMap>>,
-    list_tools_cache: Mutex<ListToolsCache>,
+    tool_surface: Mutex<Option<Arc<ToolSurface>>>,
 }
 
 impl OrbitToolServer {
@@ -70,9 +77,7 @@ impl OrbitToolServer {
             internal_drain: false,
             launch_workspace: trusted_context.workspace.clone(),
             session_context: RwLock::new(trusted_context),
-            definitions: OnceLock::new(),
-            name_map: OnceLock::new(),
-            list_tools_cache: Mutex::new(HashMap::new()),
+            tool_surface: Mutex::new(None),
         }
     }
 }
