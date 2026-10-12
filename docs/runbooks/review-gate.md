@@ -35,6 +35,14 @@ rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
 may admit one fresh re-review in the same lineage; a second conflict leaves the
 task in review as `review_gate_stale`.
 
+The review manifest carries each task's implementer summary. For a claimed
+leaf, admission takes the current run's checkpointed `implement_one` summary,
+using the same summary precedence as the claimed handoff. The owner's task
+summary is persisted when it accepts the handoff; until then it may be empty
+or describe an earlier attempt. If the current implementer returned no summary,
+the manifest keeps the owner's existing summary. Owner-run reviews continue
+to read the durable task summary.
+
 After a replacement push, GitHub's PR metadata (`headRefOid`) and the remote
 PR head ref (`refs/pull/<number>/head`) can briefly report the previous
 published head. Completion retries only that recorded SHA, checking each read

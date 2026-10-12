@@ -14,6 +14,64 @@ use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
 
+#[test]
+fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
+    if !super::dispatch_admission::isolated(
+        "review_before_landing::an_owner_before_landing_review_keeps_the_durable_task_summary",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::before_landing();
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                execution_summary: Some(
+                    "Outcome: success\nDurable owner implementation account.".into(),
+                ),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let durable = fixture
+        .runtime
+        .get_task(&fixture.task_id)
+        .unwrap()
+        .execution_summary;
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    fixture
+        .runtime
+        .checkpoint_step(
+            run_id,
+            0,
+            "implement_bundle",
+            &json!({}),
+            &std::collections::BTreeMap::from([(
+                "implement_one".into(),
+                json!({"execution_summary": "a different implementer account"}),
+            )]),
+        )
+        .unwrap();
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+    let manifest: orbit_types::workflow::ReviewManifest = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(
+                &fixture.task_id,
+                orbit_types::workflow::REVIEW_MANIFEST_ARTIFACT,
+            )
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    assert_eq!(manifest.implementer_summaries[&fixture.task_id], durable);
+}
+
 /// The pre-push gate does not apply to a before-landing run, the gate after
 /// `pr_open` does, and a rejecting reviewer refuses its settlement. The
 /// failure handoff then keeps the published PR and the task in review under

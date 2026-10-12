@@ -10,6 +10,86 @@ use orbit_core::application::distributed::ClaimedLeafStage;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{ReviewAdmission, ReviewVerdict};
 
+/// The current claimed implementation reaches the owner's review manifest
+/// before handoff acceptance, even when owner task state is empty or stale.
+#[test]
+fn a_claimed_before_landing_review_reads_the_current_implementers_summary() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_before_landing_review_reads_the_current_implementers_summary",
+    ) {
+        return;
+    }
+    let current = "Outcome: success\nImplemented and validated this candidate.";
+    let stale = "Outcome: failed\nAn earlier attempt failed.";
+    for (owner_summary, implementation, expected) in [
+        ("", json!({"execution_summary": current}), current),
+        (
+            stale,
+            json!({"execution_summary": format!("  {current}\n"), "summary": "short account"}),
+            current,
+        ),
+        (stale, json!({"summary": current}), current),
+        ("", json!({}), ""),
+        (stale, json!({"execution_summary": "  "}), stale),
+    ] {
+        let mut leaf = ReviewedLeaf::admit_launched(
+            &format!(
+                "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+            ),
+            "",
+            |pair, drain| {
+                // Only an earlier attempt can have written this owner
+                // summary: seed it before the new execution claim exists.
+                pair.wire
+                    .owner
+                    .update_task_with_identity(
+                        &pair.tasks[0],
+                        orbit_core::application::task::TaskUpdateParams {
+                            execution_summary: Some(owner_summary.into()),
+                            ..Default::default()
+                        },
+                        Some("codex".into()),
+                        None,
+                    )
+                    .unwrap();
+                pair.launched_leaf(drain, 1, std::process::id())
+            },
+        );
+        // Exercise the real compound-step checkpoint boundary, which puts
+        // implement_one in the run state before review admission.
+        leaf.bound
+            .checkpoint_step(
+                &leaf.leaf,
+                0,
+                "implement_bundle",
+                &json!({}),
+                &BTreeMap::from([("implement_one".into(), implementation)]),
+            )
+            .unwrap();
+        leaf.gate_input["before_landing"] = json!(true);
+        let admitted = leaf.admit_review();
+        assert_eq!(admitted["applies"], true, "{admitted}");
+        let manifest: orbit_types::workflow::ReviewManifest = serde_json::from_slice(
+            &leaf
+                .owner_artifact(orbit_types::workflow::REVIEW_MANIFEST_ARTIFACT)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest.implementer_summaries[&leaf.task], expected);
+        assert_eq!(
+            leaf.pair
+                .wire
+                .owner
+                .get_task(&leaf.task)
+                .unwrap()
+                .execution_summary,
+            owner_summary,
+            "admission carries the current account without changing owner task state",
+        );
+    }
+}
+
 /// The claim captures the owner's before-landing review. On the leaf the
 /// pre-push gate does not apply and the before-landing gate does; its
 /// reviewer's fix is the reviewed head. The owner refuses a handoff without
