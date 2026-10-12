@@ -17,6 +17,15 @@ needs, so Orbit derives that record instead of the implementer writing it
 [ORB-15516]: the gate's own command (ORBIT_VALIDATION_GATE, which the make
 target sets), the base it compared against, its exit status once it finishes,
 and every skip or deferral notice its tests printed under nextest.
+
+It records where that time went. compile_ms and test_ms are millisecond
+totals, and package_timings lists each package's share. A total equals the
+sum of the per-package values for that phase. Compile time is Cargo's unit
+durations (they overlap when the build is parallel). Test time is nextest
+testcase time plus doctest time (testcase time overlaps when tests are
+parallel). A phase that was not measured is null. The cargo test fallback
+has no per-package test split, so those package test_ms values stay null
+while test_ms is the sum of libtest's finished-in times.
 """
 
 import argparse
@@ -24,6 +33,7 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import shlex
 import subprocess
 import sys
@@ -177,12 +187,284 @@ def executed_tests(junit):
     return int(tests) if tests is not None and tests.isdigit() else None
 
 
-def write_summary(path, selection, tests_run, base=None, exit_code=None, notices=()):
+def milliseconds(seconds):
+    """Round a non-negative duration to milliseconds, or None."""
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return int(round(value * 1000))
+
+
+def text_lines(text):
+    return ANSI_ESCAPE.sub("", text).replace("\r", "\n").splitlines()
+
+
+def timing_report_paths(text):
+    """HTML reports this cargo invocation said it wrote.
+
+    The file name and parent directory are Cargo's, so a test's captured
+    output cannot point the parser at an arbitrary path.
+    """
+    paths = []
+    for line in text_lines(text):
+        marker = "Timing report saved to "
+        if marker not in line:
+            continue
+        candidate = Path(line.split(marker, 1)[1].strip())
+        if (candidate.name.startswith("cargo-timing") and candidate.suffix == ".html"
+                and candidate.parent.name == "cargo-timings" and candidate.is_file()):
+            paths.append(candidate)
+    return paths
+
+
+def unit_milliseconds(path):
+    """Package name to compile milliseconds from one Cargo timings report.
+
+    None when the report is not readable. An empty dict is a report that
+    named no units. Durations of the same package are summed.
+    """
+    try:
+        if path.stat().st_size > 32 * 1024 * 1024:
+            return None
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    marker = "const UNIT_DATA = "
+    start = text.find(marker)
+    if start < 0:
+        return None
+    try:
+        units, _ = json.JSONDecoder().raw_decode(text[start + len(marker):])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(units, list):
+        return None
+    totals = {}
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        name = unit.get("name")
+        duration = unit.get("duration")
+        if not isinstance(name, str) or not name or isinstance(duration, bool):
+            continue
+        ms = milliseconds(duration)
+        if ms is None:
+            continue
+        totals[name] = totals.get(name, 0) + ms
+    return totals
+
+
+FINISHED_SECONDS = re.compile(r"^\s*Finished\b.*\bin\s+([0-9]*\.?[0-9]+)s\s*$")
+COMPILING_PACKAGE = re.compile(r"^\s*Compiling (\S+) v\d")
+DOCTEST_PACKAGE = re.compile(r"^\s*Doc-tests (\S+)\s*$")
+TEST_RESULT_SECONDS = re.compile(r"test result:.*\bfinished in ([0-9]*\.?[0-9]+)s\s*$")
+
+
+def finished_milliseconds(text):
+    total = 0
+    saw = False
+    for line in text_lines(text):
+        match = FINISHED_SECONDS.match(line)
+        if match:
+            ms = milliseconds(match.group(1))
+            if ms is not None:
+                total += ms
+                saw = True
+    return total if saw else None
+
+
+def mentioned_packages(text):
+    names = []
+    for line in text_lines(text):
+        match = COMPILING_PACKAGE.match(line) or DOCTEST_PACKAGE.match(line)
+        if match and match.group(1) not in names:
+            names.append(match.group(1))
+    return names
+
+
+def suite_milliseconds(suite):
+    cases = list(suite.findall("testcase"))
+    timed = [milliseconds(case.get("time")) for case in cases]
+    if cases and any(ms is not None for ms in timed):
+        return sum(ms for ms in timed if ms is not None)
+    return milliseconds(suite.get("time"))
+
+
+def package_test_milliseconds(junit):
+    """Per-package nextest time from a JUnit report, or None when it has none."""
+    try:
+        root = xml.etree.ElementTree.parse(junit).getroot()
+    except (OSError, xml.etree.ElementTree.ParseError):
+        return None
+    totals = {}
+    saw = False
+    for suite in root.iter("testsuite"):
+        name = (suite.get("name") or "").split("::", 1)[0]
+        ms = suite_milliseconds(suite)
+        if not name or ms is None:
+            continue
+        totals[name] = totals.get(name, 0) + ms
+        saw = True
+    return totals if saw else None
+
+
+def doctest_milliseconds(text):
+    """Per-package doctest time. Cargo names the package, then the result."""
+    totals = {}
+    current = None
+    for line in text_lines(text):
+        match = DOCTEST_PACKAGE.match(line)
+        if match:
+            current = match.group(1)
+            continue
+        if current is None:
+            continue
+        match = TEST_RESULT_SECONDS.search(line)
+        if match:
+            ms = milliseconds(match.group(1))
+            if ms is not None:
+                totals[current] = totals.get(current, 0) + ms
+            current = None
+    return totals or None
+
+
+def libtest_milliseconds(text):
+    """Sum of libtest finished-in times, excluding doctest blocks."""
+    total = 0
+    saw = False
+    in_doctest = False
+    for line in text_lines(text):
+        if DOCTEST_PACKAGE.match(line):
+            in_doctest = True
+            continue
+        if in_doctest:
+            if TEST_RESULT_SECONDS.search(line):
+                in_doctest = False
+            continue
+        match = TEST_RESULT_SECONDS.search(line)
+        if match:
+            ms = milliseconds(match.group(1))
+            if ms is not None:
+                total += ms
+                saw = True
+    return total if saw else None
+
+
+class PhaseTimings:
+    """Compile and test durations that sum to their per-package parts.
+
+    Cargo's `--timings` report lists every unit. Those durations overlap
+    under a parallel build, so compile_ms is their sum, not the build's wall
+    time. Test durations overlap the same way. The two totals are defined as
+    those sums, which is what a later reader can check.
+    """
+
+    def __init__(self, packages):
+        self.packages = list(packages)
+        self.compile = None
+        self.test = None
+        self.unsplit_compile = 0
+        self.unsplit_compile_seen = False
+        self.unsplit_test = 0
+        self.unsplit_test_seen = False
+
+    def add_compile_units(self, totals):
+        if self.compile is None:
+            self.compile = {name: 0 for name in self.packages}
+        for name, value in totals.items():
+            self.compile[name] = self.compile.get(name, 0) + value
+
+    def add_tests(self, totals):
+        if not totals:
+            return
+        if self.test is None:
+            self.test = {name: 0 for name in self.packages}
+        for name, value in totals.items():
+            self.test[name] = self.test.get(name, 0) + value
+
+    def add_unsplit_compile(self, ms, names):
+        if ms is None:
+            return
+        targets = list(names)
+        if not targets and len(self.packages) == 1:
+            targets = list(self.packages)
+        if self.compile is not None:
+            if not targets:
+                targets = sorted(self.packages)[:1] or sorted(self.compile)[:1]
+            if not targets:
+                return
+            base, extra = divmod(ms, len(targets))
+            for index, name in enumerate(sorted(targets)):
+                self.compile[name] = self.compile.get(name, 0) + base + (1 if index < extra else 0)
+            return
+        self.unsplit_compile += ms
+        self.unsplit_compile_seen = True
+
+    def observe(self, text, junit=None):
+        units = None
+        for path in timing_report_paths(text):
+            parsed = unit_milliseconds(path)
+            if parsed is None:
+                continue
+            if units is None:
+                units = {}
+            for name, value in parsed.items():
+                units[name] = units.get(name, 0) + value
+        if units is not None:
+            self.add_compile_units(units)
+        else:
+            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text))
+        if junit is not None:
+            self.add_tests(package_test_milliseconds(junit))
+        self.add_tests(doctest_milliseconds(text))
+        if self.test is None:
+            ms = libtest_milliseconds(text)
+            if ms is not None:
+                self.unsplit_test += ms
+                self.unsplit_test_seen = True
+
+    def record(self):
+        """`(compile_ms, test_ms, package_timings)`, or None when nothing was measured."""
+        if (self.compile is None and self.test is None
+                and not self.unsplit_compile_seen and not self.unsplit_test_seen):
+            return None
+        names = set(self.packages)
+        if self.compile is not None:
+            names.update(self.compile)
+        if self.test is not None:
+            names.update(self.test)
+        ordered = sorted(names)
+        compile_split = self.compile is not None
+        if not compile_split and self.unsplit_compile_seen and len(ordered) == 1:
+            self.compile = {ordered[0]: self.unsplit_compile}
+            compile_split = True
+        test_split = self.test is not None
+        entries = [dict(
+            package=name,
+            compile_ms=self.compile.get(name, 0) if compile_split else None,
+            test_ms=self.test.get(name, 0) if test_split else None,
+        ) for name in ordered]
+        compile_ms = (sum(entry["compile_ms"] for entry in entries) if compile_split
+                      else (self.unsplit_compile if self.unsplit_compile_seen else None))
+        test_ms = (sum(entry["test_ms"] for entry in entries) if test_split
+                   else (self.unsplit_test if self.unsplit_test_seen else None))
+        return compile_ms, test_ms, entries
+
+
+def write_summary(path, selection, tests_run, base=None, exit_code=None, notices=(), timings=None):
+    if timings is None:
+        compile_ms = test_ms = package_timings = None
+    else:
+        compile_ms, test_ms, package_timings = timings
     if path:
         Path(path).write_text(json.dumps(dict(
             schema_version=1, selection=selection, tests_run=tests_run,
             command=os.environ.get(GATE_ENV), base=base, exit_code=exit_code,
-            notices=list(notices))))
+            notices=list(notices),
+            compile_ms=compile_ms, test_ms=test_ms, package_timings=package_timings)))
 
 
 # Keep every notice the required-command host judge refuses, including ones
@@ -205,6 +487,7 @@ def run_nextest(command, environment):
     exit status and every line that leads with a host-notice prefix.
     """
     notices = []
+    captured = []
     scratch = ROOT / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix="ci-test-affected-nextest-", suffix=".log",
@@ -218,6 +501,7 @@ def run_nextest(command, environment):
                     log.write(raw)
                     line = raw.decode("utf-8", errors="replace")
                     plain = ANSI_ESCAPE.sub("", line)
+                    captured.append(plain)
                     status = NEXTEST_STATUS.match(plain)
                     # Nextest right-aligns the status in a 12-column field.
                     # Captured payload has its own indentation: a test printing
@@ -234,11 +518,45 @@ def run_nextest(command, environment):
                               or any(marker in plain for marker in HOST_NOTICE_MARKERS))
                     if status or not passing_block or notice:
                         print(plain if notice else line, end="", file=sys.stderr, flush=True)
-                return process.wait(), notices
+                return process.wait(), notices, "".join(captured)
             except BaseException:
                 process.terminate()
                 process.wait()
                 raise
+
+
+def run_observed(command, environment):
+    """Run a command, relay both streams, and return its exit code and merged output.
+
+    Doctest compile lines and the test harness result are on different streams.
+    Both are needed to attribute doctest time to a package.
+    """
+    with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE) as process:
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        selector.register(process.stderr, selectors.EVENT_READ)
+        chunks = []
+        remaining = 2
+        try:
+            while remaining:
+                for key, _ in selector.select():
+                    raw = key.fileobj.readline()
+                    if raw == b"":
+                        selector.unregister(key.fileobj)
+                        remaining -= 1
+                        continue
+                    chunks.append(raw)
+                    dest = sys.stdout.buffer if key.fileobj is process.stdout else sys.stderr.buffer
+                    dest.write(raw)
+                    dest.flush()
+            return process.wait(), b"".join(chunks).decode("utf-8", errors="replace")
+        except BaseException:
+            process.terminate()
+            process.wait()
+            raise
+        finally:
+            selector.close()
 
 
 def main():
@@ -291,7 +609,7 @@ def main():
         doc_packages = []
     if not packages:
         print("ci-test-affected: no affected workspace crates; no Rust tests to run", file=sys.stderr)
-        write_summary(summary, selection, 0, base, 0)
+        write_summary(summary, selection, 0, base, 0, timings=(0, 0, []))
         return 0
     if arguments.list:
         print("\n".join(packages))
@@ -321,6 +639,9 @@ def main():
     budget = shlex.split(os.environ.get("BUILD_BUDGET", str(ROOT / "scripts/build-budget.py")))
     nextest = subprocess.run([*cargo, "nextest", "--version"], cwd=ROOT,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # One timings object across the test command and the doctest command.
+    # `--timings` is a report of the build those commands already do.
+    timings = PhaseTimings(run_packages)
     with tempfile.TemporaryDirectory(prefix="ci-test-affected-") as report:
         junit = Path(report) / "junit.xml"
         if nextest.returncode == 0:
@@ -335,34 +656,38 @@ def main():
             # `DEFERRED:` notice of a test that returned without running its
             # sandboxed path [ORB-15161]. The host judge classifies the gate's
             # notice output, so those lines from passing tests must reach it.
-            command = [*cargo, "nextest", "run", "--no-fail-fast", "--success-output", "immediate",
+            command = [*cargo, "nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate",
                        *report_flags, *package_flags, *run_target_flags, *filters]
         else:
             # cargo test reports no executed-test count, so the summary records none.
             print("ci-test-affected: cargo-nextest unavailable; falling back to cargo test", file=sys.stderr)
-            command = [*cargo, "test", "--no-fail-fast", *package_flags, *run_target_flags, *libtest_filters]
+            command = [*cargo, "test", "--timings", "--no-fail-fast", *package_flags, *run_target_flags, *libtest_filters]
         # A run stopped before nextest finishes still reports what it selected,
         # so its failures so far can be replayed alone [ORB-15328].
         write_summary(summary, selection, None, base)
         notices = []
         if nextest.returncode == 0:
-            exit_code, notices = run_nextest([*budget, "--", *command], test_environment)
+            exit_code, notices, output = run_nextest([*budget, "--", *command], test_environment)
+            timings.observe(output, junit if summary else None)
         else:
-            exit_code = subprocess.run([*budget, "--", *command], cwd=ROOT,
-                                       env=test_environment).returncode
+            exit_code, output = run_observed([*budget, "--", *command], test_environment)
+            timings.observe(output)
         tests_run = executed_tests(junit)
 
     def finished(code):
-        write_summary(summary, selection, tests_run, base, code, notices)
+        write_summary(summary, selection, tests_run, base, code, notices, timings.record())
         return code
 
     if exit_code or not doc_packages:
         return finished(exit_code)
     # Doctests still run, so the summary does not yet report an exit status.
-    write_summary(summary, selection, tests_run, base, None, notices)
+    write_summary(summary, selection, tests_run, base, None, notices, timings.record())
     doc_flags = [argument for name in doc_packages for argument in ("-p", name)]
-    return finished(subprocess.run([*budget, "--", *cargo, "test", "--no-fail-fast", *doc_flags, "--doc"],
-                                   cwd=ROOT, env=test_environment).returncode)
+    doc_code, doc_output = run_observed(
+        [*budget, "--", *cargo, "test", "--timings", "--no-fail-fast", *doc_flags, "--doc"],
+        test_environment)
+    timings.observe(doc_output)
+    return finished(doc_code)
 
 
 if __name__ == "__main__":
