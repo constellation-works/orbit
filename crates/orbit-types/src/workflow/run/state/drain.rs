@@ -20,7 +20,7 @@ pub struct DrainAdmissionsStop {
 }
 
 /// Why a follower cannot run a crew for the rest of its pull drain window, or
-/// until a provider usage limit lifts.
+/// until a provider usage limit or a capacity backoff lifts.
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,
 )]
@@ -30,15 +30,17 @@ pub enum CrewExclusionSource {
     /// provider CLI cannot be found or resolved here.
     Preflight,
     /// A claimed leaf failed because the provider could not be used.
-    /// Authentication excludes every configured crew of that provider; a
-    /// capacity failure excludes only the leaf's crew.
+    /// Authentication excludes every configured crew of that provider for
+    /// the window; a capacity failure excludes only the leaf's crew, and only
+    /// until the exclusion's `until`: a bounded backoff that doubles with each
+    /// repeat in the window [ORB-15791].
     ProviderUnavailable,
     /// A claimed leaf on this crew was released for a failure class that
     /// [excludes its crew](crate::workflow::ClaimFailureClass::excludes_crew) [ORB-14257].
     LeafReleased,
     /// The host's latest reading of the crew's provider usage window is at
-    /// or above the configured threshold, or exhausted. Unlike the other
-    /// sources it lasts only until the exclusion's `until`, so the crew is
+    /// or above the configured threshold, or exhausted. Like a capacity
+    /// backoff it lasts only until the exclusion's `until`, so the crew is
     /// runnable again within the same window.
     ProviderLimit,
 }
@@ -49,8 +51,10 @@ pub struct CrewExclusion {
     pub crew: String,
     pub source: CrewExclusionSource,
     pub reason: String,
-    /// When a [`CrewExclusionSource::ProviderLimit`] exclusion lifts; `None`
-    /// for an exclusion that lasts the window.
+    /// When a timed exclusion lifts — a [`CrewExclusionSource::ProviderLimit`]
+    /// or a capacity [`CrewExclusionSource::ProviderUnavailable`] — so the
+    /// crew is runnable again in the same window; `None` for an exclusion
+    /// that lasts the window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub until: Option<DateTime<Utc>>,

@@ -743,7 +743,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   offering that crew for the rest of its window. After
   `provider`, an authentication failure stops every crew of that provider
   (an `anthropic` crew is the same provider as `claude`); a capacity failure
-  stops only the crew the leaf ran. A usage limit stops no crew by itself:
+  stops only the crew the leaf ran, and only for a backoff of 10 minutes
+  from when the leaf ended, doubling with each repeat for that crew in the
+  window up to an hour, after which the drain offers it again. A usage limit stops no crew by itself:
   the reading the leaf recorded on this host excludes the provider's crews as
   `provider_limit` until it lapses. The leaf itself ends `held`, not
   `failed`, with a `provider_limit` step naming the provider and the reset,
@@ -849,7 +851,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   unresolved, or CLI not found), `provider_unavailable` (a claimed leaf's
   provider could not authenticate, which lists every crew of that provider,
   or reported its selected model at capacity, which lists that crew, with
-  the task and error), `leaf_released` (a claimed leaf was
+  the task and error, written `(provider_unavailable until <time>)`: a
+  capacity exclusion lifts at `until` within the same drain), `leaf_released` (a claimed leaf was
   released for a `transient` failure other than a forge outage, with the
   task, class and reason) or `provider_limit` (this host's latest reading of
   the crew's provider usage window is at or over its threshold, written
@@ -867,7 +870,13 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   Haiku probe; other providers currently need a new drain after re-login.
   See [executor authentication recovery probes](../CONFIG.md#executor-authentication-recovery-probes)
   for the declaration and credential-route details. Missing launchers,
-  capacity, refusal, crew and host exclusions retain their existing behavior.
+  refusal, crew and host exclusions retain their existing behavior.
+- When a capacity backoff holds the owner's review crew, the drain requests
+  nothing until it lifts: its `Requests held:` line is a
+  `before_pr_reviewer_unavailable` hold that names the review's timing
+  (before-landing or before-PR), the crew and the time it is backed off
+  until. No action is needed; the drain admits again on the first pass after
+  that time.
 - **Failure breaker.** After three consecutive claims this drain admitted
   settle as failures, its breaker opens: the drain stops requesting work
   (`circuit_open`) and only keeps settling. Only failures that could be this

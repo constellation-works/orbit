@@ -1,14 +1,16 @@
 //! The runtime reads behind a pull drain's settlement reports and crew
 //! window, and how an owner's answer to a pull is classified.
 
-use chrono::Utc;
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
 };
 
-use super::crew_window::{PullCrewWindow, phase_guidance, phase_name};
+use super::crew_window::{CapacityFailures, PullCrewWindow, phase_guidance, phase_name};
 use super::entries::{ClaimedLeafStage, DrainClaimedLeaf, PullLeafClaim, RefusedPullSettlement};
 
 impl crate::OrbitRuntime {
@@ -152,6 +154,7 @@ impl crate::OrbitRuntime {
             .map(|state| state.pull_auth_recovery)
             .unwrap_or_default();
         let mut auth_exclusions = Vec::new();
+        let mut capacity = BTreeMap::<String, CapacityFailures>::new();
         let mut host_suppressed = None;
         let default_crew = match &preflight {
             Some(preflight) => preflight.default_crew.clone(),
@@ -194,7 +197,8 @@ impl crate::OrbitRuntime {
             // groups with `claude`. [ORB-14697] A usage limit excludes nothing
             // here: the leaf recorded it in this host's provider-limit store,
             // whose reading excludes the provider's crews below until it
-            // lapses.
+            // lapses. [ORB-15791] Capacity is transient too, so it backs the
+            // crew off for a bounded time below rather than for the window.
             let authentication = evidence.provider_unavailable.is_some()
                 && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
             if authentication
@@ -209,6 +213,21 @@ impl crate::OrbitRuntime {
                 {
                     auth_exclusions.push(incident.exclusion);
                 }
+            }
+            if !authentication
+                && !evidence
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.provider_limit)
+                && let Some(unavailable) = &evidence.provider_unavailable
+                && let Some(crew) = unavailable.crew.as_deref()
+                && let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref())
+            {
+                capacity
+                    .entry(crew.to_string())
+                    .or_default()
+                    .record(at, format!("{task} failed: {}", unavailable.reason));
+                continue;
             }
             let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
             {
@@ -262,9 +281,28 @@ impl crate::OrbitRuntime {
                 });
             }
         }
+        // [ORB-15791] Recomputed on every pass like a provider limit, so a
+        // crew whose capacity backoff passed is runnable again in the same
+        // window. A crew excluded for the window already keeps that.
+        let now = Utc::now();
+        for (crew, failures) in capacity {
+            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
+                continue;
+            }
+            if let Some((until, reason)) = failures.backoff()
+                && until > now
+            {
+                excluded.push(CrewExclusion {
+                    crew,
+                    source: CrewExclusionSource::ProviderUnavailable,
+                    reason,
+                    until: Some(until),
+                });
+            }
+        }
         // [ORB-14697] Recomputed on every pass, so a crew whose reading
         // lapses is runnable again in the same window.
-        let gate = self.provider_limit_gate(Utc::now());
+        let gate = self.provider_limit_gate(now);
         for crew in self.context.settings().crews().values() {
             if excluded.iter().any(|exclusion| exclusion.crew == crew.name) {
                 continue;
@@ -278,22 +316,23 @@ impl crate::OrbitRuntime {
                 });
             }
         }
-        let limited = |crew: &str| {
-            excluded.iter().any(|exclusion| {
-                exclusion.crew == crew && exclusion.source == CrewExclusionSource::ProviderLimit
-            })
+        let timed = |crew: &str| {
+            excluded
+                .iter()
+                .any(|exclusion| exclusion.crew == crew && exclusion.until.is_some())
         };
+        // The crews the window can run once every timed exclusion lifts.
         // Review is not delivery admission, so a provider limit does not
-        // keep the owner's reviewer from running here.
+        // keep the owner's reviewer from running here; a capacity backoff
+        // does, until it lifts ([`PullCrewWindow::reviewer_unrunnable_reason`]).
         let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
             preflight
                 .runnable
                 .iter()
                 .filter(|crew| {
-                    !excluded.iter().any(|exclusion| {
-                        &exclusion.crew == *crew
-                            && exclusion.source != CrewExclusionSource::ProviderLimit
-                    })
+                    !excluded
+                        .iter()
+                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
                 })
                 .cloned()
                 .collect()
@@ -311,7 +350,7 @@ impl crate::OrbitRuntime {
         let unlimited = reviewable.as_ref().map(|crews| {
             crews
                 .iter()
-                .filter(|crew| !limited(crew))
+                .filter(|crew| !timed(crew))
                 .cloned()
                 .collect::<Vec<_>>()
         });
@@ -370,6 +409,13 @@ impl crate::OrbitRuntime {
                         })
                 })
             })
+    }
+
+    /// When `leaf` ended, or started when it records no end; `None` when its
+    /// run is unknown here.
+    fn leaf_ended_at(&self, leaf: Option<&str>) -> Option<DateTime<Utc>> {
+        let run = self.stores().jobs().get_job_run(leaf?).ok().flatten()?;
+        Some(run.finished_at.or(run.started_at).unwrap_or(run.created_at))
     }
 
     /// `failed` plus every configured crew whose provider parses to the same

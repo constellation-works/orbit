@@ -1,7 +1,7 @@
 //! The crews a pull drain's window can run [ORB-13941], and what a claimed
 //! leaf's settlement phase means for the operator.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::{AdmissionCrewCapability, LocalPullPhase};
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
 use serde::Serialize;
@@ -12,15 +12,17 @@ use super::entries::RefusedPullSettlement;
 ///
 /// The window's provider preflight, taken once when it opened, minus every
 /// crew a claimed leaf of this drain found unusable since — an authentication
-/// failure excludes every configured crew of that provider, a capacity
-/// failure only the leaf's crew — and, when the drain was submitted with
-/// `--allow-crew`, outside that restriction [ORB-14174]. Derived from the
-/// drain's run input and its own admission records, so it survives a follower
-/// restart and a resume, and ends with the drain.
+/// failure excludes every configured crew of that provider for the window, a
+/// capacity failure only the leaf's crew and only for a bounded backoff
+/// [ORB-15791] — and, when the drain was submitted with `--allow-crew`,
+/// outside that restriction [ORB-14174]. Derived from the drain's run input
+/// and its own admission records, so it survives a follower restart and a
+/// resume, and ends with the drain.
 ///
 /// [ORB-14697] Each pass also excludes the crews this host's provider-limit
-/// store finds at their usage limit, until the reading lapses, so they are
-/// runnable again within the same window.
+/// store finds at their usage limit, until the reading lapses. A timed
+/// exclusion — a provider limit or a capacity backoff — carries its `until`,
+/// and the crew is runnable again within the same window once it passes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullCrewWindow {
     /// When the preflight ran; `None` while the drain has not taken one.
@@ -43,9 +45,10 @@ pub struct PullCrewWindow {
     /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_suppressed: Option<String>,
-    /// Crews the window can run before `allowed` narrows them. The owner's
-    /// before-PR reviewer runs as one of these: the restriction selects the
-    /// implementation crews a claim may carry, not the review it owes.
+    /// Crews the window can run once its timed exclusions lift, before
+    /// `allowed` narrows them. The owner's reviewer runs as one of these:
+    /// the restriction selects the implementation crews a claim may carry,
+    /// not the review it owes.
     #[serde(skip)]
     pub(super) reviewable: Option<Vec<String>>,
 }
@@ -61,20 +64,31 @@ impl PullCrewWindow {
         }
     }
 
-    /// Why the owner's before-PR reviewer crew cannot run in this window, or
-    /// `None` when it can. Judged without `allowed`: only exclusions and the
-    /// preflight count.
+    /// Why the owner's reviewer crew cannot run in this window, or `None`
+    /// when it can. Judged without `allowed`: only exclusions and the
+    /// preflight count, and a provider limit does not hold review. A
+    /// capacity backoff does, and the reason names when it lifts [ORB-15791].
     #[must_use]
     pub fn reviewer_unrunnable_reason(&self, crew: &str) -> Option<String> {
+        let excluded: Vec<CrewExclusion> = self
+            .excluded
+            .iter()
+            .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
+            .cloned()
+            .collect();
+        if let Some(exclusion) = excluded.iter().find(|exclusion| exclusion.crew == crew)
+            && let Some(until) = exclusion.until
+        {
+            return Some(format!(
+                "crew `{crew}` is backed off on the executor until {}, when requests resume: {}",
+                until.to_rfc3339(),
+                exclusion.reason
+            ));
+        }
         AdmissionCrewCapability {
             runnable: self.reviewable.clone(),
             default_crew: None,
-            excluded: self
-                .excluded
-                .iter()
-                .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
-                .cloned()
-                .collect(),
+            excluded,
         }
         .unrunnable_reason(Some(crew))
     }
@@ -88,10 +102,11 @@ impl PullCrewWindow {
     }
 
     /// Whether every crew this drain could otherwise run — the
-    /// allowlist-permitted preflight-runnable set — is excluded by a provider
-    /// usage limit, so this drain admits again once one lifts [ORB-14697, ORB-14902].
+    /// allowlist-permitted preflight-runnable set — is excluded until a set
+    /// time, by a provider usage limit or a capacity backoff, so this drain
+    /// admits again once one lifts [ORB-14697, ORB-14902, ORB-15791].
     #[must_use]
-    pub fn held_by_provider_limit(&self) -> bool {
+    pub fn held_until_lift(&self) -> bool {
         if self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(|r| !r.is_empty()) {
             return false;
         }
@@ -105,10 +120,10 @@ impl PullCrewWindow {
             (Some(allowed), None) => allowed
                 .iter()
                 .filter(|crew| {
-                    !self.excluded.iter().any(|exclusion| {
-                        &exclusion.crew == *crew
-                            && exclusion.source != CrewExclusionSource::ProviderLimit
-                    })
+                    !self
+                        .excluded
+                        .iter()
+                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
                 })
                 .map(String::as_str)
                 .collect(),
@@ -116,10 +131,9 @@ impl PullCrewWindow {
         };
         !candidate_crews.is_empty()
             && candidate_crews.iter().all(|crew| {
-                self.excluded.iter().any(|exclusion| {
-                    exclusion.crew == *crew
-                        && exclusion.source == CrewExclusionSource::ProviderLimit
-                })
+                self.excluded
+                    .iter()
+                    .any(|exclusion| exclusion.crew == *crew && exclusion.until.is_some())
             })
     }
 
@@ -162,6 +176,38 @@ impl PullCrewWindow {
         }));
         lines.extend(self.auth_exclusions.iter().map(PullAuthExclusion::describe));
         lines
+    }
+}
+
+/// [ORB-15791] How long a crew's first capacity failure in a window backs it
+/// off; each further one in the same window doubles it, up to
+/// [`CAPACITY_BACKOFF_CAP_MINUTES`], well below a drain's window.
+const CAPACITY_BACKOFF_MINUTES: i64 = 10;
+const CAPACITY_BACKOFF_CAP_MINUTES: i64 = 60;
+
+/// The capacity failures one crew's claimed leaves met in a pull drain's
+/// window.
+#[derive(Debug, Default)]
+pub(super) struct CapacityFailures {
+    count: u32,
+    latest: Option<(DateTime<Utc>, String)>,
+}
+
+impl CapacityFailures {
+    pub(super) fn record(&mut self, at: DateTime<Utc>, reason: String) {
+        self.count += 1;
+        if self.latest.as_ref().is_none_or(|(latest, _)| at >= *latest) {
+            self.latest = Some((at, reason));
+        }
+    }
+
+    /// When the backoff from the latest failure lifts, and that failure's
+    /// reason.
+    pub(super) fn backoff(self) -> Option<(DateTime<Utc>, String)> {
+        let (at, reason) = self.latest?;
+        let doublings = self.count.saturating_sub(1).min(8);
+        let minutes = (CAPACITY_BACKOFF_MINUTES << doublings).min(CAPACITY_BACKOFF_CAP_MINUTES);
+        Some((at + Duration::minutes(minutes), reason))
     }
 }
 
