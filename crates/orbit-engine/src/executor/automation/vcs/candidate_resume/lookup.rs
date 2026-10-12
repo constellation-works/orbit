@@ -5,6 +5,7 @@ use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceHold,
+    ReviewGateHistoryNote,
 };
 use serde_json::{Value, json};
 
@@ -437,10 +438,10 @@ fn evidence_received(history: &[TaskHistoryEntry], run_id: &str) -> bool {
         })
         .is_some_and(|entry| {
             entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
-                && entry
-                    .note
-                    .as_deref()
-                    .is_some_and(|note| note.starts_with(&format!("run={run_id};")))
+                && entry.note.as_deref().is_some_and(|note| {
+                    ReviewGateHistoryNote::from_text(note)
+                        .is_some_and(|parsed| parsed.run_id == run_id)
+                })
         })
 }
 

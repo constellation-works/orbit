@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::ReviewGateRefusal;
+use orbit_types::workflow::{ReviewGateHistoryNote, ReviewGateRefusal};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -115,7 +115,11 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             .filter(|entry| {
                 entry.event == "review_timeout_incomplete"
                     && entry.note.as_deref().is_some_and(|note| {
-                        recorded_implementation_tree(note) == Some(implementation_tree.as_str())
+                        let parsed = ReviewGateHistoryNote::from_text(note);
+                        parsed
+                            .as_ref()
+                            .and_then(ReviewGateHistoryNote::recorded_tree)
+                            == Some(implementation_tree.as_str())
                     })
             })
             .count()
@@ -169,9 +173,14 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     } else {
         "A substantive review escalation requires a recorded repair or scope decision.".to_string()
     };
-    let note = format!(
-        "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
-         candidate={head_sha}, candidate_tree={candidate_tree}, implementation_tree={implementation_tree}, branch={head}; no PR was opened; {continuation}"
+    let note = ReviewGateHistoryNote::preservation_text(
+        run_id,
+        failed_step_id,
+        &head_sha,
+        &candidate_tree,
+        &implementation_tree,
+        &head,
+        &continuation,
     );
     let verdict = if failed_step_id == REVIEW_VALIDATION_STEP {
         "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation (required \
@@ -275,13 +284,6 @@ fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
         workspace_path,
         &["rev-parse", "--verify", &format!("{commit}^{{tree}}")],
     )
-}
-
-/// The tree a recorded timeout counted against. Rows written before the
-/// implementation tree was recorded carry only `candidate_tree=`.
-fn recorded_implementation_tree(note: &str) -> Option<&str> {
-    let field = |key: &str| note.split(", ").find_map(|field| field.strip_prefix(key));
-    field("implementation_tree=").or_else(|| field("candidate_tree="))
 }
 
 /// Push input for a review-gate preservation.

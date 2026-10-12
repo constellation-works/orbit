@@ -969,6 +969,7 @@
         "workflow/activity_job/tests/activity_v2.rs::provider_resolution_matches_vendored_conformance_cases",
         "workflow/activity_job/tests/tool_allowlist.rs::activity_validation_rejects_proc_spawn_grant_without_program_allowlist",
         "workflow/activity_job/tests/trusted_host.rs::a_malformed_admission_still_counts_as_declaring_the_reserved_key",
+        "workflow/review/tests/gate_note.rs::legacy_shapes_parse_to_run_and_tree_and_render_historical_bytes",
         "workflow/review/tests/history.rs::the_bounded_history_never_evicts_the_recording_attempts_own_revisions",
         "workflow/review/tests/report.rs::control_and_sources_tolerate_drift_and_name_an_unknown_kind",
         "workflow/run/state/tests/pipeline.rs::a_late_re_record_cannot_reopen_a_cancelled_child",
