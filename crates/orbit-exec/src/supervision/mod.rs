@@ -63,6 +63,7 @@ pub(crate) fn supervise(
         stdout,
         stderr: Box::new(CaptureSink::new("stderr", limit).with_redacting_echo(run.debug)),
         timeout: run.timeout_ms.map(Duration::from_millis),
+        extendable_deadline: None,
         termination: if run.kill_at_once {
             Termination::KillNow
         } else {
@@ -72,6 +73,9 @@ pub(crate) fn supervise(
         intercept_signals: true,
         drain_budget: DRAIN_BUDGET,
         stopped_descendants: Some(stopped_descendant_threshold()),
+        on_stopped_descendant: None,
+        on_spawn: None,
+        every: None,
     })?;
     append_diagnostics(&mut outcome);
     Ok(outcome)

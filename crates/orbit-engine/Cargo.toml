@@ -33,7 +33,6 @@ sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-wait-timeout.workspace = true
 
 [dev-dependencies]
 chrono-tz.workspace = true

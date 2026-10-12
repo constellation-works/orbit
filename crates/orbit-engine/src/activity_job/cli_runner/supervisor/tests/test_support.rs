@@ -32,10 +32,7 @@ pub(super) fn spawn_test_request<'a>(
         on_spawn: None,
         on_progress: None,
         stopped_descendants: None,
-        wait: None,
-        live_readers: None,
         spawned_child: None,
-        cancel_pair: None,
     }
 }
 

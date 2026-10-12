@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use orbit_common::test_env::{SupervisorSeam, with_supervisor_seam};
+
 use super::super::super::tests::test_support::sh_args;
 #[cfg(target_os = "linux")]
 use super::super::SpawnTraceContext;
@@ -69,18 +71,19 @@ fn stdin_lifecycle_child() {
         orbit_common::test_env::assert_child_test_exists(STDIN_HOLDER);
         orbit_common::test_env::assert_child_test_exists(STDIN_PROVIDER);
     }
-    let no_pair = || Err(std::io::Error::from_raw_os_error(libc::EMFILE));
     for without_wakeup in [false, true] {
-        let cancel_pair = without_wakeup.then_some(&no_pair as _);
+        let seam = || SupervisorSeam {
+            no_wakeup_pair: without_wakeup,
+            ..SupervisorSeam::default()
+        };
         // Exercise partial writes and EOF with an arbitrary oversized binary
         // payload; cat cannot exit successfully until it receives all bytes.
         for payload in [Vec::new(), (0..4 * 1024 * 1024).map(|n| n as u8).collect()] {
             let args = Vec::new();
-            let (stdout, stderr, exit_code, _, timed_out) =
+            let (stdout, stderr, exit_code, _, timed_out) = with_supervisor_seam(seam(), || {
                 spawn_with_timeout(SpawnWithTimeoutRequest {
                     stdin_bytes: &payload,
                     output_capture_limit: Some(payload.len() + 1),
-                    cancel_pair,
                     ..spawn_test_request(
                         "/bin/cat",
                         &args,
@@ -89,7 +92,8 @@ fn stdin_lifecycle_child() {
                         stdin_trace(),
                     )
                 })
-                .expect("normal stdin delivery");
+            })
+            .expect("normal stdin delivery");
             assert_eq!(
                 stdout.bytes(),
                 payload,
@@ -102,16 +106,17 @@ fn stdin_lifecycle_child() {
         // An early stdin close still reports the provider's status/stderr.
         let args = sh_args("printf 'early exit\\n' >&2; exit 7");
         let payload = vec![b'x'; 4 * 1024 * 1024];
-        let (_, stderr, code, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
-            stdin_bytes: &payload,
-            cancel_pair,
-            ..spawn_test_request(
-                "/bin/sh",
-                &args,
-                None,
-                Duration::from_secs(10),
-                stdin_trace(),
-            )
+        let (_, stderr, code, _, timed_out) = with_supervisor_seam(seam(), || {
+            spawn_with_timeout(SpawnWithTimeoutRequest {
+                stdin_bytes: &payload,
+                ..spawn_test_request(
+                    "/bin/sh",
+                    &args,
+                    None,
+                    Duration::from_secs(10),
+                    stdin_trace(),
+                )
+            })
         })
         .expect("broken stdin pipe preserves provider outcome");
         assert_eq!(code, Some(7));
@@ -129,6 +134,8 @@ fn stdin_lifecycle_child() {
 fn exercise_escaped_stdin(root: &Path, without_wakeup: bool) {
     use std::time::Instant;
 
+    use orbit_common::test_env::WaitHook;
+
     assert!(
         wait_until(Duration::from_secs(1), || proc_entry_count(
             "/proc/self/task"
@@ -137,7 +144,6 @@ fn exercise_escaped_stdin(root: &Path, without_wakeup: bool) {
     );
     let baseline_threads = proc_entry_count("/proc/self/task");
     let baseline_fds = proc_entry_count("/proc/self/fd");
-    let no_pair = || Err(std::io::Error::from_raw_os_error(libc::EMFILE));
     for mode in ["exit", "timeout", "wait_error"] {
         for _ in 0..3 {
             let dir = tempfile::Builder::new()
@@ -157,33 +163,38 @@ fn exercise_escaped_stdin(root: &Path, without_wakeup: bool) {
                 (HOLDER_DIR_ENV.to_string(), dir.path().display().to_string()),
                 (PROVIDER_MODE_ENV.to_string(), mode.to_string()),
             ];
-            let wait_failure = |child: &mut std::process::Child| {
-                if dir.path().join("filled").exists() {
+            let filled = dir.path().join("filled");
+            let wait_failure: WaitHook = Box::new(move |child: &mut std::process::Child| {
+                if filled.exists() {
                     Err(std::io::Error::other(
                         "injected wait failure after stdin filled",
                     ))
                 } else {
                     child.try_wait()
                 }
+            });
+            let seam = SupervisorSeam {
+                wait: (mode == "wait_error").then_some(wait_failure),
+                no_wakeup_pair: without_wakeup,
             };
             let payload = vec![b'x'; 4 * 1024 * 1024];
             let started = Instant::now();
-            let result = spawn_with_timeout(SpawnWithTimeoutRequest {
-                stdin_bytes: &payload,
-                env: &env,
-                wait: (mode == "wait_error").then_some(&wait_failure as _),
-                cancel_pair: without_wakeup.then_some(&no_pair as _),
-                ..spawn_test_request(
-                    program,
-                    &args,
-                    None,
-                    if mode == "timeout" {
-                        Duration::from_secs(2)
-                    } else {
-                        Duration::from_secs(10)
-                    },
-                    stdin_trace(),
-                )
+            let result = with_supervisor_seam(seam, || {
+                spawn_with_timeout(SpawnWithTimeoutRequest {
+                    stdin_bytes: &payload,
+                    env: &env,
+                    ..spawn_test_request(
+                        program,
+                        &args,
+                        None,
+                        if mode == "timeout" {
+                            Duration::from_secs(2)
+                        } else {
+                            Duration::from_secs(10)
+                        },
+                        stdin_trace(),
+                    )
+                })
             });
             assert!(
                 dir.path().join("filled").exists(),

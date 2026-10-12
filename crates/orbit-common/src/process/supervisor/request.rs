@@ -1,7 +1,7 @@
 //! The supervision request and its outcome.
 
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::super::stopped_descendants::StoppedDescendant;
 use super::{OutputSink, ProcessStopCause};
@@ -30,6 +30,15 @@ pub enum Termination {
     KillNow,
 }
 
+/// A hook supervision runs on its own thread while the child lives.
+pub struct Periodic<'a> {
+    /// Time between runs; the first runs one interval after supervision
+    /// starts.
+    pub interval: Duration,
+    /// Runs between waits on the child, so never once a wait has seen it exit.
+    pub run: &'a mut dyn FnMut(),
+}
+
 /// One supervised run of a [`SupervisedChild`](super::SupervisedChild).
 pub struct Supervision<'a> {
     pub stdin: Stdin,
@@ -39,6 +48,11 @@ pub struct Supervision<'a> {
     pub stderr: Box<dyn OutputSink>,
     /// Wall-clock limit from the start of supervision; `None` waits forever.
     pub timeout: Option<Duration>,
+    /// A deadline the caller can move while the child runs, such as one
+    /// extended by credit for time spent queued on a shared resource. When
+    /// set it replaces `timeout`. Supervision reads it at the start, again at
+    /// most every 100 ms, and afresh before acting on its passing.
+    pub extendable_deadline: Option<&'a dyn Fn() -> Instant>,
     pub termination: Termination,
     /// Kills the group at once when set; checked every poll.
     pub cancelled: Option<&'a AtomicBool>,
@@ -58,6 +72,14 @@ pub struct Supervision<'a> {
     /// the process table, so callers on the process-identity path keep it
     /// off: `identity` spawns `ps` through the bounded runner itself.
     pub stopped_descendants: Option<Duration>,
+    /// Called with each descendant the stopped-descendant watch ended or
+    /// failed to end, as it happens. The outcome lists them too.
+    pub on_stopped_descendant: Option<&'a dyn Fn(&StoppedDescendant)>,
+    /// Called once with the child's pid when supervision starts, before any
+    /// pipe setup.
+    pub on_spawn: Option<&'a dyn Fn(u32)>,
+    /// Run a hook periodically while the child lives.
+    pub every: Option<Periodic<'a>>,
 }
 
 /// What supervising a child observed.

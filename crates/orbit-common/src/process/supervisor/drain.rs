@@ -10,6 +10,8 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -18,54 +20,88 @@ use std::time::Duration;
 use super::super::pipe::set_nonblocking;
 use super::{OutputSink, ProcessStopCause, SinkVerdict};
 
+/// How often a worker without a wakeup descriptor rechecks the stop flag.
+#[cfg(unix)]
+const STOP_FLAG_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 /// Supervisor half of the drain bound. Every worker holds a [`StopWatch`]
 /// from [`Self::watch`]; [`Self::settle`] (or dropping this) stops them.
 ///
-/// The stop travels over a socket pair: dropping the supervisor's end makes
-/// the workers' ends readable, which each worker observes in `poll(2)`
-/// alongside its own pipe. Every descriptor has exactly one owner and is
-/// closed only by that owner.
+/// The stop is a flag every worker rechecks, and normally also travels over a
+/// socket pair: dropping the supervisor's end makes the workers' ends
+/// readable, which each worker observes in `poll(2)` alongside its own pipe.
+/// When the pair or a worker's clone of it cannot be created (`EMFILE`), that
+/// worker polls its pipe with a short timeout and rechecks the flag instead,
+/// so the run still proceeds with the same bound. Every descriptor has exactly
+/// one owner and is closed only by that owner.
 pub(super) struct DrainStop {
+    stop: StopSignal,
     #[cfg(unix)]
-    signal: UnixStream,
-    #[cfg(unix)]
-    watched: UnixStream,
+    watched: Option<UnixStream>,
     running_tx: SyncSender<()>,
     running_rx: Receiver<()>,
+}
+
+/// Raises the stop when dropped, on settling or on an early return.
+struct StopSignal {
+    stopped: Arc<AtomicBool>,
+    #[cfg(unix)]
+    _wakeup: Option<UnixStream>,
+}
+
+impl Drop for StopSignal {
+    fn drop(&mut self) {
+        // The wakeup end closes after this, so a worker woken by it always
+        // sees the flag set too.
+        self.stopped.store(true, Ordering::Release);
+    }
 }
 
 /// Worker half of the drain bound; dropping it reports the worker finished.
 pub(super) struct StopWatch {
     #[cfg(unix)]
-    stop: UnixStream,
+    stopped: Arc<AtomicBool>,
+    #[cfg(unix)]
+    stop: Option<UnixStream>,
     // Never sent on: the supervisor sees every worker gone once all clones
     // are dropped.
     _running: SyncSender<()>,
 }
 
 impl DrainStop {
-    pub(super) fn new() -> io::Result<Self> {
+    pub(super) fn new() -> Self {
         // Nothing is ever sent; the channel only reports when the last
         // worker drops its sender.
         let (running_tx, running_rx) = mpsc::sync_channel(1);
         #[cfg(unix)]
-        let (signal, watched) = UnixStream::pair()?;
-        Ok(Self {
-            #[cfg(unix)]
-            signal,
+        let (wakeup, watched) = match wakeup_pair() {
+            Ok((wakeup, watched)) => (Some(wakeup), Some(watched)),
+            Err(_) => (None, None),
+        };
+        Self {
+            stop: StopSignal {
+                stopped: Arc::new(AtomicBool::new(false)),
+                #[cfg(unix)]
+                _wakeup: wakeup,
+            },
             #[cfg(unix)]
             watched,
             running_tx,
             running_rx,
-        })
+        }
     }
 
-    pub(super) fn watch(&self) -> io::Result<StopWatch> {
-        Ok(StopWatch {
+    pub(super) fn watch(&self) -> StopWatch {
+        StopWatch {
             #[cfg(unix)]
-            stop: self.watched.try_clone()?,
+            stopped: Arc::clone(&self.stop.stopped),
+            #[cfg(unix)]
+            stop: self
+                .watched
+                .as_ref()
+                .and_then(|watched| watched.try_clone().ok()),
             _running: self.running_tx.clone(),
-        })
+        }
     }
 
     /// Wait up to `budget` for every worker to finish on its own, then stop
@@ -75,8 +111,7 @@ impl DrainStop {
     /// bounded. Off Unix the workers use blocking I/O and cannot be stopped.
     pub(super) fn settle(self, budget: Duration) -> bool {
         let Self {
-            #[cfg(unix)]
-            signal,
+            stop,
             running_tx,
             running_rx,
             ..
@@ -86,10 +121,17 @@ impl DrainStop {
             running_rx.recv_timeout(budget),
             Err(RecvTimeoutError::Disconnected)
         );
-        #[cfg(unix)]
-        drop(signal);
+        drop(stop);
         !finished
     }
+}
+
+#[cfg(unix)]
+fn wakeup_pair() -> io::Result<(UnixStream, UnixStream)> {
+    if super::seam::no_wakeup_pair() {
+        return Err(io::Error::from_raw_os_error(libc::EMFILE));
+    }
+    UnixStream::pair()
 }
 
 /// A pipe end the workers can wait on together with their [`StopWatch`].
@@ -217,22 +259,38 @@ fn wait_ready(fd: BorrowedFd<'_>, events: libc::c_short, stop: &StopWatch) -> io
             events,
             revents: 0,
         },
+        // `poll` ignores a negative descriptor.
         libc::pollfd {
-            fd: stop.stop.as_raw_fd(),
+            fd: stop.stop.as_ref().map_or(-1, AsRawFd::as_raw_fd),
             events: libc::POLLIN,
             revents: 0,
         },
     ];
+    // With a wakeup descriptor the worker can park until something happens;
+    // without one it must wake periodically to observe the flag.
+    let timeout_ms = if stop.stop.is_some() {
+        -1
+    } else {
+        STOP_FLAG_POLL_INTERVAL.as_millis() as libc::c_int
+    };
     loop {
+        // Checked on every pass, so a continuously ready pipe cannot starve
+        // the stop.
+        if stop.stopped.load(Ordering::Acquire) {
+            return Ok(Ready::Stopped);
+        }
         // SAFETY: both descriptors are borrowed from handles that outlive
         // the call, and `fds` is a valid array of the length passed.
-        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
-        if rc >= 0 {
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms) };
+        if rc > 0 {
             return Ok(if fds[1].revents != 0 {
                 Ready::Stopped
             } else {
                 Ready::Io
             });
+        }
+        if rc == 0 {
+            continue;
         }
         let err = io::Error::last_os_error();
         if err.kind() != io::ErrorKind::Interrupted {

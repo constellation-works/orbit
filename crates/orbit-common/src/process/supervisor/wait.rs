@@ -5,17 +5,18 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use wait_timeout::ChildExt;
-
 use super::super::OwnedChild;
 use super::super::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
 use super::drain::{DrainStop, StopWatch, spawn_sink_drain, spawn_stdin_write};
+use super::seam;
 #[cfg(unix)]
 use super::signal_guard::SignalHandlerGuard;
 use super::{Outcome, ProcessStopCause, Stdin, Supervision, Termination};
 use crate::OrbitError;
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long supervision trusts an extendable deadline's last answer.
+const DEADLINE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 type StdinResultReceiver = Receiver<std::io::Result<()>>;
 type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
@@ -111,8 +112,6 @@ impl Drop for SupervisedChild {
 #[cfg(all(test, unix))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SupervisionFailure {
-    DrainStop,
-    Watch(usize),
     SignalInstall,
     Wait,
 }
@@ -158,21 +157,29 @@ impl SupervisedChild {
     ///
     /// # Errors
     /// Returns pipe, handler or wait setup failures and stdin write failures
-    /// other than a broken pipe. The child's group is killed and the child
-    /// reaped before any error returns.
+    /// other than a broken pipe. The child's group is killed, the child
+    /// reaped and every pipe worker finished before any error returns.
     pub fn supervise(mut self, run: Supervision<'_>) -> Result<Outcome, OrbitError> {
         let Supervision {
             stdin,
             stdout,
             stderr,
             timeout,
+            extendable_deadline,
             termination,
             cancelled,
             intercept_signals,
             drain_budget,
             stopped_descendants: stopped_threshold,
+            on_stopped_descendant,
+            on_spawn,
+            mut every,
         } = run;
         let child = &mut self;
+
+        if let Some(on_spawn) = on_spawn {
+            on_spawn(child.process.pid());
+        }
 
         // Guarded spawns already intercept signals. Adopt externally spawned
         // children before any fallible pipe setup, and keep cleanup ownership
@@ -190,29 +197,12 @@ impl SupervisedChild {
         // Every pipe worker is bounded by `drain_stop`: once the child is gone
         // the supervisor waits at most `drain_budget` for them. Dropping it on
         // an early error return stops them as well.
-        #[cfg(all(test, unix))]
-        inject_supervision_failure(SupervisionFailure::DrainStop)?;
-        let drain_stop = DrainStop::new().map_err(|err| {
-            OrbitError::Execution(format!("failed to set up process pipe supervision: {err}"))
-        })?;
-        #[cfg(all(test, unix))]
-        let watch_count = std::cell::Cell::new(0);
-        let watch = || {
-            #[cfg(all(test, unix))]
-            {
-                let count = watch_count.get();
-                watch_count.set(count + 1);
-                inject_supervision_failure(SupervisionFailure::Watch(count))?;
-            }
-            drain_stop.watch().map_err(|err| {
-                OrbitError::Execution(format!("failed to set up process pipe supervision: {err}"))
-            })
-        };
+        let drain_stop = DrainStop::new();
 
         // Drain stdout/stderr in background threads so the child never blocks
         // on a full pipe buffer (which would prevent it from exiting).
         let (stdin_result_rx, stdin_thread) =
-            spawn_stdin_thread(child.process.child_mut(), stdin, watch)?;
+            spawn_stdin_thread(child.process.child_mut(), stdin, || drain_stop.watch())?;
         // Each of the two drain threads reports a sink stop at most once.
         let (sink_stop_tx, sink_stop_rx) = mpsc::sync_channel(2);
         let stdout_thread = match child.process.child_mut().stdout.take() {
@@ -220,7 +210,7 @@ impl SupervisedChild {
                 out,
                 stdout,
                 sink_stop_tx.clone(),
-                watch()?,
+                drain_stop.watch(),
             )),
             None => {
                 stdout.finish();
@@ -228,14 +218,22 @@ impl SupervisedChild {
             }
         };
         let stderr_thread = match child.process.child_mut().stderr.take() {
-            Some(err) => Some(spawn_sink_drain(err, stderr, sink_stop_tx, watch()?)),
+            Some(err) => Some(spawn_sink_drain(
+                err,
+                stderr,
+                sink_stop_tx,
+                drain_stop.watch(),
+            )),
             None => {
                 stderr.finish();
                 None
             }
         };
 
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let mut deadline = Deadline::new(timeout, extendable_deadline);
+        let mut next_periodic = every
+            .as_ref()
+            .map(|periodic| Instant::now() + periodic.interval);
         // A descendant that stays stopped would hold the child's wait until
         // the deadline; see `stopped_descendants`.
         let mut stopped_watch = stopped_threshold.map(StoppedDescendantWatch::new);
@@ -243,29 +241,25 @@ impl SupervisedChild {
         let mut stdin_write_error = None;
         let mut sink_stopped: Option<ProcessStopCause> = None;
         let mut termination_status = None;
-        // Annotated because the only `Some(signal)` arms are Unix-only.
-        let (timed_out, interrupted_signal, mut success, exit_code): (
-            bool,
-            Option<i32>,
-            bool,
-            Option<i32>,
-        ) = loop {
+        // An error leaves the child to the cleanup below, so the pipe
+        // workers are finished before it returns.
+        let waited: Result<(bool, Option<i32>, bool, Option<i32>), OrbitError> = (|| loop {
             // Check before waiting or another cancellation cause: registration
             // may have raced a signal before the handler could fan it out.
             #[cfg(unix)]
             if let Some(signal) = child.take_signal() {
                 end_group(&mut child.process, termination, signal)?;
-                break (false, Some(signal), false, Some(128 + signal));
+                return Ok((false, Some(signal), false, Some(128 + signal)));
             }
 
             if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
                 child.process.kill_and_reap();
-                break (false, None, false, None);
+                return Ok((false, None, false, None));
             }
             if let Ok(cause) = sink_stop_rx.try_recv() {
                 end_group(&mut child.process, termination, termination_signal())?;
                 sink_stopped = Some(cause);
-                break (false, None, false, None);
+                return Ok((false, None, false, None));
             }
 
             if let Some(rx) = stdin_result_rx.as_ref() {
@@ -285,7 +279,7 @@ impl SupervisedChild {
                         stdin_write_error = Some(OrbitError::Execution(format!(
                             "failed to write process stdin: {err}"
                         )));
-                        break (false, None, false, None);
+                        return Ok((false, None, false, None));
                     }
                     Err(TryRecvError::Empty) => {}
                     Err(TryRecvError::Disconnected) => {}
@@ -293,24 +287,28 @@ impl SupervisedChild {
             }
 
             // The child is not reaped yet, so its pid still names it. Each
-            // one is reported in the outcome.
+            // one is reported as it is ended, and in the outcome.
             if let Some(watch) = stopped_watch.as_mut() {
-                stopped_descendants.extend(watch.poll(child.process.pid()));
+                for stopped in watch.poll(child.process.pid()) {
+                    if let Some(report) = on_stopped_descendant {
+                        report(&stopped);
+                    }
+                    stopped_descendants.push(stopped);
+                }
             }
 
-            let wait_slice = deadline
-                .map(|end| {
-                    end.saturating_duration_since(Instant::now())
-                        .min(WAIT_POLL_INTERVAL)
-                })
-                .unwrap_or(WAIT_POLL_INTERVAL);
+            let now = Instant::now();
+            let mut wait_slice = WAIT_POLL_INTERVAL;
+            if let Some(end) = deadline.current() {
+                wait_slice = wait_slice.min(end.saturating_duration_since(now));
+            }
+            if let Some(next) = next_periodic {
+                wait_slice = wait_slice.min(next.saturating_duration_since(now));
+            }
 
             #[cfg(all(test, unix))]
             inject_supervision_failure(SupervisionFailure::Wait)?;
-            if let Some(status) = child
-                .process
-                .child_mut()
-                .wait_timeout(wait_slice)
+            if let Some(status) = seam::wait_timeout(child.process.child_mut(), wait_slice)
                 .map_err(|e| OrbitError::Execution(format!("wait timeout error: {e}")))?
             {
                 // The child is reaped: its pid is free for reuse from here
@@ -322,33 +320,46 @@ impl SupervisedChild {
                 #[cfg(unix)]
                 if let Some(signal) = child.take_signal() {
                     end_group(&mut child.process, termination, signal)?;
-                    break (false, Some(signal), false, Some(128 + signal));
+                    return Ok((false, Some(signal), false, Some(128 + signal)));
                 }
 
-                // Child exited within the timeout. Kill its process group so
-                // any orphan subprocesses still holding the pipes open are
-                // reaped before the pipe workers settle below.
-                let _ = child.process.signal_group(9);
+                // Child exited within the timeout. Kill its process group and
+                // wait for it to drain, so any orphan subprocesses still
+                // holding the pipes open are gone before the pipe workers
+                // settle below.
+                child.process.kill_and_reap();
                 if !status.success() && status.code().is_none() {
                     termination_status = Some(status);
                 }
-                break (false, None, status.success(), status.code());
+                return Ok((false, None, status.success(), status.code()));
             }
 
             #[cfg(unix)]
             if let Some(signal) = child.take_signal() {
                 end_group(&mut child.process, termination, signal)?;
-                break (false, Some(signal), false, Some(128 + signal));
+                return Ok((false, Some(signal), false, Some(128 + signal)));
             }
 
-            if deadline.is_some_and(|end| Instant::now() >= end) {
+            if deadline.passed() {
                 end_group(&mut child.process, termination, termination_signal())?;
-                break (true, None, false, None);
+                return Ok((true, None, false, None));
             }
-        };
-        // Every exit above has reaped the child (directly or through
-        // `end_group`); stop fanning signals out to its old group before the
-        // pipe workers settle below, which can outlast a pid's reuse.
+
+            if let (Some(periodic), Some(next)) = (every.as_mut(), next_periodic) {
+                let now = Instant::now();
+                if now >= next {
+                    (periodic.run)();
+                    next_periodic = Some(now + periodic.interval);
+                }
+            }
+        })();
+        // Every successful exit above has reaped the child (directly or
+        // through `end_group`); an error leaves that to this kill. Stop
+        // fanning signals out to its old group before the pipe workers settle
+        // below, which can outlast a pid's reuse.
+        if waited.is_err() {
+            child.process.kill_and_reap();
+        }
         child.mark_reaped();
 
         // The process group is dead, so its pipe ends are closed and the
@@ -364,6 +375,7 @@ impl SupervisedChild {
             .unwrap_or_default();
         let stdin_thread_panicked = stdin_thread.map(|h| h.join().is_err()).unwrap_or(false);
 
+        let (timed_out, interrupted_signal, mut success, exit_code) = waited?;
         if stdin_thread_panicked {
             return Err(OrbitError::Execution(
                 "stdin writer thread panicked".to_string(),
@@ -424,10 +436,65 @@ impl SupervisedChild {
     }
 }
 
+/// The run's deadline: fixed from the timeout, or the caller's extendable
+/// one, cached for [`DEADLINE_REFRESH_INTERVAL`].
+struct Deadline<'a> {
+    fixed: Option<Instant>,
+    extendable: Option<&'a dyn Fn() -> Instant>,
+    cached: Option<(Instant, Instant)>,
+}
+
+impl<'a> Deadline<'a> {
+    fn new(timeout: Option<Duration>, extendable: Option<&'a dyn Fn() -> Instant>) -> Self {
+        let mut deadline = Self {
+            fixed: timeout.map(|timeout| Instant::now() + timeout),
+            extendable,
+            cached: None,
+        };
+        deadline.current();
+        deadline
+    }
+
+    /// The deadline as last read, refreshed when the read is stale.
+    fn current(&mut self) -> Option<Instant> {
+        let Some(read) = self.extendable else {
+            return self.fixed;
+        };
+        let now = Instant::now();
+        match self.cached {
+            Some((deadline, read_at)) if now < read_at + DEADLINE_REFRESH_INTERVAL => {
+                Some(deadline)
+            }
+            _ => Some(self.refresh(read, now)),
+        }
+    }
+
+    /// Whether the deadline has passed, reading an extendable one afresh
+    /// before saying so.
+    fn passed(&mut self) -> bool {
+        match self.current() {
+            Some(end) if Instant::now() >= end => match self.extendable {
+                Some(read) => {
+                    let end = self.refresh(read, Instant::now());
+                    Instant::now() >= end
+                }
+                None => true,
+            },
+            _ => false,
+        }
+    }
+
+    fn refresh(&mut self, read: &dyn Fn() -> Instant, now: Instant) -> Instant {
+        let deadline = read();
+        self.cached = Some((deadline, now));
+        deadline
+    }
+}
+
 fn spawn_stdin_thread(
     child: &mut Child,
     stdin: Stdin,
-    watch: impl FnOnce() -> Result<StopWatch, OrbitError>,
+    watch: impl FnOnce() -> StopWatch,
 ) -> Result<StdinWorker, OrbitError> {
     match stdin {
         Stdin::Payload(bytes) => {
@@ -436,7 +503,7 @@ fn spawn_stdin_thread(
             })?;
             // The single stdin writer sends one completion result.
             let (tx, rx) = mpsc::sync_channel(1);
-            let handle = spawn_stdin_write(pipe, bytes, tx, watch()?);
+            let handle = spawn_stdin_write(pipe, bytes, tx, watch());
             Ok((Some(rx), Some(handle)))
         }
         Stdin::Null => Ok((None, None)),
