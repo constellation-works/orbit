@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::is_readonly_or_access_sqlite_error;
+use orbit_common::storage::sqlite::{
+    is_readonly_or_access_sqlite_error, sqlite_error, sqlite_store_error,
+};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OpenFlags};
 
 use super::schema::{
@@ -96,9 +98,11 @@ impl TaskRegistryStore {
                     "could not set synchronous=FULL on a read-only task registry; continuing for reads"
                 );
             } else {
-                return Err(OrbitError::Store(format!(
-                    "failed to set synchronous=FULL: {error}"
-                )));
+                return Err(sqlite_error(
+                    StorageLayer::Store,
+                    &error,
+                    format!("failed to set synchronous=FULL: {error}"),
+                ));
             }
         }
         // Setup, migration and recovery all need a write transaction, so a
@@ -135,7 +139,7 @@ impl TaskRegistryStore {
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let workspaces_dir = workspaces_dir_of(path);
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         assert_readable_schema(&conn, path)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

@@ -18,7 +18,8 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
@@ -105,7 +106,7 @@ fn completed_marker(
         .map(Some)
         .or_else(|error| match error {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(OrbitError::Store(other.to_string())),
+            other => Err(sqlite_store_error(other)),
         })?;
 
     let Some((schema_version, record_count, imported_count)) = row else {
@@ -245,7 +246,13 @@ fn run_import(
             crate::now_string(),
         ],
     )
-    .map_err(|error| OrbitError::Store(format!("record friction import completion: {error}")))?;
+    .map_err(|error| {
+        sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!("record friction import completion: {error}"),
+        )
+    })?;
 
     if discovered > 0 {
         orbit_common::tracing::info!(
@@ -279,7 +286,7 @@ fn record_exists(
             rusqlite::params![workspace_id, friction_id],
             |row| row.get(0),
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     Ok(count > 0)
 }
 

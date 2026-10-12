@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::contracts::{V2AuditEventFilter, V2AuditEventRow};
 
@@ -107,7 +108,7 @@ pub(super) fn count_matching(
     let sql = format!("SELECT COUNT(*) FROM v2_audit_events {where_clause}");
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
     conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 pub(super) fn select_tail_page(
@@ -129,11 +130,9 @@ pub(super) fn select_tail_page(
     params.push(Box::new(i64::try_from(limit).unwrap_or(i64::MAX)));
     params.push(Box::new(i64::try_from(offset).unwrap_or(i64::MAX)));
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(param_refs.as_slice(), row_to_v2_audit_event)
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     collect_rows(rows)
 }

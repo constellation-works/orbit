@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_error;
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::Connection;
 
 use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_state};
@@ -125,10 +126,14 @@ pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, O
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| {
-            OrbitError::Store(format!(
-                "cannot open store database '{}' read-only: {e}",
-                db_path.display()
-            ))
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!(
+                    "cannot open store database '{}' read-only: {e}",
+                    db_path.display()
+                ),
+            )
         })?;
         let current_version = current_schema_version(&conn)?;
         let forward_compatible = if current_version > SUPPORTED_SCHEMA_VERSION {

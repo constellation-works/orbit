@@ -4,6 +4,7 @@ use super::checkpoint;
 use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::*;
 use rusqlite::{TransactionBehavior, params};
 
@@ -57,7 +58,7 @@ pub(super) fn commit(
                     previous_json
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if changed == 0 {
             return Ok(false);
@@ -72,7 +73,7 @@ pub(super) fn commit(
                 encode(waiver)?
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         Ok(true)
     })
@@ -88,15 +89,15 @@ pub(super) fn list(
             .prepare(
                 "SELECT waiver_json FROM automation_waivers WHERE consumer=?1 ORDER BY rowid DESC LIMIT ?2",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![consumer, limit.min(100)], |row| {
                 row.get::<_, String>(0)
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
-        rows.map(|row| decode(&row.map_err(|e| OrbitError::Store(e.to_string()))?))
+        rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
             .collect()
     })
 }

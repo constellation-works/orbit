@@ -3,6 +3,7 @@
 use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::Delivery;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -25,7 +26,7 @@ pub(super) fn record(store: &Store, delivery: &Delivery) -> Result<(), OrbitErro
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         // Intents are immutable: a re-record is a no-op, a changed one is a conflict.
         if let Some(raw) = existing {
@@ -45,14 +46,14 @@ pub(super) fn record(store: &Store, delivery: &Delivery) -> Result<(), OrbitErro
             "INSERT INTO automation_delivery_intents VALUES (?1,?2,?3,?4)",
             params![id, delivery.repository, delivery.branch, encode(delivery)?],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         for sha in &delivery.commits {
             conn.execute(
                 "INSERT INTO automation_delivery_members VALUES (?1,?2,?3,?4)",
                 params![delivery.repository, delivery.branch, sha, id],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
 
         Ok(())
@@ -79,17 +80,17 @@ pub(super) fn lookup(
             .prepare(
                 "SELECT i.record_id,i.delivery_json FROM automation_delivery_members m JOIN automation_delivery_intents i ON i.record_id=m.record_id WHERE m.repository=?1 AND m.branch=?2 AND m.commit_id=?3 LIMIT 51",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         for sha in commits {
             let rows = stmt
                 .query_map(params![repository, branch, sha], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             for row in rows {
-                let (id, raw) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                let (id, raw) = row.map_err(sqlite_store_error)?;
                 found.insert(id, decode(&raw)?);
 
                 if found.len() > 50 {

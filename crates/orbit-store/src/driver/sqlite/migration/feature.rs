@@ -15,6 +15,7 @@
 //! (`compose::compiled_compatibility`).
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
@@ -254,7 +255,7 @@ fn read_applied_migrations(
              WHERE feature = ?1
              ORDER BY version ASC",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map([feature], |row| {
             Ok((
@@ -263,12 +264,11 @@ fn read_applied_migrations(
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut applied = Vec::new();
     for row in rows {
-        let (version, name, applied_at) =
-            row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let (version, name, applied_at) = row.map_err(sqlite_store_error)?;
         let version = u32::try_from(version).map_err(|error| {
             OrbitError::Migration(format!(
                 "feature migration ledger for '{feature}' contains invalid version {version}: {error}"
@@ -481,5 +481,5 @@ pub(super) fn apply_feature_schema_ledger(conn: &Connection) -> Result<(), Orbit
             END;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

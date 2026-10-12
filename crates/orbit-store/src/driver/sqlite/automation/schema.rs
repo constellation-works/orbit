@@ -3,6 +3,7 @@
 use crate::Store;
 use crate::driver::sqlite::migration::FeatureMigration;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 /// This feature's schema ledger name.
 pub(crate) const FEATURE: &str = "automation";
@@ -17,20 +18,20 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
             CREATE TABLE automation_delivery_members (repository TEXT NOT NULL, branch TEXT NOT NULL, commit_id TEXT NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(repository,branch,commit_id,record_id));
             CREATE TABLE automation_waivers (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, waiver_json TEXT NOT NULL);
             CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));")
-                    .map_err(|e| OrbitError::Store(e.to_string()))
+                    .map_err(sqlite_store_error)
     }),
     FeatureMigration::breaking(2, "retry_lineage_index", |conn| {
         conn.execute_batch(
                     "CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id)",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
     }),
     FeatureMigration::breaking(3, "consumer_recovery_records", |conn| {
         conn.execute_batch(
                     "CREATE TABLE automation_recoveries (record_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, recorded_at TEXT NOT NULL, record_json TEXT NOT NULL);
             CREATE INDEX automation_recoveries_consumer ON automation_recoveries(consumer, recorded_at);",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
     }),
     FeatureMigration::breaking(
         4,

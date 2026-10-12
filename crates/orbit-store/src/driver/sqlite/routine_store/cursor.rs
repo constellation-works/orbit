@@ -1,6 +1,7 @@
 //! Per-routine baseline and slot cursor.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::RoutineCursor;
@@ -23,7 +24,7 @@ impl Store {
             },
         )
         .optional()
-        .map_err(|error| OrbitError::Store(error.to_string()))
+        .map_err(sqlite_store_error)
     }
 
     /// Record the first observation of a routine on this host. Idempotent:
@@ -44,7 +45,7 @@ impl Store {
                      VALUES (?1, ?2, NULL, ?3)",
                     params![routine_name, baseline_at, now],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(inserted > 0)
         })
     }

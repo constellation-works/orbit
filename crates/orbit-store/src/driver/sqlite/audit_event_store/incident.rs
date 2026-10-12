@@ -1,6 +1,7 @@
 //! SQLite query adapter for the implementation-free failure-incident contract.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::AuditEvent;
 
 use crate::Store;
@@ -48,16 +49,14 @@ impl Store {
             param_values.len() + 1
         );
         param_values.push(Box::new(max_events as i64));
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|value| value.as_ref()).collect();
         let failures = stmt
             .query_map(param_refs.as_slice(), audit_event_from_row)
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<AuditEvent>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let truncated = failures.len() >= max_events;
         Ok(build_report(&failures, truncated))
     }

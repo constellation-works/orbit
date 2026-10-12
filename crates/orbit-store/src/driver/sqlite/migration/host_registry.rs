@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 /// v5 `host_registry_core` migration (ORB-10255): durable machine identity,
@@ -84,7 +85,7 @@ pub(super) fn apply_host_registry_core(conn: &Connection) -> Result<(), OrbitErr
             END;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v6 `workspace_coordination_projections` migration (ORB-10257): singular
@@ -160,7 +161,7 @@ pub(super) fn apply_workspace_coordination_projections(
             END;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v8 `hub_registry_metadata` migration (ORB-10267): one singleton hub-global
@@ -192,5 +193,5 @@ pub(super) fn apply_hub_registry_metadata(conn: &Connection) -> Result<(), Orbit
             ) VALUES (0, NULL, 0, datetime('now'));
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
