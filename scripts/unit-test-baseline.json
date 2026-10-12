@@ -492,6 +492,7 @@
         "application/task/tests/paths.rs::a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
         "application/task/tests/paths.rs::explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
         "application/task/tests/transitions.rs::approve_does_not_overwrite_a_status_changed_after_its_read",
+        "application/task/tests/transitions.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force",
         "application/tests/executor.rs::custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration",
         "application/tests/executor.rs::migrated_default_executor_realigns_platform_mismatched_sandbox_on_linux",
         "application/tests/executor.rs::seed_default_executors_heals_leftover_macos_sandbox_on_linux",

@@ -887,7 +887,15 @@ impl OrbitRuntime {
     pub fn delete_task_guarded(&self, id: &str, force: bool) -> Result<(), OrbitError> {
         let task = self.get_task(id)?;
         ensure_task_delete_allowed(&task.id, task.status, force)?;
-        self.delete_task(id)
+        #[cfg(test)]
+        self.apply_transition_read_hook(id)?;
+        // The preflight can go stale while a transition owns the task lock.
+        // Re-read eligibility under that lock and hold it through deletion.
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            ensure_task_delete_allowed(&task.id, task.status, force)?;
+            self.delete_task(id)
+        })
     }
 }
 

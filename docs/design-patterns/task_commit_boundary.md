@@ -34,6 +34,10 @@ boundary **before** any bundle lock, including `with_task_write_lock`, so the tw
 always acquired in the same order; the shared helper's per-thread re-entrance makes a nested
 task lock inside an admission section run under the outer acquisition rather than deadlock.
 
+Guarded task deletion re-reads eligibility under `with_task_write_lock` and holds that
+lock through bundle deletion. Its earlier status check is only a preflight: a task that
+became active meanwhile is preserved unless the caller explicitly forces deletion.
+
 Both boundary locks prefer a waiting exclusive acquirer. An admission, recovery or
 cross-partition admission refused by shared holders queues at the lock's turnstile
 (`<lock>.turnstile`) until it takes the lock. An ordinary section passes through that turnstile
