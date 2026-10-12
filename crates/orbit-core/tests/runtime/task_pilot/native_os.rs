@@ -189,7 +189,7 @@ fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
     assess(&workspace, &task, Some(needs_macos(2)));
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
     let audit: Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
     assert_eq!(
         audit["native_os_hold"]["requirements"],
         json!([{"criterion": 2, "os": "macos"}]),
@@ -608,7 +608,7 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
     assert_eq!(applied["applied_count"], 1, "{applied}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
     let audit: Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
     assert_eq!(
         audit["native_os_hold"]["machine"],
         json!({"criteria": [1], "machine_id": "fixture-machine"}),

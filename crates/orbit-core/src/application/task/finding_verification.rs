@@ -658,11 +658,13 @@ impl OrbitRuntime {
                                 note: Some(note.clone()),
                                 from_status: None,
                                 to_status: None,
+                                operation_id: None,
                             }],
                             append_comments: vec![TaskComment {
                                 at: now,
                                 by: FINDING_VERIFICATION_ACTOR.to_string(),
                                 message: comment.clone(),
+                                operation_id: None,
                             }],
                             expected_status: Some(vec![prepared_status]),
                             ..Default::default()

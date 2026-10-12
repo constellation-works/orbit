@@ -135,6 +135,7 @@ impl OrbitRuntime {
                             review.attempt_id,
                             record["repair_ref"].as_str().unwrap_or_default(),
                         ),
+                        operation_id: None,
                     }],
                     ..TaskAutomationUpdate::default()
                 },

@@ -172,6 +172,7 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: note,
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -291,6 +292,7 @@ pub(super) fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message,
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },

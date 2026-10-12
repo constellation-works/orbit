@@ -50,6 +50,7 @@ fn parallel_updates_to_one_task_keep_every_appended_comment() {
                                     at: Utc::now(),
                                     by: format!("writer-{writer}"),
                                     message: format!("writer {writer} comment {round}"),
+                                    operation_id: None,
                                 }],
                                 ..Default::default()
                             },
@@ -146,6 +147,7 @@ fn transition_event(bundle: &TaskBundleV2) -> TaskEventRowV2 {
         note: None,
         from_status: Some(bundle.envelope.status),
         to_status: Some(TaskStatus::InProgress),
+        operation_id: None,
     }
 }
 

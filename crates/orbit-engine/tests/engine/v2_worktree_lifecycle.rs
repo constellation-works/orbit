@@ -1630,6 +1630,7 @@ fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason
                     note: None,
                     from_status: Some(TaskStatus::Backlog),
                     to_status: Some(TaskStatus::Blocked),
+                    operation_id: None,
                 },
             );
             fresh("no_candidate");
@@ -2050,6 +2051,7 @@ impl PreservedCandidate {
                 )),
                 from_status: Some(TaskStatus::InProgress),
                 to_status: Some(TaskStatus::Backlog),
+                operation_id: None,
             },
         );
     }
@@ -2142,6 +2144,7 @@ fn discard_entry(at: chrono::DateTime<Utc>) -> TaskHistoryEntry {
         note: None,
         from_status: None,
         to_status: None,
+        operation_id: None,
     }
 }
 
@@ -4122,6 +4125,7 @@ impl RuntimeHost for LifecycleHost {
                     note: update.status_note,
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 },
             );
         }

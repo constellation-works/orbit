@@ -5,6 +5,10 @@ pub struct TaskComment {
     pub at: DateTime<Utc>,
     pub by: String,
     pub message: String,
+    /// Idempotency key of the task mutation that wrote this comment; read it
+    /// through [`TaskComment::receipt`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -18,6 +22,10 @@ pub struct TaskHistoryEntry {
     pub from_status: Option<TaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_status: Option<TaskStatus>,
+    /// Idempotency key of the task mutation that wrote this event; read it
+    /// through [`TaskHistoryEntry::receipt`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

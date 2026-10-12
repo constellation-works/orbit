@@ -433,6 +433,7 @@ fn a_candidate_changed_after_selection_is_never_admitted_from_the_selection() {
                             at: Utc::now(),
                             by: "task-pilot".into(),
                             message: "held".into(),
+                            operation_id: None,
                         }],
                         ..TaskHistoryUpdateParams::default()
                     },

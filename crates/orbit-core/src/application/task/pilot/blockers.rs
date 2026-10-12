@@ -194,16 +194,14 @@ impl OrbitRuntime {
             if comment.by != "task-pilot" {
                 continue;
             }
-            let Some((header, body)) = comment.message.split_once('\n') else {
+            let Some(receipt) = comment.receipt() else {
                 continue;
             };
-            let Some(operation) = header.strip_prefix("operation_id=") else {
-                continue;
-            };
+            let operation = receipt.operation_id;
             if operation.len() != 64 || !operation.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 continue;
             }
-            let Ok(audit) = serde_json::from_str::<Value>(body) else {
+            let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
                 continue;
             };
             let Some(assessment) = audit.get("assessment").filter(|value| value.is_object()) else {

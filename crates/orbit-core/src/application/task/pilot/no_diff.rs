@@ -30,7 +30,7 @@
 use orbit_common::OrbitError;
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, Task,
-    TaskRelationType, TaskStatus,
+    TaskComment, TaskHistoryEntry, TaskRelationType, TaskStatus,
 };
 use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, LandingObservationStatus};
 use serde_json::{Value, json};
@@ -48,7 +48,6 @@ pub(crate) const PILOT_VERIFIED_NO_DIFF: &str = "pilot_verified_no_diff";
 const AUTO_MINTED_TAGS: [&str; 2] = ["ci-failure-sweep", "delivery-code-review"];
 const VERIFIED_NO_DIFF: &str = "verified_no_diff";
 const PILOT_ACTOR: &str = "task-pilot";
-const RECEIPT_PREFIX: &str = "operation_id=";
 const EVIDENCE_SUMMARY_CHARS: usize = 240;
 
 /// Whether Orbit automation filed the task, so a proven `verified_no_diff`
@@ -229,23 +228,18 @@ impl OrbitRuntime {
             .rev()
             .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT)
             .filter(|entry| entry.event == "task_pilot_applied")
-            .and_then(|entry| entry.note.as_deref())
-            .and_then(|note| note.rsplit_once(&format!(" ({RECEIPT_PREFIX}")))
-            .and_then(|(_, receipt)| receipt.strip_suffix(')'))
+            .and_then(TaskHistoryEntry::receipt)
             .map(str::to_string)
         else {
             return Ok(None);
         };
-        let header = format!("{RECEIPT_PREFIX}{operation_id}");
         let comments = self.get_task_comments(task_id)?;
         let Some(audit) = comments
             .iter()
             .rev()
             .filter(|comment| comment.by == PILOT_ACTOR)
-            .find_map(|comment| {
-                let (first, audit) = comment.message.split_once('\n')?;
-                (first.trim() == header).then_some(audit)
-            })
+            .filter_map(TaskComment::receipt)
+            .find_map(|receipt| (receipt.operation_id == operation_id).then_some(receipt.body))
         else {
             return Ok(None);
         };

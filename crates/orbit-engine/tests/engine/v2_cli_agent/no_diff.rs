@@ -311,6 +311,7 @@ impl RuntimeHost for SummaryDeliveryHost {
                     note: update.status_note,
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 });
         }
         Ok(())

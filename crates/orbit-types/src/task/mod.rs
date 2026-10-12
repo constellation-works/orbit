@@ -9,6 +9,7 @@ mod model;
 mod os_requirement;
 mod plan;
 mod readiness;
+mod receipt;
 mod show_fields;
 pub use error::TaskError;
 
@@ -66,6 +67,7 @@ pub use readiness::{
     backlog_footprint_warning, declares_no_footprint, readiness_gaps, task_readiness,
     task_readiness_json,
 };
+pub use receipt::CommentReceipt;
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,
     TASK_SHOW_PROJECTION_FIELDS_CSV, TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field,

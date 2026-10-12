@@ -1788,15 +1788,30 @@ function commentMessage(comment) {
   return comment && typeof comment.message === "string" ? comment.message : "";
 }
 
+// The audit body of a pilot receipt: the whole message when the comment
+// carries its typed operation id.
+function pilotReceiptBody(comment) {
+  const message = commentMessage(comment);
+  if (comment.operation_id == null) return legacyPilotReceiptBody(message);
+  return /^[a-fA-F0-9]{64}$/.test(comment.operation_id) ? message : null;
+}
+
+// Compatibility reader for receipts written before the typed operation id:
+// an `operation_id=<id>` first line ahead of the audit body.
+function legacyPilotReceiptBody(message) {
+  const newline = message.indexOf("\n");
+  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
+  return message.slice(newline + 1);
+}
+
 // A pilot receipt is persisted data: summarize only a recognized assessment,
 // and keep the original message for raw/copy and for unrecognized comments.
 function pilotAssessment(comment) {
   if (!comment || comment.by !== "task-pilot") return null;
-  const message = commentMessage(comment);
-  const newline = message.indexOf("\n");
-  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
+  const body = pilotReceiptBody(comment);
+  if (body == null) return null;
   try {
-    const receipt = JSON.parse(message.slice(newline + 1));
+    const receipt = JSON.parse(body);
     const assessment = receipt && receipt.assessment;
     const fields = ["disposition", "confidence", "recommended_crew", "recommended_complexity", "assessment_rationale"];
     if (!assessment || !fields.every(field => typeof assessment[field] === "string" && assessment[field].trim())) return null;

@@ -410,6 +410,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },

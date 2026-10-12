@@ -432,6 +432,7 @@ fn conclude(
                             at: chrono::Utc::now(),
                             by: "system".to_string(),
                             message: format!("Final recovery for run `{}`: {detail}.", ctx.run_id),
+                            operation_id: None,
                         }],
                         ..Default::default()
                     },

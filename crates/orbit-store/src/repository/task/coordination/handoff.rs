@@ -491,11 +491,8 @@ impl TaskCommitBoundary {
             let comments = bundle
                 .comments
                 .iter()
-                .map(|c| orbit_types::task::TaskComment {
-                    at: c.at,
-                    by: c.by.clone(),
-                    message: c.body.clone(),
-                })
+                .cloned()
+                .map(crate::repository::task::v2::task_comment_from_row)
                 .collect::<Vec<_>>();
             let task = crate::repository::task::TaskV2Store::new(
                 self.registry.clone(),
@@ -696,6 +693,7 @@ impl TaskCommitBoundary {
                     })?),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 });
         }
         if candidate.base_branch != ship.base_branch
@@ -740,6 +738,7 @@ impl TaskCommitBoundary {
                     ))),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
                 });
         }
         for reference in &handoff.validation {
@@ -756,6 +755,7 @@ impl TaskCommitBoundary {
                         note: Some(flaky.text()),
                         from_status: None,
                         to_status: None,
+                        operation_id: None,
                     });
             }
         }

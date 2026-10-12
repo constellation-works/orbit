@@ -47,5 +47,6 @@ fn comment(comment_id: &str, body: &str) -> TaskCommentRowV2 {
         at: Utc::now(),
         by: "test".to_string(),
         body: body.to_string(),
+        operation_id: None,
     }
 }

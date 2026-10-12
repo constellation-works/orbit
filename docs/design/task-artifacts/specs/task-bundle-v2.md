@@ -142,6 +142,7 @@ Convenience reads:
 - `note`: optional string.
 - `from_status`: optional status.
 - `to_status`: optional status.
+- `operation_id`: optional idempotency key of the atomic task mutation (task-pilot apply) that wrote the event; that mutation replays when a same-type event carries the key.
 
 Writers must not rewrite prior event lines except during explicit cutover or repair commands. Appends must write one JSON object plus newline, flush and sync the file before success, and preserve a valid prefix if the process crashes. Readers must tolerate a final unterminated or invalid JSON line as tail corruption; repair may truncate only that final corrupt tail.
 
@@ -179,6 +180,9 @@ Re-measure the surface with `scripts/measure-history-signal.py`. [ORB-10343]
 - `at`
 - `by`
 - `body`
+- `operation_id`: optional; the atomic task mutation's key, on the audit comment that event wrote.
+
+The key is written only to `operation_id`, never into `note` or `body`. Rows written before the field carried it as text: a ` (operation_id=<key>)` note suffix or an `operation_id=<key>` first line ahead of the comment body. `orbit-types`' task `receipt` module is the one reader of that legacy text, behind the typed field.
 
 Comment bodies are Markdown strings. Multi-line bodies must be JSON escaped inside one JSONL row, not spread across lines.
 Comment appends follow the same atomicity and tail-repair rules as `events.jsonl`.

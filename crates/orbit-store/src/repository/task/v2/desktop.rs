@@ -56,11 +56,8 @@ impl TaskV2Store {
         let comments = bundle
             .comments
             .iter()
-            .map(|comment| TaskComment {
-                at: comment.at,
-                by: comment.by.clone(),
-                message: comment.body.clone(),
-            })
+            .cloned()
+            .map(super::sidecars::task_comment_from_row)
             .collect();
         let history = super::sidecars::task_history_from_events(bundle.events.clone());
         let artifacts = bundle
@@ -187,6 +184,7 @@ impl TaskV2Store {
                         at: now,
                         by: p.actor.clone(),
                         body: v.clone(),
+                        operation_id: None,
                     },
                 )?;
             }
@@ -202,6 +200,7 @@ impl TaskV2Store {
                     note: None,
                     from_status: Some(old_status),
                     to_status: Some(b.envelope.status),
+                    operation_id: None,
                 };
                 self.bundle_store.append_event(id, &approval)?;
                 b.events.push(approval);
@@ -216,6 +215,7 @@ impl TaskV2Store {
                 from_status: (!approval && old_status != b.envelope.status).then_some(old_status),
                 to_status: (!approval && old_status != b.envelope.status)
                     .then_some(b.envelope.status),
+                operation_id: None,
             };
             self.bundle_store.append_event(id, &event)?;
             b.events.push(event);

@@ -351,11 +351,7 @@ impl TaskV2Store {
     fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {
         let comments = std::mem::take(&mut bundle.comments)
             .into_iter()
-            .map(|comment| TaskComment {
-                at: comment.at,
-                by: comment.by,
-                message: comment.body,
-            })
+            .map(super::sidecars::task_comment_from_row)
             .collect();
         let history = super::sidecars::task_history_from_events(std::mem::take(&mut bundle.events));
         let mut artifacts = bundle

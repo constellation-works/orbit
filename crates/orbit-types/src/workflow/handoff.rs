@@ -344,6 +344,14 @@ pub fn already_landed_scope(
     task: &crate::task::Task,
     comments: &[crate::task::TaskComment],
 ) -> serde_json::Value {
+    // A comment's scope is what it says; a receipt id is bookkeeping, and
+    // leaving it out keeps one scope across Orbit versions.
+    let comments = comments
+        .iter()
+        .map(|comment| {
+            serde_json::json!({"at": comment.at, "by": comment.by, "message": comment.message})
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
         "title": task.title, "description": task.description,
         "acceptance_criteria": task.acceptance_criteria, "plan": task.plan,
