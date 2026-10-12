@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-10-07
+last_validated: 2026-10-12
 ---
 
 # Delivery automation operations [ORB-11330]

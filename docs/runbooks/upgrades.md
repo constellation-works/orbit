@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
-last_validated: 2026-10-06
+last_validated: 2026-10-12
 ---
 
 # Upgrade Orbit Safely
@@ -287,7 +287,7 @@ are not handed over; they finish on the image they started with.
 `orbit update --contract --json` reports protocol support without opening state:
 
 ```json
-{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":32,"writer_floor":28,"reader_floor":26},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":3,"local_pull":1,"review":1},"feature_floors":{"automation":{"version":3,"name":"consumer_recovery_records"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":1,"name":"lineages_certificates_landings"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
+{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":43,"writer_floor":38,"reader_floor":38},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
 ```
 
 `contract` stays `executable-generation-v1` because every v2 binary still honours it
@@ -993,6 +993,18 @@ nothing, so older binaries keep writing and it waits for nothing. An older
 binary that updates an existing row leaves these columns from the earlier
 reading, so trust them only on a row whose `source` is `event`. An older binary
 cannot read a row whose `source` is `event`.
+
+## Invocation provider (schema v42)
+
+Store schema v42 adds a nullable `provider` column to `invocations`, recording the provider
+alongside the agent identity. The migration is additive, so older binaries keep inserting and
+it waits for nothing.
+
+## V2 audit event window index (schema v43)
+
+Store schema v43 adds an index over v2 audit event type and timestamp for windowed reads such as
+the policy-denial summary. It is index-only, so older binaries keep reading and writing and it
+waits for nothing.
 
 ## Verify the upgrade
 

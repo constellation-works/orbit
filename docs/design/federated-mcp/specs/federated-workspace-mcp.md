@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-10-07
+last_validated: 2026-10-12
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -123,9 +123,9 @@ file; the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
 `machine_id`. After [ORB-11015] the mux advertises the canonical MCP tool
-surface. This list stays session-unbound and answered by the mux, and every
-workspace-scoped tool is delivered to the destination encoded in the copied
-selector.
+surface. This list stays session-unbound and answered by the mux. A call with a
+copied selector is delivered to its encoded destination; an id-only call to an
+id-routed task tool follows the task-id-prefix route described above.
 
 v1 (`crates/orbit-mcp/src/remote/discovery.rs`) returns `{"machine_id": "hm_…", "workspaces": […]}` with `machine_id` on the **envelope**, and filters to `Active` workspaces that are locally checked out on the accepting machine.
 
@@ -187,7 +187,7 @@ Classification and delivery are budgeted separately [ORB-11023]. SSH setup, the 
 
 Once that request is written the call may already have executed and committed on the destination, and killing the transport does not undo it. A lost answer there is therefore `outcome_unknown`, never `unreachable_destination`: the latter means a delivery miss and invites the retry that would duplicate the write. This is a post-dispatch outcome and does **not** enter the precedence ladder above — everything in that ladder is decided before the destination sees the call.
 
-An unusable answer has the same ambiguity: malformed JSON and oversized response lines preserve `outcome_unknown`, along with the destination/tool/request identity and the failure diagnostics. This also applies to calls on the internal drain admission route. The mux does not automatically replay these requests. Malformed answers during read-only initialization or discovery remain `unreachable_destination`.
+An unusable answer has the same ambiguity: malformed JSON, oversized response lines, and a result without usable `structuredContent` (including `result: null`, `{}`, or missing/null `structuredContent`) preserve `outcome_unknown`, along with the destination/tool/request identity and the failure diagnostics. This also applies to calls on the internal drain admission route. The mux does not automatically replay these requests. Malformed answers during read-only initialization or discovery remain `unreachable_destination`.
 
 Both budgets bound writing a request as well as awaiting its answer, and unrelated messages the destination emits never extend them. A write still blocked at its deadline ends the session: `unreachable_destination` if the request line never fully left, otherwise `outcome_unknown` for a routed `tools/call`.
 
