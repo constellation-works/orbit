@@ -272,6 +272,7 @@ Codex runs each tool command through the user's shell as a login shell (`zsh -lc
 - Distributed handoffs must carry exact-candidate validation matching the owner's list. A before-PR claim also freezes the list in the owner's review contract at admission; a later owner change refuses the handoff rather than replacing the snapshot.
 - Re-running a task whose failed run preserved a candidate from `commit` or later runs the commands on that candidate over the new base, to decide whether implementation runs at all. A candidate preserved from implementation or earlier always returns to the implementer ([re-running a task](../crates/orbit-core/assets/skills/orbit-orchestrate/references/workflows.md#re-running-a-task-with-a-preserved-candidate)).
 - An empty list runs nothing, including on claimed handoffs; the other handoff guards still apply.
+- On Linux every command runs with `CARGO_TARGET_DIR` set to `<checkout>/target/orbit-host-validation`, replacing any inherited value. Sandboxed steps build in `<checkout>/target` through the [stable build mount](runbooks/compiler-cache.md#host-validation-builds-apart), and test binaries built there spawn paths that exist only inside the sandbox; a separate target makes the host compile everything it runs. The first host run in a worktree compiles the selection there, with dependencies from the compiler cache.
 - An implementer whose affected-test gate passed with only one sandbox's deferral notices hands that gate off instead of failing, by naming the validation summary the gate wrote; Orbit derives the `deferred_sandbox_validation` record from it and runs the sandbox's probe in the implementer's lane itself [ORB-15516]: `DEFERRED: bubblewrap unavailable:` notices on Linux [ORB-15287], `SKIP: sandbox-exec cannot apply a profile:` notices on macOS, as a Mac claimed implementer's nested Seatbelt prints [ORB-15409], or `DEFERRED: ps denied:` notices from a claimed implementer on macOS, whose sandbox refuses to exec `ps` [ORB-15587]. The gate must be a required command or a `review.baseline_commands` entry. Validation runs it after the required commands, outside the agent sandbox (a claim's `claim_validate` on its claim host, before publication), on this run and on a resumed candidate: a pass that still prints any of these notices holds the candidate as a `validation_environment` failure, and a run that reports no executed tests is refused ([development guide](DEVELOPMENT.md#test-process-environment)).
 
 #### Missing tools block the task
@@ -288,7 +289,10 @@ uses structured metadata from the process supervisor for candidate and claim
 validation, base comparisons and hold refresh, review checks and resumed
 candidates. A stopped base is inconclusive and is never cached. Printing a
 supervisor diagnostic on stdout or stderr cannot establish a stop: a normal
-nonzero exit still gets compared with the synchronized base.
+nonzero exit still gets compared with the synchronized base. The failure
+message still names the first failure the captured output shows (a test
+panic and its message, or else the first compiler error), so a stop caused
+by a flood of failures says what they were.
 
 #### Network flakes are rerun
 

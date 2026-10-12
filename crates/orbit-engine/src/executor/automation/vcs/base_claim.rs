@@ -711,7 +711,7 @@ fn executed_no_tests(summary: Option<&ValidationSummary>) -> Option<String> {
 
 /// Whitespace runs collapsed and color codes dropped, so two captures of one
 /// failure compare equal.
-fn normalize_output(text: &str) -> String {
+pub(super) fn normalize_output(text: &str) -> String {
     static ANSI: OnceLock<Option<Regex>> = OnceLock::new();
     let text = match ANSI
         .get_or_init(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").ok())
