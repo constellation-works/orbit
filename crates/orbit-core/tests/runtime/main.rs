@@ -18,6 +18,7 @@ mod actor_identity;
 mod agent_sandbox_mask;
 mod artifact_tools;
 mod auto_task_update;
+mod baseline_hold_refresh;
 mod baseline_hold_tick;
 mod baseline_red_repair;
 mod cascade_outcomes;

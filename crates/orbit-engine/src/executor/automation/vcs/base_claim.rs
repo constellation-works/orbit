@@ -604,7 +604,7 @@ fn on_owner_base(
 /// `selection` with [`FAILING_TESTS_KEY`] naming the tests to replay on the
 /// base, or `None` when the candidate run reported no selection or a failure
 /// it names is not a test a run can be handed by name.
-fn failing_tests_selection(
+pub(super) fn failing_tests_selection(
     selection: Option<&Value>,
     failures: &BTreeSet<String>,
     claimed: &[String],

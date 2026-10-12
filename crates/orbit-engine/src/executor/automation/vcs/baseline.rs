@@ -69,6 +69,7 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
+use super::base_claim::failing_tests_selection;
 use super::git::{fetch_remote_base, git_output, git_run};
 use super::required_command::{
     MAX_VALIDATION_MESSAGE_BYTES, RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS,
@@ -918,17 +919,18 @@ pub enum BaselineHoldStatus {
 /// Decide whether a [`BaselineRedHold`] still stands in `repo`.
 ///
 /// The hold stands while its base ref still points at the red commit. When
-/// that ref advances, run the command on the new tip (or use the shared
-/// result cache), handing it the hold's recorded selection, and lift the hold
-/// only after a comparable run passes. A failed, inconclusive or
-/// not-comparable check keeps the task held. An inconclusive attempt is recorded
+/// that ref advances, first replay its recorded failing tests when the hold
+/// has a runnable test list and selection. A comparable failure keeps the hold
+/// without a full run. Otherwise run the full recorded selection, and lift the
+/// hold only after that comparable run passes. Both runs use the shared cache.
+/// A failed, inconclusive or not-comparable check keeps the task held. An inconclusive attempt is recorded
 /// separately and suppresses further hold checks for 15 minutes on that tip
 /// and command; a conclusive cached result always takes precedence.
 /// A remote-tracking ref is refreshed
 /// from `origin` at most every `HOLD_FETCH_INTERVAL` per repository and
 /// branch, so a held backlog does not wait on some other delivery to fetch.
 ///
-/// A cache miss runs the whole command, for up to the validation timeout, so
+/// A cache miss may run the whole command, for up to the validation timeout, so
 /// only a background run may ask: the owner's clock tick reads
 /// [`recorded_baseline_hold_status`] and leaves a miss to a detached refresh
 /// run [ORB-14739, ORB-14823].
@@ -942,11 +944,20 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
             if let Some(status) = recorded_moved_base_status(repo, hold, &tip) {
                 return status;
             }
+            if let Some(selection) = hold_failing_tests_selection(hold) {
+                let check = compare_with_base(host, repo, &tip, &hold.command, Some(&selection));
+                if let Some(status) = failed_replay_status(hold, &tip, &selection, check) {
+                    return status;
+                }
+                // A passing replay covers only the recorded failures. An inconclusive
+                // or non-comparable one says nothing about them. In each case the
+                // full selection must run before this tip can lift the hold.
+            }
             let check = compare_with_base(host, repo, &tip, &hold.command, hold.selection.as_ref());
             if let Err(reason) = &check.result {
                 record_inconclusive_hold(repo, &tip, hold, reason);
             }
-            judge_moved_base(hold, &tip, check.result)
+            judge_moved_base(hold, &tip, hold.selection.as_ref(), check.result)
         }
         Err(status) => status,
     }
@@ -955,7 +966,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
 /// [`baseline_hold_status`] from what is already recorded, never running the
 /// command: `None` when the base moved to a tip with neither a conclusive
 /// result nor an inconclusive hold attempt within the 15-minute back-off,
-/// so deciding needs a full run.
+/// so deciding needs a replay or full run.
 ///
 /// It still reads the base ref, refreshing it from `origin` as
 /// [`baseline_hold_status`] does, so it fits a short caller such as the clock
@@ -1009,6 +1020,13 @@ fn recorded_moved_base_status(
         Ok(cache) => match read_cached(&cache.result) {
             Some(result) => Ok(result),
             None => {
+                if let Some(selection) = hold_failing_tests_selection(hold)
+                    && let Some(check) =
+                        cached_base_check(repo, tip, &hold.command, Some(&selection))
+                    && let Some(status) = failed_replay_status(hold, tip, &selection, check)
+                {
+                    return Some(status);
+                }
                 let bytes = std::fs::read(&cache.inconclusive_hold).ok()?;
                 let attempt: InconclusiveHoldAttempt = serde_json::from_slice(&bytes).ok()?;
                 let age = Utc::now().signed_duration_since(attempt.recorded_at);
@@ -1021,7 +1039,28 @@ fn recorded_moved_base_status(
         // A full run could not locate the cache either.
         Err(error) => Err(format!("locate the base result cache: {error}")),
     };
-    Some(judge_moved_base(hold, tip, result))
+    Some(judge_moved_base(hold, tip, hold.selection.as_ref(), result))
+}
+
+/// Use only runnable test identities from the hold's persisted failure record.
+/// Older holds, build failures and shortened identities keep the full-run path.
+fn hold_failing_tests_selection(hold: &BaselineRedHold) -> Option<Value> {
+    let failures = hold.failures.identities.iter().cloned().collect();
+    failing_tests_selection(hold.selection.as_ref(), &failures, &[])
+}
+
+/// A comparable failed replay is enough to keep a tip red; it can never lift it.
+fn failed_replay_status(
+    hold: &BaselineRedHold,
+    tip: &str,
+    selection: &Value,
+    check: BaselineCheck,
+) -> Option<BaselineHoldStatus> {
+    if check.not_comparable.is_none() && check.result.as_ref().is_ok_and(|result| !result.passed) {
+        Some(judge_moved_base(hold, tip, Some(selection), check.result))
+    } else {
+        None
+    }
 }
 
 /// The commit the hold's base ref now names, when it moved off the red
@@ -1068,13 +1107,14 @@ fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, Baselin
 fn judge_moved_base(
     hold: &BaselineRedHold,
     tip: &str,
+    selection: Option<&Value>,
     result: Result<BaseCommandResult, String>,
 ) -> BaselineHoldStatus {
     let base_ref = hold.base_ref.trim();
     // A hold recorded before holds kept a selection names nothing to compare
     // with, so its tip is judged by exit status as before; the next delivery
     // holds again, with the selection, if the base is still red.
-    let unlike = hold.selection.as_ref().and_then(|selection| {
+    let unlike = selection.and_then(|selection| {
         result
             .as_ref()
             .ok()
