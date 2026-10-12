@@ -50,8 +50,12 @@ function sectionView(kit: Kit, section: Section, data: BoardData, act: Actions) 
   const { Box, Button, Text } = kit
   const count = section.tasks.length
   const isQuiet = count === 0
+  const selected = section.tasks.find(task => task.id === data.selected)
   // An empty section is its header alone, whatever the person left it as.
-  const open = !isQuiet && isOpen(data.openLanes, section.id)
+  const open = !isQuiet && (selected !== undefined || isOpen(data.openLanes, section.id))
+  const rows = section.tasks.slice(0, ROW_LIMIT)
+  // Keep the resource bound while giving direct-ID selection a visible card.
+  if (selected && !rows.includes(selected)) rows[ROW_LIMIT - 1] = selected
 
   return (
     <Box key={`section:${section.id}`} flexDirection="column">
@@ -65,7 +69,7 @@ function sectionView(kit: Kit, section: Section, data: BoardData, act: Actions) 
       </Box>
       {open ? (
         <Box flexDirection="column" paddingLeft={2} rowGap={0}>
-          {section.tasks.slice(0, ROW_LIMIT).map(task => taskRow(kit, task, data, act))}
+          {rows.map(task => taskRow(kit, task, data, act))}
           {count > ROW_LIMIT ? <Text dimColor>{`+${count - ROW_LIMIT} more · /orbit-board <id> opens one`}</Text> : null}
         </Box>
       ) : null}

@@ -370,6 +370,70 @@ test('an unregistered checkout reads the owner the federated MCP names when owne
   await ui.unmount()
 })
 
+for (const surface of SURFACES) {
+  test(`direct-ID selection reveals an overflow card within the row bound on ${surface}`, async ($, on) => {
+    const tasks = Array.from({ length: 25 }, (_, index) => ({
+      ...TASKS[1], id: `ORB-${100 + index}`, priority: index === 24 ? 'low' : 'medium', acceptance_criteria: ['selected task is inspectable'],
+    }))
+    fakeOrbit(on, [], args => args[0] === 'task' && args[1] === 'list' && !args.includes('done') ? tasks : undefined)
+    const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+    await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+    await clock.advance(0)
+    const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
+    expect(await ui.find({ key: 'card:ORB-119' })).toBeDefined()
+    expect(await ui.find({ key: 'card:ORB-124' })).toBeUndefined()
+
+    await $.command.run({ command: 'orbit-board', args: 'ORB-124' } as never)
+    let visible = 0
+    for (const task of tasks) if (await ui.find({ key: `card:${task.id}` })) visible += 1
+    expect(visible).toBe(20)
+    expect(await ui.find({ key: 'card:ORB-100' })).toBeDefined()
+    expect(await ui.find({ key: 'card:ORB-119' })).toBeUndefined()
+    expect(await ui.find({ key: 'card:ORB-124' })).toBeDefined()
+    expect(await ui.find({ key: 'criterion:0' })).toBeDefined()
+    expect(await ui.find({ key: 'work' })).toBeDefined()
+    expect(await ui.find({ key: 'ship' })).toBeDefined()
+    await ui.press({ key: 'ship' })
+    expect(await ui.find({ key: 'launch' })).toBeDefined()
+    await ui.press({ key: 'clear' })
+    await ui.press({ key: 'tab:board' })
+    await $.command.run({ command: 'orbit-board', args: 'ORB-100' } as never)
+    expect(await ui.find({ key: 'card:ORB-119' })).toBeDefined()
+    expect(await ui.find({ key: 'card:ORB-124' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`direct-ID selection opens folded lanes and still allows folding on ${surface}`, async ($, on) => {
+    const done = { ...TASKS[1], id: 'ORB-5', status: 'done', acceptance_criteria: ['completed task is inspectable'] }
+    fakeOrbit(on, [], args => args[0] === 'task' && args[1] === 'list' && args.includes('done') ? [done] : undefined)
+    const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+    await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+    await clock.advance(0)
+    const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeUndefined()
+    await $.command.run({ command: 'orbit-board', args: 'ORB-2' } as never)
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+    expect(await ui.find({ key: 'ship' })).toBeDefined()
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeUndefined()
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+    expect(await ui.find({ key: 'ship' })).toBeUndefined()
+
+    expect(await ui.find({ key: 'card:ORB-5' })).toBeUndefined()
+    await $.command.run({ command: 'orbit-board', args: 'ORB-5' } as never)
+    expect(await ui.find({ key: 'card:ORB-5' })).toBeDefined()
+    expect(await ui.find({ key: 'criterion:0' })).toBeDefined()
+    await ui.press({ key: 'lane:done' })
+    expect(await ui.find({ key: 'card:ORB-5' })).toBeUndefined()
+    await ui.press({ key: 'lane:done' })
+    expect(await ui.find({ key: 'card:ORB-5' })).toBeDefined()
+    expect(await ui.find({ key: 'criterion:0' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
 test('board sections fold: Done starts shut, and a header press shuts or opens its section', async ($, on) => {
   fakeOrbit(on, [])
   const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })

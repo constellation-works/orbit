@@ -18,7 +18,9 @@ this folder.
 - **Toasts**: a task moves to blocked, review or done, or a ship lands.
 - **Orbit pane**, with three tabs:
   - **Board.** One lane per status. Pick a card to see its acceptance
-    criteria and the actions its status allows:
+    criteria and the actions its status allows. Each lane shows at most
+    20 cards; `/orbit-board <id>` includes the selected card in that window
+    and opens its lane. Folding that lane clears its selection:
     - proposed: approve, reject
     - backlog: ship, work here
     - in-progress: track the run
