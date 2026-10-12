@@ -67,7 +67,18 @@ type Events = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
 
 /// Every lock diagnostic emitted on this thread while `op` runs, as fields.
 fn lock_events<T>(op: impl FnOnce() -> T) -> (T, Vec<BTreeMap<String, String>>) {
-    struct Capture(Events);
+    lock_events_with_partition_wait(op, None)
+}
+
+/// Optionally signal the partition contention warning before acquisition.
+fn lock_events_with_partition_wait<T>(
+    op: impl FnOnce() -> T,
+    waiting: Option<mpsc::SyncSender<()>>,
+) -> (T, Vec<BTreeMap<String, String>>) {
+    struct Capture {
+        events: Events,
+        waiting: Option<mpsc::SyncSender<()>>,
+    }
     struct Fields<'a>(&'a mut BTreeMap<String, String>);
     impl tracing::field::Visit for Fields<'_> {
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
@@ -87,11 +98,19 @@ fn lock_events<T>(op: impl FnOnce() -> T) -> (T, Vec<BTreeMap<String, String>>) 
             }
             let mut fields = BTreeMap::new();
             event.record(&mut Fields(&mut fields));
-            self.0.lock().expect("events").push(fields);
+            if is_partition_wait(&fields)
+                && let Some(waiting) = &self.waiting
+            {
+                waiting.send(()).expect("signal partition lock wait");
+            }
+            self.events.lock().expect("events").push(fields);
         }
     }
     let events = Events::default();
-    let dispatch = tracing::Dispatch::new(Registry::default().with(Capture(Arc::clone(&events))));
+    let dispatch = tracing::Dispatch::new(Registry::default().with(Capture {
+        events: Arc::clone(&events),
+        waiting,
+    }));
     let value = tracing::dispatcher::with_default(&dispatch, op);
     let events = events.lock().expect("events").clone();
     (value, events)
@@ -111,15 +130,17 @@ fn hold(
     (release_tx, holder)
 }
 
+fn is_partition_wait(event: &BTreeMap<String, String>) -> bool {
+    event.get("message").map(String::as_str) == Some(STILL_WAITING)
+        && event
+            .get("lock_path")
+            .is_some_and(|path| path.ends_with("/.task-commit.lock"))
+}
+
 fn partition_wait(events: &[BTreeMap<String, String>]) -> &BTreeMap<String, String> {
     events
         .iter()
-        .find(|event| {
-            event.get("message").map(String::as_str) == Some(STILL_WAITING)
-                && event
-                    .get("lock_path")
-                    .is_some_and(|path| path.ends_with("/.task-commit.lock"))
-        })
+        .find(|event| is_partition_wait(event))
         .unwrap_or_else(|| panic!("a partition-lock wait warning in {events:#?}"))
 }
 
@@ -266,6 +287,9 @@ fn report_millis(report: &BTreeMap<String, String>, field: &str) -> u64 {
 fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
     let (_root, overdue) = boundary(FileLockOptions {
         timeout: Duration::from_secs(10),
+        // Give the observed wait a margin over pre-acquisition bookkeeping
+        // stalls before releasing its holder; no releaser timer orders it.
+        warn_after: Duration::from_secs(1),
         warn_held_after: Some(Duration::from_millis(30)),
         ..contending()
     });
@@ -321,11 +345,15 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
         )
         .expect("exclusive holder");
     });
+    let (waiting_tx, waiting_rx) = mpsc::sync_channel(1);
     let releaser = std::thread::spawn(move || {
-        std::thread::sleep(held_for);
+        waiting_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("ordinary section must start waiting for the partition lock within 10 s");
         release.send(()).expect("release holder");
     });
-    let (result, events) = lock_events(|| overdue.enter_ordinary(|| Ok(())));
+    let (result, events) =
+        lock_events_with_partition_wait(|| overdue.enter_ordinary(|| Ok(())), Some(waiting_tx));
     releaser.join().expect("releaser thread");
     holder.join().expect("holder thread");
     result.expect("the ordinary section runs once the holder releases");
