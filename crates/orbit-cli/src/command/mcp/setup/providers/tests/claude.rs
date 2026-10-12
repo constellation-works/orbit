@@ -51,7 +51,8 @@ fn check_concurrent_update(action: McpAction<'static>) {
     lock_ready_rx.recv().expect("wait for Claude lock holder");
 
     let (waiting_tx, waiting_rx) = std::sync::mpsc::sync_channel(1);
-    let expected_lock = claude_lock_path.clone();
+    let expected_lock =
+        std::fs::canonicalize(&claude_lock_path).expect("canonicalize held Claude lock path");
     let _waiting = observe_directory_lock_waits(move |path| {
         if path == expected_lock {
             let _ = waiting_tx.try_send(());
