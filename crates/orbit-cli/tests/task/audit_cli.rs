@@ -778,3 +778,25 @@ fn audit_stats_policy_count_matches_dashboard_fixture() {
         "a real operator-only refusal must count once with both producer records present"
     );
 }
+
+#[test]
+fn success_via_runtime_yields_exactly_one_row() {
+    const TEST: &str = "audit_cli::success_via_runtime_yields_exactly_one_row";
+    if run_in_child(TEST, |_| {}) {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            r#"{"query":"anything"}"#,
+        ])
+        .assert()
+        .success();
+    let rows = fixture.command_events("tool", "run");
+    assert_eq!(rows.len(), 1, "runtime owns the row, guard suppressed");
+    assert_eq!(rows[0]["tool_name"], "orbit.search");
+}

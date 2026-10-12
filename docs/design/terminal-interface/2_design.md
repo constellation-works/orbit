@@ -80,7 +80,7 @@ Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover t
 
 The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
-`crates/orbit-cli/src/output/tests/sink.rs` asserts that a non-terminal sink has zero width and refuses color however the environment insists [ORB-10570]. Its sink is built with `OutputSink::resolve`, never `from_process`, because `make ci` runs without a TTY.
+`crates/orbit-cli/tests/output/table_rendering.rs` also runs a piped table with `COLUMNS=200` and `CLICOLOR_FORCE=1`, asserting that the long title survives without width adaptation or ANSI styling [ORB-10570]. The built binary resolves its real non-terminal sink, so the assertion covers rendering as well as sink selection.
 
 Built-binary tests cover the global JSON shorthand at every command level, conflicting output options, plugin input compatibility, and preservation of the local audit export format. An exhaustive assembled-tree parser test also covers hidden leaves that help output cannot enumerate.
 

@@ -301,7 +301,7 @@ fn findings_audit_message(results: &[WorkspaceDoctorResult], warnings: usize) ->
 
 /// `orbit doctor fs-access`: the active policy's read and modify verdicts for
 /// one path under one fsProfile, without running anything.
-pub(crate) fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
+fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
     let def = runtime
         .get_policy_def(DEFAULT_POLICY_NAME)?
         .ok_or_else(|| {

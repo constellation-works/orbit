@@ -191,6 +191,3 @@ pub enum Commands {
     #[command(hide = true)]
     Artifacts(task::artifacts::ArtifactsCommand),
 }
-
-#[cfg(test)]
-mod tests;

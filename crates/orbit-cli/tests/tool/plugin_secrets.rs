@@ -239,16 +239,21 @@ fn a_secret_is_set_from_stdin_and_appears_on_no_other_surface() {
 
     // A value on the command line is refused, and the refusal does not
     // repeat it.
-    let refused = fixture.run(
-        &["plugin", "secret", "set", "vault", "refresh_token", SECRET],
-        None,
-    );
-    assert!(!refused.status.success());
-    let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(
-        stderr.contains("never taken from the command line"),
-        "argv values must be refused: {stderr}"
-    );
+    for value_args in [
+        vec![SECRET.to_string()],
+        vec![format!("--value={SECRET}")],
+        vec!["-v".to_string(), SECRET.to_string()],
+    ] {
+        let mut args = vec!["plugin", "secret", "set", "vault", "refresh_token"];
+        args.extend(value_args.iter().map(String::as_str));
+        let refused = fixture.run(&args, None);
+        assert!(!refused.status.success());
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            stderr.contains("never taken from the command line"),
+            "argv values must reach the secret refusal: {stderr}"
+        );
+    }
     // A name the manifest does not declare is refused.
     let undeclared = fixture.run(&["plugin", "secret", "set", "vault", "other"], Some(SECRET));
     assert!(!undeclared.status.success());

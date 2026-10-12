@@ -864,3 +864,39 @@ fn doctor_reports_git_protection_refusals_with_their_fix() {
         "the warning names the remedy: {refused}"
     );
 }
+
+#[test]
+fn fs_access_reports_the_shipped_policy_verdicts_for_workspace_relative_paths() {
+    let fixture = WorkCheckout::new();
+    for (path, read, modify) in [
+        ("src/main.rs", true, true),
+        (".orbit/tmp/x", true, true),
+        (".orbit/tasks/x", true, false),
+        ("src/.env", false, false),
+    ] {
+        let output = command(&fixture)
+            .args(["doctor", "fs-access", "implementer", path, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let json: Value = serde_json::from_slice(&output.stdout).expect("fs-access JSON");
+        assert_eq!(json["policy"], "default", "{json}");
+        assert_eq!(json["profile"], "implementer", "{json}");
+        assert_eq!(json["path"], path, "{json}");
+        assert_eq!(json["read"]["allowed"], read, "{path}: {json}");
+        assert_eq!(json["modify"]["allowed"], modify, "{path}: {json}");
+        assert!(json["read"]["matched_rule"].is_string(), "{json}");
+        let human = command(&fixture)
+            .args(["doctor", "fs-access", "implementer", path])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let expected = format!("modify:  {}", if modify { "allowed" } else { "denied" });
+        assert!(
+            String::from_utf8_lossy(&human.stdout).contains(&expected),
+            "{path}: human output must carry the modify verdict"
+        );
+    }
+}

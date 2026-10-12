@@ -2314,3 +2314,78 @@ fn plugin_json_tool_input_keeps_its_meaning_alongside_global_output_json() {
         assert_eq!(document["input"], json!({"json": true}));
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
+    let fixture = Fixture::new();
+    let plugin_dir = fixture.source("open");
+    let dir = plugin_dir.to_str().expect("plugin directory");
+    fixture
+        .orbit()
+        .args(["plugin", "scaffold", "open", "--dir", dir])
+        .assert()
+        .success();
+    let manifest_path = plugin_dir.join(".orbit-plugin/plugin.yaml");
+    let manifest = std::fs::read_to_string(&manifest_path).expect("scaffold manifest");
+    let patched = manifest
+        .replacen("    timeout_ms: 30000\n", "    timeout_ms: 30000\n    sandbox: none\n", 1)
+        .replacen("  permissions:\n    network: none\n",
+            "  permissions:\n    fs:\n      write: [\"/Users/daniel\"]\n    network: any\n    env_pass: [\"HOME\"]\n", 1);
+    assert_ne!(patched, manifest, "the scaffold manifest shape changed");
+    std::fs::write(&manifest_path, patched).expect("unconfined manifest");
+    let refused = fixture
+        .orbit()
+        .args(["plugin", "test", dir])
+        .assert()
+        .failure();
+    let message = String::from_utf8_lossy(&refused.get_output().stderr);
+    for needle in [
+        "Requested grants:",
+        "unsandboxed",
+        "/Users/daniel",
+        "network (any)",
+        "env_pass (HOME)",
+        "--accept-requested",
+        "--grant",
+    ] {
+        assert!(message.contains(needle), "missing {needle}: {message}");
+    }
+    let consented_write = fixture.home.join("consented-write");
+    let manifest = std::fs::read_to_string(&manifest_path).expect("patched manifest");
+    std::fs::write(
+        &manifest_path,
+        manifest.replace("/Users/daniel", &consented_write.display().to_string()),
+    )
+    .expect("fixture-owned write root");
+    let missing = fixture
+        .orbit()
+        .args(["plugin", "test", dir, "--accept-requested", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let document = stdout_json(&missing);
+    let detail = document["results"][0]["detail"]
+        .as_str()
+        .expect("failed call diagnostic");
+    assert!(detail.contains("does not exist"), "{detail}");
+    assert!(
+        detail.contains("create this consented directory before running the plugin"),
+        "{detail}"
+    );
+    assert!(
+        !consented_write.exists(),
+        "the host must not create the manifest-named absolute write root"
+    );
+    std::fs::create_dir_all(&consented_write).expect("consented write root");
+    fixture
+        .orbit()
+        .args(["plugin", "test", dir, "--accept-requested"])
+        .assert()
+        .success();
+    assert!(
+        consented_write.is_dir(),
+        "the consented absolute write root is opened"
+    );
+}

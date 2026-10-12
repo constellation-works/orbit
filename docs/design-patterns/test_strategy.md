@@ -178,3 +178,53 @@ Before deleting a test, check whether it is the only coverage of a security or i
 - **Do not pad a boundary test to reach an edge case it cannot express cleanly.** That case meets criterion 1 or 2, so write a small unit test.
 - **Do not add e2e tests for every branch.** E2E covers critical flows. Branches belong in integration tests or table-driven unit tests.
 - **Do not reach around this rule by widening visibility** so that an integration test can call internals. Test the public surface, or admit a unit test under the criteria.
+
+## CLI admission audit reconciliation
+
+The CLI is a binary crate, so `pub` inside its command modules is not an
+exported library boundary. The 2026-10-12 audit cleanup moves plugin consent,
+secret argv refusal, filesystem diagnostics, redirected-discovery teardown,
+non-terminal rendering and audit deduplication to the existing crate-root
+`tool`, `output`, `workspace` and `task` binaries. Secret argv forms share the
+existing leak-scan invariant rather than a second parser-only test. The four
+retired Linux package/bundle tests pinned selection, call order or diagnostic
+wiring; the Host refusal, signed-digest and custom-profile controls remain.
+
+Three proposed moves require private inputs that the built CLI cannot supply
+without widening production access or changing the host:
+
+- `command/init/tests/linux_host.rs::apparmor_remedy_requires_ubuntu_and_the_exact_uid_map_denial`
+  (criteria 2 and 3): `FixtureHost` injects OS identity, probe denials and
+  privileged operations into private `prepare_with`. Its negative cases prove
+  that derivatives and different denial signatures neither elevate nor stage
+  a bundle nor install a profile. The CLI reads real host OS/kernel state;
+  the namespace-denial integration fixture cannot emulate Ubuntu's uid-map
+  denial and successful privileged profile installation safely.
+- `command/task/tests/flow.rs::rejection_then_reopen_preserves_dropped_event_and_historical_boundaries`
+  (criterion 1): private `compute_flow` accepts fixed timestamps and an explicit
+  `now`, proving dropped/reopened arithmetic and the intervening closed bucket
+  together. `task flow` always reads `Utc::now()` and persisted history. Retain
+  the pure fixed-clock case instead of adding database/history rewriting and
+  a wall-clock-dependent fixture just to reach the same arithmetic.
+- `command/clock/tests/tick.rs::deadline_failure_returns_nonzero_with_deferred_workspaces_in_both_views`
+  (criterion 2): private `ClockTickArgs::output` accepts a constructed partial
+  `SweepOutcome`, preserving both reports and the failure status together.
+  The CLI constructs default `SweepOptions` and exposes no injected deadline
+  or outcome. Forcing expiration at a chosen workspace through the binary
+  would require waiting out the real budget and holding scheduler work;
+  the existing root/alias CLI tests cannot produce that partial outcome.
+
+These are corrected admission decisions based on the current qualifying
+seams, rather than claims that the proposed moves already happened. All 15
+originally admitted CLI tests and their fixtures remain intact.
+
+The simulated `tests/audit_middleware.rs::invalid_json_bail_before_runtime_yields_exactly_one_row`
+is redundant with `tests/task/audit_cli.rs::audit_cli_missing_log_records_the_render_failure`:
+that existing built-CLI case proves guard-side failure writes exactly one row,
+with the failure status, exit code and diagnostic. The old unit case supplied
+an `OrbitError::InvalidInput` after manually creating a guard; it never parsed
+JSON. Current `ToolRunArgs::bootstrap_route` returns unusable input before
+runtime initialization and before an `AuditGuard` exists. The built-CLI
+`tool_run_unusable_input_does_not_migrate_a_pending_layout` case proves that
+refusal precedes migration. Retire the simulated duplicate rather than change
+this deliberate bootstrap behavior to satisfy its stale scenario.

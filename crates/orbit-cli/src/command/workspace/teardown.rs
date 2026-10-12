@@ -31,12 +31,8 @@ impl Execute for WorkspaceTeardownArgs {
 }
 
 impl WorkspaceTeardownArgs {
-    /// Run teardown as if invoked from `cwd`.
-    ///
-    /// The working directory only feeds the "wrong checkout" refusal, so it is
-    /// an explicit input: the process cwd is global state, and tests must not
-    /// have to mutate (or race on) it to exercise teardown.
-    pub(super) fn execute_from(self, runtime: &OrbitRuntime, cwd: &Path) -> CommandOut {
+    /// Run teardown with the invoking checkout used by the wrong-checkout refusal.
+    fn execute_from(self, runtime: &OrbitRuntime, cwd: &Path) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
         // Keep target validation, deregistration and local deletion together;
