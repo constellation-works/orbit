@@ -9,7 +9,7 @@ use super::introspect::{add_column_if_missing, table_exists, table_has_column};
 ///
 /// The 5m/1h cache split (`cache_create_1h_tokens`) and the token-derived
 /// cost column (`provider_cost_usd`) were added to
-/// [`ensure_invocation_schema`], which only ever runs as part of the v1
+/// the pre-ledger invocation-schema step, which ran as part of the v1
 /// `baseline` migration. Every database created before those columns landed
 /// is already at v1 or newer, so `run_migrations` skips baseline and the
 /// `ALTER`s never reach it — the insert then binds columns the table lacks
@@ -33,10 +33,10 @@ pub(super) fn apply_invocation_telemetry_columns(conn: &Connection) -> Result<()
         "cache_create_1h_tokens",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
-    ensure_invocation_schema_v1(conn)
+    ensure_invocation_schema_v10(conn)
 }
 
-pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
+fn ensure_invocation_schema_v10(conn: &Connection) -> Result<(), OrbitError> {
     add_column_if_missing(conn, "invocations", "slot", "TEXT")?;
     conn.execute_batch(
         r#"
@@ -62,7 +62,7 @@ pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), Orbit
 /// v20 `invocations_ts_index`: cover the accounting window filters and the
 /// newest-first invocation listing on `invocations(ts, id)`.
 ///
-/// Guarded like v19: `ensure_invocation_schema_v1` declares the same index
+/// Guarded like v19: the frozen v1 and v10 invocation steps declare the same index
 /// for a database whose `invocations` table is created or upgraded at open.
 pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitError> {
     if !table_has_column(conn, "invocations", "ts")? {

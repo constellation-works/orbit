@@ -49,7 +49,14 @@ pub(crate) struct Migration {
 }
 
 /// Stable ordered registry of store-database migrations. Append-only:
-/// never renumber or edit an entry that has shipped.
+/// never renumber or edit an entry that has shipped. Its body and shape-defining
+/// helpers are frozen too: use only version-private code and the schema-neutral
+/// primitives in `introspect`. Later shapes require later ledger entries.
+/// A version-stamped data backfill may use current domain code so a later entry
+/// can re-derive it (v16/v18 actor identity). The freeze-in-place extraction of
+/// private helper copies preserves shipped behavior, including v13/v15 defensive
+/// recreation; removing those compatibility paths requires separate approval.
+/// Every prefix is guarded by the store schema golden (`make goldens`).
 // L-0083: Preserve every shipped migration entry across reverts and history rewrites.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {

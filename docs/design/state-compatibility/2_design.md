@@ -167,6 +167,34 @@ binary, and the apply path are otherwise unchanged.
   use are planned to move onto ledgers of this kind; see
   [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
 
+## 7 Frozen store migration bodies
+
+The store registry in `driver/sqlite/migration/ledger.rs` is append-only.
+Each shipped entry owns its body and private shape-defining helpers; only
+schema-neutral primitives in `migration/introspect.rs` are shared. Later
+schema changes append an entry rather than altering what an earlier version
+produces. The freeze-in-place copied the existing helper bodies without
+changing SQL or operation order. The baseline tools and learning helpers now
+live privately in v1. v13 and v15 still defensively re-create missing tables;
+removing those paths requires the separate release-window host scan described
+in [the ledger decision](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
+
+Data backfills may use current domain code when they stamp the derivation
+version, as v16/v18 do with `actor_alias_version`; each migration owns its
+backfill helper, while a later entry can re-derive rows with a newer map.
+
+The store schema golden applies entries 1..N to an empty database independently
+for every N. It captures the normalized `sqlite_schema` rows (including
+indexes and SQL, excluding physical root-page numbers), ordered deterministically.
+The checked-in `migration/tests/store_schema.golden` stores lossless row additions
+and removals between consecutive full dumps, so replaying the deltas reconstructs
+all prefixes, including entries that leave the schema unchanged. `make goldens`
+checks it; `make goldens UPDATE=1` regenerates it. A new entry adds a new prefix;
+a change to an existing prefix needs an explanation and must not silently
+re-bless a changed shipped shape. Legacy recreation and actor backfill fixtures
+also run through the public store-open boundary, because an empty schema dump
+cannot prove data compatibility.
+
 ## Task References
 
 - [ORB-10003] versioned schema ledger; [ORB-10012] layout registry and

@@ -20,7 +20,7 @@ pub(super) fn apply_workspace_claim_scope(conn: &Connection) -> Result<(), Orbit
     // baseline has no reservation table to widen. Create it at its baseline
     // shape first so this migration widens a table that exists rather than
     // wedging the ledger; on every ordinary database this is a no-op.
-    ensure_task_reservations_schema(conn)?;
+    ensure_task_reservations_schema_v13(conn)?;
 
     add_column_if_missing(
         conn,
@@ -41,7 +41,7 @@ pub(super) fn apply_workspace_claim_scope(conn: &Connection) -> Result<(), Orbit
     Ok(())
 }
 
-pub(super) fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), OrbitError> {
+fn ensure_task_reservations_schema_v13(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(
         r#"
             CREATE TABLE IF NOT EXISTS task_reservations (

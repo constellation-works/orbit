@@ -1,7 +1,6 @@
 use orbit_common::OrbitError;
 use rusqlite::Connection;
 
-use super::audit_events::ensure_audit_events_schema;
 use super::introspect::{add_column_if_missing, table_exists};
 
 /// v24 `plugins_and_audit_plugin_provenance` migration: the host-local
@@ -28,7 +27,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
         "#,
     )
     .map_err(|error| OrbitError::Store(error.to_string()))?;
-    ensure_audit_events_schema(conn)?;
+    ensure_audit_events_schema_v24(conn)?;
     for column in ["plugin_name", "plugin_version", "plugin_manifest_digest"] {
         add_column_if_missing(conn, "audit_events", column, "TEXT")?;
     }
@@ -47,7 +46,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
 /// "Plugin secrets"). Names only; a value never reaches the table. Additive:
 /// an older binary ignores the column.
 pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
+    ensure_audit_events_schema_v30(conn)?;
     add_column_if_missing(conn, "audit_events", "plugin_secrets", "TEXT")
 }
 
@@ -58,7 +57,7 @@ pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitE
 /// only; a value never reaches the table. Additive: an older binary ignores
 /// the column.
 pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
+    ensure_audit_events_schema_v31(conn)?;
     add_column_if_missing(conn, "audit_events", "plugin_secret_updates", "TEXT")
 }
 
@@ -68,7 +67,7 @@ pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(),
 /// Additive: an older binary ignores both columns, and every earlier row
 /// reads NULL, which is not brokered.
 pub(super) fn apply_audit_brokered_call(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
+    ensure_audit_events_schema_v32(conn)?;
     add_column_if_missing(conn, "audit_events", "brokered", "INTEGER")?;
     add_column_if_missing(conn, "audit_events", "peer_pid", "INTEGER")
 }
@@ -106,4 +105,288 @@ pub(super) fn apply_plugin_build_record(conn: &Connection) -> Result<(), OrbitEr
         return Ok(());
     }
     add_column_if_missing(conn, "plugins", "build_json", "TEXT")
+}
+
+// Frozen private copy for v24. Do not share with another migration.
+fn ensure_audit_events_schema_v24(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    Ok(())
+}
+
+// Frozen private copy for v30. Do not share with another migration.
+fn ensure_audit_events_schema_v30(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    Ok(())
+}
+
+// Frozen private copy for v31. Do not share with another migration.
+fn ensure_audit_events_schema_v31(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    Ok(())
+}
+
+// Frozen private copy for v32. Do not share with another migration.
+fn ensure_audit_events_schema_v32(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    Ok(())
 }
