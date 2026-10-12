@@ -2,16 +2,33 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use super::{DiskSample, HostCpuTickHistory, HostResourceProbe, HostResourceSample};
 
-#[derive(Default)]
 pub(super) struct NativeProbe {
     cache: Mutex<Option<NativeCache>>,
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
     #[cfg(target_os = "macos")]
     cpu_ticks: Mutex<HostCpuTickHistory>,
+}
+
+impl NativeProbe {
+    pub(super) fn with_clock(now: Arc<dyn Fn() -> Instant + Send + Sync>) -> Self {
+        Self {
+            cache: Mutex::new(None),
+            now,
+            #[cfg(target_os = "macos")]
+            cpu_ticks: Mutex::new(HostCpuTickHistory::default()),
+        }
+    }
+}
+
+impl Default for NativeProbe {
+    fn default() -> Self {
+        Self::with_clock(Arc::new(Instant::now))
+    }
 }
 
 struct NativeCache {
@@ -35,13 +52,13 @@ impl HostResourceProbe for NativeProbe {
         // CPU/memory are shared even when many workspaces request different
         // disk paths. Bound disk memo size as well as its lifetime.
         let mut guard = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-        if guard
-            .as_ref()
-            .is_none_or(|cache| cache.at.elapsed() >= super::RESOURCE_CACHE_TTL)
-        {
+        let expired = guard.as_ref().is_none_or(|cache| {
+            (self.now)().saturating_duration_since(cache.at) >= super::RESOURCE_CACHE_TTL
+        });
+        if expired {
             let (cpu_percent, memory_percent) = self.cpu_memory(history);
             *guard = Some(NativeCache {
-                at: Instant::now(),
+                at: (self.now)(),
                 sampled_at: chrono::Utc::now(),
                 cpu_percent,
                 memory_percent,

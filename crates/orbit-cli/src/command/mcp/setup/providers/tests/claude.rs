@@ -2,9 +2,11 @@
 //! state-file lock before reading, so a concurrent Claude update is not lost.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tempfile::tempdir;
 
+use orbit_common::fs::directory_lock::observe_directory_lock_waits;
 use orbit_common::fs::io::atomic_write_text;
 
 use super::super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
@@ -48,6 +50,14 @@ fn check_concurrent_update(action: McpAction<'static>) {
     });
     lock_ready_rx.recv().expect("wait for Claude lock holder");
 
+    let (waiting_tx, waiting_rx) = std::sync::mpsc::sync_channel(1);
+    let expected_lock = claude_lock_path.clone();
+    let _waiting = observe_directory_lock_waits(move |path| {
+        if path == expected_lock {
+            let _ = waiting_tx.try_send(());
+        }
+    });
+
     let worker_repo = repo.path().to_path_buf();
     let worker_home = home.path().to_path_buf();
     let worker_orbit_root = orbit_root.clone();
@@ -62,7 +72,9 @@ fn check_concurrent_update(action: McpAction<'static>) {
         )
     });
 
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    waiting_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("Claude init/remove waits on the directory lock");
     assert!(
         !worker.is_finished(),
         "Claude init/remove must wait for the directory lock before reading"

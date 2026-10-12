@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::git::run_git;
 use orbit_engine::{
@@ -457,6 +457,9 @@ fn a_legacy_unattributed_field_edit_after_the_block_is_never_overridden() {
         assert_isolated_child();
         let history = runtime.get_task_history(&task.id).expect("history");
         let comments = runtime.get_task_comments(&task.id).expect("comments");
+        let artifacts = runtime
+            .get_task_artifact_manifest(&task.id)
+            .expect("artifacts");
         let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root()))
             .expect("isolated task registry");
         let bundle = registry
@@ -468,9 +471,14 @@ fn a_legacy_unattributed_field_edit_after_the_block_is_never_overridden() {
                 .expect("parse envelope");
         // Pass the timestamp slack since every attributed write; record no
         // event or comment, just as the old field-only writer did.
-        let slack = u64::try_from(ATTRIBUTION_SLACK_MS).expect("non-negative slack");
-        std::thread::sleep(std::time::Duration::from_millis(slack + 100));
-        envelope.updated_at = Utc::now();
+        let last_attributed = history
+            .iter()
+            .map(|entry| entry.at)
+            .chain(comments.iter().map(|comment| comment.at))
+            .chain(artifacts.iter().map(|artifact| artifact.created_at))
+            .max()
+            .expect("the block recorded an attributed write");
+        envelope.updated_at = last_attributed + Duration::milliseconds(ATTRIBUTION_SLACK_MS + 1);
         std::fs::write(bundle.join(TASK_PLAN_FILE_NAME), EDITED_PLAN).expect("legacy plan write");
         std::fs::write(
             envelope_path,

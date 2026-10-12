@@ -263,7 +263,9 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
         let state = workspace.runtime.read_run_state(&drain).unwrap()?;
         (state.pipeline["drain"]["broke"] == true).then_some(())
     });
-    std::thread::sleep(Duration::from_secs(2));
+    // approval_join polls live pilots for up to its 3600s bound, so a claimed
+    // pilot cannot let the drain end early. The apply below is the handshake
+    // that this drain's authority is still valid.
     assert!(workspace.live(&drain), "the drain waits for its pilot");
 
     // So the pilot's apply step still finds the drain's authority valid.

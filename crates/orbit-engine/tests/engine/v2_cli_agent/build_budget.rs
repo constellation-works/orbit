@@ -63,6 +63,10 @@ fn held_slot_wait_extends_deadline_and_is_durable() {
         .canonicalize()
         .unwrap();
     let queued = root.path().join("queued");
+    // The holder stays until the wrapper's own wait clock passes the activity
+    // budget. Post-admission work then returns at once, so startup speed does
+    // not eat a fixed gap between the hold and the wall-clock timeout.
+    let budget_ms = 4_000;
     let script = format!(
         r#"#!/usr/bin/env python3
 import json,os,pathlib,subprocess,sys,time
@@ -70,11 +74,22 @@ sys.stdin.read()
 os.environ['ORBIT_BUILD_BUDGET_DIR']={budget:?}
 os.environ['ORBIT_BUILD_SLOTS']='1'
 os.environ.pop('ORBIT_BUILD_BUDGET_HELD',None)
-p=subprocess.Popen([sys.executable,{wrapper:?},'--',sys.executable,'-c','import time; time.sleep(2.5)'])
+p=subprocess.Popen([sys.executable,{wrapper:?},'--',sys.executable,'-c','pass'])
 directory=pathlib.Path(os.environ['ORBIT_ACTIVITY_BUILD_BUDGET_DIR'])
-deadline=time.monotonic()+20
-while not list(directory.glob('*.json')):
-    if time.monotonic()>deadline: raise RuntimeError('wait channel missing')
+deadline=time.monotonic()+30
+snapshot=None
+while True:
+    files=list(directory.glob('*.json'))
+    if files:
+        try:
+            snapshot=json.loads(files[0].read_text())
+        except (OSError, json.JSONDecodeError):
+            snapshot=None
+        else:
+            if snapshot.get('elapsed_ms', 0) >= {budget_ms}:
+                break
+    if time.monotonic()>deadline:
+        raise RuntimeError('wait did not pass the budget: %r' % (snapshot,))
     time.sleep(0.01)
 pathlib.Path({queued:?}).touch()
 assert p.wait()==0
@@ -82,25 +97,25 @@ print(json.dumps({{'schemaVersion':1,'status':'success','result':{{}},'error':No
 "#,
         budget = budget.to_str().unwrap(),
         wrapper = wrapper.to_str().unwrap(),
-        queued = queued.to_str().unwrap()
+        queued = queued.to_str().unwrap(),
+        budget_ms = budget_ms,
     );
     let fake = fake_cli("claude", &script).unwrap();
     let release = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !queued.exists() {
             assert!(
                 Instant::now() < deadline,
-                "fake agent did not enter admission"
+                "fake agent did not hold the slot through the budget"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_secs(3));
         drop(holder.0.stdin.take());
         holder.0.wait().unwrap();
     });
     let (writer, store) = build_writer(root.path(), "wait-credit").unwrap();
     let mut spec = cli_agent_loop_spec(None);
-    spec.wall_clock_timeout_seconds = 4;
+    spec.wall_clock_timeout_seconds = budget_ms / 1000;
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "wait_credit",
         spec: &ActivityV2Spec::AgentLoop(spec),
@@ -118,15 +133,27 @@ print(json.dumps({{'schemaVersion':1,'status':'success','result':{{}},'error':No
     );
     let waits = &outcome.output["build_budget_waits"];
     assert_eq!(waits["count"], 1);
-    assert!(waits["total_ms"].as_u64().unwrap() >= 3000, "{waits}");
+    assert!(waits["total_ms"].as_u64().unwrap() >= budget_ms, "{waits}");
     assert_eq!(waits["total_ms"], waits["longest_ms"]);
-    assert_eq!(waits["queued_wall_ms"], waits["deadline_extension_ms"]);
+    // The hold runs until the wrapper's own clock passes the budget, so the
+    // recorded queue interval overshoots it. Credit stays capped at the
+    // original wall-clock budget (`queued_wall_ms.min(timeout)`).
+    let queued_wall_ms = waits["queued_wall_ms"].as_u64().unwrap();
+    assert!(
+        queued_wall_ms >= budget_ms,
+        "the hold lasts through the budget: {waits}"
+    );
+    assert_eq!(
+        waits["deadline_extension_ms"].as_u64().unwrap(),
+        queued_wall_ms.min(budget_ms),
+        "queue credit is capped at the original wall-clock budget: {waits}"
+    );
     assert_eq!(
         outcome.output["effective_deadline_ms"].as_u64().unwrap(),
-        4000 + waits["deadline_extension_ms"].as_u64().unwrap(),
+        budget_ms + waits["deadline_extension_ms"].as_u64().unwrap(),
         "the recorded deadline must include earned queue credit",
     );
-    assert!(outcome.output["duration_ms"].as_u64().unwrap() > 4000);
+    assert!(outcome.output["duration_ms"].as_u64().unwrap() > budget_ms);
     let events = events_snapshot(&store, "wait-credit").unwrap();
     let persisted = events
         .iter()

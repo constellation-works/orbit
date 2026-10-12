@@ -14,7 +14,9 @@ mod probe;
 
 pub use monitor::HostResourceMonitor;
 pub use pressure::{ResourceAdmission, ResourcePressureEvaluator};
-pub use probe::{CachedHostResourceProbe, default_host_resource_probe};
+pub use probe::{
+    CachedHostResourceProbe, default_host_resource_probe, host_resource_probe_with_clock,
+};
 
 /// Native samples are reused for this interval, including failed observations.
 pub const RESOURCE_CACHE_TTL: Duration = Duration::from_secs(2);
