@@ -1,7 +1,7 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-10-12
 last_validated: 2026-10-09
 status: Draft
 feature: state-compatibility
@@ -163,7 +163,9 @@ binary, and the apply path are otherwise unchanged.
 - **Task-registry compatibility is separate.** The global task registry keeps
   its own `PRAGMA user_version` reader floor (see
   [upgrades runbook](../../runbooks/upgrades.md)); this contract does not
-  change it.
+  change it yet. The registry, the feature ledgers and tables created on first
+  use are planned to move onto ledgers of this kind; see
+  [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
 
 ## Task References
 

@@ -1,7 +1,7 @@
 ---
 title: State Compatibility — Vision
 owner: claude
-last_updated: 2026-10-11
+last_updated: 2026-10-12
 last_validated: 2026-10-11
 status: Draft
 feature: state-compatibility
@@ -33,8 +33,10 @@ from. The shipped mechanism is in [2_design.md](./2_design.md).
    dropped with a warning. A local spool replayed after the upgrade would
    keep the trail intact, but introduces a second write target.
 4. **Does the task registry's `user_version` floor belong in this contract?**
-   It solves the same problem with a different mechanism; unifying them would
-   remove one concept at the cost of a migration of its own.
+   *Resolved 2026-10-12.* Yes. The registry moves onto its own ledger, run by
+   the store's ledger engine, and keeps `user_version` only as a fence for
+   binaries that predate that ledger. See
+   [4_decisions.md](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
 5. **How far back should read-only support reach?** *Resolved 2026-10-11.* The
    record makes it possible to support arbitrarily old binaries, so support is
    bounded by a 30-day, release-gated window instead of an open-ended promise.
