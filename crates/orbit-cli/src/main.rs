@@ -74,8 +74,8 @@ fn json_arg() -> Arg {
 ///
 /// `orbit audit export` does, naming its export file's serialization with its
 /// own value type. It keeps that meaning; the global flag is simply not
-/// offered there, and its help says so. `--json` selects the sink mode independently of the exported
-/// file, leaving the existing export confirmation unchanged.
+/// offered there. A JSON export also selects a JSON confirmation, while a
+/// global output format before `audit` still controls the confirmation mode.
 fn declares_format(command: &Command) -> bool {
     command
         .get_arguments()
@@ -166,10 +166,13 @@ fn legacy_json(matches: &ArgMatches) -> bool {
 /// Resolve explicit output options once, rejecting contradictory spellings.
 ///
 /// `--ops` retains its existing precedence behavior; only the global JSON
-/// shorthand conflicts with an explicit non-JSON output format. A local
-/// file-format argument (such as `audit export --format csv`) is unrelated.
+/// shorthand conflicts with an explicit non-JSON output format. An explicit
+/// audit export format of `json` also requests a JSON confirmation when no
+/// global output format was supplied.
 fn requested_output(matches: &ArgMatches) -> Result<(Option<FormatArg>, bool), clap::Error> {
-    let requested = requested_format(matches);
+    let requested = requested_format(matches).or_else(|| {
+        command::audit::export_format_requests_json(matches).then_some(FormatArg::Json)
+    });
     let legacy = legacy_json(matches);
     let mut level = matches;
     loop {

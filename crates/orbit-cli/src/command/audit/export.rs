@@ -4,7 +4,7 @@ use clap::{Args, ValueEnum};
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime};
 use serde_json::Value;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_since;
 
 use super::support::audit_event_to_json;
@@ -17,11 +17,10 @@ pub enum ExportFormat {
 
 #[derive(Args)]
 #[command(
-    after_help = "`--format` here names the export file's serialization (json or csv) and shadows the global `--format` (auto|table|plain|json|ndjson), which this command does not accept: the export is written to --output, not to stdout."
+    after_help = "`--format` names the export file's serialization (json or csv). Explicitly selecting `--format json` also renders the confirmation as JSON; use a global `--format` before `audit` to select another confirmation mode. The export file is written to --output, not stdout."
 )]
 pub struct AuditExportArgs {
-    /// Export file format. Local to this command — it shadows the global
-    /// `--format` output-mode argument, which is not accepted here.
+    /// Export file format. Explicitly selecting `json` also uses JSON for the confirmation.
     #[arg(long, default_value = "json")]
     pub format: ExportFormat,
     /// Output file path
@@ -40,20 +39,30 @@ impl Execute for AuditExportArgs {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
         let events = runtime.export_audit_events(since, self.tool)?;
 
-        match self.format {
+        let format = match self.format {
             ExportFormat::Json => {
                 export_json(&self.output, &events)?;
-                Ok(CommandOutput::Silent)
+                "json"
             }
             ExportFormat::Csv => {
                 export_csv(&self.output, &events)?;
-                Ok(CommandOutput::Silent)
+                "csv"
             }
-        }
+        };
+        let text = format!("Exported {} events to {}", events.len(), self.output);
+        Ok(Payload::detail(
+            serde_json::json!({
+                "action": "export",
+                "format": format,
+                "events_exported": events.len(),
+                "path": self.output,
+            }),
+            text,
+        )
+        .into())
     }
 }
 
-// pub(super) widened for sibling-layout tests in audit/tests/export.rs
 fn write_json_export<W: Write>(
     mut writer: W,
     events: &[AuditEvent],
@@ -76,7 +85,6 @@ fn write_json_export<W: Write>(
     Ok(())
 }
 
-// pub(super) widened for sibling-layout tests in audit/tests/export.rs
 fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
     let file =
         std::fs::File::create(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
@@ -84,11 +92,9 @@ fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
 
     write_json_export(writer, events, path)?;
 
-    println!("Exported {} events to {path}", events.len());
     Ok(())
 }
 
-// pub(super) widened for sibling-layout tests in audit/tests/export.rs
 fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
     let mut writer =
         csv::Writer::from_path(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
@@ -211,6 +217,5 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
         .flush()
         .map_err(|e| OrbitError::Io(format!("flush csv: {e}")))?;
 
-    println!("Exported {} events to {path}", events.len());
     Ok(())
 }
