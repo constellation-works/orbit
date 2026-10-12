@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -236,6 +237,31 @@ EVIDENCE = ["analysis.log", "codeql-config.yml", "codeql-logs", "database",
             "extraction-problems.log", "extraction.log", "inputs.sha256", "results.sarif",
             "toolchain.log"]
 BULK = ["cache", "cargo", "database/db-rust", "target", "tmp"]
+
+
+# A process that lives until its stdin closes or it is signalled.
+BLOCKED_ON_STDIN = [sys.executable, "-c", "import sys; sys.stdin.read()"]
+
+
+def spawn_group_anchor(leader):
+    # An unreaped child in the leader's process group. While the anchor is
+    # unreaped the group ID stays reserved, even after the leader is reaped, so
+    # killpg cannot reach a number that an unrelated group has reused.
+    return subprocess.Popen(BLOCKED_ON_STDIN, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, process_group=leader.pid)
+
+
+def stop_group(leader, anchor):
+    # Signal only while the anchor holds the group, then reap both. Once the
+    # anchor is reaped the group ID may belong to another group, so a repeated
+    # call (for example from a test cleanup) never signals.
+    if anchor.returncode is None:
+        try:
+            os.killpg(leader.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    leader.communicate(timeout=180)
+    anchor.communicate(timeout=180)
 
 
 class LocalCodeqlTests(unittest.TestCase):
@@ -631,6 +657,7 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
                     process = subprocess.Popen(["bash", str(self.script), "--fresh", "fixture.ql"],
                                                cwd=self.root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                                process_group=0)
+                    anchor = spawn_group_anchor(process)
                     try:
                         ready, _, _ = select.select([event_pipe], [], [], 180)
                         self.assertTrue(ready, "child never reached admission or extraction")
@@ -650,12 +677,39 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
                         # The completed run releases the very same lock inode.
                         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     finally:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        process.communicate(timeout=180)
+                        stop_group(process, anchor)
                 self.assert_isolated()
+
+    def test_group_teardown_signals_only_while_the_anchor_holds_the_group(self):
+        # A completed run reaps its leader before teardown; a failed run tears
+        # down while the leader is unreaped. Both signal the group while the
+        # anchor still holds it, then reap both, and a repeat teardown after
+        # the anchor is reaped never signals the released group ID.
+        for leader_reaped in (True, False):
+            with self.subTest(leader_reaped=leader_reaped):
+                leader = subprocess.Popen(BLOCKED_ON_STDIN, stdin=subprocess.PIPE,
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, process_group=0)
+                anchor = spawn_group_anchor(leader)
+                self.addCleanup(stop_group, leader, anchor)
+                if leader_reaped:
+                    # communicate closes stdin, so the leader exits and is reaped.
+                    leader.communicate(timeout=180)
+                    self.assertEqual(leader.returncode, 0)
+                signals = []
+                real_killpg = os.killpg
+
+                def recording_killpg(pgid, sig):
+                    signals.append((pgid, sig, leader.returncode, anchor.returncode))
+                    real_killpg(pgid, sig)
+
+                with mock.patch("os.killpg", recording_killpg):
+                    stop_group(leader, anchor)
+                self.assertEqual(signals, [(leader.pid, signal.SIGKILL, 0 if leader_reaped else None, None)])
+                self.assertEqual(leader.returncode, 0 if leader_reaped else -signal.SIGKILL)
+                self.assertEqual(anchor.returncode, -signal.SIGKILL)
+                with mock.patch("os.killpg") as repeat_killpg:
+                    stop_group(leader, anchor)
+                repeat_killpg.assert_not_called()
 
     def test_environment_count_overrides_persistent_count_and_keeps_existing_locks(self):
         slot_dir = self.cache / "slots"
