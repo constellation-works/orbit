@@ -175,6 +175,14 @@ impl SupervisedChild {
             on_spawn,
             mut every,
         } = run;
+        if every
+            .as_ref()
+            .is_some_and(|periodic| periodic.interval.is_zero())
+        {
+            return Err(OrbitError::Execution(
+                "process supervision periodic interval must be nonzero".to_string(),
+            ));
+        }
         let child = &mut self;
 
         if let Some(on_spawn) = on_spawn {
@@ -240,6 +248,7 @@ impl SupervisedChild {
         let mut stopped_descendants: Vec<StoppedDescendant> = Vec::new();
         let mut stdin_write_error = None;
         let mut sink_stopped: Option<ProcessStopCause> = None;
+        let mut check_stopped = None;
         let mut termination_status = None;
         // An error leaves the child to the cleanup below, so the pipe
         // workers are finished before it returns.
@@ -348,8 +357,12 @@ impl SupervisedChild {
             if let (Some(periodic), Some(next)) = (every.as_mut(), next_periodic) {
                 let now = Instant::now();
                 if now >= next {
-                    (periodic.run)();
-                    next_periodic = Some(now + periodic.interval);
+                    if let Some(cause) = (periodic.run)() {
+                        end_group(&mut child.process, termination, termination_signal())?;
+                        check_stopped = Some(cause);
+                        return Ok((false, None, false, None));
+                    }
+                    next_periodic = Some(Instant::now() + periodic.interval);
                 }
             }
         })();
@@ -412,7 +425,11 @@ impl SupervisedChild {
         // stops sent while the child was exiting or the pipes were settling.
         // Truncated output must fail even if the child itself exited
         // successfully.
-        for cause in sink_stopped.into_iter().chain(sink_stop_rx.try_iter()) {
+        for cause in check_stopped
+            .into_iter()
+            .chain(sink_stopped)
+            .chain(sink_stop_rx.try_iter())
+        {
             success = false;
             stop_causes.push(cause);
         }

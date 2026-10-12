@@ -5,8 +5,6 @@
 //! drain budget and the stopped-descendant watch. Supervision diagnostics are
 //! appended to the captured stderr.
 
-mod cleanup;
-
 use std::io::PipeWriter;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -18,7 +16,7 @@ use orbit_common::process::supervisor::{
     CaptureSink, Outcome, OutputSink, RelaySink, Stdin, SupervisedChild, Supervision, Termination,
 };
 
-pub(crate) use cleanup::{TERMINATION_GRACE_PERIOD, termination_signal};
+pub(crate) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 pub use orbit_common::process::supervisor::{
     INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, ProcessStopCause, TERMINATION_STATUS_NOTE,
 };

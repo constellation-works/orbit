@@ -276,6 +276,66 @@ fn a_phase_gets_only_its_environment_and_no_core_dumps() {
     assert!(output.contains("core=0"), "{output}");
 }
 
+/// Supervision preserves the child's exit status, including a signal with
+/// no numeric exit code.
+/// Unit admission: platform-kernel behavior at the pre-sandbox process seam;
+/// the public sandbox boundary requires host-specific sandbox availability.
+#[cfg(unix)]
+#[test]
+fn a_phase_reports_exit_codes_and_signals() {
+    let dir = tempfile::tempdir().expect("build dir");
+    let env = path_env();
+    for (script, expected) in [
+        ("exit 0", BuildPhaseEnd::Exited(0)),
+        ("exit 23", BuildPhaseEnd::Exited(23)),
+        ("kill -TERM $$", BuildPhaseEnd::Signaled(libc::SIGTERM)),
+    ] {
+        let mut log = BuildLog::default();
+        let end = run(
+            shell(script),
+            (),
+            &request(dir.path(), Duration::from_secs(20), u64::MAX, &env),
+            &mut log,
+        )
+        .expect("run");
+        assert_eq!(end, expected, "{script}");
+    }
+}
+
+/// Both streams and successive phases contribute to the same cap, without
+/// stopping a phase when the log fills. Joining the workers keeps all bytes
+/// written before exit, including a fast phase's last output.
+/// Unit admission: platform-kernel pipe draining and cross-phase capture at
+/// the pre-sandbox seam, independent of host sandbox availability.
+#[cfg(unix)]
+#[test]
+fn phase_output_shares_one_capped_log_across_streams_and_phases() {
+    let dir = tempfile::tempdir().expect("build dir");
+    let env = path_env();
+    let mut log = BuildLog::with_cap(100);
+    log.note("before");
+    for byte in ['A', 'B'] {
+        let end = run(
+            shell(&format!(
+                "head -c 1024 /dev/zero | tr '\\000' {byte}; \
+                 head -c 1024 /dev/zero | tr '\\000' {byte} >&2"
+            )),
+            (),
+            &request(dir.path(), Duration::from_secs(20), u64::MAX, &env),
+            &mut log,
+        )
+        .expect("run");
+        assert_eq!(end, BuildPhaseEnd::Exited(0));
+    }
+    let mut expected = b"[orbit] before\n".to_vec();
+    let elided = expected.len() + 4 * 1024 - 100;
+    expected.resize(50, b'A');
+    expected.extend_from_slice(b"\n[orbit] ");
+    expected.extend_from_slice(format!("… {elided} bytes of build output elided …\n").as_bytes());
+    expected.extend_from_slice(&[b'B'; 50]);
+    assert_eq!(log.render(), expected);
+}
+
 /// The `fetch` ruleset refuses a TCP connect to any port but 443, which is
 /// what keeps loopback and LAN services out of reach on Linux.
 #[cfg(target_os = "linux")]

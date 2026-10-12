@@ -469,7 +469,7 @@ namespace denial leaves this gate incomplete until host execution succeeds.
 
 Exec's runners supervise through `crates/orbit-exec/src/supervision/mod.rs::supervise`, which applies exec's policy to the shared supervisor, `crates/orbit-common/src/process/supervisor/wait.rs::SupervisedChild::supervise`. It drains stdout/stderr in background threads, writes stdin bytes when requested, installs Unix SIGINT/SIGTERM handling, and polls `child.wait_timeout` every `WAIT_POLL_INTERVAL = 100ms`. Clean exits still kill the process group to reap orphans. Parent signals terminate the group and report `exit_code = Some(128 + signal)` with annotated stderr; deadlines terminate with SIGTERM and append `process timed out`.
 
-`OwnedChild::terminate_with_signal` (`crates/orbit-common/src/process/owned_child.rs`) is the termination layer; exec's grace period is `TERMINATION_GRACE_PERIOD` in `crates/orbit-exec/src/supervision/cleanup.rs`. The escalation policy:
+`OwnedChild::terminate_with_signal` (`crates/orbit-common/src/process/owned_child.rs`) is the termination layer; exec's grace period is `TERMINATION_GRACE_PERIOD` in `crates/orbit-exec/src/supervision/mod.rs`. The escalation policy:
 
 1. Send `SIGTERM` (or the supplied signal) to the entire process group via `killpg`.
 2. Poll `probe_process_group_liveness(pgid)` (orbit-common) for up to `TERMINATION_GRACE_PERIOD = 5 seconds`.
