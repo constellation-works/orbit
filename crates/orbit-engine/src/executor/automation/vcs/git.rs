@@ -269,6 +269,10 @@ pub(super) fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
 
 fn git_environment() -> Vec<(String, String)> {
     let mut environment = vcs_environment(&["SSH_AUTH_SOCK"]);
+    // Git stderr drives retry classification. LANGUAGE can override gettext's
+    // locale selection, so never admit it and replace the parent's LC_ALL.
+    environment.retain(|(name, _)| name != "LC_ALL" && name != "LANGUAGE");
+    environment.push(("LC_ALL".to_string(), "C".to_string()));
     environment.push(("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()));
     environment
 }

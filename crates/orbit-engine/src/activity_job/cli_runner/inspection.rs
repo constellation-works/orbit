@@ -466,7 +466,14 @@ fn git_output(
     deadline: Duration,
     args: &[&str],
 ) -> Result<GitCommandOutput, DispatchError> {
-    let mut argv = vec!["-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0"];
+    let mut argv = vec![
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "gc.auto=0",
+    ];
     argv.extend_from_slice(args);
     run_git_within(root, &argv, deadline).map_err(|error| retryable(error.to_string()))
 }
