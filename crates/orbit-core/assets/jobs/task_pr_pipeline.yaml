@@ -190,15 +190,16 @@ spec:
       # Only the typed unmerged-index conflict emitted by git_rebase may
       # dispatch this leaf. Other VCS failures preserve the original error and
       # fall through to the terminal candidate handoff without an agent.
-      # ORB-14668: a recovery that leaves the branch exactly on its base,
+      # A clean rebase or conflict recovery that leaves the branch on its base,
       # because a base commit already carries the candidate's change, fails
-      # the retry as `[candidate_absorbed]`. Final recovery re-verifies the
+      # the step as `[candidate_absorbed]`. Final recovery re-verifies the
       # certified evidence and settles it as `complete_no_diff` for that
       # commit without dispatching its agent; any refusal reaches the agent
       # as `absorbed_refusal`.
       recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
+        step_id: sync_base
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"

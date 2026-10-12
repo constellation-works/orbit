@@ -12,7 +12,7 @@ use super::super::handoff::{
 use super::checkpoint::recovery_run_id;
 use super::divergence::{branch_freshness_against_ref, commit_sha, remote_branch_sha};
 use super::rebase_recovery::{
-    RecoveredRewrite, ensure_clean_for_rewrite, rebase_conflict_error,
+    RecoveredRewrite, certify_empty_rebase, ensure_clean_for_rewrite, rebase_conflict_error,
     recover_started_rebase_timeout, recovered_rewrite, refuse_or_recover_existing_rebase,
     unmerged_paths,
 };
@@ -277,6 +277,11 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
             base_sha,
         )?
     };
+
+    if rewritten && head_sha == base_sha {
+        let checkpoint = certify_empty_rebase(host, input, context, base_sha)?;
+        return Err(absorbed_outcome(host, input, context, head, &checkpoint));
+    }
 
     Ok(json!({
         "phase": "rebase",

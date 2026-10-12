@@ -1,5 +1,8 @@
 //! Interrupted rebase recovery and certified rewrite classification.
-use super::super::super::input::input_string_field;
+use super::super::super::input::{input_string_field, required_input_string};
+use super::super::absorbed::{
+    ABSORBING_STEP, AbsorbedReason, AbsorbedRefusal, covering_commit, task_scope_digest,
+};
 use super::super::git::{
     git_command_success, git_output, git_output_raw, git_success, git_timeout_error,
     timeout_recovery_error,
@@ -7,10 +10,95 @@ use super::super::git::{
 use super::super::handoff::{HandoffContext, rebase_in_progress};
 use super::checkpoint::{RecoveryCheckpointLookup, recovery_checkpoint_lookup, recovery_run_id};
 use super::divergence::original_base_sha;
-use crate::context::RuntimeHost;
+use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 use orbit_common::{OrbitError, RecoverableVcsConflict};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+
+/// Certify a deterministic `sync_base` rebase that dropped every pick, using
+/// the same content evidence and host authority as conflict recovery. Other
+/// steps and candidates without a covering commit retain the empty-branch
+/// refusal. Consumers re-observe this certificate before settlement.
+pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+    base_sha: &str,
+) -> Result<Value, OrbitError> {
+    let refused =
+        |reason, detail| OrbitError::Execution(AbsorbedRefusal::new(reason, detail).to_string());
+    if input.get("step_id").and_then(Value::as_str) != Some(ABSORBING_STEP)
+        || context.tasks.len() != 1
+    {
+        return Err(refused(
+            AbsorbedReason::StaleCheckpoint,
+            "only a single-task sync_base may settle an empty rebase",
+        ));
+    }
+    let workspace = context.workspace_path.as_path();
+    if !git_output_raw(
+        workspace,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )?
+    .is_empty()
+    {
+        return Err(refused(
+            AbsorbedReason::DirtyWorktree,
+            "the rebased checkout has uncommitted or untracked changes",
+        ));
+    }
+    let head_sha_before = required_input_string(input, "head_sha")?;
+    let original_base = original_base_sha(workspace, head_sha_before, base_sha)?;
+    let (covering, candidate_paths) =
+        covering_commit(workspace, &original_base, head_sha_before, base_sha)?.ok_or_else(
+            || {
+                refused(
+                    AbsorbedReason::NoCoveringCommit,
+                    "the synced base does not hold the candidate's exact content",
+                )
+            },
+        )?;
+    let run_id = recovery_run_id(input, context);
+    let workspace_path = workspace.to_string_lossy().into_owned();
+    let dispatch =
+        |error: crate::activity_job::DispatchError| OrbitError::Execution(error.to_string());
+    let attempt = host
+        .begin_rebase_recovery_attempt(
+            run_id,
+            ABSORBING_STEP,
+            &RebaseRecoveryAttemptScope {
+                workspace_path: workspace_path.clone(),
+                head_sha_before: head_sha_before.to_string(),
+                target_base_sha: base_sha.to_string(),
+            },
+        )
+        .map_err(dispatch)?;
+    let checkpoint = json!({
+        "run_id": run_id,
+        "step_id": ABSORBING_STEP,
+        "task_ids": [context.tasks[0].id],
+        "workspace_path": workspace_path,
+        "head": input["head"],
+        "head_sha_before": head_sha_before,
+        "original_base_sha": original_base,
+        "base_ref": input["base_ref"],
+        "target_base_sha": base_sha,
+        "base_sha": base_sha,
+        "remote_sha_before": input.get("remote_sha").cloned().unwrap_or(Value::Null),
+        "head_sha": base_sha,
+        "companion_paths": [],
+        "rewritten": true,
+        "recovery_attempt": attempt,
+        "absorbed": {
+            "covering_commit": covering,
+            "candidate_paths": candidate_paths,
+            "task_scope_digest": task_scope_digest(&context.tasks[0]),
+        },
+    });
+    host.checkpoint_rebase_recovery(run_id, ABSORBING_STEP, &checkpoint)
+        .map_err(dispatch)?;
+    Ok(checkpoint)
+}
 
 pub(in crate::executor::automation::vcs) fn ensure_clean_for_rewrite(
     workspace_path: &Path,
