@@ -3,6 +3,7 @@ use orbit_common::fs::io::hold_step;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
+use orbit_types::workflow::ReviewGateHistoryNote;
 
 use super::super::TaskCommitBoundary;
 use super::super::landing::LandingStop;
@@ -537,11 +538,12 @@ impl TaskCommitBoundary {
                         // The note names the held run as a local hold's does.
                         if let Some(hold) = &value.evidence_hold {
                             params.status = None;
-                            params.status_note = Some(format!(
-                                "run={}; candidate={}; awaiting named external checks; receipt \
-                                 queues a fresh review. {reason}",
-                                hold.run_id, hold.candidate.commit
-                            ));
+                            params.status_note =
+                                Some(ReviewGateHistoryNote::awaiting_evidence_text(
+                                    &hold.run_id,
+                                    &hold.candidate.commit,
+                                    Some(reason),
+                                ));
                             state.last_event = "review_awaiting_evidence".into();
                         // [ORB-14258] A release for a red base is recorded as the
                         // hold itself, so owner admission withholds the task until

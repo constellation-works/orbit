@@ -73,8 +73,8 @@ use orbit_engine::{
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, HeldFailure, JobRun, JobRunState,
-    ProviderFailureClass, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
-    is_upgrade_pending,
+    ProviderFailureClass, ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT,
+    is_baseline_red_failure, is_upgrade_pending,
 };
 
 use crate::OrbitRuntime;
@@ -443,8 +443,8 @@ impl OrbitRuntime {
                                     | "review_awaiting_evidence"
                                     | "review_evidence_received"
                             ) && entry.note.as_deref().is_some_and(|note| {
-                                note.contains(&format!("run={run_id},"))
-                                    || note.starts_with(&format!("run={run_id};"))
+                                ReviewGateHistoryNote::from_text(note)
+                                    .is_some_and(|parsed| parsed.run_id == run_id)
                             })
                         })
                     {

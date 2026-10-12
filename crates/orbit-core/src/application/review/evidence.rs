@@ -16,8 +16,8 @@ use orbit_types::workflow::{
     FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
     REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
     ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
-    ReviewExternalEvidence, ReviewValidation, ValidationOutcome, ValidationRole,
-    is_reserved_review_artifact,
+    ReviewExternalEvidence, ReviewGateHistoryNote, ReviewValidation, ValidationOutcome,
+    ValidationRole, is_reserved_review_artifact,
 };
 use serde_json::{Value, json};
 
@@ -468,9 +468,9 @@ pub(crate) fn resume_evidence_hold(
                 status: Some(TaskStatus::Backlog),
                 expected_status: Some(vec![TaskStatus::InProgress]),
                 status_event: Some(REVIEW_EVIDENCE_RECEIVED_EVENT.into()),
-                status_note: Some(format!(
-                    "run={}; all named external checks arrived for the held candidate; {next}.",
-                    hold.run_id
+                status_note: Some(ReviewGateHistoryNote::evidence_received_text(
+                    &hold.run_id,
+                    next,
                 )),
                 ..Default::default()
             },

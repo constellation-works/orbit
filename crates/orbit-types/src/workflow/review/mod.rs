@@ -10,6 +10,7 @@
 
 mod admission;
 mod certificate;
+mod gate_note;
 mod history;
 mod ledger;
 mod records;
@@ -30,6 +31,7 @@ pub use certificate::{
     HostCandidateOverride, HostGateResult, HostKnownRed, LandingTransformation, ReviewCertificate,
     ReviewConsumption, ReviewInvalidation, ReviewLanding, ReviewManifest, ReviewerIdentity,
 };
+pub use gate_note::ReviewGateHistoryNote;
 pub use history::{
     REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
     ReviewReportHistory, ReviewReportRevision,

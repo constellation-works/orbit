@@ -17,7 +17,8 @@ use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     CommitIdentity, REVIEW_ABANDONED_MARKER, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
-    ReviewAttemptState, ReviewCertificate, ReviewGateRefusal, ReviewTiming, ReviewerIdentity,
+    ReviewAttemptState, ReviewCertificate, ReviewGateHistoryNote, ReviewGateRefusal, ReviewTiming,
+    ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -848,16 +849,20 @@ fn settled_outcome(
                         && hold.task_meaning_digest == certificate.task_meaning_digest
                 })
             {
-                runtime.apply_task_automation_update(task_id, TaskAutomationUpdate {
-                    expected_status: Some(orbit_types::task::TaskStatus::InProgress),
-                    status: Some(orbit_types::task::TaskStatus::InProgress),
-                    status_event: Some("review_awaiting_evidence".into()),
-                    status_note: Some(format!(
-                        "run={}; candidate={}; awaiting named external checks; receipt queues a fresh review",
-                        context.run_id, hold.candidate.commit,
-                    )),
-                    ..Default::default()
-                })?;
+                runtime.apply_task_automation_update(
+                    task_id,
+                    TaskAutomationUpdate {
+                        expected_status: Some(orbit_types::task::TaskStatus::InProgress),
+                        status: Some(orbit_types::task::TaskStatus::InProgress),
+                        status_event: Some("review_awaiting_evidence".into()),
+                        status_note: Some(ReviewGateHistoryNote::awaiting_evidence_text(
+                            &context.run_id,
+                            &hold.candidate.commit,
+                            None,
+                        )),
+                        ..Default::default()
+                    },
+                )?;
                 return Ok(Settled::AwaitingEvidence(Box::new(hold)));
             }
         }
