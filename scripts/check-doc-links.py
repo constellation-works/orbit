@@ -127,9 +127,10 @@ def anchors(text):
 
 
 def check(root):
-    tracked = set(subprocess.check_output(
-        ["git", "ls-files", "-z"], cwd=root).decode().split("\0")) - {""}
-    documents = sorted(path for path in tracked if path.endswith(".md")
+    repository_files = set(subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root).decode().split("\0")) - {""}
+    documents = sorted(path for path in repository_files if path.endswith(".md")
                        and not any(fnmatchcase(path, pattern) for pattern in EXCLUSIONS))
     heading_cache = {}
     errors = []
@@ -147,8 +148,8 @@ def check(root):
             value = match[2].strip()
             if SOURCE_PATH.fullmatch(value):
                 target = re.split(r"::|:\d|#L", value, maxsplit=1)[0]
-                if target not in tracked or not (root / target).is_file():
-                    report(match.start(), f"missing tracked source path: {target}")
+                if target not in repository_files or not (root / target).is_file():
+                    report(match.start(), f"missing repository source path: {target}")
         # A displayed code example is not a link, but backticks in a link's
         # label must not hide the destination that follows it.
         links = CODE_SPAN.sub(blank, text)

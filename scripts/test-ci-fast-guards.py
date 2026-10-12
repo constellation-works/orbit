@@ -725,24 +725,62 @@ class DocLinkGuardrailTests(unittest.TestCase):
         for line, reason, target in (
                 (2, "missing link target", "missing.md"),
                 (3, "missing heading anchor", "target.md#missing"),
-                (4, "missing tracked source path", "crates/demo/src/missing.rs"),
+                (4, "missing repository source path", "crates/demo/src/missing.rs"),
                 (7, "missing link target", "missing-nested.md")):
             self.assertIn(f"docs/guide.md:{line}: {reason}: {target}", result.stderr)
 
-    def test_untracked_source_is_rejected_and_excluded_docs_are_ignored(self):
-        for name in ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
-                     "docs/design/CONVENTIONS.md", "docs/rca/record.md", "CHANGELOG.md",
-                     "crates/demo/tests/fixtures/example.md"):
-            self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")
+    def test_untracked_source_is_accepted(self):
         self.write("docs/guide.md", "`crates/demo/src/untracked.rs`\n")
         subprocess.run(["git", "add", "."], cwd=self.root, env=self.env, check=True)
         self.write("crates/demo/src/untracked.rs", "// untracked\n")
         result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
                                 env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checked 1 Markdown files", result.stdout)
+
+    def test_untracked_markdown_is_checked(self):
+        self.run_checker()
+        self.write("docs/untracked.md", "[broken](missing.md)\n")
+        result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                                env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 1, result.stderr)
-        errors = [line for line in result.stderr.splitlines() if ":1:" in line]
-        self.assertEqual(errors, ["docs/guide.md:1: missing tracked source path: "
-                                  "crates/demo/src/untracked.rs"])
+        self.assertIn("docs/untracked.md:1: missing link target: missing.md", result.stderr)
+
+    def test_ignored_source_is_rejected(self):
+        self.write(".gitignore", "crates/demo/src/ignored.rs\n")
+        self.write("docs/guide.md", "`crates/demo/src/ignored.rs`\n")
+        self.run_checker()
+        self.write("crates/demo/src/ignored.rs", "// ignored\n")
+        result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("missing repository source path: crates/demo/src/ignored.rs", result.stderr)
+
+    def test_deleted_tracked_source_is_rejected(self):
+        self.write("docs/guide.md", "`crates/demo/src/deleted.rs`\n")
+        self.write("crates/demo/src/deleted.rs", "// tracked then deleted\n")
+        self.run_checker()
+        (self.root / "crates/demo/src/deleted.rs").unlink()
+        result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("missing repository source path: crates/demo/src/deleted.rs", result.stderr)
+
+    def test_excluded_documents_are_ignored_when_tracked_or_untracked(self):
+        excluded = ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
+                    "docs/design/CONVENTIONS.md", "docs/rca/record.md", "CHANGELOG.md",
+                    "crates/demo/tests/fixtures/example.md")
+        for name in excluded:
+            self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")
+        tracked = self.run_checker()
+        self.assertEqual(tracked.returncode, 0, tracked.stderr)
+        self.assertIn("checked 0 Markdown files", tracked.stdout)
+        subprocess.run(["git", "rm", "--cached", "--", *excluded], cwd=self.root,
+                       env=self.env, check=True, capture_output=True, text=True)
+        result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checked 0 Markdown files", result.stdout)
 
     def test_website_routes_resolve_to_source_and_validate_anchors(self):
         self.write("website/src/content/docs/how-to/guide.md",
