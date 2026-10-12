@@ -485,6 +485,7 @@ spec:
         base: "{{ steps.sync_base.output.base }}"
         base_ref: "{{ steps.sync_base.output.base_ref }}"
         lease_remote_sha: "{{ steps.push.output.local_sha }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
 
     - id: complete_pr
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"

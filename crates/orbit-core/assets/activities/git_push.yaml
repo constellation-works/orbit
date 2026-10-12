@@ -65,7 +65,14 @@ spec:
       # The published head a before-landing reviewer's fix must
       # go onto: the remote branch must still be at it, and the push is
       # conditional on it, else the step fails as `push_lease_lost`.
+      # When `pr_number` names a pull request that merged at this head
+      # (merge or squash) and the repair is still only local, the step
+      # instead preserves that repair and fails as `review_repair_after_merge`.
       lease_remote_sha:
+        type: string
+      # The open pull request `landing_push` is publishing onto. Read only
+      # when the remote is no longer at `lease_remote_sha`.
+      pr_number:
         type: string
       # A claimed leaf's `candidate_resume` output. When its
       # `reused_head_sha` names the published head of the candidate whose

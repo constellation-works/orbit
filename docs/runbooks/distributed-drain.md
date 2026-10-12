@@ -156,7 +156,13 @@ The owner's `review.before_landing` is captured the same way, and the
 follower's own value is ignored. A claimed PR leaf then pushes and opens its
 PR first and runs the same contract on the published head after `pr_open`,
 while hosted CI runs. A reviewer fix is revalidated on the leaf and pushed onto
-the PR under a lease (`push_lease_lost` if the branch moved). The handoff
+the PR under a lease (`push_lease_lost` if the branch moved to a commit that
+is not the merged pull request). When the pull request was merged at that
+published head, including a squash, and the branch was deleted while the
+repair was still local, the push fails as `review_repair_after_merge`
+instead: the repair commits are pushed to `refs/heads/orbit-evidence/<branch>`
+(or the durable candidate ref if that push fails) and the task is blocked
+with the commands to land them as a follow-up pull request. The handoff
 carries before-landing evidence for the settled head, and the owner refuses a
 handoff without it, with before-PR evidence instead, or for any other head, so
 an unreviewed head never reaches `review` or a merge. A leaf whose review does
@@ -768,7 +774,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   task keeps one open PR. If the branch advanced or was deleted on the
   remote since that head, the push fails as `push_lease_lost` and the
   remote branch is left as it is, even when the base also moved; a person
-  decides what to do with the newer commits. Its `resume_candidate` output names the branch it
+  decides what to do with the newer commits. That lease is the adopted
+  published head. It is separate from a before-landing repair preserved
+  after the pull request merged (`review_repair_after_merge`). Its `resume_candidate` output names the branch it
   took over as `reused_branch`. A claim on the host that made the candidate
   renames the earlier worktree's branch to `<branch>-superseded-<suffix>`;
   that worktree and its commits are untouched. When the branch cannot be
