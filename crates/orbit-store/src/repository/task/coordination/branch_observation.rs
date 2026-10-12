@@ -50,10 +50,7 @@ impl TaskCommitBoundary {
         stored.applied = false;
         stored.artifact_path = normalize_v2_artifact_path(&observation.artifact_path)?;
         self.with_admission(|| {
-            let protecting = self
-                .execution_claims()?
-                .into_iter()
-                .find(|claim| claim.task_id == stored.task_id && claim.phase.protects_footprint());
+            let protecting = self.protecting_claim_for_task(&stored.task_id)?;
             stored.claiming_run_id = protecting
                 .as_ref()
                 .map(|claim| claim.run_context.run_id.clone());

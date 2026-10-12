@@ -75,6 +75,8 @@ use orbit_types::workflow::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+#[path = "allocation_admission/claim_reads.rs"]
+mod claim_reads;
 #[path = "allocation_admission/claim_retention.rs"]
 mod claim_retention;
 #[path = "allocation_admission/dependencies.rs"]
