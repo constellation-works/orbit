@@ -131,6 +131,7 @@ fn block_by_failed_run(runtime: &OrbitRuntime, task: &Task) -> String {
     jobs.complete_job_run_step(
         &run.run_id,
         &JobRunStepParams {
+            lock_wait_ms: None,
             step_index: 0,
             target_type: JobTargetType::Activity,
             target_id: "agent_implement".to_string(),

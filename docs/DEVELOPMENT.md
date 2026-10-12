@@ -442,3 +442,24 @@ make audit                          # scripts/cargo-deny.sh check
 ## Vendored dashboard JavaScript
 
 DOMPurify and marked are vendored under [`crates/orbit-web/assets/dashboard/vendor/`](../crates/orbit-web/assets/dashboard/vendor/); [`VENDOR.md`](../crates/orbit-web/assets/dashboard/vendor/VENDOR.md) has the refresh procedure. Refresh with `./scripts/refresh-dashboard-vendor.sh` after changing the pins in `package.json`; never edit the blobs by hand. `make ci-fast` runs [`check-dashboard-vendor.py`](../scripts/check-dashboard-vendor.py), which fails on a digest mismatch or drift between the manifest, `package.json` and `package-lock.json`. Dependabot and GitHub security alerts watch these packages, and the `dependabot-alert-sweep` job files remediation tasks; `cargo-deny` does not see them.
+
+### Leaf step diagnostics
+
+`orbit run show` exposes `lock_wait_ms` on step records and displays positive
+values in its table and step detail. Timing sums advisory file-lock acquisition
+(including turnstile waits and failed acquisition) and the store writer mutex
+waits inside the synchronous leaf, across retries and recovery. Each leaf owns
+its own scope: parallel workers and nested steps do not borrow another step's
+waits. Child processes and SQLite's internal busy-handler waits are excluded.
+Historical records have unknown (`null`) timing; zero means the scope observed
+less than one millisecond of acquisition wait. The completion audit event
+retains timing even when the leaf fails, and terminal worker summaries copy it
+into stored step rows.
+
+A stopped `git_rebase` (the delivery pipeline's `sync_base`) records
+`conflicting_paths` and `conflicting_files` in its checkpoint output before
+recovery, and supplies both to the recovery leaf. Each file carries
+`deterministically_resolvable`: true only when unmerged index object IDs and
+modes prove identical sides or a side unchanged from the base. Distinct edits,
+renames and missing evidence are conservatively false. This is diagnostic;
+recovery still validates and resolves the stopped rebase under existing rules.

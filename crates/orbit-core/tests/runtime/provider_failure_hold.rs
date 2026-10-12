@@ -195,6 +195,7 @@ impl Fixture {
             .complete_job_run_step(
                 run,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index: 1,
                     target_type: JobTargetType::Activity,
                     target_id: "implement_one".to_string(),

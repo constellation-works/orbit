@@ -33,9 +33,7 @@ impl TaskRegistryStore {
             return Ok(id);
         }
         let candidate = self.allocate_task_id(workspace)?;
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         conn.execute(
             "INSERT OR IGNORE INTO task_action_keys VALUES (?1,?2,?3,?4)",

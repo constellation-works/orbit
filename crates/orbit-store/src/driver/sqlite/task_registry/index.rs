@@ -45,9 +45,7 @@ impl TaskRegistryStore {
             envelope.validate()?;
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -98,9 +96,7 @@ impl TaskRegistryStore {
             envelope.validate()?;
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)

@@ -41,6 +41,8 @@ impl RunAuditEvent {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunAuditStep {
+    /// Acquisition wait in the synchronous leaf, absent for historical steps.
+    pub lock_wait_ms: Option<u64>,
     pub step_index: u32,
     pub step_id: String,
     pub started_at: Option<DateTime<Utc>>,

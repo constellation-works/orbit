@@ -130,9 +130,7 @@ impl Store {
         if let Some(refusal) = self.refuse_forward_compatible_write("write store metadata") {
             return Err(refusal);
         }
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
             r#"INSERT INTO schema_meta(key, value, updated_at)
@@ -230,9 +228,7 @@ impl Store {
             // Serialize before the fresh handle's write probe. Otherwise a
             // sibling transaction can exhaust SQLite's independent busy
             // timeout even though the shared writer would safely wait for it.
-            let mut current = self
-                .conn
-                .lock()
+            let mut current = orbit_common::fs::lock_wait::mutex(&self.conn)
                 .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
             let fresh = Self::open(path)?;
             fresh.check_writable()?;
@@ -291,9 +287,7 @@ impl Store {
         if let Some(refusal) = self.refuse_forward_compatible_write("open a write transaction") {
             return Err(refusal);
         }
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
 
         let tx = conn
@@ -322,9 +316,7 @@ impl Store {
                 Ok(ReadGuard::pooled(generation, connection, pool))
             }
             None => {
-                let guard = self
-                    .conn
-                    .lock()
+                let guard = orbit_common::fs::lock_wait::mutex(&self.conn)
                     .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
                 Ok(ReadGuard::Writer(guard))
             }
@@ -410,8 +402,7 @@ impl Store {
         {
             return true;
         }
-        self.conn
-            .lock()
+        orbit_common::fs::lock_wait::mutex(&self.conn)
             .map(|conn| conn.is_readonly(DatabaseName::Main).unwrap_or(false))
             .unwrap_or(false)
     }
@@ -421,9 +412,7 @@ impl Store {
     /// database file (or its WAL sidecars) is not writable, or when the
     /// write lock cannot be obtained within the busy timeout.
     pub fn check_writable(&self) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         check_connection_writable(&conn)
     }

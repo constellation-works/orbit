@@ -684,6 +684,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         }
         params.state.validate_step_state()?;
         let step = JobRunStep {
+            lock_wait_ms: params.lock_wait_ms,
             step_index: params.step_index as u32,
             target_type: params.target_type,
             target_id: params.target_id.clone(),

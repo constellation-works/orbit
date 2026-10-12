@@ -34,7 +34,7 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
     // Recreate schema v36 so the next open applies the index migration at v37,
     // the job-state migration at v38, the run recency indexes at v39, the
     // provider limit table at v40, its reading columns at v41, the v2
-    // event-type index at v43 and the resource-minute tables at v44 and v45.
+    // event-type index at v43 and the resource-minute tables at v44 and v45, and the step timing at v46.
     // Compatibility is rewritten by the opener.
     conn.execute_batch(
         "DROP INDEX idx_audit_events_command_subcommand_timestamp;
@@ -46,11 +46,12 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
         DROP INDEX idx_v2_audit_events_ws_event_type_ts;
         DROP TABLE run_resource_minutes;
         DROP TABLE host_resource_minutes;
+        ALTER TABLE job_run_steps DROP COLUMN lock_wait_ms;
         CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
         DELETE FROM schema_meta
             WHERE key IN ('migration.v0037', 'migration.v0038', 'migration.v0039',
                 'migration.v0040', 'migration.v0041', 'migration.v0042', 'migration.v0043',
-                'migration.v0044', 'migration.v0045');
+                'migration.v0044', 'migration.v0045', 'migration.v0046');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",

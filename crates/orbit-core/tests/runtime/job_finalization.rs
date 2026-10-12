@@ -221,3 +221,37 @@ fn successful_runs_stay_successful_when_final_summary_writes_fail() {
         }
     }
 }
+
+#[test]
+fn incomplete_step_diagnostics_survive_without_making_resume_skip_the_step() {
+    if !super::dispatch_admission::isolated(
+        "job_finalization::incomplete_step_diagnostics_survive_without_making_resume_skip_the_step",
+    ) {
+        return;
+    }
+    use orbit_engine::RuntimeHost;
+    let fixture = Fixture::new(false);
+    let run = fixture.queued(json!({}));
+    let state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    fixture
+        .jobs
+        .initialize_run_state(&run.run_id, &state)
+        .unwrap();
+    let diagnostic = json!({
+        "conflicting_paths": ["file.txt"],
+        "conflicting_files": [{"path": "file.txt", "deterministically_resolvable": false}],
+    });
+    fixture
+        .runtime
+        .checkpoint_step_diagnostic(&run.run_id, "sync_base", &diagnostic)
+        .unwrap();
+    let persisted = fixture.jobs.read_run_state(&run.run_id).unwrap().unwrap();
+    assert_eq!(
+        persisted.pipeline_step_output("sync_base"),
+        Some(&diagnostic)
+    );
+    assert!(
+        persisted.step_states.is_empty(),
+        "diagnostics cannot certify completion"
+    );
+}

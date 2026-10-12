@@ -1015,6 +1015,7 @@ fn landing_review_stopped(
         .complete_job_run_step(
             leaf,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: "landing_review_gate_settle".into(),

@@ -10,9 +10,7 @@ impl Store {
         &self,
         params: &V2AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
             r#"INSERT OR IGNORE INTO v2_audit_events(

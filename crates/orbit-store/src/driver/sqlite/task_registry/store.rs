@@ -155,9 +155,7 @@ impl TaskRegistryStore {
                 Ok(ReadGuard::pooled(generation, connection, pool))
             }
             None => {
-                let guard = self
-                    .conn
-                    .lock()
+                let guard = orbit_common::fs::lock_wait::mutex(&self.conn)
                     .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
                 Ok(ReadGuard::Writer(guard))
             }

@@ -777,6 +777,7 @@ impl OrbitRuntime {
         self.stores().jobs().complete_job_run_step(
             &run.run_id,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Job,
                 target_id: run.job_id.clone(),
@@ -833,6 +834,7 @@ impl OrbitRuntime {
             self.stores().jobs().complete_job_run_step(
                 &run.run_id,
                 &JobRunStepParams {
+                    lock_wait_ms: step.lock_wait_ms,
                     step_index: step.step_index as usize,
                     target_type: JobTargetType::Activity,
                     target_id: step.step_id,

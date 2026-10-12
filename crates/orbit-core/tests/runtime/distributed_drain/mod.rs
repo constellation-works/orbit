@@ -679,6 +679,7 @@ impl Pair {
             .complete_job_run_step(
                 leaf,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index: 0,
                     target_type: JobTargetType::Activity,
                     target_id: "implement_one".into(),

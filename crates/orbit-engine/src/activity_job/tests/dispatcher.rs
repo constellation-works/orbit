@@ -26,13 +26,14 @@ fn dispatch_error_retryability_classification_table() {
             code: "worktree_escape",
             diagnostic: r#"{"task_id":"ORB-1"}"#.into(),
         },
-        DispatchError::RecoverableVcsConflict {
+        DispatchError::RecoverableVcsConflict(Box::new(orbit_common::RecoverableVcsConflict {
             operation: "git_rebase".into(),
             original_base_sha: "base-before".into(),
             target_base_sha: "base-target".into(),
             conflicting_paths: vec!["src/lib.rs".into()],
+            conflicting_files: Vec::new(),
             diagnostic: "stopped on unmerged index entries".into(),
-        },
+        })),
         DispatchError::TaskCompletionLiveRun {
             task_id: "T1".into(),
             run_id: "jrun-live".into(),
