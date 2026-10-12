@@ -60,7 +60,7 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
 | `preparation_eligible` | Proposed/backlog task has no fresh assessment for its material fingerprint. | Per-task accepted assessment, including an unready verdict. |
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
-| `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
+| `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict for its current material ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
 
 The last three are the state-transition/eligibility vocabulary. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata

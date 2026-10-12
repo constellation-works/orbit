@@ -191,7 +191,10 @@ Two of its answers separate contention from capacity:
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
 - `unverified_review_finding` means a review-filed bug has no CONFIRMED
-  verdict yet. Run `finding_verification_pipeline` on it, or change its type
+  verdict for its current material. Claim and evidence-selector edits require
+  verification again; comment-only edits retain confirmation. Legacy verdicts
+  without a finding fingerprint also remain held. Run
+  `finding_verification_pipeline` on it, or change its type
   or remove its review tag to accept it without verification; `detail` gives
   the command.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares

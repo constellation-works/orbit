@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskListFilter, VERIFIABLE_STATUSES, is_review_finding, needs_verification,
+    TaskListFilter, VERIFIABLE_STATUSES, finding_fingerprint, is_review_finding, needs_verification,
 };
 
 use super::super::task_pilot::input::{bounded_usize, requested_workspace_root, string_array};
@@ -225,6 +225,7 @@ pub(super) fn task_snapshot(
         "title": task.title,
         "status": task.status,
         "history_len": history_len,
+        "finding_fingerprint": finding_fingerprint(task),
         "crew": verifier.crew,
         "tier": verifier.tier,
         "prior": prior,

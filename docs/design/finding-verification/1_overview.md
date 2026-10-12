@@ -21,8 +21,12 @@ wrong: the code may not behave as claimed, the defect may already be fixed, or
 the path may be unreachable. `finding_verification_pipeline` has a read-only
 verifier crew judge each such finding against the code at one pinned revision.
 It records a CONFIRMED or REJECTED verdict with `path:line` evidence. Until a
-finding is CONFIRMED, approval, promotion to backlog and drain admission refuse
-it and name the job. A REJECTED verdict moves the task to `rejected` [ORB-15662].
+finding is CONFIRMED for its current material, approval, promotion to backlog
+and drain admission refuse it and name the job. Editing its title, description,
+criteria, tags, type or evidence selectors requires verification again;
+comment-only edits retain confirmation. Legacy records without a finding
+fingerprint cannot unlock admission. A REJECTED verdict moves the task to
+`rejected` [ORB-15662].
 
 ## 1. Motivation
 
@@ -42,7 +46,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 - **Escalation** — a REJECTED verdict from the low tier, or any low-confidence
   verdict, is judged again once by the next complexity tier's pool.
 - **Unverified finding hold** — the admission and promotion refusal for a
-  finding without a CONFIRMED record.
+  finding without a CONFIRMED record matching its current material.
 
 ## 3. At a Glance
 

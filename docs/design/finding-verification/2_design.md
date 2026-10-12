@@ -27,7 +27,8 @@ rather than a task-pilot phase is in [4_decisions.md](4_decisions.md).
 `REVIEW_FINDING_TAGS`: `code-review`, `delivery-code-review`,
 `security-review`, `qa-sweep`. A finding is verified, and held, only in
 `proposed`, `someday` or `backlog` (`VERIFIABLE_STATUSES`). A finding needs
-verification there until its latest verification record is CONFIRMED.
+verification there until its latest verification record is CONFIRMED and its
+`finding_fingerprint` matches the current task material (§7).
 
 ## 2. The job
 
@@ -82,6 +83,7 @@ The recorded **`FindingVerification`** (`schema_version: 1`) holds:
   `reproduction` and `rejection` from the deciding report, with free text
   redacted;
 - `verified_sha` and `base_branch`, the pinned revision;
+- `finding_fingerprint`, the finding material captured at preparation (§7);
 - `crews`: every verifier that judged the task, in order, each as
   `{crew, tier, verdict, confidence}`;
 - `escalated`: whether more than one crew judged it;
@@ -103,7 +105,9 @@ In the initial round, a REJECTED verdict from the `low` tier, or a verdict of
 a crew from the next tier's pool (low → medium → hard → xhard). That draw
 passes over every crew that already judged the task, and the filer's. The
 second verdict decides. With no next-tier pool member, or from `xhard`, the
-first verdict stands. There is one escalation round.
+first verdict stands. There is one escalation round. The escalation checkpoint
+retains the initial finding fingerprint, even when its task re-read sees edited
+material; the final write checks that original fingerprint.
 
 ## 5. Recording
 
@@ -119,15 +123,21 @@ task write lock, attributed to `finding-verification`:
 - for REJECTED, the move to `rejected` with status event `finding_rejected`.
 
 The update requires the status the task was prepared in. A task that left
-it, stopped being a review finding, or was verified by another run since
-preparation settles `superseded` without a write. A CONFIRMED verdict leaves
+it, stopped being a review finding, changed any fingerprinted material, or
+was verified by another run since preparation settles `superseded` without a
+write. The material comparison occurs under the task write lock,
+so both confirmation and rejection require the prepared material. A checkpoint
+without a fingerprint also settles superseded. A CONFIRMED verdict leaves
 the status unchanged; the operator or the drain's proposed-task approval
 promotes it.
 
 ## 6. The gate
 
 `OrbitRuntime::unverified_finding_hold` holds a review finding in a
-verifiable status until its latest record is CONFIRMED. The hold's detail
+verifiable status until its latest record is CONFIRMED for the current material.
+Material edits restore the hold and require a new verification; comment-only
+edits and status changes retain confirmation. Promotion with a material edit
+in the same update checks the resulting material. The hold's detail
 names `finding_verification_pipeline`, the command to run it, and the
 seeded `finding_verification.yaml` routine. It also mentions a prior REJECTED
 verdict.
@@ -162,18 +172,27 @@ uses the shared member host:
   `already_verifying: <runs>`.
 - **Fingerprint**: `finding_fingerprint`, a hash of the id, title,
   description, acceptance criteria, sorted tags, type and context files.
-  Status, comments and attribution are not part of it.
+  Status, comments and attribution are not part of it. The same fingerprint
+  binds prepared checkpoints and persisted verdicts. Evidence-selector edits,
+  including task-pilot selector updates, require verification again.
 - **Batching**: members are grouped by stored crew, as task-pilot does.
 - **Settlement**: apply emits `member_evidence` for each recorded verdict.
   The member host reads the `apply` step, then `apply_escalations` when
   `escalation_count` is non-zero. A recorded verdict removes the task from
-  observation. An edit to a fingerprinted field releases a failed claim.
+  observation while its fingerprint matches. An edit to a fingerprinted field
+  releases a failed claim and puts a previously confirmed finding back into
+  observation.
 
 ## 8. Concerns & Honest Limitations
 
 - **Existing backlog findings are held.** The gate applies to review findings
   already in backlog. With the routine disabled, they wait until the job runs
   or the operator retypes them.
+- **Legacy confirmation is stale.** Verdicts without a stored fingerprint
+  remain readable, but cannot authorize promotion or admission. In-flight
+  checkpoints without a fingerprint cannot record a verdict. Existing confirmed
+  findings need re-verification, including those already in backlog; with the
+  routine disabled, run the job explicitly or enable the routine.
 - **One escalation round.** A disagreement between tiers is decided by the
   escalation verdict. There is no third opinion.
 - **A failed verifier fails the member.** A verifier that fails beyond its
