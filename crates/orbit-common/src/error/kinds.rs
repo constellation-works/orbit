@@ -279,3 +279,28 @@ impl std::fmt::Display for HostRegistryCode {
         f.write_str(self.as_str())
     }
 }
+
+/// Facts certified when conflict recovery leaves a candidate on its covering base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateAbsorbed {
+    /// The recovered branch.
+    pub head: String,
+    /// The base commit the recovered branch sits on.
+    pub base_sha: String,
+    /// The base ref that still reaches the covering commit.
+    pub base_ref: String,
+    /// The commit that already carries the candidate's content.
+    pub covering_commit: String,
+}
+
+impl std::fmt::Display for CandidateAbsorbed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[candidate_absorbed] git_rebase: conflict recovery left '{}' on base \
+             '{}' with no candidate commit; covering commit {} on '{}' already carries the \
+             candidate's change, so verified no-diff settlement completes the task",
+            self.head, self.base_sha, self.covering_commit, self.base_ref
+        )
+    }
+}

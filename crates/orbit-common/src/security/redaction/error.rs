@@ -176,6 +176,13 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             payload: redact_json_with(payload, redact),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::CandidateAbsorbed(mut candidate) => {
+            candidate.head = redact(&candidate.head);
+            candidate.base_sha = redact(&candidate.base_sha);
+            candidate.base_ref = redact(&candidate.base_ref);
+            candidate.covering_commit = redact(&candidate.covering_commit);
+            OrbitError::CandidateAbsorbed(candidate)
+        }
         OrbitError::ExecutionTimeout {
             timeout_ms,
             message,

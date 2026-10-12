@@ -31,9 +31,7 @@ use crate::context::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, TaskAutomationUpdate,
 };
-use crate::executor::automation::vcs::absorbed::{
-    AbsorbedCandidate, is_candidate_absorbed, verify_absorbed_candidate,
-};
+use crate::executor::automation::vcs::absorbed::{AbsorbedCandidate, verify_absorbed_candidate};
 use crate::executor::automation::vcs::git::{git_command_success, git_output};
 
 /// What the executor does after the hook.
@@ -96,9 +94,11 @@ pub(super) fn attempt_final_recovery(
     job: &JobV2,
     ctx: &ExecCtx<'_>,
     step_index: usize,
-    error_message: &str,
+    error: &DispatchError,
     budget: &mut FinalRecoveryBudget,
 ) -> FinalRecoveryVerdict {
+    let error_text = error.to_string();
+    let error_message = error_text.as_str();
     let Some(activity) = ctx.final_recovery_activity.as_ref() else {
         return FinalRecoveryVerdict::Skipped;
     };
@@ -197,7 +197,7 @@ pub(super) fn attempt_final_recovery(
     // base is settled from the host-certified evidence, re-observed here,
     // without dispatching an agent. A refusal leaves the agent its look, and
     // tells it why.
-    let absorbed = is_candidate_absorbed(error_message).then(|| {
+    let absorbed = matches!(error, DispatchError::CandidateAbsorbed { .. }).then(|| {
         verify_absorbed_candidate(
             ctx.host,
             &ctx.run_id,

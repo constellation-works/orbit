@@ -293,7 +293,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
 }
 
 /// The step failure for a recovered HEAD whose certified checkpoint says the
-/// pinned base absorbed the candidate: the settlement marker once
+/// pinned base absorbed the candidate: a typed settlement failure once
 /// [`verify_absorbed_candidate`] re-observes it, otherwise today's empty-branch
 /// refusal with the typed reason.
 fn absorbed_outcome<H: RuntimeHost + ?Sized>(
@@ -321,7 +321,12 @@ fn absorbed_outcome<H: RuntimeHost + ?Sized>(
         )),
     };
     match verified {
-        Ok(candidate) => OrbitError::Execution(candidate.failure_text(head)),
+        Ok(candidate) => OrbitError::CandidateAbsorbed(Box::new(orbit_common::CandidateAbsorbed {
+            head: head.to_string(),
+            base_sha: candidate.base_sha,
+            base_ref: candidate.base_ref,
+            covering_commit: candidate.covering_commit,
+        })),
         Err(refusal) => OrbitError::Execution(format!(
             "git_rebase: recovered branch '{head}' no longer contains a candidate ahead of target base '{}'; {refusal}",
             checkpoint

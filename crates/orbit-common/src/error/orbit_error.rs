@@ -2,8 +2,9 @@ use serde::Serialize;
 use thiserror::Error;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, RecoverableVcsConflict, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, RecoverableVcsConflict, SqliteContention, StorageLayer,
+    WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -153,6 +154,11 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// Conflict recovery certified that the base already carries the candidate.
+    /// Keeps the execution error's display and serialized string for compatibility.
+    #[error("execution failed: {0}")]
+    #[serde(rename = "Execution", serialize_with = "serialize_absorbed_candidate")]
+    CandidateAbsorbed(Box<CandidateAbsorbed>),
     /// An execution step failed because an operation it supervised hit its
     /// deadline. Reads and codes exactly as [`Self::Execution`]; the variant
     /// carries the timeout class so callers never read it from the text.
@@ -326,3 +332,10 @@ const _: () = assert!(
     std::mem::size_of::<OrbitError>() <= 128,
     "OrbitError exceeds its 128-byte size budget; box multi-field variant payloads"
 );
+
+fn serialize_absorbed_candidate<S: serde::Serializer>(
+    candidate: &CandidateAbsorbed,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&candidate.to_string())
+}

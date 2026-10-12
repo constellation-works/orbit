@@ -4,7 +4,6 @@ use super::decision::{RecoveryAdmission, attempt_recovery_activity};
 use super::input::bind_recovery_context;
 use super::*;
 use crate::executor::automation::vcs::RecoveryCommitRefusal;
-use crate::executor::automation::vcs::absorbed::is_candidate_absorbed;
 use orbit_types::workflow::AgentBlocker;
 
 /// Most `pr_conflict_recovery` rounds one failing step gets [ORB-14332].
@@ -209,7 +208,7 @@ fn post_recovery_attempt(
         ),
         // [ORB-14668] The recovery worked: the base already held the
         // candidate, which final recovery settles.
-        Err(error) if is_candidate_absorbed(&error.to_string()) => {
+        Err(error @ DispatchError::CandidateAbsorbed { .. }) => {
             ("absorbed", Some(error.to_string()))
         }
         Err(error) => ("error", Some(error.to_string())),
@@ -240,6 +239,15 @@ fn post_recovery_attempt(
                 .is_some_and(|recovered| recovered != conflict.to_string()) =>
         {
             PostRecovery::ConflictAgain(conflict)
+        }
+        Err(DispatchError::CandidateAbsorbed { candidate, .. }) => {
+            PostRecovery::Settled(Err(DispatchError::CandidateAbsorbed {
+                candidate,
+                message: format!(
+                    "job executor: post-recovery attempt {outcome}: {}; original error before recovery: {original}",
+                    error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+                ),
+            }))
         }
         Ok(_) | Err(_) => PostRecovery::Settled(Err(DispatchError::JobExecution(format!(
             "post-recovery attempt {outcome}: {}; original error before recovery: {original}",

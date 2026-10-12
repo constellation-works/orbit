@@ -101,7 +101,44 @@ fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
                 panic!("expected one post-recovery attempt, got {post:#?}");
             };
             assert_eq!(outcome, "absorbed", "{message}");
-            assert!(message.contains("[candidate_absorbed]"), "{message}");
+            let legacy = legacy_absorbed_message(&prepared, &prepared.target);
+            assert_eq!(
+                message, &legacy,
+                "the persisted post-recovery diagnostic stays byte-identical"
+            );
+            let error = run.result.as_ref().unwrap_err();
+            let DispatchError::CandidateAbsorbed { candidate, .. } = error else {
+                panic!("post-recovery wrapping must retain absorption: {error:?}");
+            };
+            assert_eq!(candidate.head, prepared.checkout.branch);
+            assert_eq!(candidate.base_sha, prepared.target);
+            assert_eq!(candidate.covering_commit, prepared.target);
+            assert_eq!(
+                candidate.base_ref,
+                prepared.prepared["base_ref"].as_str().unwrap()
+            );
+            assert_eq!(error.failure_code(), "pipeline_step_failed");
+            let initial = format!(
+                "recoverable VCS conflict during 'git_rebase': original base '{}', target base '{}'; rebase of '{}' onto checkpoint '{}' stopped with conflicts; conflicting paths: README.md",
+                prepared.base_sha, prepared.target, prepared.checkout.branch, prepared.target
+            );
+            let expected = format!(
+                "job executor: post-recovery attempt absorbed: {legacy}; original error before recovery: {initial}"
+            );
+            assert_eq!(error.to_string(), expected);
+            let persisted = run
+                .events
+                .iter()
+                .find_map(|event| match event {
+                    V2AuditEventKind::StepFinished {
+                        step_id,
+                        error_message,
+                        ..
+                    } if step_id == "sync_base" => error_message.as_deref(),
+                    _ => None,
+                })
+                .expect("persisted step diagnostic");
+            assert_eq!(persisted, expected);
 
             // Final recovery settles through the host applier without
             // dispatching its agent or the failure handoff.
@@ -239,9 +276,18 @@ fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
             assert_eq!(checkpoint["absorbed"]["covering_commit"], advanced);
             let retried = prepared
                 .rebase_on(&host, &prepared.prepared)
-                .expect_err("an absorbed candidate fails its step")
-                .to_string();
-            assert!(retried.contains("[candidate_absorbed]"), "{retried}");
+                .expect_err("an absorbed candidate fails its step");
+            let OrbitError::CandidateAbsorbed(candidate) = &retried else {
+                panic!("expected typed absorption, got {retried:?}");
+            };
+            assert_eq!(candidate.base_sha, advanced);
+            assert_eq!(candidate.covering_commit, advanced);
+            assert_eq!(
+                retried.to_string(),
+                legacy_absorbed_message(&prepared, &advanced)
+                    .strip_prefix("deterministic action `git_rebase` failed: ")
+                    .unwrap()
+            );
         },
     );
 }
@@ -403,16 +449,18 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                 assert!(outcome.success, "{case}: {:?}", outcome.message);
                 // The retry's settlement claim, as git_rebase made it before
                 // the change.
-                let absorbed = prepared
+                let error = prepared
                     .rebase_on(&host, &prepared.prepared)
-                    .expect_err("an absorbed candidate fails its step")
-                    .to_string();
-                assert!(
-                    absorbed.contains("[candidate_absorbed]"),
-                    "{case}: {absorbed}"
-                );
+                    .expect_err("an absorbed candidate fails its step");
+                let message = format!("deterministic action `sync_base_absorbed` failed: {error}");
+                let OrbitError::CandidateAbsorbed(candidate) = error else {
+                    panic!("{case}: expected typed absorption, got {error:?}");
+                };
                 stub_pipeline_steps(&host, &prepared);
-                host.stub("sync_base_absorbed", Err(absorbed));
+                host.stubs.lock().unwrap().insert(
+                    "sync_base_absorbed".into(),
+                    Err(DispatchError::CandidateAbsorbed { candidate, message }),
+                );
                 host.stub(
                     "decide",
                     Ok(json!({
@@ -631,7 +679,10 @@ fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> Abso
 
 impl LifecycleHost {
     fn stub(&self, action: &str, reply: Result<Value, String>) {
-        self.stubs.lock().unwrap().insert(action.to_string(), reply);
+        self.stubs.lock().unwrap().insert(
+            action.to_string(),
+            reply.map_err(|message| DispatchError::action_failed(action, message)),
+        );
     }
 
     fn stub_calls_of(&self, action: &str) -> Vec<Value> {
@@ -643,4 +694,59 @@ impl LifecycleHost {
             .map(|(_, input)| input.clone())
             .collect()
     }
+}
+
+/// The pre-typing diagnostic is a persisted compatibility contract.
+fn legacy_absorbed_message(prepared: &PreparedRebase, base_sha: &str) -> String {
+    format!(
+        "deterministic action `git_rebase` failed: execution failed: [candidate_absorbed] git_rebase: conflict recovery left '{}' on base '{}' with no candidate commit; covering commit {} on '{}' already carries the candidate's change, so verified no-diff settlement completes the task",
+        prepared.checkout.branch,
+        base_sha,
+        base_sha,
+        prepared.prepared["base_ref"].as_str().unwrap()
+    )
+}
+
+#[test]
+fn a_quoted_absorption_marker_never_settles_a_certified_candidate() {
+    isolated_in(
+        module_path!(),
+        "a_quoted_absorption_marker_never_settles_a_certified_candidate",
+        || {
+            let prepared = absorbed_rebase("jrun-quoted-absorbed");
+            let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
+            let conflict = stopped_conflict(&prepared);
+            recover(
+                &host,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &prepared.prepared, &conflict),
+            )
+            .unwrap();
+            assert!(!host.checkpoints().is_empty());
+            stub_pipeline_steps(&host, &prepared);
+            host.stub(
+                "sync_base_absorbed",
+                Err("tool quoted [candidate_absorbed]".into()),
+            );
+            host.stub("decide", Ok(json!({"decision":"escalate", "diagnosis":"ordinary tool failure", "human_action":"inspect tool"})));
+            let mut job = pipeline(absorbed_step());
+            job.steps[2].recovery_activity = None;
+            job.steps[2].resolved_recovery_activity = None;
+            let run = execute(&host, &prepared, &job);
+            assert!(run.result.is_err());
+            let calls = host.stub_calls_of("decide");
+            let [input] = calls.as_slice() else {
+                panic!("the final recovery agent must run: {calls:?}");
+            };
+            assert!(
+                input.get("absorbed_refusal").is_none(),
+                "quoted text must not trigger absorption verification"
+            );
+            assert_eq!(
+                run.final_recovery(),
+                vec![("escalated".into(), Some("escalate".into()))]
+            );
+            assert_eq!(host.stub_calls_of("handoff").len(), 1);
+        },
+    );
 }
