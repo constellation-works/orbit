@@ -75,7 +75,15 @@ macro_rules! define_config_settings {
                 crews: &BTreeMap<String, Crew>,
             ) -> Result<Self, OrbitError> {
                 let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
-                Self::admit_with_env(document, config_path, crews, env_default.as_deref(), false)
+                Self::admit_internal(
+                    document,
+                    config_path,
+                    crews,
+                    env_default.as_deref(),
+                    false,
+                    false,
+                    None,
+                )
             }
 
             pub(crate) fn admit_with_env(
@@ -84,6 +92,66 @@ macro_rules! define_config_settings {
                 crews: &BTreeMap<String, Crew>,
                 env_default: Option<&str>,
                 require_default_crew: bool,
+            ) -> Result<Self, OrbitError> {
+                Self::admit_internal(
+                    document,
+                    config_path,
+                    crews,
+                    env_default,
+                    require_default_crew,
+                    true,
+                    None,
+                )
+            }
+
+            /// Admit a merged layer using the global resource-throttle memory
+            /// high-water mark for the host-wide auto-concurrency check.
+            pub(crate) fn admit_with_global_memory_high(
+                document: &toml::Value,
+                config_path: &Path,
+                crews: &BTreeMap<String, Crew>,
+                global_memory_high_percent: u8,
+            ) -> Result<Self, OrbitError> {
+                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
+                Self::admit_internal(
+                    document,
+                    config_path,
+                    crews,
+                    env_default.as_deref(),
+                    true,
+                    true,
+                    Some(global_memory_high_percent),
+                )
+            }
+
+            /// Admit the settings supplied by a workspace layer. The machine
+            /// table is refused separately, so there is no host-wide memory
+            /// threshold in this scoped view to compare against.
+            pub(crate) fn admit_workspace(
+                document: &toml::Value,
+                config_path: &Path,
+                crews: &BTreeMap<String, Crew>,
+            ) -> Result<Self, OrbitError> {
+                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
+                Self::admit_internal(
+                    document,
+                    config_path,
+                    crews,
+                    env_default.as_deref(),
+                    true,
+                    false,
+                    None,
+                )
+            }
+
+            fn admit_internal(
+                document: &toml::Value,
+                config_path: &Path,
+                crews: &BTreeMap<String, Crew>,
+                env_default: Option<&str>,
+                require_default_crew: bool,
+                validate_auto_memory: bool,
+                global_memory_high_percent: Option<u8>,
             ) -> Result<Self, OrbitError> {
                 $(let $field: $resolved = {
                     let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
@@ -94,6 +162,12 @@ macro_rules! define_config_settings {
                     $($field,)+
                 };
                 snapshot.finish_admission(crews, env_default, require_default_crew)?;
+                if validate_auto_memory {
+                    snapshot.auto_concurrency().validate_memory_high_percent(
+                        global_memory_high_percent
+                            .unwrap_or(snapshot.workflow_resource_throttle_memory_high_percent),
+                    )?;
+                }
                 Ok(snapshot)
             }
 
@@ -191,6 +265,48 @@ define_config_settings! {
         description: "Stable generated identity of this machine (hm_...). Written once by `orbit init` and never reused; not settable.",
         section: ConfigSection::Machine, order: 10,
         resolve: |raw: Option<String>| resolve_machine_id(raw),
+    },
+    machine_auto_concurrency_admit_cpu_percent: u8 => u8 {
+        key: "machine.auto_concurrency.admit_cpu_percent", value_type: "integer",
+        description: "Maximum forecast CPU utilization as a percentage of host cores (1..=100, default 90).",
+        section: ConfigSection::Machine, order: 33,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 90, "machine.auto_concurrency.admit_cpu_percent"),
+    },
+    machine_auto_concurrency_admit_memory_percent: u8 => u8 {
+        key: "machine.auto_concurrency.admit_memory_percent", value_type: "integer",
+        description: "Maximum forecast non-reclaimable memory as a percentage of host memory (1..=100, default 75); must be below global workflow.resource_throttle.memory_high_percent.",
+        section: ConfigSection::Machine, order: 34,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 75, "machine.auto_concurrency.admit_memory_percent"),
+    },
+    machine_auto_concurrency_head_max_wait_minutes: u32 => u32 {
+        key: "machine.auto_concurrency.head_max_wait_minutes", value_type: "integer",
+        description: "Starvation guard: maximum wait for the queue head, in minutes (default 30).",
+        section: ConfigSection::Machine, order: 38,
+        resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(30)),
+    },
+    machine_auto_concurrency_horizon_cap_minutes: u32 => u32 {
+        key: "machine.auto_concurrency.horizon_cap_minutes", value_type: "integer",
+        description: "Maximum forecast horizon for a candidate, in minutes (default 120).",
+        section: ConfigSection::Machine, order: 37,
+        resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(120)),
+    },
+    machine_auto_concurrency_min_profile_deliveries: u32 => u32 {
+        key: "machine.auto_concurrency.min_profile_deliveries", value_type: "integer",
+        description: "Minimum completed deliveries before a profile key is used without fallback (default 10).",
+        section: ConfigSection::Machine, order: 36,
+        resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(10)),
+    },
+    machine_auto_concurrency_mode: String => String {
+        key: "machine.auto_concurrency.mode", value_type: "string",
+        description: "Forecast admission mode: off, shadow, or enforce (default off).",
+        section: ConfigSection::Machine, order: 32,
+        resolve: |raw: Option<String>| resolve_choice(raw, "off", "machine.auto_concurrency.mode", &["off", "shadow", "enforce"]),
+    },
+    machine_auto_concurrency_profile_window: u32 => u32 {
+        key: "machine.auto_concurrency.profile_window", value_type: "integer",
+        description: "Most recent completed deliveries retained per profile key; at least min_profile_deliveries (default 50).",
+        section: ConfigSection::Machine, order: 35,
+        resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(50)),
     },
     machine_name: Option<String> => String {
         key: "machine.name", value_type: "string",

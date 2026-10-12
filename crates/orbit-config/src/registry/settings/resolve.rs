@@ -367,7 +367,7 @@ pub(super) fn resolve_cpu_light_leaves(raw: Option<u8>) -> Result<u8, OrbitError
     }
 }
 
-pub(super) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
+pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
     let value = raw.unwrap_or(default);
     if (1..=100).contains(&value) {
         Ok(value)

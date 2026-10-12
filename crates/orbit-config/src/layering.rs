@@ -44,7 +44,9 @@ use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
-use crate::registry::{CONFIG_KEY_REGISTRY, ConfigSnapshot, GLOBAL_ONLY_KEY_PREFIX};
+use crate::registry::{
+    CONFIG_KEY_REGISTRY, ConfigSnapshot, GLOBAL_ONLY_KEY_PREFIX, read_optional, resolve_percent,
+};
 use crate::resolved::{ResolvedConfig, crews_from_raw, default_crews, warn_compatibility_keys};
 use crate::store::read_config_file;
 
@@ -413,6 +415,19 @@ fn load_layered_resolved_with_staged(
     }
     let persistence = PersistenceConfig::default_for_roots(roots.global(), roots.workspace());
 
+    let global_memory_high_percent = match global.as_ref() {
+        Some(document) => resolve_percent(
+            read_optional(
+                &document.value,
+                "workflow.resource_throttle.memory_high_percent",
+                &document.path,
+            )?,
+            90,
+            "workflow.resource_throttle.memory_high_percent",
+        )?,
+        None => 90,
+    };
+
     // Merging erases which file a crew came from, and a colon-named crew is
     // only repairable by hand-editing that file, so each layer is checked
     // while its own path is still known.
@@ -460,8 +475,13 @@ fn load_layered_resolved_with_staged(
             .path
             .unwrap_or_else(|| config_path.to_path_buf())
     };
-    let mut resolved =
-        ResolvedConfig::from_layered_value(merged, config_path, &crew_field_path, persistence)?;
+    let mut resolved = ResolvedConfig::from_layered_value(
+        merged,
+        config_path,
+        &crew_field_path,
+        persistence,
+        global_memory_high_percent,
+    )?;
     for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
         warn_compatibility_keys(&document.value, &document.path);
     }

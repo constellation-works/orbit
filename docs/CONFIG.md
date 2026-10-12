@@ -71,6 +71,37 @@ task_prefix = "ORB"
 | `machine.worker_tasks_max` | `4096` | Yes | Scope `TasksMax=` (processes plus threads), at least 1. |
 | `machine.worker_cpu_quota` | `0` (unset) | Yes | Scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` sets no CPU limit. Linux only. |
 
+### `[machine.auto_concurrency]` — host forecast admission
+
+Global-only host thresholds for forecast-based delivery admission. These are
+settings only today; no admission path reads them yet, so the default `off`
+leaves behavior unchanged.
+
+```toml
+[machine.auto_concurrency]
+mode = "off"
+admit_cpu_percent = 90
+admit_memory_percent = 75
+profile_window = 50
+min_profile_deliveries = 10
+horizon_cap_minutes = 120
+head_max_wait_minutes = 30
+```
+
+| Key | Default | What it is |
+|---|---|---|
+| `machine.auto_concurrency.mode` | `off` | One of `off`, `shadow` or `enforce`. |
+| `machine.auto_concurrency.admit_cpu_percent` | `90` | Forecast CPU **utilization** as a percentage of host cores; valid range `1..=100`. |
+| `machine.auto_concurrency.admit_memory_percent` | `75` | Forecast **non-reclaimable memory** as a percentage of host memory; valid range `1..=100`, and strictly below the global `workflow.resource_throttle.memory_high_percent`. |
+| `machine.auto_concurrency.profile_window` | `50` deliveries | Most recent completed deliveries retained per profile key; must be at least `min_profile_deliveries`. |
+| `machine.auto_concurrency.min_profile_deliveries` | `10` deliveries | Minimum samples before using a profile key rather than falling back along the profile chain. |
+| `machine.auto_concurrency.horizon_cap_minutes` | `120` minutes | Maximum forecast horizon for a candidate. |
+| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard for the head of the queue. |
+
+CPU utilization is bounded at 100% and is not compared with the resource
+throttle's CPU percentage. The auto-concurrency memory forecast and the
+resource throttle's memory percentage both measure non-reclaimable memory.
+
 - `orbit config set` refuses `machine.id` and `machine.task_prefix`: changing either would orphan or renumber records minted under it.
 - `orbit init` refuses to create an identity once the task store has minted ids under another prefix (tasks created before `orbit init` use the historical `ORB`). It fails before writing anything; run `orbit init` before creating tasks.
 - Hand edits fail closed: a `[machine]` table missing an identity key, a `task_prefix` that contradicts the local task allocator, or an `id` that contradicts a workspace record naming this machine as owner is refused. Nothing falls back to the hostname.
@@ -157,6 +188,13 @@ While CPU, memory or a watched filesystem stays at or above its high mark, this 
 | `workflow.resource_throttle.disk_resume_percent` | `85` | Resume below this filesystem percentage. |
 
 Percentages are integers `1..=100`; each resume mark must be below its high mark. Workspace runtimes use their resolved values. The host dashboard uses the serving machine's global values, read when its monitor first opens, so restart it after changing them.
+
+`machine.auto_concurrency.admit_memory_percent` must stay below this table's
+global `memory_high_percent`, since both memory thresholds count non-reclaimable
+memory. Its CPU threshold measures forecast utilization. On Linux this
+table's CPU percentage is load-based (`/proc/loadavg` divided by online CPUs),
+includes the run queue, and can exceed 100%; it is a different quantity from
+CPU utilization.
 
 **Verdict.** Below resume is `ok`, between resume and high `elevated`, at or above high `critical`. A resource is held once its high readings span ten seconds (repeated reads of one cached sample do not count; a gap over fifteen seconds restarts the window) and stays held until below resume. A sample that is unavailable, invalid, future-dated or older than fifteen seconds is `unknown` and releases that resource's hold (fail open). Readiness, `orbit run show`, `orbit run auto`, MCP and the dashboard Drain card name the held resource, value, threshold and since-when.
 

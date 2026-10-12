@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use orbit_config::{
-    ConfigRoots, ConfigScope, ConfigStore, OperationLayerSource, ResolvedConfig,
-    admit_settable_config_key,
+    AutoConcurrencySettings, ConfigRoots, ConfigScope, ConfigStore, OperationLayerSource,
+    ResolvedConfig, admit_settable_config_key,
 };
 
 fn write_config(root: &Path, body: &str) {
@@ -394,4 +394,138 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
         .expect_err("an unknown single crew fails the load")
         .to_string();
     assert!(error.contains("no-such-crew"), "{error}");
+}
+
+#[test]
+fn machine_auto_concurrency_defaults_and_global_values_are_admitted() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+
+    let defaults = ResolvedConfig::load(&roots).expect("built-in auto-concurrency defaults load");
+    assert_eq!(
+        defaults.auto_concurrency,
+        AutoConcurrencySettings {
+            mode: "off".to_string(),
+            admit_cpu_percent: 90,
+            admit_memory_percent: 75,
+            profile_window: 50,
+            min_profile_deliveries: 10,
+            horizon_cap_minutes: 120,
+            head_max_wait_minutes: 30,
+        }
+    );
+
+    write_config(
+        global.path(),
+        "[workflow.resource_throttle]\ncpu_high_percent = 2\ncpu_resume_percent = 1\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
+         [machine.auto_concurrency]\nmode = \"shadow\"\nadmit_cpu_percent = 100\nadmit_memory_percent = 79\nprofile_window = 20\nmin_profile_deliveries = 10\nhorizon_cap_minutes = 90\nhead_max_wait_minutes = 5\n",
+    );
+    let configured = ResolvedConfig::load(&roots)
+        .expect("global settings load with CPU utilization independent of load-based throttle");
+    assert_eq!(
+        configured.auto_concurrency,
+        AutoConcurrencySettings {
+            mode: "shadow".to_string(),
+            admit_cpu_percent: 100,
+            admit_memory_percent: 79,
+            profile_window: 20,
+            min_profile_deliveries: 10,
+            horizon_cap_minutes: 90,
+            head_max_wait_minutes: 5,
+        }
+    );
+}
+
+#[test]
+fn machine_auto_concurrency_rejects_invalid_values_with_the_key_named() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+
+    for (config, expected_key) in [
+        (
+            "[machine.auto_concurrency]\nadmit_cpu_percent = 0\n",
+            "machine.auto_concurrency.admit_cpu_percent",
+        ),
+        (
+            "[machine.auto_concurrency]\nadmit_memory_percent = 101\n",
+            "machine.auto_concurrency.admit_memory_percent",
+        ),
+        (
+            "[workflow.resource_throttle]\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
+             [machine.auto_concurrency]\nadmit_memory_percent = 80\n",
+            "machine.auto_concurrency.admit_memory_percent",
+        ),
+        (
+            "[machine.auto_concurrency]\nprofile_window = 9\nmin_profile_deliveries = 10\n",
+            "machine.auto_concurrency.profile_window",
+        ),
+        (
+            "[machine.auto_concurrency]\nmode = \"automatic\"\n",
+            "machine.auto_concurrency.mode",
+        ),
+    ] {
+        write_config(global.path(), config);
+        let error = ResolvedConfig::load(&roots)
+            .expect_err("invalid host auto-concurrency settings are refused")
+            .to_string();
+        assert!(error.contains(expected_key), "{expected_key}: {error}");
+    }
+}
+
+#[test]
+fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+
+    write_config(
+        global.path(),
+        "[workflow.resource_throttle]\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
+         [machine.auto_concurrency]\nadmit_memory_percent = 75\n",
+    );
+    write_config(
+        workspace.path(),
+        "[workflow.resource_throttle]\nmemory_high_percent = 70\nmemory_resume_percent = 60\n",
+    );
+    ResolvedConfig::load(&roots)
+        .expect("a workspace throttle override does not replace the host threshold");
+
+    write_config(
+        global.path(),
+        "[workflow.resource_throttle]\nmemory_high_percent = 70\nmemory_resume_percent = 60\n\
+         [machine.auto_concurrency]\nadmit_memory_percent = 75\n",
+    );
+    write_config(
+        workspace.path(),
+        "[workflow.resource_throttle]\nmemory_high_percent = 90\nmemory_resume_percent = 80\n",
+    );
+    let error = ResolvedConfig::load(&roots)
+        .expect_err("a workspace cannot raise the global memory admission ceiling")
+        .to_string();
+    assert!(
+        error.contains("machine.auto_concurrency.admit_memory_percent"),
+        "{error}"
+    );
+}
+
+#[test]
+fn workspace_machine_auto_concurrency_table_is_refused() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    write_config(
+        workspace.path(),
+        "[machine.auto_concurrency]\nmode = \"enforce\"\nadmit_cpu_percent = 90\nadmit_memory_percent = 75\n\
+         profile_window = 50\nmin_profile_deliveries = 10\nhorizon_cap_minutes = 120\nhead_max_wait_minutes = 30\n",
+    );
+
+    let error = ResolvedConfig::load(&roots)
+        .expect_err("workspace config cannot set host-wide machine thresholds")
+        .to_string();
+    assert!(
+        error.contains("[machine] is not a workspace setting"),
+        "{error}"
+    );
 }
