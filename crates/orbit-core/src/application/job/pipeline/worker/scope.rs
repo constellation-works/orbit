@@ -64,6 +64,7 @@ const SYSTEMD_RUN: &str = "systemd-run";
 /// The kernel OOM preference every worker launches with, well above the
 /// user manager's 100 and the default 0 of the drain or service that launched
 /// it, so a worker process is always killed before them.
+#[cfg(target_os = "linux")]
 pub(crate) const WORKER_OOM_SCORE_ADJ: i32 = 500;
 /// Inherited by a coordinator's child workers so one CLI invocation keeps its
 /// containment policy for every leaf it admits.
