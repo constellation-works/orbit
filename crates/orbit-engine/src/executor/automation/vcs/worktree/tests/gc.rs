@@ -549,6 +549,13 @@ fn gc_reclaims_trash_directory_when_age_exceeds_timeout() {
     ));
     fs::create_dir_all(&trash_dir).unwrap();
     fs::write(trash_dir.join("timedout.txt"), "timed out leftover").unwrap();
+    // A stale relative gitdir left after Git removed its administrative entry
+    // is still reclaimable, unlike a relative link to a recoverable checkout.
+    fs::write(
+        trash_dir.join(".git"),
+        "gitdir: ../../../../.git/worktrees/removed\n",
+    )
+    .unwrap();
 
     let host = FakeTaskHost::new(Vec::new());
     let result = collect_worktrees(

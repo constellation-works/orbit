@@ -282,46 +282,29 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                     None
                 };
                 if let Some(trash) = trash {
-                    if process_is_alive(trash.pid) && !is_trash_expired(trash.nanos) {
-                        reports.push(WorktreeGcReport {
-                            path: entry,
-                            run_id: None,
-                            run_state: None,
-                            task_id: None,
-                            task_status: None,
-                            pr_status: None,
-                            action: "skipped:deleter_alive".to_string(),
-                            bytes_reclaimed: 0,
-                            detail: None,
-                            reclaim: Vec::new(),
-                            recovery: None,
-                            retained_bytes: None,
+                    let report = reclaim_trash_directory(&entry, &trash, &registered, options)
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(
+                                path = %entry.display(),
+                                %error,
+                                "failed to reclaim trash directory"
+                            );
+                            WorktreeGcReport {
+                                path: entry.clone(),
+                                run_id: None,
+                                run_state: None,
+                                task_id: None,
+                                task_status: None,
+                                pr_status: None,
+                                action: format!("failed:{error}"),
+                                bytes_reclaimed: 0,
+                                detail: None,
+                                reclaim: Vec::new(),
+                                recovery: None,
+                                retained_bytes: None,
+                            }
                         });
-                    } else {
-                        let report =
-                            reclaim_trash_directory(&entry, options).unwrap_or_else(|error| {
-                                tracing::warn!(
-                                    path = %entry.display(),
-                                    %error,
-                                    "failed to reclaim trash directory"
-                                );
-                                WorktreeGcReport {
-                                    path: entry.clone(),
-                                    run_id: None,
-                                    run_state: None,
-                                    task_id: None,
-                                    task_status: None,
-                                    pr_status: None,
-                                    action: format!("failed:{error}"),
-                                    bytes_reclaimed: 0,
-                                    detail: None,
-                                    reclaim: Vec::new(),
-                                    recovery: None,
-                                    retained_bytes: None,
-                                }
-                            });
-                        reports.push(report);
-                    }
+                    reports.push(report);
                 } else {
                     reports.push(WorktreeGcReport {
                         path: entry,
@@ -712,14 +695,13 @@ fn is_failed_removal_leftover(path: &Path) -> bool {
         Ok(metadata) if metadata.is_file() => fs::read_to_string(&link)
             .ok()
             .and_then(|content| {
-                content
-                    .lines()
-                    .find_map(|line| line.strip_prefix("gitdir:"))
-                    .map(|target| PathBuf::from(target.trim()))
+                let target = content.trim().strip_prefix("gitdir:")?.trim();
+                (!target.is_empty() && !target.contains(['\n', '\r']))
+                    .then(|| PathBuf::from(target))
             })
             .is_some_and(|admin_dir| {
                 matches!(
-                    fs::symlink_metadata(&admin_dir),
+                    fs::symlink_metadata(path.join(admin_dir)),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound
                 )
             }),
@@ -803,46 +785,58 @@ fn is_trash_expired(created_nanos: u128) -> bool {
     age_nanos >= timeout_nanos
 }
 
+/// A trash name and an expired or dead deleter identify a removal attempt,
+/// but do not license deleting a checkout repaired or registered since then.
 fn reclaim_trash_directory(
     path: &Path,
+    trash: &TrashDirectoryInfo,
+    registered: &BTreeSet<PathBuf>,
     options: &WorktreeGcOptions,
 ) -> Result<WorktreeGcReport, OrbitError> {
-    let estimated_bytes = if options.delete || options.estimate_bytes {
-        directory_bytes(path)?
-    } else {
-        0
-    };
-    if !options.delete {
-        return Ok(WorktreeGcReport {
-            path: path.to_path_buf(),
-            run_id: None,
-            run_state: None,
-            task_id: None,
-            task_status: None,
-            pr_status: None,
-            action: "would_remove".to_string(),
-            bytes_reclaimed: estimated_bytes,
-            detail: Some(TRASH_DETAIL.to_string()),
-            reclaim: Vec::new(),
-            recovery: None,
-            retained_bytes: None,
-        });
-    }
-    remove_unregistered_directory(path)?;
-    Ok(WorktreeGcReport {
+    let mut report = WorktreeGcReport {
         path: path.to_path_buf(),
         run_id: None,
         run_state: None,
         task_id: None,
         task_status: None,
         pr_status: None,
-        action: "removed".to_string(),
-        bytes_reclaimed: estimated_bytes,
-        detail: Some(TRASH_DETAIL.to_string()),
+        action: String::new(),
+        bytes_reclaimed: 0,
+        detail: None,
         reclaim: Vec::new(),
         recovery: None,
         retained_bytes: None,
-    })
+    };
+    if path_is_registered(registered, path) {
+        report.action = "skipped:registered_worktree".to_string();
+        report.detail = Some(
+            "Git still registers this directory as a worktree; its trash name does not authorize removal."
+                .to_string(),
+        );
+        return Ok(report);
+    }
+    if !is_failed_removal_leftover(path) {
+        report.action = "skipped:not_registered_worktree".to_string();
+        report.detail = Some(NOT_REGISTERED_REMEDY.to_string());
+        return Ok(report);
+    }
+    if process_is_alive(trash.pid) && !is_trash_expired(trash.nanos) {
+        report.action = "skipped:deleter_alive".to_string();
+        return Ok(report);
+    }
+    report.bytes_reclaimed = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
+    report.detail = Some(TRASH_DETAIL.to_string());
+    if !options.delete {
+        report.action = "would_remove".to_string();
+        return Ok(report);
+    }
+    remove_unregistered_directory(path)?;
+    report.action = "removed".to_string();
+    Ok(report)
 }
 
 /// Reclaim only declared output, keeping committed and unmatched work.
