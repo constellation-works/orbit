@@ -2196,6 +2196,70 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
     assert!(!text.contains("Task ORB-220"), "{text}");
 }
 
+/// [ORB-15639] An open pull breaker names its failure count, their classes
+/// and when it half-opens; once that time has passed it reads half-open.
+#[test]
+fn run_show_names_the_pull_breaker() {
+    if !isolated_run_observation("run_observation::run_show_names_the_pull_breaker") {
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-pull-breaker";
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_pull_pipeline".into(),
+        serde_json::json!({}),
+    );
+    let half_open_at = now + chrono::Duration::minutes(15);
+    state.pull_breaker = Some(orbit_types::workflow::PullBreaker {
+        failures: 3,
+        failure_classes: vec!["candidate".into(), "task_input".into(), "untyped".into()],
+        opened_at: now,
+        half_open_at,
+    });
+    runtime.write_run_state(id, &state).unwrap();
+
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let breaker = &shown["pipeline_state"]["pull_breaker"];
+    assert_eq!(breaker["failures"], 3, "{breaker}");
+    assert_eq!(breaker["failure_classes"][1], "task_input", "{breaker}");
+    let text = |fixture: &Fixture| {
+        let output = fixture
+            .orbit()
+            .args(["run", "show", id, "--no-reconcile"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let open = text(&fixture);
+    let half_open = format!(
+        "half-opens at {} to admit one probe claim",
+        half_open_at.format("%Y-%m-%d %H:%M:%SZ")
+    );
+    for expected in [
+        "Breaker: open after 3 consecutive failed claims (candidate, task_input, untyped)",
+        half_open.as_str(),
+    ] {
+        assert!(open.contains(expected), "missing {expected:?} in:\n{open}");
+    }
+
+    state.pull_breaker.as_mut().unwrap().half_open_at = now - chrono::Duration::minutes(1);
+    runtime.write_run_state(id, &state).unwrap();
+    let probing = text(&fixture);
+    assert!(probing.contains("half-open since"), "{probing}");
+}
+
 /// A durable failed-pass record is visible through the actual CLI in text
 /// and JSON, independently of successful coordinator step outputs.
 #[test]

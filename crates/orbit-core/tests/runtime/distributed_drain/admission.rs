@@ -3,7 +3,9 @@
 use orbit_core::application::distributed::{DrainEntryPoint, RESOURCE_THROTTLED};
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::HostOs;
-use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, PullBreaker,
+};
 
 use super::*;
 
@@ -937,6 +939,152 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
     assert_eq!(backlog(&pair), 1);
     assert_eq!(pair.owner_claims().len(), 4);
+}
+
+/// The drain's recorded failure breaker, which a pass leaves open or
+/// half-open.
+fn breaker(pair: &Pair, drain: &str) -> PullBreaker {
+    pair.follower
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .pull_breaker
+        .expect("the breaker is recorded")
+}
+
+/// Let the breaker's cooldown pass, as the clock would.
+fn cooldown_passes(pair: &Pair, drain: &str) {
+    let mut state = pair.follower.read_run_state(drain).unwrap().unwrap();
+    let breaker = state.pull_breaker.as_mut().expect("an open breaker");
+    breaker.half_open_at = Utc::now() - chrono::Duration::seconds(1);
+    pair.follower.write_run_state(drain, &state).unwrap();
+}
+
+/// [ORB-15639] An open breaker does not latch for the drain's life: once its
+/// cooldown has passed it half-opens and admits a single probe claim, and no
+/// other while that probe runs, however many slots are free. A probe that
+/// fails opens it again with twice the wait; one that hands off closes it,
+/// and the drain admits again.
+#[test]
+fn an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome() {
+    if !isolated(
+        module_path!(),
+        "an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome",
+    ) {
+        return;
+    }
+    let pair = Pair::new(6);
+    let drain = pair.start_drain();
+    let pulls = |pair: &Pair| pair.wire.calls("orbit.task.pull").len();
+    for _ in 0..3 {
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_fails_with(&leaf, "candidate validation failed");
+        pair.pass_with(&drain, 0);
+    }
+    let opened = pair.pass_with(&drain, 4);
+    assert_eq!(opened["breaker_state"], "open", "{opened}");
+    assert_eq!(opened["admitting"], false, "{opened}");
+    assert_eq!(pulls(&pair), 3);
+    let first = breaker(&pair, &drain);
+    assert_eq!(first.failures, 3);
+    assert_eq!(first.failure_classes, vec!["candidate"; 3]);
+    assert_eq!(
+        first.half_open_at - first.opened_at,
+        chrono::Duration::minutes(15),
+        "the default cooldown"
+    );
+    assert!(
+        opened["refusal"].as_str().is_some_and(
+            |refusal| refusal.starts_with("circuit_open") && refusal.contains("half-opens at")
+        ),
+        "{opened}"
+    );
+
+    cooldown_passes(&pair, &drain);
+    let probe = pair.running_leaf(&drain, 4);
+    assert_eq!(pulls(&pair), 4, "the half-open breaker admits a probe");
+    let waiting = pair.pass_with(&drain, 4);
+    assert_eq!(waiting["breaker_state"], "half_open", "{waiting}");
+    assert_eq!(waiting["admitted"], 0, "{waiting}");
+    assert!(
+        waiting["refusal"]
+            .as_str()
+            .is_some_and(|refusal| refusal.starts_with("circuit_half_open")),
+        "{waiting}"
+    );
+    assert_eq!(pulls(&pair), 4, "no second claim while the probe runs");
+
+    pair.leaf_fails_with(&probe, "candidate validation failed");
+    let reopened = pair.pass_with(&drain, 4);
+    assert_eq!(reopened["breaker_state"], "open", "{reopened}");
+    assert_eq!(reopened["consecutive_failures"], 4, "{reopened}");
+    assert_eq!(pulls(&pair), 4);
+    let second = breaker(&pair, &drain);
+    assert_eq!(second.failures, 4);
+    assert_eq!(
+        second.half_open_at - second.opened_at,
+        chrono::Duration::minutes(30),
+        "a failed probe doubles the wait"
+    );
+
+    cooldown_passes(&pair, &drain);
+    let probe = pair.running_leaf(&drain, 4);
+    assert_eq!(pulls(&pair), 5);
+    pair.leaf_hands_off(&probe);
+    let closed = pair.pass_with(&drain, 0);
+    assert_eq!(closed["breaker_state"], "closed", "{closed}");
+    assert_eq!(closed["consecutive_failures"], 0, "{closed}");
+    assert!(closed["refusal"].is_null(), "{closed}");
+    let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
+    assert_eq!(state.pull_breaker, None);
+    pair.running_leaf(&drain, 4);
+    assert_eq!(pulls(&pair), 6, "a closed breaker admits again");
+}
+
+/// [ORB-15639] Orbit's refusal of an implementer's handoff (a deferral
+/// naming a command outside the owner's gate list, say) blocks the task for
+/// an operator to requeue, but says nothing about the host: it neither
+/// extends nor resets the breaker's streak. Three genuine failures in a row
+/// still open it.
+#[test]
+fn contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do() {
+    if !isolated(
+        module_path!(),
+        "contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do",
+    ) {
+        return;
+    }
+    let pair = Pair::new(6);
+    let drain = pair.start_drain();
+    let refusal = format!(
+        "{CONTRACT_REFUSAL_MARKER}: `deferred_sandbox_validation` names the gate summary \
+         `.orbit/tmp/gate.json`, which names `make ci-test-affected`, which is not one of the \
+         owner's validation gates"
+    );
+    let mut refused_task = None;
+    for (error, streak) in [
+        (refusal.as_str(), 0),
+        ("candidate validation failed", 1),
+        (refusal.as_str(), 1),
+        ("candidate validation failed", 2),
+        (refusal.as_str(), 2),
+        ("candidate validation failed", 3),
+    ] {
+        let leaf = pair.running_leaf(&drain, 1);
+        refused_task.get_or_insert_with(|| pair.claimed_task(&leaf));
+        pair.leaf_fails_with(&leaf, error);
+        let pass = pair.pass_with(&drain, 0);
+        assert!(error_of(&pass).is_empty(), "{pass}");
+        assert_eq!(pass["consecutive_failures"], streak, "{error}: {pass}");
+    }
+    assert_eq!(
+        pair.owner_status(&refused_task.unwrap()),
+        "blocked",
+        "a refused handoff still blocks its task"
+    );
+    let opened = pair.pass(&drain);
+    assert_eq!(opened["breaker_state"], "open", "{opened}");
+    assert_eq!(breaker(&pair, &drain).failure_classes, vec!["candidate"; 3]);
 }
 
 fn excluded(pass: &Value, crew: &str) -> Value {

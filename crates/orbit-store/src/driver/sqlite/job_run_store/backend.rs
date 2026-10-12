@@ -207,7 +207,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         &self,
         destination: &crate::contracts::PullDestination,
         run_id: &str,
-    ) -> Result<usize, OrbitError> {
+    ) -> Result<crate::contracts::PullFailureStreak, OrbitError> {
         super::pull::consecutive_failed_settlements(
             &self.store,
             &self.workspace_id,

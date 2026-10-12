@@ -614,6 +614,24 @@ pub struct LocalPullAdmission {
     pub settlement_refusal: Option<SettlementRefusal>,
 }
 
+/// The settled claims that make up a pull drain's failure-breaker streak
+/// [ORB-15639]: how many of its most recent claims failed in a row, and their
+/// failure classes, newest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PullFailureStreak {
+    /// The failure class of each, by wire name; `untyped` for a failure that
+    /// carried none.
+    pub classes: Vec<String>,
+}
+
+impl PullFailureStreak {
+    /// Consecutive failed claims.
+    #[must_use]
+    pub fn failures(&self) -> usize {
+        self.classes.len()
+    }
+}
+
 /// A pending settlement the owner refused while still holding its claim, and
 /// when delivery is next attempted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

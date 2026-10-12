@@ -141,6 +141,22 @@ pub fn is_owner_route_unavailable(error_code: Option<&str>, message: Option<&str
         || message.is_some_and(|message| message.contains(OWNER_ROUTE_UNAVAILABLE_MARKER))
 }
 
+/// Leads the failure Orbit raises when it refuses an implementer's handoff
+/// before delivery: a malformed `unfiled_findings`, or a
+/// `deferred_sandbox_validation` the delivery contract does not sanction
+/// (a command outside the owner's gate list, say). The candidate never
+/// reached delivery, so the task is blocked for an operator to requeue, but
+/// the refusal says nothing about the executing host: a pull drain's failure
+/// breaker does not count it [ORB-15639].
+pub const CONTRACT_REFUSAL_MARKER: &str = "implementer output rejected before delivery";
+
+/// Whether a failure is Orbit's refusal of an implementer's handoff
+/// ([`CONTRACT_REFUSAL_MARKER`]).
+#[must_use]
+pub fn is_contract_refusal(message: &str) -> bool {
+    message.contains(CONTRACT_REFUSAL_MARKER)
+}
+
 /// Token a step failure carries when its outcome was inconclusive for a
 /// reason that may not recur [ORB-14257]: claimed required validation stamps
 /// it on a command that still could not reach the network after its reruns.

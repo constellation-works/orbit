@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimFailure, ClaimMutation,
-    LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
+    LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination, PullFailureStreak,
 };
 use orbit_types::workflow::ClaimFailureClass;
 
@@ -182,17 +182,19 @@ impl PullDrain<'_> {
             .count())
     }
 
-    /// How many of this drain's most recent settled claims failed in a row.
+    /// This drain's most recent settled claims that failed in a row: the
+    /// failure breaker's streak.
     ///
     /// Reads only admissions `run_id` made, in admission order, so an earlier
     /// drain's history never trips a new one. A claim closed obsolete — the
-    /// owner had already ended it — says nothing about this executor, so it
-    /// neither extends nor resets the streak.
+    /// owner had already ended it — a released claim, or a failure that does
+    /// not trip the breaker says nothing about this executor, so it neither
+    /// extends nor resets the streak.
     pub(crate) fn consecutive_failed_settlements(
         &self,
         destination: &PullDestination,
         run_id: &str,
-    ) -> Result<usize, OrbitError> {
+    ) -> Result<PullFailureStreak, OrbitError> {
         self.jobs
             .consecutive_failed_local_pull_settlements(destination, run_id)
     }
