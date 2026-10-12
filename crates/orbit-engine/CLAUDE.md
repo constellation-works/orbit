@@ -10,6 +10,7 @@ Run a v2 activity or job to completion: template resolution, dispatch to a provi
 - `executor/automation/vcs/freshness/` separates PR rebasing, interrupted-rebase recovery, divergence and certified checkpoint lookup; `mod.rs` re-exports the existing VCS surface.
 - `executor/automation/` holds deterministic step actions; each new operation gets a file, not another arm.
 - `executor/automation/vcs/operations/` separates private operation dispatch, input parsing, process execution, push retries, and PR operations. `vcs/candidate_resume/` separates candidate lookup from applying and recording a resume; required candidate validation remains in `candidate_validate.rs`.
+- The private PR operations' answers (`pr.status`, `pr.view`, `pr.list`, `pr.merge_capabilities`, `pr.merge`) are parsed once in `vcs/pr/answers.rs`; readers, Core's included, take those types and never index the response by provider field name.
 - `DispatchError`/`CatalogError` translators stay in this crate (`scripts/check-error-translation.sh`).
 - No local `fn redact_*` in `cli_runner` (`scripts/check-artifact-redaction-guardrail.sh`); child environments are composed via `orbit_common::security::child_env` over a cleared env, never inherited.
 - Step results are durable: any `job_executor` accounting change needs resume/recovery test coverage, not just the happy path.

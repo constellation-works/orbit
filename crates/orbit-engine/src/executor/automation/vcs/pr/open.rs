@@ -6,9 +6,7 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::super::super::input::{
-    input_string_field, json_number_to_string, required_input_string,
-};
+use super::super::super::input::{input_string_field, required_input_string};
 use super::super::base_obsolescence::ensure_base_can_still_land;
 use super::super::freshness::branch_freshness_against_ref;
 use super::super::git::git_output;
@@ -16,6 +14,7 @@ use super::super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, record_failed_handoff,
 };
 use super::super::operations;
+use super::answers::{PullRequestStatus, PullRequestSummary, read_pr_status};
 use super::body::{
     GITHUB_PR_BODY_BYTE_LIMIT, bound_pr_body, build_batch_pr_body, default_pr_title,
     render_known_red_section,
@@ -225,16 +224,12 @@ fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
     let prior_branch = input_string_field(resumed, "prior_pull_request_head")
         .or_else(|| input_string_field(resumed, "source_branch"))
         .unwrap_or_default();
-    let status = match host.run_private_vcs_operation(
-        operations::PR_STATUS,
-        json!({"pr": prior, "workspace_path": workspace_path}),
-    ) {
-        Ok(status) => status,
+    let pull_request = match read_pr_status(host, workspace_path, &prior) {
+        Ok(pull_request) => pull_request,
         Err(error) => return close_failed(&prior, number, error),
     };
-    let pull_request = &status["pull_request"];
-    let state = pull_request["state"].as_str().unwrap_or_default();
-    let head = pull_request["headRefName"].as_str().unwrap_or_default();
+    let state = pull_request.state.as_deref().unwrap_or_default();
+    let head = pull_request.head_branch.as_deref().unwrap_or_default();
     if !state.eq_ignore_ascii_case("open") {
         return outcome("not_open", format!("pull request #{prior} is {state}"));
     }
@@ -466,30 +461,17 @@ fn view_pr<H: RuntimeHost + ?Sized>(
     workspace_path: &std::path::Path,
     selector: &str,
 ) -> Result<(String, Option<String>), OrbitError> {
-    let value = host.run_private_vcs_operation(
+    let response = host.run_private_vcs_operation(
         operations::PR_VIEW,
         json!({ "pr": selector, "workspace_path": workspace_path }),
     )?;
-    let pull_request = value.get("pull_request").ok_or_else(|| {
+    let pull_request = PullRequestStatus::from_view_response(&response)?;
+    let pr_number = pull_request.number.ok_or_else(|| {
         OrbitError::Execution(
-            "private automation VCS PR view did not return pull_request metadata".to_string(),
+            "private automation VCS PR view did not return a PR number".to_string(),
         )
     })?;
-    let pr_number = pull_request
-        .get("number")
-        .and_then(json_number_to_string)
-        .ok_or_else(|| {
-            OrbitError::Execution(
-                "private automation VCS PR view did not return a PR number".to_string(),
-            )
-        })?;
-    let pr_url = pull_request
-        .get("url")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    Ok((pr_number, pr_url))
+    Ok((pr_number.to_string(), pull_request.url))
 }
 
 fn find_pr_by_head<H: RuntimeHost + ?Sized>(
@@ -497,36 +479,26 @@ fn find_pr_by_head<H: RuntimeHost + ?Sized>(
     workspace_path: &std::path::Path,
     head: &str,
 ) -> Result<Option<(String, Option<String>)>, OrbitError> {
-    let value = host.run_private_vcs_operation(
+    let response = host.run_private_vcs_operation(
         operations::PR_LIST,
         json!({ "head": head, "state": "open", "workspace_path": workspace_path }),
     )?;
-    let pull_requests = value
-        .get("pull_requests")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            OrbitError::Execution(
-                "private automation VCS PR list did not return pull_requests metadata".to_string(),
-            )
-        })?;
+    let pull_requests = PullRequestSummary::list_from_response(&response)?;
 
     let mut matching_pr_number = None;
     for pull_request in pull_requests {
-        let listed_head = pull_request
-            .get("headRefName")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                OrbitError::Execution(
-                    "private automation VCS PR list returned a pull request without headRefName"
-                        .to_string(),
-                )
-            })?;
+        let listed_head = pull_request.head_branch.as_deref().ok_or_else(|| {
+            OrbitError::Execution(
+                "private automation VCS PR list returned a pull request without headRefName"
+                    .to_string(),
+            )
+        })?;
         if listed_head != head {
             continue;
         }
         let pr_number = pull_request
-            .get("number")
-            .and_then(json_number_to_string)
+            .number
+            .map(|number| number.to_string())
             .ok_or_else(|| {
                 OrbitError::Execution(
                     "private automation VCS PR list returned a matching pull request without a number"
