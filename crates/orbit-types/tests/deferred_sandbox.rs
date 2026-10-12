@@ -103,14 +103,14 @@ fn host_gates(commands: &[&str]) -> HostValidationGates {
     })
 }
 
-/// Derive the record from `handoff`, the `summary` it names and `probe` the
-/// way the implement step boundary does for an implementer in `lane`, after
-/// checking which probe the summary asks Orbit to run.
-fn derive_in(
+/// Derive the record from `handoff`, the `summary` it names and the lane's
+/// `probes` answers the way the implement step boundary does for an
+/// implementer in `lane`.
+fn derive_probed(
     lane: DeferralLane,
     handoff: Value,
     summary: &Value,
-    probe: NamespaceProbe,
+    probes: Vec<NamespaceProbe>,
 ) -> Result<DeferredSandboxValidation, String> {
     let output = json!({ "deferred_sandbox_validation": handoff });
     let handoff = deferral_handoff(&output)?.expect("the handoff names a summary");
@@ -120,7 +120,17 @@ fn derive_in(
         Some(BASE),
         lane,
     )?;
-    pending.complete(probe)
+    pending.complete(probes)
+}
+
+/// [`derive_probed`] with the lane's answer to a single probe.
+fn derive_in(
+    lane: DeferralLane,
+    handoff: Value,
+    summary: &Value,
+    probe: NamespaceProbe,
+) -> Result<DeferredSandboxValidation, String> {
+    derive_probed(lane, handoff, summary, vec![probe])
 }
 
 /// [`derive_in`] for an owner run on Linux.
@@ -152,6 +162,7 @@ fn a_bubblewrap_deferral_is_derived_from_the_summary_and_orbits_probe() {
             base: BASE.to_string(),
             notices: notices.to_vec(),
             probe: refused_bwrap_probe(),
+            other_probes: Vec::new(),
         }
     );
 }
@@ -216,25 +227,32 @@ fn an_unrelated_bwrap_failure_is_not_a_namespace_refusal() {
 }
 
 #[test]
-fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
-    let probe_of = |notice: String| {
+fn the_summary_names_the_probe_of_each_sandbox_its_notices_defer() {
+    let probes_of = |notices: &[String]| {
         let output = json!({ "deferred_sandbox_validation": summary_handoff() });
         deferral_handoff(&output)
             .expect("well formed")
             .expect("present")
             .derive(
-                &serde_json::to_vec(&summary(&[notice])).expect("encodes"),
+                &serde_json::to_vec(&summary(notices)).expect("encodes"),
                 &host_gates(&[GATE]),
                 Some(BASE),
                 CLAIMED_MACOS,
             )
             .expect("deferrable before the probe")
-            .probe()
+            .probes()
     };
 
-    let bubblewrap = probe_of(bwrap_notice());
-    let seatbelt = probe_of(seatbelt_notice());
-    let ps = probe_of(ps_notice());
+    let [bubblewrap] = probes_of(&[bwrap_notice()])[..] else {
+        panic!("Bubblewrap notices name one probe");
+    };
+    let [seatbelt] = probes_of(&[seatbelt_notice()])[..] else {
+        panic!("Seatbelt notices name one probe");
+    };
+    let [ps] = probes_of(&[ps_notice(), ps_notice()])[..] else {
+        panic!("ps-denied notices name one probe");
+    };
+    let mixed = probes_of(&[ps_notice(), seatbelt_notice(), ps_notice()]);
 
     assert_eq!(bubblewrap.command, BUBBLEWRAP_NAMESPACE_PROBE);
     assert_eq!(bubblewrap.argv.join(" "), BUBBLEWRAP_NAMESPACE_PROBE);
@@ -242,11 +260,202 @@ fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
     assert_eq!(seatbelt.argv[0], "/usr/bin/sandbox-exec");
     assert_eq!(ps.command, PS_EXEC_PROBE);
     assert_eq!(ps.argv.join(" "), PS_EXEC_PROBE);
+    assert_eq!(
+        mixed,
+        vec![seatbelt, ps],
+        "one probe per sandbox, in a fixed order whatever the notices' order"
+    );
+}
+
+/// What a broad `make ci-test-affected` on a macOS claimed leaf prints when
+/// it selects orbit-common and orbit-cli: the lines `macos_sandbox_test_guard`
+/// and `report_ps_denied` write for real tests, as a lane that refuses
+/// nested Seatbelt profiles and the setuid `ps` reports them [ORB-15692].
+const CAPTURED_MAC_NOTICES: [&str; 3] = [
+    "SKIP: sandbox-exec cannot apply a profile: each_plugin_backend_sees_only_its_own_state: \
+     permissive profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not \
+     permitted",
+    "DEFERRED: ps denied: \
+     process::tests::identity::darwin::libproc_start_time_renders_exactly_as_ps_lstart: the \
+     sandbox denied running `ps`: Operation not permitted (os error 1)",
+    "SKIP: sandbox-exec cannot apply a profile: \
+     a_set_secret_reaches_its_exec_backend_on_stdin_only: permissive profile exited with \
+     Some(71): sandbox-exec: sandbox_apply: Operation not permitted",
+];
+
+/// The Seatbelt apply probe as a lane that refuses nested profiles answers.
+fn refused_seatbelt_probe() -> NamespaceProbe {
+    seatbelt_probe(71, "sandbox-exec: sandbox_apply: Operation not permitted")
+}
+
+/// [ORB-15692] A macOS claimed leaf's broad gate prints Seatbelt skips and
+/// ps-denied deferrals together. One record defers both, once Orbit's probe
+/// of each shows the lane refuses it, and names every notice and probe.
+#[test]
+fn a_seatbelt_and_ps_denied_gate_derives_one_record_naming_both_probes() {
+    let notices = CAPTURED_MAC_NOTICES.map(str::to_string);
+
+    let record = derive_probed(
+        CLAIMED_MACOS,
+        summary_handoff(),
+        &summary(&notices),
+        vec![refused_seatbelt_probe(), refused_ps_probe()],
+    )
+    .expect("a lane that refuses both sandboxes defers both kinds' notices");
+
+    assert_eq!(
+        record,
+        DeferredSandboxValidation {
+            command: GATE.to_string(),
+            exit_code: 0,
+            tests_run: 42,
+            base: BASE.to_string(),
+            notices: notices.to_vec(),
+            probe: refused_seatbelt_probe(),
+            other_probes: vec![refused_ps_probe()],
+        }
+    );
+    let encoded = serde_json::to_value(&record).expect("the record encodes");
+    assert_eq!(
+        serde_json::from_value::<DeferredSandboxValidation>(encoded).expect("the record decodes"),
+        record,
+        "the claim host replays the record it reads back"
+    );
+    assert!(
+        serde_json::to_value(
+            derive(
+                summary_handoff(),
+                &summary(&[bwrap_notice()]),
+                refused_bwrap_probe()
+            )
+            .expect("deferrable")
+        )
+        .expect("encodes")
+        .get("other_probes")
+        .is_none(),
+        "a single-sandbox record keeps the shape older readers decode"
+    );
+}
+
+/// [ORB-15692] A record of several sandboxes holds every refusal rule of a
+/// single one, for each of them, and each needs its own refused probe.
+#[test]
+fn a_mixed_gate_is_refused_unless_every_sandbox_is_deferrable_and_refused() {
+    let mixed = CAPTURED_MAC_NOTICES.map(str::to_string);
+    let with = |field: &str, value: Value| {
+        let mut summary = summary(&mixed);
+        summary[field] = value;
+        summary
+    };
+    let refused_both = || vec![refused_seatbelt_probe(), refused_ps_probe()];
+    let cases = [
+        (
+            "a lane that runs `ps`",
+            CLAIMED_MACOS,
+            summary(&mixed),
+            vec![refused_seatbelt_probe(), ps_probe(0, "    1")],
+            "no refused `ps` probe",
+        ),
+        (
+            "a lane that applies Seatbelt",
+            CLAIMED_MACOS,
+            summary(&mixed),
+            vec![seatbelt_probe(0, ""), refused_ps_probe()],
+            "no refused Seatbelt apply probe",
+        ),
+        (
+            "a ps-denied notice with no probe",
+            CLAIMED_MACOS,
+            summary(&mixed),
+            vec![refused_seatbelt_probe()],
+            "has no `/bin/ps -o pid= -p 1` probe",
+        ),
+        (
+            "probes in another order",
+            CLAIMED_MACOS,
+            summary(&mixed),
+            vec![refused_ps_probe(), refused_seatbelt_probe()],
+            "names the probe",
+        ),
+        (
+            "a probe no notice defers",
+            CLAIMED_MACOS,
+            summary(&mixed),
+            vec![
+                refused_seatbelt_probe(),
+                refused_ps_probe(),
+                refused_bwrap_probe(),
+            ],
+            "which no notice defers",
+        ),
+        (
+            "a Bubblewrap notice in a lane whose namespace probe was not refused",
+            CLAIMED_MACOS,
+            summary(&[seatbelt_notice(), bwrap_notice(), ps_notice()]),
+            vec![
+                bwrap_probe(-1, "the probe could not run: No such file or directory"),
+                refused_seatbelt_probe(),
+                refused_ps_probe(),
+            ],
+            "no failing namespace probe",
+        ),
+        (
+            "ps-denied beside Seatbelt in an owner run on macOS",
+            DeferralLane {
+                claimed: false,
+                os: Some(EvidenceHostOs::Macos),
+            },
+            summary(&mixed),
+            refused_both(),
+            "only a claimed leaf on macOS may defer",
+        ),
+        (
+            "ps-denied beside Seatbelt in a claimed leaf on Linux",
+            DeferralLane {
+                claimed: true,
+                os: Some(EvidenceHostOs::Linux),
+            },
+            summary(&mixed),
+            refused_both(),
+            "only a claimed leaf on macOS may defer",
+        ),
+        (
+            "zero tests",
+            CLAIMED_MACOS,
+            with("tests_run", json!(0)),
+            refused_both(),
+            "executed no tests",
+        ),
+        (
+            "an unrelated SKIP beside both kinds",
+            CLAIMED_MACOS,
+            with(
+                "notices",
+                json!([seatbelt_notice(), ps_notice(), "SKIP: sandbox denying ps"]),
+            ),
+            refused_both(),
+            "`SKIP: sandbox denying ps`, which is not a Bubblewrap, Seatbelt or ps-denied deferral",
+        ),
+        (
+            "a nonzero exit",
+            CLAIMED_MACOS,
+            with("exit_code", json!(2)),
+            refused_both(),
+            "exited 2",
+        ),
+    ];
+
+    for (case, lane, summary, probes, reason) in cases {
+        let refusal = derive_probed(lane, summary_handoff(), &summary, probes).expect_err(case);
+
+        assert!(refusal.contains(reason), "{case}: {refusal}");
+    }
 }
 
 /// [ORB-15587] A macOS claimed leaf whose agent sandbox refuses to exec `ps`
 /// defers those tests to its claim host like a nested-sandbox skip. Every
-/// other lane, mixed kind, unrefused probe or untyped skip is refused.
+/// other lane, kind without its probe, unrefused probe or untyped skip is
+/// refused.
 #[test]
 fn a_ps_denied_deferral_is_derived_only_for_a_macos_claimed_leaf() {
     let notices = [ps_notice(), ps_notice()];
@@ -305,18 +514,18 @@ fn a_ps_denied_deferral_is_derived_only_for_a_macos_claimed_leaf() {
             "is not a Bubblewrap, Seatbelt or ps-denied deferral",
         ),
         (
-            "a Seatbelt notice beside a ps-denied one",
+            "a Seatbelt notice beside a ps-denied one, with only the `ps` probe",
             CLAIMED_MACOS,
             json!([ps_notice(), seatbelt_notice()]),
             refused_ps_probe(),
-            "is not a ps-denied deferral",
+            "names the probe `/bin/ps -o pid= -p 1`, not",
         ),
         (
-            "a ps-denied notice beside a Bubblewrap one",
+            "a ps-denied notice beside a Bubblewrap one, with only the namespace probe",
             CLAIMED_MACOS,
             json!([bwrap_notice(), ps_notice()]),
             refused_bwrap_probe(),
-            "is not a Bubblewrap deferral",
+            "has no `/bin/ps -o pid= -p 1` probe",
         ),
         (
             "a lane that runs `ps`",
@@ -446,7 +655,7 @@ fn every_refusal_rule_holds_for_a_derived_record() {
                 "notices",
                 json!([bwrap_notice(), "SKIP: sandbox denying ps"]),
             ),
-            "is not a Bubblewrap deferral",
+            "not a Bubblewrap, Seatbelt or ps-denied deferral",
         ),
         (
             "a notice of neither sandbox",
@@ -454,9 +663,9 @@ fn every_refusal_rule_holds_for_a_derived_record() {
             "not a Bubblewrap, Seatbelt or ps-denied deferral",
         ),
         (
-            "both sandboxes' notices",
+            "both sandboxes' notices, with only the namespace probe",
             with("notices", json!([bwrap_notice(), seatbelt_notice()])),
-            "is not a Bubblewrap deferral",
+            "has no `/usr/bin/sandbox-exec",
         ),
         (
             "another summary schema",

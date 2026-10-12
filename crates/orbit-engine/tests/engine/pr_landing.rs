@@ -2474,15 +2474,16 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     );
 }
 
-/// Every handoff whose derivation is not exactly one sandbox's case, the
-/// Bubblewrap one [ORB-15287] or the Seatbelt one [ORB-15409], fails the
-/// implement step before commit: nothing is validated, replayed or kept, and
-/// the failure names what is wrong. The gate summary, Orbit's own probe and
-/// any hand-written field each decide [ORB-15516].
+/// Every handoff whose derivation is not the sanctioned case, only notices
+/// of sandboxes whose probe the lane refuses (Bubblewrap [ORB-15287],
+/// Seatbelt [ORB-15409], or both [ORB-15692]), fails the implement step
+/// before commit: nothing is validated, replayed or kept, and the failure
+/// names what is wrong. The gate summary, Orbit's own probes and any
+/// hand-written field each decide [ORB-15516].
 #[test]
-fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
+fn a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step() {
     isolated(
-        "a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step",
+        "a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step",
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let gate = Gate::new(sandbox);
@@ -2502,9 +2503,9 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
             let probe = |exit_code: i32, output: &str| json!({ "command": BUBBLEWRAP_NAMESPACE_PROBE, "exit_code": exit_code, "output": output });
             let seatbelt_probe = |exit_code: i32, output: &str| json!({ "command": SEATBELT_APPLY_PROBE, "exit_code": exit_code, "output": output });
             let none = Value::Null;
-            // (case, the run the gate summary reports, Orbit's probe in the
-            // lane when not the sandbox's refusal, hand-written fields beside
-            // `summary`, reason)
+            // (case, the run the gate summary reports, the lane's answer to
+            // the record's `probe` when not the sandbox's refusal,
+            // hand-written fields beside `summary`, reason)
             let cases = [
                 (
                     "a SKIP line",
@@ -2514,7 +2515,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     ),
                     none.clone(),
                     none.clone(),
-                    "is not a Bubblewrap deferral",
+                    "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
                     "a notice of neither sandbox",
@@ -2537,18 +2538,18 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
-                    "a Seatbelt notice beside a Bubblewrap one",
-                    with("notices", alongside(&seatbelt_notice())),
+                    "a Seatbelt notice beside a Bubblewrap one, in a lane that applies Seatbelt",
+                    seatbelt_with("notices", alongside(&seatbelt_notice())),
+                    seatbelt_probe(0, ""),
                     none.clone(),
-                    none.clone(),
-                    "is not a Bubblewrap deferral",
+                    "no refused Seatbelt apply probe",
                 ),
                 (
-                    "a Bubblewrap notice beside a Seatbelt one",
-                    seatbelt_with("notices", json!([seatbelt_notice(), bwrap_notice()])),
+                    "a Bubblewrap notice beside a Seatbelt one, in a lane that creates namespaces",
+                    with("notices", json!([seatbelt_notice(), bwrap_notice()])),
+                    probe(0, ""),
                     none.clone(),
-                    none.clone(),
-                    "is not a Seatbelt deferral",
+                    "no failing namespace probe",
                 ),
                 (
                     "a non-Seatbelt skip beside a Seatbelt notice",
@@ -2561,7 +2562,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     ),
                     none.clone(),
                     none.clone(),
-                    "is not a Seatbelt deferral",
+                    "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
                     "a ps-denied notice in an owner run",
@@ -2697,51 +2698,59 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     "unknown field `coverage`",
                 ),
             ];
-            let refuse = |case: &str, deferral: Value, probe: Value, reason: &str| {
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                host.require_commands(&["true"]);
-                host.baseline_commands(&[&gate.command()]);
-                if !probe.is_null() {
-                    *host.deferral_probe.lock().unwrap() =
-                        Some(serde_json::from_value(probe).unwrap());
-                }
-                let handoff = json!({ "summary": "done", "deferred_sandbox_validation": deferral });
-                let refusal = run_implementation(&fx, &host, Some(handoff)).expect_err(case);
-                assert!(
-                    refusal.contains("`deferred_sandbox_validation`") && refusal.contains(reason),
-                    "{case}: {refusal}"
-                );
-                assert!(
-                    !host.has_artifact(TASK_ID, &format!("validation/{RUN_ID}/0.json")),
-                    "{case}: no validation ran"
-                );
-                assert!(
-                    !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
-                    "{case}: nothing is kept"
-                );
-            };
+            let refuse =
+                |case: &str, deferral: Value, answered: &Value, probe: Value, reason: &str| {
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    host.require_commands(&["true"]);
+                    host.baseline_commands(&[&gate.command()]);
+                    if !probe.is_null() {
+                        host.deferral_answers.lock().unwrap().insert(
+                            answered.as_str().unwrap().to_string(),
+                            serde_json::from_value(probe).unwrap(),
+                        );
+                    }
+                    let handoff =
+                        json!({ "summary": "done", "deferred_sandbox_validation": deferral });
+                    let refusal = run_implementation(&fx, &host, Some(handoff)).expect_err(case);
+                    assert!(
+                        refusal.contains("`deferred_sandbox_validation`")
+                            && refusal.contains(reason),
+                        "{case}: {refusal}"
+                    );
+                    assert!(
+                        !host.has_artifact(TASK_ID, &format!("validation/{RUN_ID}/0.json")),
+                        "{case}: no validation ran"
+                    );
+                    assert!(
+                        !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
+                        "{case}: nothing is kept"
+                    );
+                };
             for (case, record, probe, handed, reason) in cases {
                 let mut handoff = handoff_for(&fx, &record);
                 if let Some(handed) = handed.as_object() {
                     handoff.as_object_mut().unwrap().extend(handed.clone());
                 }
-                refuse(case, handoff, probe, reason);
+                refuse(case, handoff, &record["probe"]["command"], probe, reason);
             }
             refuse(
                 "a hand-written record that names no summary",
                 valid.clone(),
+                &none,
                 none.clone(),
                 "names no gate summary",
             );
             refuse(
                 "a summary outside the scratch directory",
                 json!({ "summary": "src/feature.txt" }),
+                &none,
                 none.clone(),
                 "is not a file in the checkout's `.orbit/tmp`",
             );
             refuse(
                 "a summary that escapes the checkout",
                 json!({ "summary": format!(".orbit/tmp/../../../{}", fx.repo.file_name().unwrap().to_string_lossy()) }),
+                &none,
                 none.clone(),
                 "is not a file in the checkout's `.orbit/tmp`",
             );
@@ -2988,6 +2997,119 @@ fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication() {
     );
 }
 
+/// A macOS claimed leaf's broad gate prints Seatbelt skips and ps-denied
+/// deferrals together, and one record defers both once Orbit's probe of each
+/// refuses in the lane [ORB-15692]. The claim host's replay, and an owner's
+/// replay of a kept record, judge it as they judge a single sandbox's: a
+/// native pass with no deferral line is pinned as the gate's evidence, and a
+/// replay that still skips Seatbelt or still cannot run `ps` holds the
+/// candidate.
+#[test]
+fn a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs() {
+    isolated(
+        "a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            *host.os.lock().unwrap() = Some(EvidenceHostOs::Macos);
+            let gate = Gate::new(sandbox);
+            host.require_commands(&["true"]);
+            host.baseline_commands(&[&gate.command()]);
+            let record = mixed_deferral(&fx, &gate.command());
+            let handoff = json!({
+                "summary": "done",
+                "deferred_sandbox_validation": handoff_for(&fx, &record),
+            });
+
+            run_claimed_implementation(&fx, &host, handoff)
+                .expect("the claim host's native replay passes");
+            assert_eq!(
+                host.scripted_input("test_stub_commit")["implementation"]["deferred_sandbox_validation"],
+                record,
+                "Orbit derived one record naming both sandboxes' probes"
+            );
+            assert_eq!(
+                host.probes
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|probe| probe.0.as_str())
+                    .collect::<Vec<_>>(),
+                vec![SEATBELT_APPLY_PROBE, PS_EXEC_PROBE],
+                "Orbit ran each sandbox's probe in the implementer's lane"
+            );
+            assert_eq!(gate.runs(), 1, "the claim host replayed the gate once");
+
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+                "implementation": { "deferred_sandbox_validation": record },
+            });
+            let pending =
+                action(&host, "claim_validate", &input).expect("replay before publication");
+            assert_eq!(pending["replayed"], json!([gate.command()]));
+            input["pull_request"] = json!(PR_NUMBER);
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input)
+                .expect("the native replay is pinned as the gate's evidence");
+            assert_eq!(pinned["validation"].as_array().unwrap().len(), 2);
+            let fields = input.as_object_mut().unwrap();
+            fields.remove("pull_request");
+            fields.remove("prevalidated");
+
+            for (still, notice) in [
+                (Gate::skips_seatbelt as fn(&Gate), seatbelt_notice()),
+                (Gate::denies_ps, ps_notice()),
+            ] {
+                still(&gate);
+                let held = action(&host, "claim_validate", &input)
+                    .expect_err("a replay that still defers is not a pass")
+                    .to_string();
+                assert!(
+                    orbit_types::workflow::is_validation_environment_failure(None, Some(&held))
+                        && held.contains(&notice),
+                    "the claim host that still defers holds the candidate: {held}"
+                );
+            }
+
+            let owner = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            owner.require_commands(&["true"]);
+            owner.baseline_commands(&[&gate.command()]);
+            RuntimeHost::attach_task_validation_log(
+                &owner,
+                TASK_ID,
+                RUN_ID,
+                DEFERRED_SANDBOX_ARTIFACT,
+                serde_json::to_vec(&json!({
+                    "schema_version": 1,
+                    "run_id": RUN_ID,
+                    "deferred": mixed_deferral(&fx, &gate.command()),
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            gate.executes();
+            let runs = gate.runs();
+            run_implementation(&fx, &owner, None)
+                .expect("an owner replays a kept record of both sandboxes and delivers");
+            assert_eq!(
+                gate.runs(),
+                runs + 1,
+                "the owner ran the deferred gate itself"
+            );
+            gate.skips_seatbelt();
+            let held = run_implementation(&fx, &owner, None)
+                .expect_err("an owner replay that still skips is not a pass");
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&held)),
+                "{held}"
+            );
+        },
+    );
+}
+
 /// The handed-off gate, run by path so a test can change what it does between
 /// runs while its command, and so the kept record, stays the same. Each run
 /// appends a line to `runs`.
@@ -3111,6 +3233,7 @@ fn handoff_for(fx: &Fixture, record: &Value) -> Value {
     let mut summary = record.clone();
     let fields = summary.as_object_mut().unwrap();
     fields.remove("probe");
+    fields.remove("other_probes");
     fields.insert("schema_version".to_string(), json!(1));
     fields.insert("selection".to_string(), json!({ "packages": ["fixture"] }));
     let path = fx.repo.join(GATE_SUMMARY);
@@ -3156,6 +3279,23 @@ fn ps_deferral(fx: &Fixture, command: &str) -> Value {
             "exit_code": 71,
             "output": "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
         },
+    })
+}
+
+/// The accepted macOS claimed-leaf record of a broad gate that printed
+/// Seatbelt skips and ps-denied deferrals, with the gate and base substituted
+/// for this run's values [ORB-15692].
+fn mixed_deferral(fx: &Fixture, command: &str) -> Value {
+    let seatbelt = seatbelt_deferral(fx, command);
+    let ps = ps_deferral(fx, command);
+    json!({
+        "command": command,
+        "exit_code": 0,
+        "tests_run": 1650,
+        "base": fx.base_sha,
+        "notices": [seatbelt_notice(), ps_notice(), seatbelt_notice()],
+        "probe": seatbelt["probe"],
+        "other_probes": [ps["probe"]],
     })
 }
 
@@ -6438,9 +6578,10 @@ struct DeliveryHost {
     run_states: Mutex<BTreeMap<String, PipelineState>>,
     /// Inputs the scripted actions last received, by action.
     scripted_inputs: Mutex<BTreeMap<String, Value>>,
-    /// What the implementer's lane answers a deferral probe with; `None`
-    /// answers with the probed sandbox's refusal.
-    deferral_probe: Mutex<Option<NamespaceProbe>>,
+    /// What the implementer's lane answers a deferral probe with, by the
+    /// probe's command; a probe with no scripted answer gets its sandbox's
+    /// refusal.
+    deferral_answers: Mutex<BTreeMap<String, NamespaceProbe>>,
     /// Deferral probes run, as (probe, provider, checkout).
     probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
     /// The OS this host runs implementers on [ORB-15587].
@@ -6477,7 +6618,7 @@ impl DeliveryHost {
             recovery_certificates: Mutex::default(),
             run_states: Mutex::default(),
             scripted_inputs: Mutex::default(),
-            deferral_probe: Mutex::default(),
+            deferral_answers: Mutex::default(),
             probes: Mutex::default(),
             os: Mutex::new(EvidenceHostOs::current()),
         }
@@ -6880,8 +7021,8 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             provider.map(str::to_string),
             cwd.to_path_buf(),
         ));
-        if let Some(answer) = self.deferral_probe.lock().unwrap().clone() {
-            return answer;
+        if let Some(answer) = self.deferral_answers.lock().unwrap().get(probe.command) {
+            return answer.clone();
         }
         let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
             (71, "sandbox-exec: sandbox_apply: Operation not permitted")

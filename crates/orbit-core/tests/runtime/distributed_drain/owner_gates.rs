@@ -63,11 +63,11 @@ fn derive_deferral(
                 os: orbit_types::workflow::EvidenceHostOs::current(),
             },
         )?
-        .complete(NamespaceProbe {
+        .complete(vec![NamespaceProbe {
             command: BUBBLEWRAP_NAMESPACE_PROBE.to_string(),
             exit_code: 1,
             output: BUBBLEWRAP_NAMESPACE_REFUSAL.to_string(),
-        })
+        }])
 }
 
 /// With review off, the ship contract captures no gates; the receipt alone

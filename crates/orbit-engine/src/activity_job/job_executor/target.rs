@@ -311,8 +311,9 @@ fn reject_malformed_implementer_findings(
 }
 
 /// Derive an implementer step's deferred sandbox validation from the gate
-/// summary it names and Orbit's own probe in its lane, failing the step
-/// unless it is one sandbox's sanctioned case [ORB-15287] [ORB-15516]. The
+/// summary it names and Orbit's own probes in its lane, failing the step
+/// unless it is the sanctioned case: only deferral notices, of sandboxes the
+/// lane refuses [ORB-15287] [ORB-15516] [ORB-15692]. The
 /// derived record replaces the handoff in the step's output, and an owner run
 /// keeps it for the native replay before delivery. Like malformed findings,
 /// it fails here, before anything is committed.
