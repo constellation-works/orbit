@@ -7,12 +7,17 @@ use super::*;
 /// copies on write, while a write with no live snapshot mutates in place.
 pub(super) type PipelineSteps = Arc<HashMap<String, Value>>;
 
+pub(super) const CONFLICT_DIAGNOSTIC_KEYS: [&str; 2] = ["conflicting_paths", "conflicting_files"];
+
 pub(super) struct ExecCtx<'a> {
     pub(super) run_id: String,
     pub(super) audit: Arc<V2AuditWriter>,
     pub(super) host: &'a dyn RuntimeHost,
     pub(super) input: Value,
     pub(super) pipeline: Arc<Mutex<PipelineSteps>>,
+    /// Allowlisted diagnostics from incomplete checkpoints. Kept outside
+    /// the usable pipeline so they cannot satisfy templates or skip a step.
+    pub(super) resumed_diagnostics: Arc<HashMap<String, Value>>,
     pub(super) recovery_activity: Option<ResolvedRecoveryActivity>,
     pub(super) failure_activity: Option<ResolvedRecoveryActivity>,
     /// [ORB-13907] The job's final recovery hook. Only the top-level context

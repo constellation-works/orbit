@@ -578,6 +578,15 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(())
     }
 
+    fn checkpoint_step_diagnostic(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
     fn checkpoint_failure_activity(
         &self,
         _run_id: &str,
@@ -1137,6 +1146,15 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             compound_outputs,
         )
     }
+    fn checkpoint_step_diagnostic(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_step_diagnostic(self, run_id, step_id, output)
+    }
+
     fn checkpoint_failure_activity(
         &self,
         run_id: &str,

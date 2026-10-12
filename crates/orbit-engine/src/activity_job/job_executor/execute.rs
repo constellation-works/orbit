@@ -93,6 +93,7 @@ pub fn execute_job_with_resume(
         host,
         input: base_input.clone(),
         pipeline: Arc::new(Mutex::new(pipeline_steps_from_raw(pipeline))),
+        resumed_diagnostics: Arc::new(seed_diagnostics_from_resume(job, resume)),
         recovery_activity,
         failure_activity,
         final_recovery_activity,
@@ -316,6 +317,34 @@ fn seed_pipeline_from_resume(
         }
     }
     seeded
+}
+
+/// Carry only conflict diagnostics for incomplete steps, without turning
+/// their persisted output into a usable success checkpoint.
+fn seed_diagnostics_from_resume(
+    job: &JobV2,
+    resume: Option<&PipelineState>,
+) -> HashMap<String, Value> {
+    let Some(state) = resume else {
+        return HashMap::new();
+    };
+    job.steps
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| state.step_states.get(&(*index as u32)) != Some(&JobRunState::Success))
+        .filter_map(|(_, step)| {
+            let output = state.pipeline_step_output(&step.id)?;
+            let diagnostics: serde_json::Map<String, Value> = CONFLICT_DIAGNOSTIC_KEYS
+                .into_iter()
+                .filter_map(|key| {
+                    output
+                        .get(key)
+                        .map(|value| (key.to_string(), value.clone()))
+                })
+                .collect();
+            (!diagnostics.is_empty()).then(|| (step.id.clone(), Value::Object(diagnostics)))
+        })
+        .collect()
 }
 
 fn step_is_compound(step: &JobV2Step) -> bool {

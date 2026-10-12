@@ -464,3 +464,4 @@ recovery, and supplies both to the recovery leaf. Each file carries
 modes prove identical sides or a side unchanged from the base. Distinct edits,
 renames and missing evidence are conservatively false. This is diagnostic;
 recovery still validates and resolves the stopped rebase under existing rules.
+On resume, an incomplete step retains only these two diagnostic fields outside the usable pipeline until it runs successfully; a new conflict supersedes them, and diagnostics neither skip execution nor expose failed outputs to templates.
