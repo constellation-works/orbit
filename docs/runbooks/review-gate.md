@@ -188,11 +188,14 @@ The owner enforces what it is owed in two places:
   declare as a Linux `codeql` rule with that same command, artifact and
   `hosted_check`, or that is not a before-landing review.
 - `handoff_land` merges the pull request only once every owed hosted check
-  reports a pass on the pinned head, matched by its own name or as
-  `<workflow> / <job>`. It waits while a check is absent or running, within
-  `max_wait_seconds`, and stops the landing when one failed, whatever branch
-  protection requires. The candidate stays in review. A local candidate owed
-  a hosted check stops too.
+  reports an explicit success on the pinned head, matched by its own name or
+  as `<workflow> / <job>`. A CheckRun `SUCCESS` or a StatusContext `SUCCESS`
+  is that success. A completed `SKIPPED` or `NEUTRAL` conclusion is not: the
+  owner keeps waiting, the same as when a check is absent or still running,
+  within `max_wait_seconds`, and stops the landing when one failed, whatever
+  branch protection requires. Branch protection may still treat a skipped or
+  neutral required check as satisfied; this gate does not. The candidate
+  stays in review. A local candidate owed a hosted check stops too.
 
 Any other Linux CodeQL keeps the hold, as it does on a before-PR review: a
 rule without `hosted_check` (a custom query, or a workspace with no hosted

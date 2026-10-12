@@ -145,9 +145,14 @@ pub(crate) struct StatusCheck {
     pub(crate) name: Option<String>,
     /// The CheckRun's workflow, trimmed.
     pub(crate) workflow_name: Option<String>,
-    /// `None` for a value this reader does not recognize, which can never
-    /// authorize waiting.
+    /// Branch-protection reading. A completed `SKIPPED` or `NEUTRAL`
+    /// conclusion counts as passed. `None` for a value this reader does not
+    /// recognize, which can never authorize waiting.
     pub(crate) state: Option<CheckState>,
+    /// Owner-owed reading. Only an explicit success is passed: a CheckRun
+    /// conclusion `SUCCESS`, or a StatusContext state `SUCCESS`. A completed
+    /// `SKIPPED` or `NEUTRAL` conclusion is pending [ORB-15812].
+    pub(crate) owed_state: Option<CheckState>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,16 +164,21 @@ pub(crate) enum CheckState {
 
 impl StatusCheck {
     fn parse(check: &Value) -> Self {
+        let state = Self::classify(check);
         Self {
             name: reported(check.get("name").or_else(|| check.get("context"))),
             workflow_name: check
                 .get("workflowName")
                 .and_then(Value::as_str)
                 .map(|workflow| workflow.trim().to_string()),
-            state: Self::classify(check),
+            state,
+            owed_state: Self::classify_owed(check, state),
         }
     }
 
+    /// Branch-protection classification. A completed `SKIPPED` or `NEUTRAL`
+    /// conclusion counts as satisfied here. Owner-owed checks use
+    /// [`Self::classify_owed`].
     fn classify(check: &Value) -> Option<CheckState> {
         if let Some(state) = check.get("state").and_then(Value::as_str) {
             return match state {
@@ -189,6 +199,24 @@ impl StatusCheck {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// Owner-owed checks accept only an explicit success. A StatusContext
+    /// carries `state` and no conclusion, so its `SUCCESS` stays a pass.
+    /// A completed CheckRun `SKIPPED` or `NEUTRAL` is not the analysis the
+    /// review did not run, so the owner keeps waiting [ORB-15812].
+    fn classify_owed(check: &Value, state: Option<CheckState>) -> Option<CheckState> {
+        if check.get("state").and_then(Value::as_str).is_some() {
+            return state;
+        }
+        match state {
+            Some(CheckState::Passed)
+                if check.get("conclusion").and_then(Value::as_str) != Some("SUCCESS") =>
+            {
+                Some(CheckState::Pending)
+            }
+            other => other,
         }
     }
 }

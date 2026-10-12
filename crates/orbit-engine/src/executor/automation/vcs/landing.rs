@@ -330,9 +330,10 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         if let Err(error) = pin.ensure_pinned_candidate(&status, &pr_number) {
             return Err(stop(host, context, &error.to_string())?);
         }
-        // [ORB-15677] The review owed these checks to the pull request's
-        // hosted CI instead of running them: nothing merges until each has
-        // passed on the pinned head, whatever branch protection requires.
+        // [ORB-15677] [ORB-15812] The review owed these checks to the pull
+        // request's hosted CI instead of running them: nothing merges until
+        // each reports an explicit success on the pinned head. A skipped or
+        // neutral result keeps waiting. Branch protection is separate.
         let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
         if let OwedHostedChecks::Failed(reason) = &owed {
             return Err(stop(
