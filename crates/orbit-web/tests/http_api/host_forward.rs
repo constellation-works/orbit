@@ -92,6 +92,8 @@ fn alive(pid: i64) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+/// Startup and reaping are liveness guards, so allow the same scheduling
+/// slack as the request that owns the ssh child.
 fn wait_until(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + timeout;
     while !done() {
@@ -629,11 +631,9 @@ fn forward_failures_are_typed_and_bounded() {
                     .send()
                     .unwrap()
             });
-            wait_until(
-                "the dead host's ssh to start",
-                Duration::from_secs(10),
-                || !stub.calls().is_empty(),
-            );
+            wait_until("the dead host's ssh to start", SLOW_REQUEST, || {
+                !stub.calls().is_empty()
+            });
             // The dead host's ssh is held, so its request is still in flight here.
             json_ok(a_server.get(&format!("/api/tasks{WS}")));
             assert!(
@@ -666,11 +666,9 @@ fn forward_failures_are_typed_and_bounded() {
             );
             assert_eq!(mismatch["host"], "imposter");
             let imposter = stub.pids()[before];
-            wait_until(
-                "the mismatched tunnel's ssh to exit",
-                Duration::from_secs(10),
-                || !alive(imposter),
-            );
+            wait_until("the mismatched tunnel's ssh to exit", SLOW_REQUEST, || {
+                !alive(imposter)
+            });
 
             error_code(
                 a_server.get("/api/on/oldhost/workspaces"),
@@ -721,11 +719,9 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                         .send()
                         .unwrap()
                 });
-                wait_until(
-                    &format!("{host}'s ssh to start"),
-                    Duration::from_secs(10),
-                    || stub.calls().len() > before,
-                );
+                wait_until(&format!("{host}'s ssh to start"), SLOW_REQUEST, || {
+                    stub.calls().len() > before
+                });
                 let reserved = forwarded_port(&stub.calls()[before]);
                 let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
                     .expect("the reserved port is free until ssh binds it");
