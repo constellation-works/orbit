@@ -30,7 +30,7 @@ use super::paths::{
 /// Canonicalize an artifact a caller other than the review gate's system
 /// writer supplies, and refuse it in the reserved review namespace. Gate
 /// records are certificates and authority, not agent claims, so every
-/// agent-originated write applies this one rule: the ordinary task update and
+/// agent-originated write applies this one rule: task updates, task starts and
 /// a claimed worker's claim evidence, which a remote owner's broker also
 /// reaches. The only exception is the live reviewer's schema-checked report;
 /// the store retains its revisions and settlement certifies it.

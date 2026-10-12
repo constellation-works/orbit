@@ -1,8 +1,8 @@
 //! Artifact diagnostics and the reviewer's list-before-read procedure, through
 //! the public tool boundary. Mutable fixtures run in isolated child processes.
 
-use orbit_core::application::task::TaskUpdateParams;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, RuntimeHost};
 use orbit_types::task::{ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
 use orbit_types::telemetry::AuditEventStatus;
@@ -14,6 +14,118 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
+
+#[test]
+fn task_starts_admit_artifacts_before_any_persistence() {
+    if !super::dispatch_admission::isolated(
+        "artifact_tools::task_starts_admit_artifacts_before_any_persistence",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
+        let task = fixture
+            .runtime
+            .add_task(TaskAddParams {
+                title: "Start artifact admission".into(),
+                description: "Reject forged review records before starting.".into(),
+                acceptance_criteria: vec!["Only admitted artifacts persist.".into()],
+                plan: "Check artifact admission.".into(),
+                status: Some(status),
+                ..Default::default()
+            })
+            .unwrap();
+        let comments = fixture.runtime.get_task_comments(&task.id).unwrap();
+        let history = fixture.runtime.get_task_history(&task.id).unwrap();
+        let start = |path: &str, content: &str| {
+            // The tool schema currently rejects artifact fields. Exercise the
+            // shared runtime writer its start handler calls, so admission here
+            // cannot be satisfied by that transport-only rejection.
+            fixture.runtime.start_task_with_identity_and_crew(
+                &task.id,
+                None,
+                Some("Admitted artifacts".into()),
+                None,
+                Some("codex".into()),
+                None,
+                None,
+                TaskUpdateParams {
+                    description: Some("Admitted start".into()),
+                    upsert_artifacts: vec![
+                        TaskArtifact::from_text("ordinary.txt", "ordinary evidence"),
+                        TaskArtifact::from_text(path, content),
+                    ],
+                    ..Default::default()
+                },
+                None,
+            )
+        };
+        for reserved in [
+            REVIEW_GATE_ARTIFACT,
+            REVIEW_EVIDENCE_HOLD_ARTIFACT,
+            REVIEW_MANIFEST_ARTIFACT,
+            REVIEW_BASELINE_ARTIFACT,
+            REVIEW_REPORT_HISTORY_ARTIFACT,
+            "review-future.json",
+        ] {
+            for path in [
+                reserved.to_string(),
+                format!(" ./ ./{reserved}\t"),
+                reserved.to_ascii_uppercase(),
+            ] {
+                let result = start(&path, "{}");
+                assert!(
+                    matches!(result, Err(OrbitError::InvalidInput(_))),
+                    "a start must not grant review certificate authority: {path}: {result:?}"
+                );
+            }
+        }
+        for report in [
+            json!({}),
+            json!({"schema_version": 99, "attempt_id": "attempt", "verdict": "accept"}),
+            json!({"schema_version": 1, "attempt_id": " ", "verdict": "accept"}),
+        ] {
+            let result = start(" ./ review-report.json\t", &report.to_string());
+            assert!(matches!(result, Err(OrbitError::InvalidInput(_))));
+        }
+        assert_eq!(fixture.runtime.get_task(&task.id).unwrap(), task);
+        assert_eq!(
+            fixture.runtime.get_task_comments(&task.id).unwrap(),
+            comments
+        );
+        assert_eq!(fixture.runtime.get_task_history(&task.id).unwrap(), history);
+        assert!(
+            fixture
+                .runtime
+                .get_task_artifact_manifest(&task.id)
+                .unwrap()
+                .is_empty(),
+            "a rejected start must persist neither the forged record nor ordinary batch members"
+        );
+
+        let report = json!({"schema_version": 1, "attempt_id": "attempt", "verdict": "incomplete"});
+        start(" ./ review-report.json\t", &report.to_string())
+            .expect("ordinary evidence and schema-valid reviewer reports remain accepted on start");
+        assert_eq!(
+            fixture.runtime.get_task(&task.id).unwrap().status,
+            TaskStatus::InProgress
+        );
+        for (path, content) in [
+            ("ordinary.txt", "ordinary evidence".to_string()),
+            (REVIEW_REPORT_ARTIFACT, report.to_string()),
+        ] {
+            assert_eq!(
+                fixture
+                    .runtime
+                    .get_task_artifact(&task.id, path)
+                    .unwrap()
+                    .unwrap()
+                    .content,
+                content.as_bytes()
+            );
+        }
+    }
+}
 
 #[test]
 fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
