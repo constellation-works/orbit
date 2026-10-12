@@ -16,9 +16,13 @@ SCRIPTS = Path(__file__).resolve().parent
 
 class GuardrailTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="ci-fast-guards-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        self.guard_calls = self.root / "guard-calls"
+        self.guard_calls.mkdir()
         self.scripts = self.root / "scripts"
         self.scripts.mkdir()
         self.bin = self.root / "bin"
@@ -26,8 +30,10 @@ class GuardrailTests(unittest.TestCase):
         self.log = self.root / "cargo.log"
         self.metadata = self.root / "metadata.json"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
+                        GIT_CEILING_DIRECTORIES=str(scratch),
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
-                        GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"))
+                        GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
+                        GUARD_TEST_CALLS=str(self.guard_calls))
         self.targets = self.root / "targets.json"
         self.env["GUARD_TEST_TARGETS"] = str(self.targets)
         # A miniature libtest. Without a targets file every listing reports one
@@ -136,6 +142,8 @@ else:
             "cargo test -p orbit-types fixture_test", command))
 
     def run_guard(self, name, *arguments):
+        for call in self.guard_calls.iterdir():
+            call.unlink()
         shutil.copy2(SCRIPTS / name, self.scripts / name)
         return subprocess.run(["/bin/bash", str(self.scripts / name), *arguments],
                               env=self.env, text=True, capture_output=True)
@@ -143,7 +151,9 @@ else:
     def prepare_ci(self):
         source = (SCRIPTS / "ci-guardrails.sh").read_text()
         for name in re.findall(r'\$repo_root/scripts/([\w.-]+)', source):
-            self.write_executable(self.scripts / name, "#!/bin/bash\nexit 0\n")
+            self.write_executable(self.scripts / name,
+                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{name}"\n')
+        shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         workflows = self.root / ".github/workflows"
         workflows.mkdir(parents=True, exist_ok=True)
@@ -159,6 +169,143 @@ jobs:
     steps:
       - run: cargo test -p orbit-types fixture_test
 ''')
+
+    def init_ci_git(self):
+        self.env.pop("CI_TEST_BASE", None)
+        self.env["GIT_CEILING_DIRECTORIES"] = str(self.root.parent)
+        self.git("init", "-q", "-b", "agent-main")
+        self.git("config", "user.name", "Guard fixture")
+        self.git("config", "user.email", "guard@example.invalid")
+        (self.root / ".gitignore").write_text(".orbit/\nbin/\nguard-calls/\n*.log\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture base")
+        self.base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.env["CI_TEST_BASE"] = self.base
+        self.git("checkout", "-q", "--detach")
+        # A committed crates-only change still belongs to the candidate diff.
+        self.crate_input = self.root / "crates/example/Cargo.toml"
+        self.crate_input.parent.mkdir(parents=True)
+        self.crate_input.write_text("# crates-only change\n")
+        self.git("add", "crates")
+        self.git("commit", "-qm", "crate candidate")
+
+    def git(self, *arguments):
+        result = subprocess.run(["git", "-C", str(self.root), *arguments],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def assert_self_tests(self, ran):
+        # Discover the fixture's executable tests; assertions are about what
+        # the runner executed, not a pinned source-list or count.
+        expected = {path.name for path in self.scripts.glob("test-*")
+                    if path.name != "test-qa-full-sweep.py"}
+        actual = {path.name for path in self.guard_calls.iterdir()} & expected
+        self.assertEqual(actual, expected if ran else set())
+        self.assertTrue((self.guard_calls / "test-qa-full-sweep.py").exists(),
+                        "the live surface inventory must run on crates changes")
+
+    def test_fast_crates_only_skips_self_tests_for_explicit_and_merge_bases(self):
+        self.prepare_ci()
+        self.init_ci_git()
+        # Include unstaged and untracked crates paths as well as the commit.
+        self.crate_input.write_text("# unstaged\n")
+        (self.crate_input.parent / "untracked.rs").touch()
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit):
+                if not explicit:
+                    self.env.pop("CI_TEST_BASE")
+                result = self.run_guard("ci-guardrails.sh", "--fast")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(False)
+
+    def test_fast_changed_inputs_run_every_self_test(self):
+        self.prepare_ci()
+        self.init_ci_git()
+        for path in ("scripts/new-guard.sh", ".github/new.yml", "Makefile",
+                     "install.sh", "RELEASING.md", "plugin/new.json", ".cargo/config.toml"):
+            with self.subTest(path=path):
+                target = self.root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# changed input\n")
+                result = self.run_guard("ci-guardrails.sh", "--fast")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(True)
+                target.unlink()
+        # Test the tracked path query independently of untracked inputs.
+        target = self.scripts / "test-build-budget.sh"
+        target.write_text(target.read_text() + "# changed\n")
+        self.git("add", "scripts")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+        self.git("commit", "-qm", "script change")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+
+    def test_fast_deleted_and_renamed_inputs_run_self_tests(self):
+        self.prepare_ci()
+        self.init_ci_git()
+        target = self.scripts / "fixture-input.txt"
+        target.touch()
+        self.git("add", "scripts")
+        self.git("commit", "-qm", "tracked input")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        target.rename(self.crate_input.parent / "moved-input.txt")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+
+    def test_unresolvable_base_runs_every_self_test(self):
+        self.prepare_ci()
+        self.init_ci_git()
+        self.env["CI_TEST_BASE"] = "missing-delivery-base"
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+
+    def test_full_ci_runs_every_self_test_on_crates_only_diff(self):
+        self.prepare_ci()
+        self.init_ci_git()
+        result = self.run_guard("ci-guardrails.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+
+    def test_parallel_guards_rendezvous_and_all_failures_are_named(self):
+        self.prepare_ci()
+        pipes = [self.root / "left.fifo", self.root / "right.fifo"]
+        for pipe in pipes:
+            os.mkfifo(pipe)
+        for index, name in enumerate(("check-orphan-modules.sh", "check-doc-links.py")):
+            self.write_executable(self.scripts / name, f'''#!/usr/bin/env python3
+import os, select
+incoming = os.open({str(pipes[index])!r}, os.O_RDWR | os.O_NONBLOCK)
+outgoing = os.open({str(pipes[1-index])!r}, os.O_RDWR | os.O_NONBLOCK)
+os.write(outgoing, b"ready")
+assert select.select([incoming], [], [], 10)[0], "guards did not overlap"
+assert os.read(incoming, 5) == b"ready"
+raise SystemExit({17+index})
+''')
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 17, result.stderr)
+        for name in ("check-orphan-modules.sh", "check-doc-links.py"):
+            self.assertIn(f"FAILED {name}", result.stderr)
+            self.assertRegex(result.stderr, rf"ci-guardrails: {re.escape(name)} [0-9.]+ s")
+        self.assertTrue((self.guard_calls / "test-cross-revision-check.sh").exists(),
+                        "a failing guard must not leave remaining children unjoined")
+
+    def test_make_ci_fast_reports_failing_guard_name(self):
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root / "Makefile")
+        self.write_executable(self.bin / "budget", '#!/bin/sh\nshift\nexec "$@"\n')
+        self.write_executable(self.scripts / "check-doc-links.py", "#!/bin/sh\nexit 18\n")
+        # Copy the runner before make invokes it; the other executables are stubs.
+        shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts)
+        result = subprocess.run(["make", "ci-fast", f"BUILD_BUDGET={self.bin / 'budget'}"],
+                                cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAILED check-doc-links.py (exit 18)", result.stderr)
 
     def test_fast_does_not_enumerate_or_compile_tests(self):
         self.prepare_ci()
