@@ -29,6 +29,7 @@ mod ci_sweep_races;
 mod creation;
 mod crew_selection;
 mod inspection;
+mod malformed_input;
 mod native_os;
 mod pilot_output;
 mod races;
