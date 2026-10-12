@@ -7,7 +7,7 @@ mod migrations;
 mod types;
 
 pub(crate) use bundle_io::{
-    PENDING_WRITE_FILE_NAME, PendingWriteGuard, append_jsonl_row,
+    PENDING_WRITE_FILE_NAME, PendingWriteGuard, append_jsonl_row, append_jsonl_rows,
     cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope, read_bundle_at,
     read_bundle_lightweight_at, read_envelope_at, read_search_docs_at, reap_unpublished_stub,
     recover_pending_bundle_at, recover_pending_write, replace_bundle_at, truncate_jsonl_file,

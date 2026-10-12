@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{create_new_private_file, create_private_dir_all};
+use super::{create_new_private_file, create_private_dir_all, open_private_file};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -45,6 +45,25 @@ pub fn write_new_private_text(path: &Path, content: &str) -> io::Result<()> {
     let mut file = create_new_private_file(path)?;
     file.write_all(content.as_bytes())?;
     sync_file(&file)
+}
+
+/// Create or replace the marker file `path`, holding `content`, and sync only
+/// the directory entry that names it.
+///
+/// For a file whose presence is the fact it records: once this returns, the
+/// file survives a crash, though `content` may not. One durability sync
+/// where [`atomic_write_text`] takes two, the staged file's and its parent's.
+pub fn write_presence_marker(path: &Path, content: &str) -> io::Result<()> {
+    let target = validated_atomic_target(path)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other("validated marker target is missing its parent"))?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    let mut file = open_private_file(&target, &mut options)?;
+    file.write_all(content.as_bytes())?;
+    drop(file);
+    sync_parent_dir(&File::open(parent)?)
 }
 
 /// Atomically write `content` to `path` without fsyncing the parent.
@@ -299,6 +318,22 @@ pub fn durability_syncs_relaxed() -> bool {
     relaxed && DURABLE_SYNC_HOLDS.load(Ordering::SeqCst) == 0
 }
 
+thread_local! {
+    /// Durability syncs requested on this thread, relaxed or not.
+    static DURABILITY_SYNCS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many durability syncs ([`sync_file`], [`sync_file_data`]) this thread
+/// has requested, counting those a relaxed test run skips. A caller compares
+/// two readings to bound the syncs a section of its own code performs.
+pub fn durability_syncs_requested() -> u64 {
+    DURABILITY_SYNCS.with(std::cell::Cell::get)
+}
+
+fn count_durability_sync() {
+    DURABILITY_SYNCS.with(|syncs| syncs.set(syncs.get() + 1));
+}
+
 /// Flush `file`'s data and metadata to stable storage (`File::sync_all`).
 ///
 /// Every durability sync in Orbit goes through here or [`sync_file_data`];
@@ -310,6 +345,7 @@ pub fn durability_syncs_relaxed() -> bool {
     reason = "the single durability-sync site; callers route through it so test runs can relax it"
 )]
 pub fn sync_file(file: &File) -> io::Result<()> {
+    count_durability_sync();
     if durability_syncs_relaxed() {
         return Ok(());
     }
@@ -323,6 +359,7 @@ pub fn sync_file(file: &File) -> io::Result<()> {
     reason = "the single durability-sync site; callers route through it so test runs can relax it"
 )]
 pub fn sync_file_data(file: &File) -> io::Result<()> {
+    count_durability_sync();
     if durability_syncs_relaxed() {
         return Ok(());
     }

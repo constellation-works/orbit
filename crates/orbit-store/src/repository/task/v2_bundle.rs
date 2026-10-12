@@ -18,9 +18,9 @@ use orbit_types::task::{
 use crate::driver::file::task_bundle::bundle_lock_target;
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::file::task_bundle::{
-    append_jsonl_row, cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
-    read_bundle_at, read_bundle_lightweight_at, read_envelope_at, read_search_docs_at,
-    recover_pending_write, write_bundle_at,
+    append_jsonl_row, append_jsonl_rows, cleanup_partial_bundle_best_effort, is_unpublished_stub,
+    publish_envelope, read_bundle_at, read_bundle_lightweight_at, read_envelope_at,
+    read_search_docs_at, recover_pending_write, write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
@@ -402,6 +402,36 @@ impl TaskBundleStoreV2 {
         append_jsonl_row(
             &self.bundle_path(task_id)?.join(TASK_COMMENTS_FILE_NAME),
             comment,
+        )
+    }
+
+    /// Append `events` in order with one write and one sync.
+    pub(crate) fn append_events(
+        &self,
+        task_id: &str,
+        events: &[TaskEventRowV2],
+    ) -> Result<(), OrbitError> {
+        for event in events {
+            event.validate()?;
+        }
+        append_jsonl_rows(
+            &self.bundle_path(task_id)?.join(TASK_EVENTS_FILE_NAME),
+            events,
+        )
+    }
+
+    /// Append `comments` in order with one write and one sync.
+    pub(crate) fn append_comments(
+        &self,
+        task_id: &str,
+        comments: &[TaskCommentRowV2],
+    ) -> Result<(), OrbitError> {
+        for comment in comments {
+            comment.validate()?;
+        }
+        append_jsonl_rows(
+            &self.bundle_path(task_id)?.join(TASK_COMMENTS_FILE_NAME),
+            comments,
         )
     }
 }

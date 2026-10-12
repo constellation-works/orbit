@@ -314,10 +314,14 @@ impl TaskCommitBoundary {
     ) -> Result<T, OrbitError> {
         let mut op = Some(op);
         loop {
-            hold_step(PENDING_RECOVERY_STEP, || self.recover_pending_in(section))?;
             let result = self.shared(&self.lock_target(), section, || {
-                // A commit may have crashed while we waited for this lock.
-                // Drop the shared acquisition before taking recovery exclusive.
+                // A live commit holds the partition exclusively until it has
+                // cleared its marker, so a marker this read still sees once it
+                // gets in belongs to an interrupted commit. Drop the shared
+                // acquisition before taking recovery exclusive. Checking first
+                // and entering after made a reader that met a live commit wait
+                // for the partition twice, the second time behind any writer
+                // that had queued meanwhile (ORB-15797).
                 if !BoundaryDepth::active(&self.partition_dir)
                     && self.pending_marker_path().try_exists()?
                 {
@@ -332,6 +336,7 @@ impl TaskCommitBoundary {
             if let Some(result) = result {
                 return Ok(result);
             }
+            hold_step(PENDING_RECOVERY_STEP, || self.recover_pending_in(section))?;
         }
     }
 
@@ -429,6 +434,26 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| self.store.task_coordination_rows(&self.workspace_id, kind))
     }
 
+    /// Dependent coordination rows of `kind` whose payload carries `value` as
+    /// a JSON string, settling an interrupted commit first. Every row with a
+    /// string field equal to `value` is among them, so a caller decodes only
+    /// these and keeps its exact matches instead of decoding every row of the
+    /// kind inside its section.
+    pub(super) fn coordination_rows_mentioning(
+        &self,
+        kind: &str,
+        value: &str,
+    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+        // Payloads are compact `serde_json` encodings, which escape a string
+        // the same way wherever it sits.
+        let needle =
+            serde_json::to_string(value).map_err(|error| OrbitError::Store(error.to_string()))?;
+        self.enter_ordinary(|| {
+            self.store
+                .task_coordination_rows_containing(&self.workspace_id, kind, &needle)
+        })
+    }
+
     /// One dependent coordination row by identity, settling an interrupted
     /// commit first like [`Self::coordination_rows`].
     pub fn coordination_row(
@@ -488,17 +513,23 @@ pub(crate) mod section_probe {
     use std::cell::{Cell, RefCell};
     use std::time::{Duration, Instant};
 
+    use orbit_common::fs::io::durability_syncs_requested;
+
+    use super::super::lifecycle::STATE_DECODES;
     use crate::repository::task::v2_bundle::{CANONICAL_BUNDLE_READS, LIGHTWEIGHT_BUNDLE_READS};
 
     /// One exclusive section: its kind (`admission` holds the host lock
-    /// shared, `host admission` exclusively), how long it was held, and the
-    /// bundles read in it.
+    /// shared, `host admission` exclusively), how long it was held, the
+    /// bundles read in it, the durability syncs it requested and the claim
+    /// lifecycle rows it decoded.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct SectionCost {
         pub(crate) kind: &'static str,
         pub(crate) held: Duration,
         pub(crate) lightweight_reads: u64,
         pub(crate) canonical_reads: u64,
+        pub(crate) durability_syncs: u64,
+        pub(crate) state_decodes: u64,
     }
 
     thread_local! {
@@ -511,6 +542,8 @@ pub(crate) mod section_probe {
         started: Instant,
         lightweight: u64,
         canonical: u64,
+        syncs: u64,
+        state_decodes: u64,
     }
 
     impl SectionProbe {
@@ -521,6 +554,8 @@ pub(crate) mod section_probe {
                 started: Instant::now(),
                 lightweight: LIGHTWEIGHT_BUNDLE_READS.with(Cell::get),
                 canonical: CANONICAL_BUNDLE_READS.with(Cell::get),
+                syncs: durability_syncs_requested(),
+                state_decodes: STATE_DECODES.with(Cell::get),
             }
         }
     }
@@ -537,6 +572,8 @@ pub(crate) mod section_probe {
                     held: self.started.elapsed(),
                     lightweight_reads: LIGHTWEIGHT_BUNDLE_READS.with(Cell::get) - self.lightweight,
                     canonical_reads: CANONICAL_BUNDLE_READS.with(Cell::get) - self.canonical,
+                    durability_syncs: durability_syncs_requested() - self.syncs,
+                    state_decodes: STATE_DECODES.with(Cell::get) - self.state_decodes,
                 };
                 SECTIONS.with(|sections| sections.borrow_mut().push(cost));
             }

@@ -283,6 +283,16 @@ fn existing_file_len(path: &Path) -> Result<u64, OrbitError> {
 pub(crate) fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitError> {
     match OpenOptions::new().write(true).open(path) {
         Ok(file) => {
+            // Already at that length: nothing to cut, and the next append's
+            // sync covers the file's length anyway.
+            if file
+                .metadata()
+                .map_err(|err| OrbitError::from_write_io(path, err))?
+                .len()
+                == len
+            {
+                return Ok(());
+            }
             file.set_len(len)
                 .map_err(|err| OrbitError::from_write_io(path, err))?;
             orbit_common::fs::io::sync_file(&file)

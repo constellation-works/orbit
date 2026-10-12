@@ -54,18 +54,19 @@ reaches either lock.
 
 | Step | What happens | What a crash here means |
 |---|---|---|
-| Prepare | Durable pending marker, then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
+| Prepare | Durable pending marker (only its presence: recovery reads the journal, so the marker is created in place and only its directory entry is synced), then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
 | Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed` | Decided: recovery replays the apply |
-| Apply | Truncate `events.jsonl` to the intent's recorded pre-apply length, append its events, replay summary/comments/artifact bytes and manifest, republish `task.yaml`, settle the row `applied`, drop the marker | Still decided: the next entrant replays it again |
+| Apply | Truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml`, settle the row `applied`, drop the marker | Still decided: the next entrant replays it again |
 
 Nothing infers the decision from bundle contents, and nothing tries to un-publish an envelope.
 Because no bundle file is touched before the commit point, a pre-commit failure has nothing to
 compensate beyond the journal row and the marker.
 
-**Recovery before exposure.** The marker signals interrupted publication. Ordinary operations check it again
-after acquiring their shared partition lock, so a commit that crashed while they waited cannot
-be missed. Recovery drops that shared acquisition and settles the journal exclusively before
-exposing any state — so a committed reservation whose transition has not landed is never observable, and a
+**Recovery before exposure.** The marker signals interrupted publication. Ordinary operations check it
+once they hold their shared partition lock. A live commit holds the partition exclusively until
+it has dropped its marker, so a marker still there belongs to a commit that crashed, including
+one that crashed while they waited. Recovery drops that shared acquisition and settles the
+journal exclusively before exposing any state — so a committed reservation whose transition has not landed is never observable, and a
 live commit blocks a reader for its (short) duration instead of showing it a half-applied task.
 A compensation or replay that fails leaves the marker in place and returns the error: the
 partition stays closed until recovery succeeds, rather than opening with unknown commit state.
@@ -115,7 +116,11 @@ replay semantics, and retention belong to the caller, not here.
 Internal claim lifecycle uses the same boundary. `ClaimInvocation` is supplied by trusted
 runtime code, never deserialized from tool input. Current claim, machine, immutable bound run,
 and phase are checked under exclusive serialization; the SQL decision also compares the old
-claim/state payloads before replacing them. Mutation receipts deduplicate exact retries. Recovery
+claim/state payloads before replacing them. Mutation receipts deduplicate exact retries; a
+retry replays its receipt in an ordinary section, so it does not exclude the partition's
+readers. A check across claims (a leaf run bound to another attempt, a task's release budget)
+asks SQL for the lifecycle rows that mention the run or task and decodes only those, never the
+partition's whole claim history, inside the exclusive section. Recovery
 revokes authority and refuses unresolved external merge intent; it does not infer failure from age
 or reservation expiry. Read-only claim inspection refuses pending repair rather than replaying it.
 

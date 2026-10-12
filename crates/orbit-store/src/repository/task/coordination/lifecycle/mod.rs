@@ -13,7 +13,9 @@ mod mutate;
 mod releases;
 mod retention;
 
-pub(super) use codec::{CLAIM, STATE, decode, encode, invalid, row};
+#[cfg(test)]
+pub(super) use codec::STATE_DECODES;
+pub(super) use codec::{CLAIM, STATE, decode, decode_state, encode, invalid, row};
 pub(super) use releases::{DrainReleases, fresh_offer_history};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

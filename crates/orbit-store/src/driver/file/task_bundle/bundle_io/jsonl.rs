@@ -53,7 +53,25 @@ pub(crate) fn append_jsonl_row<T>(path: &Path, row: &T) -> Result<(), OrbitError
 where
     T: serde::Serialize,
 {
-    let encoded = serde_json::to_string(row).map_err(|err| OrbitError::Store(err.to_string()))?;
+    append_jsonl_rows(path, std::slice::from_ref(row))
+}
+
+/// Append `rows` in order with one write and one sync; nothing at all, not
+/// even the file, for no rows.
+pub(crate) fn append_jsonl_rows<T>(path: &Path, rows: &[T]) -> Result<(), OrbitError>
+where
+    T: serde::Serialize,
+{
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut encoded = String::new();
+    for row in rows {
+        encoded.push_str(
+            &serde_json::to_string(row).map_err(|err| OrbitError::Store(err.to_string()))?,
+        );
+        encoded.push('\n');
+    }
     with_exclusive_file_lock(path, "task jsonl", || {
         repair_jsonl_tail(path)?;
         let mut file = OpenOptions::new()
@@ -62,8 +80,6 @@ where
             .open(path)
             .map_err(|err| OrbitError::from_write_io(path, err))?;
         file.write_all(encoded.as_bytes())
-            .map_err(|err| OrbitError::from_write_io(path, err))?;
-        file.write_all(b"\n")
             .map_err(|err| OrbitError::from_write_io(path, err))?;
         file.flush()
             .map_err(|err| OrbitError::from_write_io(path, err))?;

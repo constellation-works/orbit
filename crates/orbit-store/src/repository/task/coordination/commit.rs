@@ -15,7 +15,7 @@ use crate::repository::task::v2::sequencing::next_sequence;
 use crate::repository::task::v2_bundle::TaskBundleV2;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{hold_step, write_presence_marker};
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, ContextCreationState, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_EVENTS_FILE_NAME, TaskEventRowV2,
@@ -24,6 +24,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static JOURNAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Steps of a commit, so a long admission hold's report names which part of
+/// the protocol it spent its time in.
+const INTENT_STEP: &str = "commit intent";
+const PREPARE_STEP: &str = "commit prepare";
+const DECIDE_STEP: &str = "commit decision";
+const APPLY_STEP: &str = "commit apply";
 
 fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
     match std::fs::remove_file(path) {
@@ -194,35 +201,42 @@ impl TaskCommitBoundary {
                     return Ok(TaskCoordinationCommitOutcome::Stale { current_status });
                 }
 
-                let mut intent = self.build_intent(&bundle, params)?;
-                self.prepare_claim_evidence(
-                    &mut intent,
-                    &bundle,
-                    evidence,
-                    binding,
-                    &params.actor,
-                    effects,
-                )?;
-                self.append_creation_grant_to_intent(&mut intent, &bundle, &params.actor)?;
-                let intent_json = serde_json::to_string(&intent)
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                let (intent, intent_json) = hold_step(INTENT_STEP, || {
+                    let mut intent = self.build_intent(&bundle, params)?;
+                    self.prepare_claim_evidence(
+                        &mut intent,
+                        &bundle,
+                        evidence,
+                        binding,
+                        &params.actor,
+                        effects,
+                    )?;
+                    self.append_creation_grant_to_intent(&mut intent, &bundle, &params.actor)?;
+                    let intent_json = serde_json::to_string(&intent)
+                        .map_err(|error| OrbitError::Store(error.to_string()))?;
+                    Ok::<_, OrbitError>((intent, intent_json))
+                })?;
                 let journal_id = unique_journal_id();
 
-                self.write_pending_marker(&journal_id)?;
-                self.store.prepare_task_commit_journal(
-                    &journal_id,
-                    &self.workspace_id,
-                    &params.task_id,
-                    &intent_json,
-                )?;
+                hold_step(PREPARE_STEP, || {
+                    self.write_pending_marker(&journal_id)?;
+                    self.store.prepare_task_commit_journal(
+                        &journal_id,
+                        &self.workspace_id,
+                        &params.task_id,
+                        &intent_json,
+                    )
+                })?;
 
-                let decided = match self.store.commit_task_commit_journal_effects(
-                    &journal_id,
-                    params.reservation.as_ref(),
-                    &params.rows,
-                    make_rows,
-                    effects,
-                ) {
+                let decided = match hold_step(DECIDE_STEP, || {
+                    self.store.commit_task_commit_journal_effects(
+                        &journal_id,
+                        params.reservation.as_ref(),
+                        &params.rows,
+                        make_rows,
+                        effects,
+                    )
+                }) {
                     Ok(decided) => decided,
                     Err(error) => {
                         self.compensate_prepared(&journal_id)?;
@@ -245,7 +259,11 @@ impl TaskCommitBoundary {
                     JournalCommitOutcome::Committed(reservation) => {
                         // Past the commit point: the decision is durable and the
                         // bundle apply is a replay obligation, never a rollback.
-                        self.apply_committed(&journal_id, &intent)?;
+                        hold_step(APPLY_STEP, || {
+                            #[cfg(test)]
+                            slow_apply::run();
+                            self.apply_committed(&journal_id, &intent)
+                        })?;
                         Ok(TaskCoordinationCommitOutcome::Committed(
                             TaskCoordinationCommit {
                                 journal_id,
@@ -390,9 +408,8 @@ impl TaskCommitBoundary {
         }
         let bundle_dir = self.bundle_store.bundle_path(&intent.task_id)?;
         truncate_jsonl_file(&bundle_dir.join(TASK_EVENTS_FILE_NAME), intent.events_len)?;
-        for event in &intent.events {
-            self.bundle_store.append_event(&intent.task_id, event)?;
-        }
+        self.bundle_store
+            .append_events(&intent.task_id, &intent.events)?;
         self.apply_claim_evidence(intent)?;
         self.bundle_store
             .rewrite_envelope(&intent.task_id, &intent.envelope)?;
@@ -437,13 +454,37 @@ impl TaskCommitBoundary {
         self.partition_dir.join(PENDING_MARKER_FILE)
     }
 
+    /// Recovery reads the journal, never the marker, so only the marker's
+    /// presence has to be durable before the decision it guards.
     fn write_pending_marker(&self, journal_id: &str) -> Result<(), OrbitError> {
         let path = self.pending_marker_path();
-        atomic_write_text(&path, journal_id)
+        write_presence_marker(&path, journal_id)
             .map_err(|error| OrbitError::from_write_io(&path, error))
     }
 
     fn clear_pending_marker(&self) -> Result<(), OrbitError> {
         remove_file_if_present(&self.pending_marker_path())
+    }
+}
+
+/// A hook run at the start of a commit's apply step, inside its admission
+/// section, so a test can hold that section for a known time.
+#[cfg(test)]
+pub(crate) mod slow_apply {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// Run `hook` once, in the next commit applied on this thread.
+    pub(crate) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn run() {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 }

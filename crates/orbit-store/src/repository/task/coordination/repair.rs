@@ -24,7 +24,7 @@ use super::TaskCommitBoundary;
 use super::admission::{
     ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest, os_unavailable,
 };
-use super::lifecycle::{CLAIM, STATE, decode, encode, row};
+use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
 use crate::contracts::*;
 
 /// How long a pending repair waits for its original executor before the
@@ -180,7 +180,7 @@ impl TaskCommitBoundary {
             .replacements
             .push((old_claim, row(CLAIM, &superseded.claim_id, &revoked)?));
         if let Some(old_state) = self.coordination_row(STATE, &superseded.claim_id)? {
-            let mut settled: ClaimInspection = decode(&old_state.payload_json)?;
+            let mut settled = decode_state(&old_state.payload_json)?;
             settled.claim = revoked;
             settled.last_event = "repair_admitted".into();
             settled.updated_at = Utc::now().to_rfc3339();
