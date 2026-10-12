@@ -70,7 +70,7 @@ migration.
 | Concern | File | Task |
 |---------|------|------|
 | Bounded runner (deadline, prefix capture, no `Drop`) | [process/bounded.rs](../../../crates/orbit-common/src/process/bounded.rs) | [ORB-15829] |
-| Exec supervisor (`SupervisedChild`, kill-on-drop, signal fan-out) — the survivor | [supervision/wait.rs](../../../crates/orbit-exec/src/supervision/wait.rs) | [ORB-15828] |
+| Shared supervisor (`SupervisedChild`, kill-on-drop, signal fan-out), moved from exec — the survivor | [process/supervisor/wait.rs](../../../crates/orbit-common/src/process/supervisor/wait.rs) | [ORB-15828] |
 | Engine provider supervisor (rolling capture, progress, build-budget deadline) | [supervisor/spawn.rs](../../../crates/orbit-engine/src/activity_job/cli_runner/supervisor/spawn.rs) | [ORB-15830] |
 | Plugin build-phase loop | [build_sandbox/supervise.rs](../../../crates/orbit-exec/src/build_sandbox/supervise.rs) | [ORB-15831] |
 | Automation source command loop | [source/command.rs](../../../crates/orbit-core/src/application/automation/source/command.rs) | [ORB-15832] |

@@ -11,6 +11,7 @@ pub mod shell;
 #[cfg(unix)]
 pub mod signal;
 pub mod stopped_descendants;
+pub mod supervisor;
 
 pub use bounded::{
     BoundedRunError, CapturedOutput, run_bounded, run_bounded_capped,

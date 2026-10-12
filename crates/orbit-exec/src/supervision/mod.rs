@@ -1,54 +1,109 @@
-mod cleanup;
-#[cfg(unix)]
-mod signal;
-mod tee;
-mod wait;
+//! Exec's policy over the shared supervisor in
+//! [`orbit_common::process::supervisor`]: fail-at-limit capture of both
+//! streams (with a redacting echo in debug mode) or a stdout relay, a
+//! five-second termination grace period, signal interception, a one-second
+//! drain budget and the stopped-descendant watch. Supervision diagnostics are
+//! appended to the captured stderr.
 
-pub(crate) use cleanup::{TERMINATION_GRACE_PERIOD, termination_signal};
-pub(crate) use wait::{
-    SupervisedChild, WaitResult, wait_with_cancellation, wait_with_optional_timeout,
-    wait_with_spawn_cancellation, wait_with_stdout_relay,
+mod cleanup;
+
+use std::io::PipeWriter;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+use orbit_common::OrbitError;
+use orbit_common::process::output_capture::capture_limit_from_env;
+use orbit_common::process::stopped_descendants::stopped_descendant_threshold;
+use orbit_common::process::supervisor::{
+    CaptureSink, Outcome, OutputSink, RelaySink, Stdin, SupervisedChild, Supervision, Termination,
 };
 
-#[cfg(test)]
-mod tests;
+pub(crate) use cleanup::{TERMINATION_GRACE_PERIOD, termination_signal};
+pub use orbit_common::process::supervisor::{
+    INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, ProcessStopCause, TERMINATION_STATUS_NOTE,
+};
 
-/// Prefix of the supervisor note when output capture stops a process.
-pub const OUTPUT_CAPTURE_LIMIT_NOTE: &str = "process output capture limit exceeded on ";
-/// Prefix of the supervisor note when an incoming signal stops a process.
-pub const INTERRUPTED_SIGNAL_NOTE: &str = "process interrupted by signal ";
-/// Prefix of the supervisor note when a child terminates without an exit code.
-pub const TERMINATION_STATUS_NOTE: &str = "process terminated with ";
+const ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV: &str = "ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES";
+const DEFAULT_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 
-/// A stop observed by the process supervisor, independently of child output.
-///
-/// Deadlines are reported separately by the outcome's `timed_out` flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcessStopCause {
-    /// A captured stream exceeded its byte ceiling, including during drain
-    /// after the child exited.
-    OutputCaptureLimit { stream: &'static str },
-    /// An incoming signal interrupted supervision.
-    InterruptedSignal { signal: i32 },
-    /// The child terminated without an exit code, such as by a Unix signal.
-    TerminationStatus { status: std::process::ExitStatus },
+/// How long pipe workers may keep running after the supervised child is gone,
+/// when a descendant outside its process group still holds a pipe.
+const DRAIN_BUDGET: Duration = Duration::from_secs(1);
+
+/// What one exec run asks of the supervisor.
+pub(crate) struct ExecSupervision<'a> {
+    pub(crate) timeout_ms: Option<u64>,
+    /// Echo both streams, redacted, to Orbit's stderr.
+    pub(crate) debug: bool,
+    pub(crate) stdin_payload: Option<Vec<u8>>,
+    /// Forward stdout here instead of capturing it.
+    pub(crate) stdout_relay: Option<PipeWriter>,
+    pub(crate) cancelled: Option<&'a AtomicBool>,
+    /// Kill the group at once instead of signalling it and allowing the
+    /// termination grace period.
+    pub(crate) kill_at_once: bool,
 }
 
-impl std::fmt::Display for ProcessStopCause {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::OutputCaptureLimit { stream } => write!(f, "{OUTPUT_CAPTURE_LIMIT_NOTE}{stream}"),
-            Self::InterruptedSignal { signal } => {
-                #[cfg(unix)]
-                {
-                    f.write_str(&self::signal::signal_message(*signal))
-                }
-                #[cfg(not(unix))]
-                {
-                    write!(f, "{INTERRUPTED_SIGNAL_NOTE}{signal}")
-                }
-            }
-            Self::TerminationStatus { status } => write!(f, "{TERMINATION_STATUS_NOTE}{status}"),
+/// Supervise `child` under exec's policy. The outcome's stderr carries the
+/// supervision diagnostics after the child's own output.
+pub(crate) fn supervise(
+    child: SupervisedChild,
+    run: ExecSupervision<'_>,
+) -> Result<Outcome, OrbitError> {
+    let limit = capture_limit_from_env(
+        ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV,
+        DEFAULT_OUTPUT_CAPTURE_LIMIT_BYTES,
+    );
+    let stdout: Box<dyn OutputSink> = match run.stdout_relay {
+        Some(relay) => Box::new(RelaySink::new(relay)),
+        None => Box::new(CaptureSink::new("stdout", limit).with_redacting_echo(run.debug)),
+    };
+    let mut outcome = child.supervise(Supervision {
+        stdin: run.stdin_payload.map_or(Stdin::Null, Stdin::Payload),
+        stdout,
+        stderr: Box::new(CaptureSink::new("stderr", limit).with_redacting_echo(run.debug)),
+        timeout: run.timeout_ms.map(Duration::from_millis),
+        termination: if run.kill_at_once {
+            Termination::KillNow
+        } else {
+            Termination::Grace(TERMINATION_GRACE_PERIOD)
+        },
+        cancelled: run.cancelled,
+        intercept_signals: true,
+        drain_budget: DRAIN_BUDGET,
+        stopped_descendants: Some(stopped_descendant_threshold()),
+    })?;
+    append_diagnostics(&mut outcome);
+    Ok(outcome)
+}
+
+/// Explain on stderr what supervision observed, so a caller reading only the
+/// text never mistakes a stopped or cut run for the child's own failure.
+fn append_diagnostics(outcome: &mut Outcome) {
+    let mut notes = Vec::new();
+    if outcome.timed_out {
+        notes.push("process timed out".to_string());
+    }
+    notes.extend(outcome.stop_causes.iter().map(ToString::to_string));
+    notes.extend(
+        outcome
+            .stopped_descendants
+            .iter()
+            .map(|stopped| format!("supervisor: {}", stopped.describe())),
+    );
+    // Output after this point was discarded; without the note a caller could
+    // mistake a cut stream for the whole of it.
+    if outcome.drain_stopped {
+        notes.push(format!(
+            "process pipes were still held open outside its process group; \
+             stopped draining {} ms after it ended",
+            DRAIN_BUDGET.as_millis()
+        ));
+    }
+    for note in notes {
+        if !outcome.stderr.is_empty() {
+            outcome.stderr.push(b'\n');
         }
+        outcome.stderr.extend_from_slice(note.as_bytes());
     }
 }

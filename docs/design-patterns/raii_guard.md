@@ -92,7 +92,7 @@ Patterns to copy:
 
 ## Reference: `SignalHandlerGuard` — restore global state
 
-From `crates/orbit-exec/src/supervision/signal.rs`:
+From `crates/orbit-common/src/process/supervisor/signal_guard.rs`:
 
 ```rust
 pub(super) struct SignalHandlerGuard {
@@ -130,7 +130,7 @@ impl Drop for SignalHandlerGuard {
 
 Concurrent waits overlap. A slot only ever holds a pid that leads its own live process group (never our own group), the handler re-checks that before each `killpg`, and the waiter releases the slot the moment the child is reaped — a reaped pid can be reused by an unrelated group leader, and a fan-out to it would signal processes Orbit never spawned.
 
-Both runner entry points install the guard before calling the sandbox's spawn operation, then register the returned child's group. A signal received before registration stays pending; the wait loop checks it before its first blocking wait and terminates and reaps the group. `SupervisedChild` keeps the guard through relay and pipe setup, so error cleanup also kills and reaps before the last guard can restore and re-raise. If spawn fails before creating a child, the guard still restores and re-raises any pending signal. Callers of `supervise_child` already own a spawned child; supervision installs the handler before pipe setup, but the caller owns the preceding spawn window. A caller that spawns through a sandbox wrapper and does post-spawn work (the plugin callback bind) uses `spawn_supervised_cancellable`, which installs the guard before running its spawn closure, so that work is inside the protected window (ORB-15096).
+`SupervisedChild::spawn_guarded` installs the guard before running its spawn closure, then registers the returned child's group; both `orbit-exec` runner entry points spawn through it. A signal received before registration stays pending; the wait loop checks it before its first blocking wait and terminates and reaps the group. `SupervisedChild` keeps the guard through relay and pipe setup, so error cleanup also kills and reaps before the last guard can restore and re-raise. If spawn fails before creating a child, the guard still restores and re-raises any pending signal. Callers of `supervise_child` already own a spawned child; a supervision request with `intercept_signals` installs the handler before pipe setup, but the caller owns the preceding spawn window. A caller that spawns through a sandbox wrapper and does post-spawn work (the plugin callback bind) uses `spawn_supervised_cancellable`, which installs the guard before running its spawn closure, so that work is inside the protected window (ORB-15096).
 
 Patterns to copy:
 

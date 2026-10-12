@@ -1,8 +1,10 @@
+//! Process-wide SIGINT/SIGTERM interception for supervised children.
+
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use orbit_common::OrbitError;
+use crate::OrbitError;
 
 /// Slots for live child process groups. The signal handler walks this table
 /// and therefore cannot take a mutex; empty is `0` (never a valid pgid here,

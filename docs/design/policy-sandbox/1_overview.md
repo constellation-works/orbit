@@ -75,7 +75,7 @@ When the default policy denies workspace `.orbit/**`, the v2 host re-allows only
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/dispatcher.rs`, `crates/orbit-engine/src/activity_job/job_executor/{step,target}.rs` | [T20260419-0503] |
 | Exec spawn primitive | `crates/orbit-exec/src/{lib,runner,process,sandbox}.rs` | [T20260417-0550] |
 | Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox/` | [ORB-10552] |
-| Process supervision | `crates/orbit-exec/src/supervision/{wait,cleanup,signal,tee}.rs` | [T20260417-0558-4], [T20260417-0558-5] |
+| Process supervision | `crates/orbit-common/src/process/supervisor/`; exec's policy in `crates/orbit-exec/src/supervision/` | [T20260417-0558-4], [T20260417-0558-5] |
 | Filesystem denial audit channel | `crates/orbit-tools/src/fs_audit.rs` (`FsAuditLogger`), `crates/orbit-engine/src/activity_job/dispatcher.rs` → `docs/design/auditability/2_design.md §3` | [T20260426-0605] |
 
 ---

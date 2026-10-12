@@ -1861,6 +1861,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
+ "wait-timeout",
  "yaml_serde",
 ]
 
