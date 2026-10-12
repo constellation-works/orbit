@@ -13,7 +13,6 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd};
 
-use orbit_common::process::OwnedChild;
 use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
 #[cfg(unix)]
 use orbit_common::process::pipe::set_nonblocking;
@@ -160,24 +159,22 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
 
     let started = Instant::now();
     let deadline_start = supervision_now();
-    let spawned = match spawned_child {
+    let mut spawned = match spawned_child {
         Some(spawned) => spawned,
         None => spawn_for_supervision(program, args, env, cwd, sandbox, trace.provider)?,
     };
-    let SpawnedChild {
-        mut child,
-        // Linux mount descriptors also outlive the child. Dropping a cloned
-        // SQLite DB descriptor earlier can release the host's lease locks.
-        _linux_mount_plan,
-    } = spawned;
+    // Keep the container intact: its owned child drops before the Linux mount
+    // descriptors even when setup or a callback unwinds.
+    let child = &mut spawned.child;
 
     // Report the PID before any blocking work: the whole point is to be
     // observable during a long invocation, and the child is already running.
     if let Some(on_spawn) = on_spawn {
-        on_spawn(child.id());
+        on_spawn(child.pid());
     }
 
     let stdin_writer = match child
+        .child_mut()
         .stdin
         .take()
         .map(|stdin| {
@@ -192,7 +189,6 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     {
         Ok(writer) => writer,
         Err(err) => {
-            kill_child_process_tree(&mut child);
             return Err(SpawnError {
                 permanent: err.kind() == io::ErrorKind::Unsupported,
                 message: format!("stdin {program}: {err}"),
@@ -205,7 +201,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     let stderr_buf = Arc::new(Mutex::new(RollingOutputCapture::new(output_limit)));
     let dispatch = tracing::dispatcher::get_default(Clone::clone);
 
-    let stdout_reader = child.stdout.take().map(|handle| {
+    let stdout_reader = child.child_mut().stdout.take().map(|handle| {
         spawn_output_reader(
             handle,
             Arc::clone(&stdout_buf),
@@ -222,7 +218,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
             cancel_pair,
         )
     });
-    let stderr_reader = child.stderr.take().map(|handle| {
+    let stderr_reader = child.child_mut().stderr.take().map(|handle| {
         spawn_output_reader(
             handle,
             Arc::clone(&stderr_buf),
@@ -273,7 +269,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         report: reporter.report,
     });
     let wait_result = wait_until_exit_or_deadline(
-        &mut child,
+        child.child_mut(),
         deadline,
         wait,
         on_progress
@@ -291,7 +287,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     };
 
     let stdin_join = stdin_writer.map(StdinWriterHandle::cancel);
-    kill_child_process_tree(&mut child);
+    child.kill_and_reap();
 
     // The join is bounded on every exit path, not only after a timeout. A
     // reader returns when the last writer closes the pipe, and a helper the
@@ -444,12 +440,4 @@ fn spawn_stdin_writer(_stdin: ChildStdin, _bytes: &[u8]) -> io::Result<StdinWrit
         io::ErrorKind::Unsupported,
         "bounded provider stdin supervision requires Unix (use WSL2 on Windows)",
     ))
-}
-
-/// Kills the child's whole process group, reaps the leader and waits for the
-/// group to drain. A caller that abandons a spawned child must use this, not
-/// `Child::kill`: descendants the child forked share its group, and only the
-/// group kill reaches them.
-pub(in crate::activity_job::cli_runner) fn kill_child_process_tree(child: &mut Child) {
-    OwnedChild::kill_and_reap_spawned(child);
 }

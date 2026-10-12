@@ -99,8 +99,8 @@ pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
     EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,
-    run_process_streaming_stdout, run_process_supervised, spawn_supervised_cancellable,
-    supervise_child, supervise_child_cancellable,
+    run_process_streaming_stdout, run_process_supervised, spawn_owned_supervised_cancellable,
+    spawn_supervised_cancellable, supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
 pub use supervision::{

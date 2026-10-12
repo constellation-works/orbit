@@ -183,6 +183,12 @@ impl OwnedChild {
     }
 }
 
+impl From<Child> for OwnedChild {
+    fn from(child: Child) -> Self {
+        Self::from_spawned(child)
+    }
+}
+
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         self.kill_and_reap();

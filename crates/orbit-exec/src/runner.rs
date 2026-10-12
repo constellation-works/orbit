@@ -197,9 +197,32 @@ pub fn supervise_child_cancellable(
 /// intercept installed, a signal during it stays pending, and supervision then
 /// terminates and reaps the child's group before the signal is re-raised.
 /// An error from `spawn` after it created a child must kill and reap that
-/// child itself, as the child never reaches supervision.
+/// child itself, as the child never reaches supervision. For fallible
+/// post-spawn setup, use [`spawn_owned_supervised_cancellable`] to retain
+/// cleanup ownership throughout the closure.
 pub fn spawn_supervised_cancellable(
     spawn: impl FnOnce() -> Result<Child, OrbitError>,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<SupervisedOutcome, OrbitError> {
+    spawn_owned_supervised_cancellable(
+        || spawn().map(orbit_common::process::OwnedChild::from_spawned),
+        timeout_ms,
+        stdin_payload,
+        cancelled,
+    )
+}
+
+/// Spawn with cleanup ownership retained during setup and supervision.
+///
+/// Like [`spawn_supervised_cancellable`], installs signal interception before
+/// the closure runs. Hold the child in an
+/// [`OwnedChild`](orbit_common::process::OwnedChild) during fallible post-spawn
+/// setup and return the same handle; errors and panics then kill and reap its
+/// group without an unguarded transfer into supervision.
+pub fn spawn_owned_supervised_cancellable(
+    spawn: impl FnOnce() -> Result<orbit_common::process::OwnedChild, OrbitError>,
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,

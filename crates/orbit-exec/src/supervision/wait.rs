@@ -40,8 +40,8 @@ impl SupervisedChild {
     /// Intercept termination before the spawn operation can create a child.
     /// Keep the handler with cleanup ownership until the child is reaped,
     /// including errors during relay or pipe setup.
-    pub(crate) fn spawn(
-        spawn: impl FnOnce() -> Result<Child, OrbitError>,
+    pub(crate) fn spawn<C: Into<OwnedChild>>(
+        spawn: impl FnOnce() -> Result<C, OrbitError>,
     ) -> Result<Self, OrbitError> {
         #[cfg(unix)]
         let signal_guard = SignalHandlerGuard::install()?;
@@ -56,9 +56,9 @@ impl SupervisedChild {
         Ok(child)
     }
 
-    pub(crate) fn new(process: Child) -> Self {
+    pub(crate) fn new(process: impl Into<OwnedChild>) -> Self {
         Self {
-            process: OwnedChild::from_spawned(process),
+            process: process.into(),
             kill_on_deadline: false,
             #[cfg(unix)]
             signal_guard: None,
@@ -277,8 +277,8 @@ pub(crate) fn wait_with_stdout_relay(
 /// `spawn` runs, so a signal arriving between the child's creation and the
 /// caller's own post-spawn work (which `spawn` may include) cannot take the
 /// previous disposition and orphan the child's process group.
-pub(crate) fn wait_with_spawn_cancellation(
-    spawn: impl FnOnce() -> Result<Child, OrbitError>,
+pub(crate) fn wait_with_spawn_cancellation<C: Into<OwnedChild>>(
+    spawn: impl FnOnce() -> Result<C, OrbitError>,
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,

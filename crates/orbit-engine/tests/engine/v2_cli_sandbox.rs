@@ -115,6 +115,7 @@ fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
         broker_runs: Mutex::new(Vec::new()),
         denial_activities: Mutex::new(Vec::new()),
         refuse_registration_after: None,
+        panic_on_registration: false,
     };
     let audit = V2AuditWriter::with_disk_sinks(
         &root.join("audit"),
@@ -204,6 +205,7 @@ struct RecordingHost {
     /// Refuses worker registration once the provider has published its
     /// grandchild's pid to this file, so the refusal lands while it is alive.
     refuse_registration_after: Option<PathBuf>,
+    panic_on_registration: bool,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
@@ -277,7 +279,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
         let Some(pid_file) = &self.refuse_registration_after else {
             return Ok(());
         };
-        wait_until(Duration::from_secs(10), || pid_file.exists());
+        assert!(wait_until(Duration::from_secs(10), || pid_file.exists()));
+        assert!(!self.panic_on_registration, "worker registration panicked");
         Err(OrbitError::Execution("worker registration refused".into()))
     }
 }
@@ -521,6 +524,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
         broker_runs: Mutex::new(vec![]),
         denial_activities: Mutex::new(vec![]),
         refuse_registration_after: None,
+        panic_on_registration: false,
     };
     let mut probe = AuthProbe {
         args: vec!["sandbox".into(), "ORBIT_AUTH_OK".into(), "0".into()],
@@ -583,6 +587,7 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
         broker_runs: Mutex::new(Vec::new()),
         denial_activities: Mutex::new(Vec::new()),
         refuse_registration_after: Some(grandchild.0.clone()),
+        panic_on_registration: false,
     };
     let probe = AuthProbe {
         args: vec!["grandchild".into()],
@@ -601,56 +606,68 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
 }
 
 /// The dispatch path has the same refusal: a provider step whose registration
-/// is refused must end the grandchild its provider started.
+/// is refused or panics must end the entire group its provider started.
 #[test]
-fn dispatch_refused_registration_ends_the_grandchild() {
+fn dispatch_registration_failure_ends_the_provider_group() {
     use orbit_engine::activity_job::cli_runner::run_cli_backend;
 
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
-    let grandchild = Grandchild(root.join("grandchild.pid"));
-    let command = root.join("codex");
-    write_grandchild_provider(&command, &grandchild.0);
-    let host = RecordingHost {
-        command,
-        worktree: root.clone(),
-        sandbox: None,
-        broker_runs: Mutex::new(Vec::new()),
-        denial_activities: Mutex::new(Vec::new()),
-        refuse_registration_after: Some(grandchild.0.clone()),
-    };
-    let spec: AgentLoopSpec = serde_json::from_value(json!({
-        "instruction": "review fixture",
-        "provider": "codex",
-        "tool_disallow_list": ["proc.*"],
-        "wall_clock_timeout_seconds": 30
-    }))
-    .unwrap();
-    let audit = V2AuditWriter::with_disk_sinks(
-        &root.join("audit"),
-        Arc::new(Store::open_in_memory().unwrap()),
-        "ws-registration",
-        "registration-refusal",
-        "codex".to_string(),
-        None,
-    )
-    .unwrap();
+    for panic_on_registration in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let grandchild = Grandchild(root.join("grandchild.pid"));
+        let command = root.join("codex");
+        write_grandchild_provider(&command, &grandchild.0);
+        let host = RecordingHost {
+            command,
+            worktree: root.clone(),
+            sandbox: None,
+            broker_runs: Mutex::new(Vec::new()),
+            denial_activities: Mutex::new(Vec::new()),
+            refuse_registration_after: Some(grandchild.0.clone()),
+            panic_on_registration,
+        };
+        let spec: AgentLoopSpec = serde_json::from_value(json!({
+            "instruction": "review fixture",
+            "provider": "codex",
+            "tool_disallow_list": ["proc.*"],
+            "wall_clock_timeout_seconds": 30
+        }))
+        .unwrap();
+        let audit = V2AuditWriter::with_disk_sinks(
+            &root.join("audit"),
+            Arc::new(Store::open_in_memory().unwrap()),
+            "ws-registration",
+            "registration-refusal",
+            "codex".to_string(),
+            None,
+        )
+        .unwrap();
 
-    let outcome = run_cli_backend(
-        &host,
-        &spec,
-        "agent_review_repair",
-        "registration-refusal",
-        audit,
-        &json!({"prompt": "review"}),
-        None,
-    );
-    assert!(
-        matches!(&outcome, Err(DispatchError::CliInvocationPermanent(message))
-            if message.contains("worker registration refused")),
-        "a refused registration must fail the dispatch permanently"
-    );
-    grandchild.assert_ended();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_cli_backend(
+                &host,
+                &spec,
+                "agent_review_repair",
+                "registration-refusal",
+                audit,
+                &json!({"prompt": "review"}),
+                None,
+            )
+        }));
+        if panic_on_registration {
+            assert!(
+                outcome.is_err(),
+                "the registration panic must unwind dispatch"
+            );
+        } else {
+            assert!(
+                matches!(outcome.unwrap(), Err(DispatchError::CliInvocationPermanent(message))
+                    if message.contains("worker registration refused")),
+                "a refused registration must fail the dispatch permanently"
+            );
+        }
+        grandchild.assert_ended();
+    }
 }
 
 /// Writes a provider stand-in that starts a sleeping grandchild, publishes
@@ -660,7 +677,8 @@ fn write_grandchild_provider(command: &Path, pid_file: &Path) {
     fs::write(
         command,
         format!(
-            "#!/bin/sh\nsleep 300 &\nprintf '%s\\n' \"$!\" > '{staging}' && mv '{staging}' '{pid_file}'\nwait\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{leader_file}'\nsleep 300 &\nprintf '%s\\n' \"$!\" > '{staging}' && mv '{staging}' '{pid_file}'\nwait\n",
+            leader_file = pid_file.with_extension("leader").display(),
             staging = staging.display(),
             pid_file = pid_file.display(),
         ),
@@ -676,6 +694,20 @@ struct Grandchild(PathBuf);
 
 impl Grandchild {
     fn assert_ended(&self) {
+        let leader: u32 = fs::read_to_string(self.0.with_extension("leader"))
+            .expect("provider leader pid")
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            !process_is_running(leader),
+            "provider leader survived registration failure"
+        );
+        assert_eq!(
+            orbit_common::process::identity::probe_process_group_liveness(leader as i32),
+            orbit_common::process::identity::KernelLiveness::Exited,
+            "the provider group must have no live members after registration failure"
+        );
         let text = fs::read_to_string(&self.0).expect("the provider publishes its grandchild");
         let pid: u32 = text.trim().parse().expect("grandchild pid");
         assert!(
@@ -687,6 +719,14 @@ impl Grandchild {
 
 impl Drop for Grandchild {
     fn drop(&mut self) {
+        if let Some(leader) = fs::read_to_string(self.0.with_extension("leader"))
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            let _ = orbit_common::process::OwnedChild::signal_spawned_group(leader, libc::SIGKILL);
+            // SAFETY: only reap this fixture's own provider; it may already have been reaped.
+            unsafe { libc::waitpid(leader as libc::pid_t, std::ptr::null_mut(), 0) };
+        }
         let Some(pid) = fs::read_to_string(&self.0)
             .ok()
             .and_then(|text| text.trim().parse::<u32>().ok())

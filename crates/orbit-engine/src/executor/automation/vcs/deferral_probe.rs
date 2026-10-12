@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use orbit_exec::supervise_child;
+use orbit_exec::spawn_owned_supervised_cancellable;
 use orbit_types::workflow::{DeferralProbe, NamespaceProbe};
 
 use crate::activity_job::cli_runner::spawn::{
@@ -71,8 +71,13 @@ fn spawn_probe<H: RuntimeHost + ?Sized>(
         provider.unwrap_or_default(),
     )
     .map_err(|error| error.message)?;
-    let outcome = supervise_child(spawned.child, Some(PROBE_TIMEOUT_MS), Some(Vec::new()))
-        .map_err(|error| error.to_string())?;
+    let outcome = spawn_owned_supervised_cancellable(
+        || Ok(spawned.child),
+        Some(PROBE_TIMEOUT_MS),
+        Some(Vec::new()),
+        None,
+    )
+    .map_err(|error| error.to_string())?;
     if outcome.timed_out {
         return Err(format!("it did not exit within {PROBE_TIMEOUT_MS} ms"));
     }
