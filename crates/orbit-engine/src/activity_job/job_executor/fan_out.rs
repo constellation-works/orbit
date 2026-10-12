@@ -145,6 +145,7 @@ pub(super) fn run_fan_out(
     });
 
     let mut collected: Vec<Value> = Vec::new();
+    let mut errors: Vec<Value> = Vec::new();
     let mut collected_count = 0u32;
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
@@ -164,13 +165,18 @@ pub(super) fn run_fan_out(
             Ok(o) if o.success => {
                 collected_count += 1;
                 collected.push(o.output);
+                errors.push(Value::Null);
             }
-            Ok(_) => {
+            Ok(o) => {
                 failed_count += 1;
                 collected.push(Value::Null);
+                errors.push(Value::String(o.message.unwrap_or_else(|| {
+                    format!("worker {idx} completed with success=false")
+                })));
             }
             Err(e) => {
                 failed_count += 1;
+                errors.push(Value::String(e.to_string()));
                 if !panicked_workers.contains(&idx) && first_error.is_none() {
                     first_error = Some(e);
                 }
@@ -194,6 +200,10 @@ pub(super) fn run_fan_out(
         JoinMode::Any => collected_count > 0,
         JoinMode::Quorum { n } => collected_count >= *n,
     };
+
+    if let Some(error_key) = &fan_in.errors {
+        record_pipeline(ctx, error_key, Value::Array(errors));
+    }
 
     if !block_ok && let Some(err) = first_error {
         return Err(err);

@@ -104,8 +104,16 @@ fn record_step_guards(
     };
     // Collect aliases share the output namespace with step ids. Keep every
     // producer's guards so a later writer cannot hide a skippable output.
-    if let Some(alias) = fan_in_alias(step)
-        && alias != step.id
+    let aliases = match &step.body {
+        JobV2StepBody::FanOut { fan_in, .. } => {
+            [fan_in.collect.as_deref(), fan_in.errors.as_deref()]
+        }
+        _ => [None, None],
+    };
+    for alias in aliases
+        .into_iter()
+        .flatten()
+        .filter(|alias| *alias != step.id)
     {
         guards
             .entry(alias.to_string())
@@ -383,6 +391,16 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
             }
         }
         JobV2StepBody::FanOut { fan_out, fan_in } => {
+            if let Some(errors) = &fan_in.errors
+                && (errors.is_empty()
+                    || errors == &step.id
+                    || Some(errors) == fan_in.collect.as_ref())
+            {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` fan-in errors key must be nonempty and distinct from its id and collect alias",
+                    step.id
+                )));
+            }
             if matches!(fan_in.join, JoinMode::Quorum { n: 0 }) {
                 return Err(DispatchError::JobValidation(format!(
                     "step `{}` fan-in quorum n=0 must be at least 1",

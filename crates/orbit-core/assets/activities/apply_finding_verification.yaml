@@ -7,7 +7,8 @@ spec:
   description: >
     Validate each verifier verdict against the prepared revision and record
     the deciding one. Results are matched to prepared partitions by
-    position; a partition whose verifier failed leaves its tasks unverified.
+    position; a partition whose verifier failed leaves its tasks unverified
+    with the corresponding partition_errors diagnostic when supplied.
     A verdict must parse, give reasoning, and cite evidence as `path:line`
     naming a line of a file that exists at the pinned revision; CONFIRMED
     also rates severity and cites at least one location, and REJECTED names
@@ -34,6 +35,10 @@ spec:
       results:
         type: array
         items: {}
+      partition_errors:
+        type: array
+        items:
+          type: [string, "null"]
       workspace_path:
         type: string
       carried_task_outcomes:

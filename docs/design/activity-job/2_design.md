@@ -1237,6 +1237,15 @@ The executor emits `StepJoin` with per-branch outcomes. If the join policy fails
 
 `fan_out.items` is template-rendered into an array of at most 256 entries (each item gets its own scoped thread, so a larger list fails the step rather than exhausting OS threads). Rendered text that parses as a JSON array is that list. Valid JSON of any other kind — `null`, an object, a number, a bool, or a string — fails the step with `JobExecution` naming `fan_out.items` before any worker runs; splitting that text on commas would dispatch fragments such as `{"a":1` and `"b":2}`. Text that is not JSON, such as a bare `A, B` list, still splits on commas and whitespace into string items. Workers run concurrently behind a counting semaphore, so `max_workers` is a true concurrency bound, not just metadata. `fan_in.collect` can persist the ordered worker outputs under a separate pipeline key in addition to the step id itself.
 
+An optional `fan_in.errors` key publishes a separate position-aligned array:
+null for successful workers and an error string for failures, including
+unsuccessful outcome messages and panic diagnostics. Output collection keeps
+null slots for failed workers. A successful `any` or `quorum` join retains
+both arrays, and compound checkpoints restore the errors on resume. Empty
+blocks publish empty arrays. The errors key must be nonempty and distinct
+from the fan-out's own id and collect alias; it carries the same guard chain
+as the collect alias and is cleared when final recovery reruns the step.
+
 Collection does not itself interpret a successful activity call whose payload
 reports a failed child run. A parent that waits on child workflows must pass
 the collected wait entries to `pipeline_success_guard` after fan-in. The CI

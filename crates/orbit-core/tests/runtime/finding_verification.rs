@@ -14,10 +14,16 @@ use orbit_core::application::task::{
     FindingVerdict, FindingVerification, TaskAddParams, TaskUpdateParams,
 };
 use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus, TaskType};
-use orbit_engine::RuntimeHost;
+use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
+use orbit_engine::{
+    DispatchError, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink, execute_job_with_resume,
+    resolve_job_catalog_refs_for_execution,
+};
 use orbit_tools::ToolContext;
 use orbit_types::workflow::RoutineDefinition;
+use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec};
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use crate::dispatch_admission::isolated;
@@ -931,4 +937,211 @@ fn legacy_confirmation_is_readable_but_cannot_authorize_promotion() {
         .expect_err("legacy confirmation is stale");
     fixture.confirm(&task);
     fixture.runtime.approve_task(&task.id, None, None).unwrap();
+}
+
+/// Execute the shipped graph and deterministic activities; only verifier
+/// sessions are replaced with scripted boundary results.
+struct VerificationHost<'a> {
+    fixture: &'a Fixture,
+    failed_task: Option<&'a Task>,
+    escalated_task: Option<&'a Task>,
+    applied: Mutex<Vec<Value>>,
+}
+
+impl RuntimeHost for VerificationHost<'_> {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        context: ToolContext,
+    ) -> Result<Value, DispatchError> {
+        if action == "fixture_verify" {
+            let ids = input["task_ids"].as_array().unwrap();
+            if self
+                .failed_task
+                .is_some_and(|task| ids.contains(&json!(task.id)))
+            {
+                return Err(DispatchError::CliInvocationPermanent(
+                    "fixture verifier executable unavailable".into(),
+                ));
+            }
+            let tasks = ids
+                .iter()
+                .map(|id| {
+                    let task = self.fixture.runtime.get_task(id.as_str().unwrap()).unwrap();
+                    if self
+                        .escalated_task
+                        .is_some_and(|escalated| escalated.id == task.id)
+                        && input["escalation"] != true
+                    {
+                        rejected(&task, "high")
+                    } else {
+                        confirmed(&task, "high")
+                    }
+                })
+                .collect::<Vec<_>>();
+            return Ok(json!({"partition_index": input["partition_index"], "tasks": tasks}));
+        }
+        let result = self
+            .fixture
+            .runtime
+            .run_deterministic(action, config, input, context)?;
+        if action == "apply_finding_verification" {
+            self.applied.lock().unwrap().push(result.clone());
+        }
+        Ok(result)
+    }
+}
+
+fn run_verification_job(
+    host: &VerificationHost<'_>,
+    tasks: &[&Task],
+) -> Result<JobOutcome, DispatchError> {
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut job = load_job_asset(
+        &std::fs::read_to_string(assets.join("jobs/finding_verification_pipeline.yaml")).unwrap(),
+    )
+    .unwrap()
+    .spec;
+    let mut catalog = V2ActivityCatalog::new();
+    for name in [
+        "prepare_finding_verification",
+        "verify_finding",
+        "apply_finding_verification",
+        "pipeline_success_guard",
+    ] {
+        let asset = load_activity_asset(
+            &std::fs::read_to_string(assets.join(format!("activities/{name}.yaml"))).unwrap(),
+        )
+        .unwrap();
+        let mut activity = asset.spec;
+        if name == "verify_finding" {
+            activity.spec = ActivityV2Spec::Deterministic(DeterministicSpec {
+                action: "fixture_verify".into(),
+                config: Value::Null,
+            });
+        }
+        catalog.insert(name, activity);
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+    let audit = host.fixture._root.path().join("audit");
+    let store = Arc::new(orbit_store::Store::open_in_memory().unwrap());
+    let writer = Arc::new(V2AuditWriter::new(
+        "verification-run",
+        "fixture",
+        Arc::new(V2SqliteSink::for_audit_root(
+            store,
+            "ws_fixture",
+            "verification-run",
+            "fixture",
+            None,
+            &audit,
+        )),
+    ));
+    execute_job_with_resume(
+        &job,
+        json!({
+            "task_ids": tasks.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(),
+            "workspace_path": host.fixture.repo, "base_branch": "main",
+            "max_partition_size": 1,
+        }),
+        "verification-run",
+        writer,
+        host,
+        None,
+    )
+}
+
+#[test]
+fn shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_error() {
+    if !isolated(
+        "finding_verification::shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_error",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let successful = fixture.finding("Confirmed by a successful worker", TaskComplexity::Medium);
+    let failed = fixture.finding("Failed verifier", TaskComplexity::Low);
+    let host = VerificationHost {
+        fixture: &fixture,
+        failed_task: Some(&failed),
+        escalated_task: None,
+        applied: Mutex::default(),
+    };
+    let result = run_verification_job(&host, &[&successful, &failed]);
+    assert!(
+        result.is_err(),
+        "the guard still refuses unverified findings: {result:?}"
+    );
+    let applied = host.applied.lock().unwrap();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0]["partition_count"], 2);
+    assert_eq!(outcome(&applied[0], &successful)["outcome"], "verified");
+    let held = outcome(&applied[0], &failed);
+    assert_eq!(held["reason"], "verifier_failed", "{held}");
+    let detail = held["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("fixture verifier executable unavailable"),
+        "{held}"
+    );
+    assert!(detail.contains("low_lane"), "{held}");
+    assert!(fixture.verification(&failed).is_none());
+    assert_eq!(fixture.status(&failed), TaskStatus::Proposed);
+    assert_eq!(
+        fixture.verification(&successful).unwrap().verdict,
+        FindingVerdict::Confirmed
+    );
+    assert_eq!(
+        shown_verdict(&fixture, &successful).0,
+        "finding-verification: confirmed"
+    );
+}
+
+#[test]
+fn shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop() {
+    if !isolated(
+        "finding_verification::shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let low = fixture.finding("Low tier rejection", TaskComplexity::Low);
+    let settled = fixture.finding("Initial confirmation", TaskComplexity::Hard);
+    let host = VerificationHost {
+        fixture: &fixture,
+        failed_task: None,
+        escalated_task: Some(&low),
+        applied: Mutex::default(),
+    };
+    let run = run_verification_job(&host, &[&low, &settled]).unwrap();
+    assert!(run.success, "{run:?}");
+    assert_eq!(run.pipeline["prepare"]["partition_count"], 2);
+    assert_eq!(run.pipeline["apply"]["escalation_count"], 1);
+    assert_eq!(run.pipeline["apply_escalations"]["recorded_count"], 1);
+    let record = fixture.verification(&low).unwrap();
+    assert!(record.escalated);
+    assert_eq!(record.crews.len(), 2);
+    assert_eq!(record.verdict, FindingVerdict::Confirmed);
+    assert_eq!(
+        shown_verdict(&fixture, &low).0,
+        "finding-verification: confirmed"
+    );
+    assert_eq!(
+        outcome(&run.pipeline["apply_escalations"], &settled)["outcome"],
+        "verified"
+    );
+
+    let empty = Fixture::new();
+    let host = VerificationHost {
+        fixture: &empty,
+        failed_task: None,
+        escalated_task: None,
+        applied: Mutex::default(),
+    };
+    let run = run_verification_job(&host, &[]).unwrap();
+    assert!(run.success, "{run:?}");
+    assert_eq!(run.pipeline["verdict_results"], json!([]));
+    assert_eq!(run.pipeline["verdict_errors"], json!([]));
+    assert_eq!(run.pipeline["apply"]["recorded_count"], 0);
 }

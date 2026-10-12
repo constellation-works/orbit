@@ -953,6 +953,7 @@ fn assert_empty_join_resume(
 struct GraphHost {
     calls: Mutex<Vec<Value>>,
     checkpoints: Mutex<BTreeMap<u32, Value>>,
+    compound_outputs: Mutex<BTreeMap<u32, BTreeMap<String, Value>>>,
     in_flight: AtomicUsize,
     peak_in_flight: AtomicUsize,
 }
@@ -981,8 +982,12 @@ impl RuntimeHost for GraphHost {
         step_index: u32,
         _step_id: &str,
         output: &Value,
-        _compound_outputs: &BTreeMap<String, Value>,
+        compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
+        self.compound_outputs
+            .lock()
+            .unwrap()
+            .insert(step_index, compound_outputs.clone());
         self.checkpoints
             .lock()
             .expect("checkpoints")
@@ -1800,4 +1805,75 @@ fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation()
         ["test_worktree_setup", "test_review_gate_admit"],
         "an exhausted lineage consumes no implementer or recovery invocation: {result:?}"
     );
+}
+
+#[test]
+fn fan_in_retains_position_aligned_errors_through_successful_join_and_resume() {
+    let mut fan = fan_out_step(3, json!({"mode": "any"}));
+    fan["fan_in"]["errors"] = json!("worker_errors");
+    let job = job_asset(json!([fan, probe_step("after", json!({"label": "after"}))]));
+    let input = json!({"items": [probe_input('+', 0), probe_input('-', 1), probe_input('!', 2)]});
+    let run = run_graph_job(&job, input.clone());
+    assert!(run.succeeded(), "{:?}", run.result);
+    let errors = &run.outcome().pipeline["worker_errors"];
+    assert_eq!(errors[0], Value::Null);
+    assert!(
+        errors[1].as_str().unwrap().contains("probe failed"),
+        "{errors}"
+    );
+    assert!(errors[2].as_str().unwrap().contains("panicked"), "{errors}");
+    assert!(run.outcome().pipeline["scatter"][1].is_null());
+    assert!(run.outcome().pipeline["scatter"][2].is_null());
+    let mut resume = PipelineState::new("graph-run".into(), "graph_fixture".into(), input.clone());
+    resume.step_outputs = run.host.checkpoints.lock().unwrap().clone();
+    resume.compound_outputs = run.host.compound_outputs.lock().unwrap().clone();
+    for index in resume.step_outputs.keys() {
+        resume.step_states.insert(*index, JobRunState::Success);
+    }
+    let resumed = run_graph_job_with_resume(&job, input, Some(&resume));
+    assert!(resumed.succeeded());
+    assert_eq!(resumed.outcome().pipeline["worker_errors"], *errors);
+    assert!(
+        resumed.host.calls().is_empty(),
+        "resume retains errors without redispatching workers"
+    );
+}
+
+#[test]
+fn a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume() {
+    let mut empty = fan_out_step(1, json!({"mode": "all"}));
+    empty["id"] = json!("empty");
+    empty["fan_out"]["worker"]["id"] = json!("empty_worker");
+    empty["when"] = json!("{{ input.empty }} == true");
+    empty["fan_in"]["errors"] = json!("worker_errors");
+    let mut nonempty = fan_out_step(1, json!({"mode": "any"}));
+    nonempty["when"] = json!("{{ input.empty }} == false");
+    nonempty["fan_in"]["errors"] = json!("worker_errors");
+    let job = job_asset(json!([empty, nonempty]));
+    for is_empty in [true, false] {
+        let items = if is_empty {
+            json!([])
+        } else {
+            json!([probe_input('+', 0)])
+        };
+        let input = json!({"empty": is_empty, "items": items});
+        let run = run_graph_job(&job, input.clone());
+        assert!(run.succeeded());
+        let mut resume =
+            PipelineState::new("graph-run".into(), "graph_fixture".into(), input.clone());
+        resume.step_outputs = run.host.checkpoints.lock().unwrap().clone();
+        resume.compound_outputs = run.host.compound_outputs.lock().unwrap().clone();
+        for index in resume.step_outputs.keys() {
+            resume.step_states.insert(*index, JobRunState::Success);
+        }
+        let resumed = run_graph_job_with_resume(&job, input, Some(&resume));
+        assert!(resumed.succeeded());
+        for alias in ["results", "worker_errors"] {
+            assert_eq!(
+                resumed.outcome().pipeline[alias],
+                run.outcome().pipeline[alias],
+                "a skipped fan-out never publishes an alias: empty={is_empty}, alias={alias}"
+            );
+        }
+    }
 }

@@ -141,11 +141,23 @@ pub(in super::super) fn apply(
                     .iter()
                     .find(|report| report.get("task_id").and_then(Value::as_str) == Some(task_id))
             }) else {
-                task_outcomes.push(unverified(
-                    task_id,
-                    "missing_verdict",
-                    format!("verifier crew {crew} returned no verdict for this task"),
-                ));
+                let error = input
+                    .get("partition_errors")
+                    .and_then(Value::as_array)
+                    .and_then(|errors| errors.get(position))
+                    .and_then(Value::as_str);
+                task_outcomes.push(match error {
+                    Some(error) => unverified(
+                        task_id,
+                        "verifier_failed",
+                        format!("verifier partition {position} (crew {crew}) failed: {error}"),
+                    ),
+                    None => unverified(
+                        task_id,
+                        "missing_verdict",
+                        format!("verifier crew {crew} returned no verdict for this task"),
+                    ),
+                });
                 continue;
             };
             let report = match serde_json::from_value::<VerifierReport>(report.clone())

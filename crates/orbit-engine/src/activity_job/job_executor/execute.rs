@@ -304,7 +304,12 @@ fn seed_pipeline_from_resume(
         let Some(output) = state.step_outputs.get(&step_index) else {
             continue;
         };
-        if let Some(alias) = fan_in_alias(step) {
+        // A guarded fan-out checkpoints null when skipped. It did not
+        // publish its collect alias; restoring that null can overwrite a
+        // sibling's real collection (notably the empty verification path).
+        if let Some(alias) = fan_in_alias(step)
+            && output.is_array()
+        {
             seeded.insert(alias.to_string(), output.clone());
         }
         seeded.insert(step.id.clone(), output.clone());
@@ -390,6 +395,7 @@ pub(super) fn collect_step_keys<'a>(step: &'a JobV2Step, keys: &mut Vec<&'a str>
         }
         JobV2StepBody::FanOut { fan_out, fan_in } => {
             keys.extend(fan_in.collect.as_deref());
+            keys.extend(fan_in.errors.as_deref());
             collect_step_keys(&fan_out.worker, keys);
         }
         JobV2StepBody::Loop { loop_ } => {

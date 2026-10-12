@@ -136,6 +136,24 @@ An empty fan-out records `[]` under its step id and optional `fan_in.collect`
 alias, and emits dispatch and join audit events with zero workers. A failed
 join stops subsequent steps.
 
+Fan-in keeps one output slot per item in dispatch order. Failed workers have
+`null` output slots; successful siblings remain available when `any` or
+`quorum` admits the join. Set `fan_in.errors: worker_errors` to publish a
+separate array at `steps.worker_errors.output` in the same order: successful
+workers have `null` errors and failed workers have their dispatch error or
+unsuccessful outcome's message. A worker panic records its panic diagnostic.
+An empty block publishes `[]`. The errors array is retained in successful
+compound checkpoints and restored on resume. Choose an errors key distinct
+from the step's id and collect alias.
+
+The shipped finding verification job passes these errors into apply as
+`partition_errors`. A failed partition stays unverified with `verifier_failed`
+and its crew and diagnostic; a successful verifier that omits a task's verdict
+still reports `missing_verdict`. Native pinned-source inspection currently
+supports Codex and Claude. Other providers, including Gemini and Grok, fail
+before launching with `inspection_tools_unavailable`; their refusal is retained
+alongside successful partitions' verdicts.
+
 ## Modifiers
 
 Any step may add `when` and `retry`.
