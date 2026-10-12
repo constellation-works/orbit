@@ -164,6 +164,8 @@ fn readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper
     }
 }
 
+// Symbolic links are created with a Unix-only API.
+#[cfg(unix)]
 #[test]
 fn readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout() {
     if !isolated_run_observation(
