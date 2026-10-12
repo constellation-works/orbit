@@ -91,7 +91,7 @@ build anyway:
   clean base (`task_claimed_pr_pipeline.yaml` `validate_no_diff`, then
   `orbit-engine/src/executor/automation/vcs/claim/no_diff.rs`). The owner
   refuses a handoff without those logs
-  (`orbit-store/src/repository/task/coordination/handoff.rs`). In ws_orbit
+  (`orbit-store/src/repository/task/coordination/handoff/evidence.rs`). In ws_orbit
   that means a full `cargo check` of the workspace for every claimed review.
 - **Instructions.** On every route, the implementer prompt
   (`assets/activities/agent_implement.yaml`) and the repository gates tell
