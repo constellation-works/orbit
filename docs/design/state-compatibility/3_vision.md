@@ -1,7 +1,7 @@
 ---
 title: State Compatibility — Vision
 owner: claude
-last_updated: 2026-10-06
+last_updated: 2026-10-11
 last_validated: 2026-10-11
 status: Draft
 feature: state-compatibility
@@ -35,9 +35,13 @@ from. The shipped mechanism is in [2_design.md](./2_design.md).
 4. **Does the task registry's `user_version` floor belong in this contract?**
    It solves the same problem with a different mechanism; unifying them would
    remove one concept at the cost of a migration of its own.
-5. **How far back should read-only support reach?** The record makes it
-   possible to support arbitrarily old binaries; a support window may be
-   preferable to an open-ended promise.
+5. **How far back should read-only support reach?** *Resolved 2026-10-11.* The
+   record makes it possible to support arbitrarily old binaries, so support is
+   bounded by a 30-day, release-gated window instead of an open-ended promise.
+   A compatibility path, including a legacy reader of a persisted shape, is
+   deleted once the four conditions in
+   [4_decisions.md](./4_decisions.md#compatibility-paths-expire-on-a-30-day-release-gated-window)
+   hold.
 
 ## 2 Prior Work
 

@@ -1,17 +1,17 @@
 ---
 title: State Compatibility — Decisions
 owner: claude
-last_updated: 2026-10-06
+last_updated: 2026-10-11
 last_validated: 2026-10-06
 status: Draft
 feature: state-compatibility
 doc_role: decisions
 type: design
-summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, and why read-compatible store opens are enforced read-only by SQLite itself.
+summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, why read-compatible store opens are enforced read-only by SQLite itself, and when a compatibility path may be deleted.
 tags: [state-compatibility, migrations, upgrades]
 paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/connection.rs", "crates/orbit-store/src/workflow/layout/marker.rs"]
 related_features: [state-compatibility]
-related_artifacts: [ORB-12434]
+related_artifacts: [ORB-12434, ORB-15732]
 ---
 
 # State Compatibility — Decisions
@@ -110,10 +110,65 @@ not the guarantee.
   sites to check a flag — would have produced better messages and a weaker
   guarantee.
 
+## Compatibility paths expire on a 30-day, release-gated window
+
+**Recorded:** 2026-10-11 · [ORB-15732]
+
+### Context
+
+A compatibility path is code kept only so an older shape keeps working: a
+serde alias, a legacy reader of a persisted record, a re-export of a retired
+name, a hidden or alias CLI command or flag, a config key alias, or a
+deprecated MCP tool field or HTTP route. Without a rule for when one may go,
+each cleanup sweep re-decides it, and nothing answers whether anyone still
+depends on the old shape. Followers upgrade in lockstep with the owner host,
+and the owner is the only external consumer, so release history and consumers
+can be checked directly.
+
+The alternative was open-ended support: keep each path until someone removes
+it by hand. That needs no age, release, or consumer check, but every sweep
+then re-argues each path with no rule to apply.
+
+### Decision
+
+A compatibility path may be deleted once all four conditions hold:
+
+1. The commit that made the path compatibility-only is at least 30 days old.
+2. The oldest release tag containing that commit is at or below the running
+   version of the owner host.
+3. For a CLI, config, MCP, or HTTP surface: no consumer exists outside the
+   definition and its tests in this repository, the dashboard assets, the
+   workspace's auto-task definitions, or the sibling Constellation checkouts.
+4. For a persisted-format reader: either a migration rewrites the remaining
+   old-shape records on open, or a read-only scan of every host holding the
+   state finds none. At the time of this decision those hosts are dk-server-2,
+   dk-server-1, and the Mac.
+
+The rule covers every compatibility path in Orbit's CLI, config, MCP, HTTP,
+and persisted state, including one added later; its 30-day window starts at
+the commit that makes it compatibility-only. The plugin protocol is excluded
+and is not governed by this rule. The `code-health-sweep` auto-task's Pass C
+applies this rule.
+
+### Consequences
+
+- A path that meets all four conditions needs no further owner decision to
+  remove.
+- A path inside its 30-day window, or whose oldest release is above the owner
+  host's version, stays even when nothing consumes it.
+- Cost: conditions 3 and 4 are checks by search and scan, not guarantees. A
+  consumer outside the listed places, or a host missing from the scan, goes
+  unseen, and a deletion made on a clean result can still break it.
+- Cost: an unused path is kept for at least 30 days after it becomes
+  compatibility-only, and until the owner host runs a release containing that
+  commit.
+
 ## Task References
 
 - [ORB-12434] introduced the forward-compatibility contract.
 - [ORB-11994] and [ORB-12078] removed the task checkout projections whose
   older writers motivated the enforced read-only open.
+- [ORB-15732] recorded the 30-day compatibility-path window and its four
+  conditions.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
