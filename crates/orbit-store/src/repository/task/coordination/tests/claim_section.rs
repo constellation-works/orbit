@@ -229,6 +229,7 @@ fn request(id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        admissible: None,
     }
 }
 

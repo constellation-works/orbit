@@ -1,6 +1,8 @@
 //! Gap fit: whether a candidate's profile fits under the forecast.
 
-use super::HostLoadForecast;
+use std::fmt;
+
+use super::{HostLoad, HostLoadForecast};
 use crate::runtime::host_resource::profile::ResourceProfile;
 
 /// The resource a candidate would push past its threshold.
@@ -130,5 +132,107 @@ impl ForecastGap {
     /// `bytes` as a share of the host's memory.
     pub fn memory_percent(&self, bytes: f64) -> f64 {
         bytes / self.memory_total * 100.0
+    }
+}
+
+/// The forecast load admission may reach: the configured shares of the
+/// host's cores and memory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AdmissionLimits {
+    pub(crate) cpu_cores: f64,
+    pub(crate) memory_bytes: f64,
+    host_cores: f64,
+    host_memory_bytes: f64,
+}
+
+impl AdmissionLimits {
+    /// `admit_cpu_percent` of `host`'s cores and `admit_memory_percent` of
+    /// its memory.
+    pub(crate) fn of(host: &HostLoad, admit_cpu_percent: u8, admit_memory_percent: u8) -> Self {
+        let host_cores = f64::from(host.cpu_count);
+        let host_memory_bytes = host.memory_total_bytes as f64;
+        Self {
+            cpu_cores: host_cores * f64::from(admit_cpu_percent) / 100.0,
+            memory_bytes: host_memory_bytes * f64::from(admit_memory_percent) / 100.0,
+            host_cores,
+            host_memory_bytes,
+        }
+    }
+}
+
+/// The resource a candidate would push over its limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverResource {
+    Cpu,
+    Memory,
+}
+
+/// The first minute a candidate would push the forecast over a limit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Overload {
+    pub(crate) resource: OverResource,
+    /// Minutes from now.
+    pub(crate) minute: u32,
+    /// The forecast with the candidate, as a share of the host's capacity.
+    pub(crate) percent: f64,
+}
+
+impl fmt::Display for Overload {
+    /// `cpu 94% at +6m`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let resource = match self.resource {
+            OverResource::Cpu => "cpu",
+            OverResource::Memory => "memory",
+        };
+        write!(
+            f,
+            "{resource} {:.0}% at +{}m",
+            self.percent.round(),
+            self.minute
+        )
+    }
+}
+
+/// Whether `candidate` fits under `forecast` within `limits` for every minute
+/// of its horizon, or the first minute it would not, CPU before memory.
+pub(crate) fn gap_fit(
+    forecast: &HostLoadForecast,
+    candidate: &ResourceProfile,
+    limits: &AdmissionLimits,
+) -> Result<(), Overload> {
+    let horizon = candidate.horizon_minutes.min(forecast.horizon_minutes);
+    for t in 0..=horizon {
+        let index = t as usize;
+        let (cpu, memory) = candidate.series.get(index).map_or((0.0, 0.0), |minute| {
+            (
+                minute.cpu_cores * minute.alive,
+                minute.memory_bytes as f64 * minute.alive,
+            )
+        });
+        let cpu = forecast.cpu.minutes.get(index).copied().unwrap_or(0.0) + cpu;
+        if cpu > limits.cpu_cores {
+            return Err(Overload {
+                resource: OverResource::Cpu,
+                minute: t,
+                percent: share(cpu, limits.host_cores),
+            });
+        }
+        let memory = forecast.memory.minutes.get(index).copied().unwrap_or(0.0) + memory;
+        if memory > limits.memory_bytes {
+            return Err(Overload {
+                resource: OverResource::Memory,
+                minute: t,
+                percent: share(memory, limits.host_memory_bytes),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn share(value: f64, capacity: f64) -> f64 {
+    if capacity > 0.0 {
+        value / capacity * 100.0
+    } else {
+        f64::INFINITY
     }
 }

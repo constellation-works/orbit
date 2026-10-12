@@ -13,8 +13,8 @@ use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDis
 use super::{
     ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
     DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint,
-    FinalRecoveryCheckpoint, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullSinglePass,
-    PullWindowClose, TaskCancellationPolicy,
+    FinalRecoveryCheckpoint, PullAdmissionFit, PullAuthRecovery, PullBreaker, PullCrewPreflight,
+    PullSinglePass, PullWindowClose, TaskCancellationPolicy,
 };
 
 /// The PR leaf step that admits the before-landing review of its open pull
@@ -140,6 +140,11 @@ pub struct PipelineState {
     /// show` reports the breaker a drain ended with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_breaker: Option<PullBreaker>,
+    /// What this pull drain's host load forecast last had room for, under
+    /// `machine.auto_concurrency` `shadow` or `enforce`; absent with `off` or
+    /// before the host has resource profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_admission_fit: Option<PullAdmissionFit>,
     /// What this drain's last admission pass left waiting. Survives
     /// terminalization: it is how `run show` reports the backlog a finished
     /// drain never started.
@@ -236,6 +241,7 @@ impl PipelineState {
             pull_single_pass: None,
             pull_window_close: None,
             pull_breaker: None,
+            pull_admission_fit: None,
             drain_last_pass: None,
             drain_approvals: None,
             failure_activity_checkpoint: None,

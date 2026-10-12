@@ -58,6 +58,7 @@ mod admission;
 mod allow_crew;
 #[cfg(unix)]
 mod auth_recovery;
+mod auto_concurrency;
 mod before_landing;
 mod before_pr;
 mod cancel;
@@ -566,6 +567,20 @@ impl Pair {
     /// [ORB-15637].
     fn with_owner(tasks: usize, host: impl FnOnce(OrbitRuntime) -> OrbitRuntime) -> Self {
         Self::with_owner_host("", "", &vec![None; tasks], host)
+    }
+
+    /// [`Self::new`] with `config` as the follower's global `config.toml`,
+    /// where machine-wide settings such as `machine.auto_concurrency` live.
+    fn with_follower_global(tasks: usize, config: &str) -> Self {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join(FOLLOWER).join("global");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("config.toml"), config).unwrap();
+        let (owner, owner_repo) = open_runtime(root.path(), OWNER);
+        let tasks = (0..tasks)
+            .map(|n| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), None))
+            .collect();
+        Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
     }
 
     /// [`Self::with_configs`] with the owner's runtime passed through `host`.

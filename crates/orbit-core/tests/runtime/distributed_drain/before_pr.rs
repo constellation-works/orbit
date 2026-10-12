@@ -200,6 +200,7 @@ impl ReviewedHandoff {
             ship: ship.clone(),
             crews: None,
             os: None,
+            admissible: None,
         };
         let AdmissionLookup::Found { receipt, .. } = boundary
             .admit_task(

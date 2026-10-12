@@ -113,6 +113,7 @@ impl PullPeer for Peer {
                 crew_unavailable: vec![],
                 os_unavailable: vec![],
                 queue_depth: 0,
+                capacity_unavailable: Vec::new(),
             })
             .clone();
         if self.lose_request.replace(false) {
@@ -381,6 +382,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             },
             crews: None,
             os: None,
+            admissible: None,
         },
     )
 }

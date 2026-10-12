@@ -125,6 +125,14 @@ impl TaskCommitBoundary {
                 receipt.crew_unavailable.push(diagnose(reason));
                 continue;
             }
+            if let Some(reason) = request
+                .admissible
+                .as_ref()
+                .and_then(|fit| fit.unfit_reason(task))
+            {
+                receipt.capacity_unavailable.push(diagnose(reason));
+                continue;
+            }
             let stop_evidence = self
                 .landing_attempt(&accepted.handoff_id)?
                 .and_then(|attempt| attempt.evidence)

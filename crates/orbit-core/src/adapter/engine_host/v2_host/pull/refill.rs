@@ -78,6 +78,19 @@
 //! before every request, after reconciliation, so a leaf the pass just
 //! settled as failed already counts.
 //!
+//! Under `machine.auto_concurrency` `enforce`, each request also carries the
+//! work this host's load forecast has room for, computed under the host
+//! admission lock just before it, and the owner admits only a task inside it.
+//! When nothing fits the pass requests nothing and records
+//! `forecast_no_headroom`. A claim that returns is reserved under that lock
+//! before the next request is forecast, so each request is one candidate
+//! against a fresh forecast. Shadow mode records the list as
+//! `pull_admission_fit` and requests as with `off`; with `off`, or before the
+//! host has resource profiles, requests carry no list.
+//!
+//! Each pass sends at most the drain's live ceiling of requests, an operator's
+//! `orbit run concurrency` included, not the ceiling it was submitted with.
+//!
 //! A graceful `orbit run cancel` puts the drain into its cancelling mode:
 //! each pass then requests nothing, releases every admission that never
 //! launched back to the owner's backlog, and waits for the launched leaves to
@@ -98,7 +111,8 @@ use orbit_store::contracts::{
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
 };
 use orbit_types::workflow::{
-    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullBreaker, PullCrewPreflight,
+    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullAdmissionFit, PullBreaker,
+    PullCrewPreflight,
 };
 use serde_json::{Value, json};
 
@@ -110,7 +124,7 @@ use super::drain::{
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    OwnerAnswer, PullCrewWindow, RefusedPullSettlement, owner_binary_version,
+    OwnerAnswer, PullCrewWindow, PullWorkFit, RefusedPullSettlement, owner_binary_version,
 };
 use crate::application::job::pull_window_closed;
 
@@ -263,6 +277,10 @@ pub(crate) fn pull_refill(
     // since found unusable [ORB-13941]. Read by the refill after it has
     // reconciled, so a leaf this pass settles already counts.
     let crews: RefCell<Option<PullCrewWindow>> = RefCell::new(None);
+    // What the host load forecast had room for when this pass last built a
+    // request: `None` until it builds one, `Some(None)` when nothing was
+    // forecast (`off`, no profiles, an unreadable host).
+    let work_fit: RefCell<Option<Option<PullWorkFit>>> = RefCell::new(None);
     // An open breaker skips the probe, as does a half-open one still waiting
     // for this drain's claims to settle; the refill asks it again before each
     // request, since settling a newly failed leaf can open it mid-pass. A
@@ -327,7 +345,19 @@ pub(crate) fn pull_refill(
                     let window = crew_window(runtime, &run_id)?;
                     let capability = (!window.runs_nothing()).then(|| window.capability());
                     *crews.borrow_mut() = Some(window);
-                    Ok(capability.map(|capability| AdmissionRequest {
+                    let Some(capability) = capability else {
+                        return Ok(None);
+                    };
+                    // Forecast afresh for every request, after the claim
+                    // before it was reserved.
+                    let fit = runtime.pull_work_fit()?;
+                    let admissible = fit.as_ref().and_then(PullWorkFit::admissible);
+                    let requests = fit.as_ref().is_none_or(PullWorkFit::requests);
+                    *work_fit.borrow_mut() = Some(fit);
+                    if !requests {
+                        return Ok(None);
+                    }
+                    Ok(Some(AdmissionRequest {
                         request_id: String::new(),
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
@@ -349,8 +379,20 @@ pub(crate) fn pull_refill(
                         ship: ship.clone(),
                         crews: Some(capability),
                         os: runtime.host_os(),
+                        admissible,
                     }))
                 };
+                // A claim the forecast described is reserved before the next
+                // request is forecast.
+                let claimed =
+                    |receipt: &orbit_store::contracts::AdmissionReceipt,
+                     requested_at: chrono::DateTime<chrono::Utc>| {
+                        if matches!(*work_fit.borrow(), Some(Some(_))) {
+                            runtime.reserve_pulled_claim(receipt, requested_at)
+                        } else {
+                            Ok(())
+                        }
+                    };
                 // A stop or cancel recorded mid-pass ends it before the next
                 // request; one that cannot be read ends it too. So does the
                 // breaker: open, or half-open once this pass took its probe
@@ -379,8 +421,22 @@ pub(crate) fn pull_refill(
                     }
                     Ok(admits)
                 };
+                // The live ceiling: an operator's resize since submission
+                // bounds this pass, not only each allocation.
+                let ceiling =
+                    pass_state.as_ref().map_or(ceiling, |state| {
+                        u64::from(state.effective_max_active_leaf_runs(
+                            u32::try_from(ceiling).unwrap_or(u32::MAX),
+                        ))
+                    });
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
-                let pass = drain.refill_pass(&destination, &template, &still_admitting, ceiling);
+                let pass = drain.refill_pass_claiming(
+                    &destination,
+                    &template,
+                    &still_admitting,
+                    Some(&claimed),
+                    ceiling,
+                );
                 refilled = true;
                 admitted = pass.admitted;
                 idle_receipt = pass.answer;
@@ -478,6 +534,22 @@ pub(crate) fn pull_refill(
     };
     let runs_nothing = crews.as_ref().is_some_and(PullCrewWindow::runs_nothing);
     admitting &= !runs_nothing;
+    // The forecast this pass last requested against, recorded for `run
+    // show`; a pass that built no request leaves the previous one.
+    let work_fit = work_fit.into_inner();
+    let admission_fit = work_fit
+        .as_ref()
+        .map(|fit| fit.as_ref().map(|fit| fit.record.clone()));
+    if let Some(fit) = &admission_fit
+        && let Err(failure) = record_admission_fit(runtime, &run_id, fit.as_ref())
+    {
+        error.get_or_insert(failure.to_string());
+    }
+    let no_headroom = admitted == 0
+        && work_fit
+            .as_ref()
+            .and_then(Option::as_ref)
+            .is_some_and(|fit| !fit.requests());
     // As this pass left them: one it just delivered no longer holds requests.
     let refused = refused_settlements(&drain, &destination).unwrap_or_else(|failure| {
         error.get_or_insert(failure.to_string());
@@ -509,7 +581,7 @@ pub(crate) fn pull_refill(
     }
     let sleep_seconds = if admitted > 0 {
         0
-    } else if unsettled_holding || error.is_some() || resource.throttle.is_some() {
+    } else if unsettled_holding || error.is_some() || resource.throttle.is_some() || no_headroom {
         poll
     } else {
         idle
@@ -572,7 +644,16 @@ pub(crate) fn pull_refill(
                     .map(crate::runtime::host_signal::ScheduledShutdown::hold_reason)
             })?
         })
-        .or_else(|| runs_nothing.then_some(no_runnable_crew));
+        .or_else(|| runs_nothing.then_some(no_runnable_crew))
+        .or_else(|| {
+            no_headroom.then(|| {
+                "forecast_no_headroom: this host's load forecast has room for no work the owner \
+                 could grant under `machine.auto_concurrency` enforce; see the drain's \
+                 `pull_admission_fit`, which names the minute and resource each kind of work \
+                 would exceed. The drain requests again once its forecast has room"
+                    .to_string()
+            })
+        });
     let owner_answer = match idle_receipt.as_deref() {
         Some(receipt) => OwnerAnswer::Idle(receipt),
         None if admitted > 0 => OwnerAnswer::Claimed,
@@ -607,6 +688,7 @@ pub(crate) fn pull_refill(
         "refusal": refusal,
         "settlement_refused": refused.len(),
         "crews": crews,
+        "admission_fit": admission_fit.flatten(),
         "consecutive_failures": consecutive_failures,
         "breaker": breaker,
         "breaker_state": gate.as_str(),
@@ -662,6 +744,23 @@ fn record_breaker(
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
             state.pull_breaker = breaker.cloned();
+            Ok(())
+        })
+        .map(|_| ())
+}
+
+/// Record what the drain's host load forecast last had room for; `None`
+/// clears it once nothing is forecast.
+fn record_admission_fit(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    fit: Option<&PullAdmissionFit>,
+) -> Result<(), OrbitError> {
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.pull_admission_fit = fit.cloned();
             Ok(())
         })
         .map(|_| ())

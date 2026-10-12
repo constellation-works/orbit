@@ -149,6 +149,35 @@ pub struct PullWindowClose {
     pub closed_at: DateTime<Utc>,
 }
 
+/// What a pull drain's host load forecast had room for when it last
+/// requested work: each kind of work it would admit for its profile's whole
+/// horizon, each it would not and why, and whether its request carried the
+/// list. Shadow mode records it and requests as with `off`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullAdmissionFit {
+    /// `shadow` or `enforce`.
+    pub mode: String,
+    pub computed_at: DateTime<Utc>,
+    /// Whether the request carried the list: under `enforce` only.
+    pub sent: bool,
+    /// The work that fits: `change/hard`, `no-diff/unset` or
+    /// `auto-task:<template>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admissible: Vec<String>,
+    /// The work that does not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfit: Vec<PullUnfitWork>,
+}
+
+/// Work a pull drain's forecast had no room for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullUnfitWork {
+    /// As in [`PullAdmissionFit::admissible`].
+    pub work: String,
+    /// The first minute and resource over its limit, say `cpu 94% at +6m`.
+    pub reason: String,
+}
+
 /// A pull drain's open failure breaker [ORB-15639]: the claims it admitted
 /// last settled as consecutive failures, so it requests no new work until
 /// `half_open_at`. From then it is half-open and admits one probe claim at a

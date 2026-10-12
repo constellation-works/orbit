@@ -17,6 +17,8 @@
 //!   report revisions are each retained in the store-owned report history.
 //! - An atomic task mutation's receipt is a typed field it replays on; a
 //!   receipt written as text before that field still replays.
+//! - A pull naming the work its host has room for is granted only a task in
+//!   that list.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -91,6 +93,8 @@ mod ordering;
 mod reservation_grants;
 #[path = "allocation_admission/task_index.rs"]
 mod task_index;
+#[path = "allocation_admission/work_fit.rs"]
+mod work_fit;
 
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
@@ -724,6 +728,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        admissible: None,
     }
 }
 
@@ -1290,6 +1295,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        admissible: None,
     }
 }
 
