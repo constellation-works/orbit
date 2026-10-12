@@ -1,5 +1,6 @@
 //! Branch divergence and commit/ref lookup.
 use super::super::git::{BaseSyncMode, git_output, resolve_worktree_start_point};
+use super::super::remote_probe::remote_ref_output;
 use orbit_common::OrbitError;
 use std::path::Path;
 
@@ -92,7 +93,7 @@ pub(in crate::executor::automation::vcs) fn remote_branch_sha(
     repo_root: &Path,
     branch: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let output = git_output(
+    let probe = remote_ref_output(
         repo_root,
         &[
             "ls-remote",
@@ -100,9 +101,9 @@ pub(in crate::executor::automation::vcs) fn remote_branch_sha(
             "origin",
             &format!("refs/heads/{branch}"),
         ],
+        "branch freshness",
     )?;
-    let sha = output.split_whitespace().next().map(ToOwned::to_owned);
-    Ok(sha.filter(|value| !value.is_empty()))
+    Ok(probe.stdout.split_whitespace().next().map(str::to_owned))
 }
 
 fn parse_divergence_count(
