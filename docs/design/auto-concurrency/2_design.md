@@ -132,7 +132,13 @@ Implemented in `application/job/pipeline/worker/usage.rs` (sampler) and
   started: mean cores and maximum memory for that minute. Maximum, because a
   rustc or linker peak that lasts a few seconds is what triggers the OOM
   killer. A minute is written as soon as it ends, and the last, partial
-  minute when the run ends.
+  minute when the run ends. CPU counter deltas belong to the interval between
+  readings, and are credited before completed minutes are written. An interval
+  crossing one or more boundaries is split proportionally by wall time,
+  conserving its total CPU time; intra-interval activity is not observable.
+  Memory and sample counts remain point readings in the minute containing
+  their timestamp, so a minute crossed without a reading has no memory peak
+  observation and zero samples.
 - **Storage.** Each minute is a row of `run_resource_minutes` in `orbit.db`,
   keyed by workspace, run id and minute index. It also carries the task id,
   the minute's start, the delivery's admission time, work class, complexity
@@ -172,7 +178,11 @@ and memory per wall-clock minute in the same units: busy cores from
 `/proc/loadavg`, which the throttle reads: load counts the run queue and runs
 far past 100% (load 36 on 15 cores at about 95% utilization on dk-server-1).
 Each worker offers every wall-clock minute it observed whole, and the first
-insert for that minute wins. Profiles do not need it. It is the ground truth
+insert for that minute wins. Busy and total tick deltas are split across
+wall-clock boundaries by the same elapsed-time rule as worker CPU, including
+intervals spanning multiple minutes. The initial host minute is omitted unless
+a preceding reading covers its beginning; the final partial minute is omitted.
+Profiles do not need it. It is the ground truth
 for checking the forecast (§8).
 
 ## 3. Profiles

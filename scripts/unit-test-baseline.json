@@ -361,6 +361,7 @@
         "application/job/pipeline/worker/tests/supervisor.rs::a_closed_observer_channel_stops_and_reaps_the_spawned_child",
         "application/job/pipeline/worker/tests/supervisor.rs::store_read_faults_retain_supervision_and_reap_in_a_live_parent",
         "application/job/pipeline/worker/tests/usage.rs::concurrent_workers_store_one_host_row_per_minute",
+        "application/job/pipeline/worker/tests/usage.rs::counter_intervals_credit_the_minutes_they_cover",
         "application/job/pipeline/worker/tests/usage.rs::memory_counts_shmem_but_not_page_cache",
         "application/job/pipeline/worker/tests/usage.rs::sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory",
         "application/job/run/tests/actions.rs::cancel_job_run_does_not_signal_reused_pid_identity_mismatch",

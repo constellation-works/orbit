@@ -148,8 +148,7 @@ fn at(seconds: i64) -> DateTime<Utc> {
 fn sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory() {
     let mut fixture = Fixture::new();
     let run = "jrun-minutes";
-    // Cores and host busy cores for each sample interval, by the minute the
-    // interval ends in.
+    // Cores and host busy cores for each interval, by the minute it covers.
     let cores = [2.0, 0.5, 1.0];
     let host_busy = [1, 3, 2];
     let mut sampler = fixture.sampler(run);
@@ -157,7 +156,7 @@ fn sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory() {
     fixture.run_host(0, 0, 1024);
     sampler.sample(at(0));
     for seconds in (5..=125).step_by(5) {
-        let minute = (seconds / 60) as usize;
+        let minute = ((seconds - 5) / 60) as usize;
         // Minute 0 peaks at 30 s: 3.5 GB charged, 1.5 GB of it page cache.
         let (current, file) = match seconds {
             30 => (7 * GB / 2, 3 * GB / 2),
@@ -229,6 +228,83 @@ fn sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory() {
     let rows = fixture.store.run_resource_minutes("ws_test", run).unwrap();
     assert_eq!(rows.len(), 4);
     assert!(!rows[0].resumed && rows[3].resumed && rows[3].minute_index == 3);
+}
+
+/// Injected counter intervals guard attribution before flushing, including a
+/// burst ending exactly at a boundary and gaps spanning several minutes.
+#[test]
+fn counter_intervals_credit_the_minutes_they_cover() {
+    for (run, intervals, expected_run, expected_host) in [
+        (
+            "jrun-boundary-burst",
+            vec![(55, 0), (60, 4), (65, 0), (120, 0), (125, 0)],
+            vec![1.0 / 3.0, 0.0, 0.0],
+            vec![(0, 1.0 / 3.0), (60, 0.0)],
+        ),
+        (
+            "jrun-crossing-intervals",
+            vec![(55, 0), (65, 2), (185, 1), (190, 0)],
+            vec![1.0 / 6.0, 65.0 / 60.0, 1.0, 0.5],
+            vec![(0, 1.0 / 6.0), (60, 65.0 / 60.0), (120, 1.0)],
+        ),
+    ] {
+        let mut fixture = Fixture::new();
+        let mut sampler = fixture.sampler(run);
+        fixture.run_scope(run, 0.0, 0.0, GB, 0);
+        fixture.run_host(0, 0, 1024);
+        // A host reading before the first boundary makes minute 0 whole;
+        // the worker's elapsed clock still begins at 0.
+        sampler.sample(at(-5));
+        sampler.sample(at(0));
+        let jitter = if run == "jrun-crossing-intervals" {
+            789
+        } else {
+            0
+        };
+        let mut previous = 0;
+        for (seconds, cores) in intervals {
+            let duration = seconds - previous;
+            fixture.run_scope(run, duration as f64, cores as f64, GB, 0);
+            fixture.run_host(duration as u64, cores, 1024);
+            // Nonintegral microseconds force boundary-duration rounding in
+            // the crossing case, while the burst still ends exactly at 60.
+            sampler.sample(at(seconds) + TimeDelta::nanoseconds(jitter));
+            previous = seconds;
+        }
+        sampler.finish(at(previous) + TimeDelta::nanoseconds(jitter));
+        let rows = fixture.store.run_resource_minutes("ws_test", run).unwrap();
+        let recovered_cpu: u64 = rows
+            .iter()
+            .map(|row| {
+                let end = (row.minute_started_at + TimeDelta::minutes(1))
+                    .min(at(previous) + TimeDelta::nanoseconds(jitter));
+                let wall = (end - row.minute_started_at).num_microseconds().unwrap();
+                (row.cpu_cores * wall as f64).round() as u64
+            })
+            .sum();
+        assert_eq!(
+            recovered_cpu, fixture.usage_usec,
+            "splitting conserves CPU time"
+        );
+        assert_eq!(rows.len(), expected_run.len(), "{run}: {rows:#?}");
+        for (index, (row, expected)) in rows.iter().zip(expected_run).enumerate() {
+            assert_eq!(row.minute_index, index as u32);
+            assert!(
+                (row.cpu_cores - expected).abs() < 1e-6,
+                "{run}: minute {index} must credit its covered interval: {rows:#?}"
+            );
+        }
+        let host = fixture.store.host_resource_minutes(start()).unwrap();
+        assert_eq!(host.len(), expected_host.len(), "{run}: {host:#?}");
+        for (row, (seconds, expected)) in host.iter().zip(expected_host) {
+            assert_eq!(row.minute_at, at(seconds));
+            assert!(
+                // Integer ticks can round by one at a fractional boundary.
+                (row.cpu_cores - expected).abs() < 1e-3,
+                "{run}: host minute {seconds} must credit its covered interval within tick precision: {host:#?}"
+            );
+        }
+    }
 }
 
 /// Page cache charged to a scope is reclaimable and not counted; tmpfs and
