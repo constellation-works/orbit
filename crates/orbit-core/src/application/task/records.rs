@@ -85,6 +85,12 @@ impl TaskRecordService<'_> {
         id: &str,
         params: TaskRecordUpdateParams,
     ) -> Result<Task, OrbitError> {
+        #[cfg(test)]
+        if FAIL_NEXT_UPDATE.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Execution(
+                "injected task record update failure".to_string(),
+            ));
+        }
         // Let the artifact store finish its rejection checks before publishing
         // document or status/history edits. Keeping those checks in the store
         // also covers reserved evidence paths and malformed coverage payloads.
@@ -182,6 +188,13 @@ impl TaskRecordService<'_> {
         }
         Ok(deleted)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fails this thread's next [`TaskRecordService::update`] before it writes
+    /// anything, as a store error would. Production builds do not have it.
+    pub(super) static FAIL_NEXT_UPDATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl crate::OrbitRuntime {

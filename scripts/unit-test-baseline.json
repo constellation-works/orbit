@@ -466,6 +466,7 @@
         "application/task/desktop/tests/write.rs::completion_replay_finishes_side_effects_after_a_post_lock_read_failure",
         "application/task/desktop/tests/write.rs::desktop_legacy_edit_receipt_survives_status_contract_extension",
         "application/task/desktop/tests/write.rs::desktop_redacts_before_receipt_and_preserves_retries",
+        "application/task/tests/add.rs::creation_provenance_failure_keeps_one_task_and_its_event",
         "application/task/tests/add.rs::keyed_creation_lost_reply_replays_without_history_or_events",
         "application/task/tests/add.rs::task_add_redacts_secrets_in_stored_fields",
         "application/task/tests/blocked_recovery.rs::a_human_field_edit_after_the_block_is_never_overridden",
