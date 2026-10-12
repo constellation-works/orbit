@@ -379,10 +379,10 @@ pub(crate) fn reconcile_default_routines(
                 // provenance, so content alone cannot separate a routine Orbit
                 // seeded and the operator then customized — flipping `enabled`
                 // and pinning a host is the documented lifecycle — from a file
-                // the operator wrote from scratch. Adopt the on-disk instance's
-                // own binding so a later shipped-template change can be
-                // reconciled, and reserve the collision warning for a directory
-                // Orbit already tracks, where a shipped name missing from the
+                // the operator wrote from scratch with the same seeded name.
+                // Adopt the on-disk instance's own binding so a later shipped
+                // template change can be reconciled, and reserve the collision
+                // warning for a directory Orbit already tracks, where a shipped name missing from the
                 // manifest really is user-authored. Mirrors the guard in
                 // `reconcile_managed_assets`. Adoption records the bytes now on
                 // disk as Orbit's own, so a later shipped-template change
