@@ -71,7 +71,7 @@ Cases:
 | `complete-needs-operator` | "through to done" over MCP: no `done` update, no `complete` field; reply names `orbit run ship … --complete` |
 | `preserve-user-intervention` | DANI-43, blocked by a human, is reported and left alone; DANI-41/42 overlap still flagged; no ship |
 | `agent-report-is-advisory` | `agent_invoke` report claims a merge that the task record contradicts; `task_show` follows the invoke; advises against `done` |
-| `setup-when-absent` | skill fires, reads `setup/first-run.md`, no task calls; reply covers install → identity/prefix → `workspace init` → MCP registration → verify |
+| `setup-when-absent` | `orbit-setup` skill fires, reads `orbit-setup/references/first-run.md`, no task calls; reply covers install → identity/prefix → `workspace init` → MCP registration → verify |
 | `orbit-homonym` | negative: "Hohmann transfer orbit" fires no orbit skill and no MCP call |
 
 Under `--ablation with-without`, `tool_used: Skill` graders are plugin-fired
