@@ -11,7 +11,7 @@ use super::super::git::{git_failure_error, git_output_raw, git_run, git_success}
 /// the 30s git default: this runs off the critical path on its own thread, so
 /// it can afford to wait out a legitimately huge `target/` without blocking
 /// GC or the sweep that called it.
-const TRASH_DELETE_TIMEOUT_MS: u64 = 600_000;
+pub(super) const TRASH_DELETE_TIMEOUT_MS: u64 = 600_000;
 
 /// Shared sanctioned worktree removal sequence. Pipeline cleanup may force
 /// removal because it owns the just-created checkout; out-of-band GC passes

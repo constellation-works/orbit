@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
+use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness, process_is_alive};
 use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
@@ -14,7 +15,7 @@ use serde_json::Value;
 use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
 use super::super::git::{git_command_success, git_output, git_success};
-use super::cleanup::{remove_unregistered_directory, remove_worktree};
+use super::cleanup::{TRASH_DELETE_TIMEOUT_MS, remove_unregistered_directory, remove_worktree};
 use super::rescue;
 use super::{
     WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
@@ -274,20 +275,69 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         let known: BTreeSet<_> = known_paths.keys().cloned().collect();
         for entry in on_disk_worktrees(repo_root)? {
             if !known.contains(&entry) {
-                reports.push(WorktreeGcReport {
-                    path: entry,
-                    run_id: None,
-                    run_state: None,
-                    task_id: None,
-                    task_status: None,
-                    pr_status: None,
-                    action: "skipped:unrecognized".to_string(),
-                    bytes_reclaimed: 0,
-                    detail: None,
-                    reclaim: Vec::new(),
-                    recovery: None,
-                    retained_bytes: None,
-                });
+                let file_name = entry.file_name().and_then(|val| val.to_str());
+                let trash = if !options.target_only {
+                    file_name.and_then(parse_trash_directory)
+                } else {
+                    None
+                };
+                if let Some(trash) = trash {
+                    if process_is_alive(trash.pid) && !is_trash_expired(trash.nanos) {
+                        reports.push(WorktreeGcReport {
+                            path: entry,
+                            run_id: None,
+                            run_state: None,
+                            task_id: None,
+                            task_status: None,
+                            pr_status: None,
+                            action: "skipped:deleter_alive".to_string(),
+                            bytes_reclaimed: 0,
+                            detail: None,
+                            reclaim: Vec::new(),
+                            recovery: None,
+                            retained_bytes: None,
+                        });
+                    } else {
+                        let report =
+                            reclaim_trash_directory(&entry, options).unwrap_or_else(|error| {
+                                tracing::warn!(
+                                    path = %entry.display(),
+                                    %error,
+                                    "failed to reclaim trash directory"
+                                );
+                                WorktreeGcReport {
+                                    path: entry.clone(),
+                                    run_id: None,
+                                    run_state: None,
+                                    task_id: None,
+                                    task_status: None,
+                                    pr_status: None,
+                                    action: format!("failed:{error}"),
+                                    bytes_reclaimed: 0,
+                                    detail: None,
+                                    reclaim: Vec::new(),
+                                    recovery: None,
+                                    retained_bytes: None,
+                                }
+                            });
+                        reports.push(report);
+                    }
+                } else {
+                    reports.push(WorktreeGcReport {
+                        path: entry,
+                        run_id: None,
+                        run_state: None,
+                        task_id: None,
+                        task_status: None,
+                        pr_status: None,
+                        action: "skipped:unrecognized".to_string(),
+                        bytes_reclaimed: 0,
+                        detail: None,
+                        reclaim: Vec::new(),
+                        recovery: None,
+                        retained_bytes: None,
+                    });
+                }
             }
         }
     }
@@ -713,6 +763,84 @@ fn reclaim_failed_removal_leftover(
     report.action = "removed".to_string();
     report.detail = Some(LEFTOVER_DETAIL.to_string());
     Ok(report)
+}
+
+const TRASH_DETAIL: &str = "A timed-out worktree removal left a relocated trash directory. \
+     Removed the leftover directory.";
+
+struct TrashDirectoryInfo {
+    #[allow(dead_code)]
+    name: String,
+    pid: u32,
+    nanos: u128,
+}
+
+fn parse_trash_directory(file_name: &str) -> Option<TrashDirectoryInfo> {
+    let rest = file_name.strip_prefix(".trash-")?;
+    let (rest, nanos_str) = rest.rsplit_once('-')?;
+    let (name, pid_str) = rest.rsplit_once('-')?;
+    if name.is_empty() {
+        return None;
+    }
+    let pid = pid_str.parse::<u32>().ok()?;
+    let nanos = nanos_str.parse::<u128>().ok()?;
+    Some(TrashDirectoryInfo {
+        name: name.to_string(),
+        pid,
+        nanos,
+    })
+}
+
+fn is_trash_expired(created_nanos: u128) -> bool {
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let age_nanos = now_nanos.saturating_sub(created_nanos);
+    let timeout_nanos = (TRASH_DELETE_TIMEOUT_MS as u128) * 1_000_000;
+    age_nanos >= timeout_nanos
+}
+
+fn reclaim_trash_directory(
+    path: &Path,
+    options: &WorktreeGcOptions,
+) -> Result<WorktreeGcReport, OrbitError> {
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
+    if !options.delete {
+        return Ok(WorktreeGcReport {
+            path: path.to_path_buf(),
+            run_id: None,
+            run_state: None,
+            task_id: None,
+            task_status: None,
+            pr_status: None,
+            action: "would_remove".to_string(),
+            bytes_reclaimed: estimated_bytes,
+            detail: Some(TRASH_DETAIL.to_string()),
+            reclaim: Vec::new(),
+            recovery: None,
+            retained_bytes: None,
+        });
+    }
+    remove_unregistered_directory(path)?;
+    Ok(WorktreeGcReport {
+        path: path.to_path_buf(),
+        run_id: None,
+        run_state: None,
+        task_id: None,
+        task_status: None,
+        pr_status: None,
+        action: "removed".to_string(),
+        bytes_reclaimed: estimated_bytes,
+        detail: Some(TRASH_DETAIL.to_string()),
+        reclaim: Vec::new(),
+        recovery: None,
+        retained_bytes: None,
+    })
 }
 
 /// Reclaim only declared output, keeping committed and unmatched work.
