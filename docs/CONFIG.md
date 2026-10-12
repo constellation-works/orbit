@@ -64,6 +64,7 @@ task_prefix = "ORB"
 | `machine.id` | written by init | No | Opaque `hm_…` identity for run ownership, workspace ownership and federated routing. |
 | `machine.name` | written by init | Yes (`--global`) | Display label: `executed_on.machine_name` on new local and claimed runs, `run_context.machine_name` in pull admission, and dashboard execution labels (full id in the tooltip). |
 | `machine.task_prefix` | written by init | No | 2–5 uppercase ASCII letters for task IDs minted here; fixed for the life of the local task store. |
+| `machine.host_shutdown_hold_minutes` | `180` | Yes (`--global`) | Hold new unattended admissions only when a scheduled host shutdown or reboot is this many minutes away or sooner (`>= 1`). A later schedule is still reported and admission continues. |
 | `machine.worker_containment` | `true` | Yes | Run each detached pipeline worker in a transient systemd user scope (`orbit-worker-<run_id>-<nonce>.scope`), so a runaway run is throttled or OOM-killed inside it. See [worker containment](#worker-containment). |
 | `machine.worker_containment_strict` | `false` | Yes | Refuse a worker launch when no systemd user scope is available. Requires `worker_containment = true`. |
 | `machine.worker_memory_high` | `40%` | Yes | Scope `MemoryHigh=` (throttle point): bytes with optional `K`/`M`/`G`/`T`, a percentage of physical RAM, or `infinity`. |
@@ -177,6 +178,8 @@ Interactive init asks for the default crew by name, offering only enabled crews.
 ### `[workflow.resource_throttle]` — host pressure
 
 While CPU, memory or a watched filesystem stays at or above its high mark, admission using those thresholds starts no new task work until it falls below the resume mark; running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
+
+A scheduled host shutdown is a separate hold. `machine.host_shutdown_hold_minutes` (default 180, global only, at least 1) stands new unattended work down only when the schedule is that close, so a reboot set for tomorrow does not idle the host all day. Readiness still names a later schedule. See [scheduled host shutdown](runbooks/distributed-drain.md#scheduled-host-shutdown-or-reboot).
 
 | Key | Default | What it does |
 |---|---|---|

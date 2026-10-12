@@ -1552,25 +1552,34 @@ Each kept worktree's declared build output is reclaimed on every sweep, and
 ## Scheduled host shutdown or reboot
 
 When the host has a shutdown or reboot pending (for example
-`unattended-upgrades` running `shutdown -r 04:00`), Orbit starts no new
-unattended work until the schedule clears. Routines and auto-tasks do not
-fire, drain waves admit no leaves, and `orbit run ship-sweep` skips with
+`unattended-upgrades` running `shutdown -r 04:00`), Orbit holds new
+unattended work only while that schedule is within
+`machine.host_shutdown_hold_minutes` (default 180; see
+[CONFIG.md](../CONFIG.md#machine--who-this-machine-is)). A reboot set
+further ahead is still reported, and routines, auto-tasks, and drain waves
+admit as usual, so the host is not idle for the whole lead time. Inside the
+horizon, routines and auto-tasks do not fire, drain waves admit no leaves, a
+pull drain requests no claim and records `admission_refusal` beginning
+`host_shutdown_scheduled`, and `orbit run ship-sweep` skips with
 `host_shutdown_scheduled`. Runs already in flight are not cancelled or
 signalled.
 
 ```bash
-orbit doctor                 # host-shutdown: warning naming mode and time
-orbit run readiness          # "Admissions held: host reboot scheduled for …"
+orbit doctor                 # warning while the schedule is inside the horizon; ok, naming the time, when it is further away
+orbit run readiness          # inside: "Admissions held: host reboot scheduled for …"
+                             # beyond: "Host reboot scheduled for …. Admissions continue until machine.host_shutdown_hold_minutes …"
 cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 ```
 
 - To resume admissions before the restart, cancel the schedule as root with
-  `shutdown -c`. The next tick or drain iteration admits again.
+  `shutdown -c`, or wait until the schedule is further than the horizon. The
+  next tick or drain iteration admits again.
 - Otherwise, do nothing. `/run` is cleared on reboot, and admissions resume
   on their own when the host comes back.
 - `orbit run ship` and `orbit run auto` still run while a hold is active and
-  log a warning. A single explicit ship may be killed by the restart. A drain
-  started during the hold admits nothing until the hold clears.
+  log a warning. Beyond the horizon they run without that warning. A single
+  explicit ship may be killed by the restart. A drain started during the hold
+  admits nothing until the hold clears.
 - Reboot policy (apt `Automatic-Reboot*` settings) is root territory, and
   Orbit does not change it.
 
@@ -1671,7 +1680,9 @@ long-lived processes.
 its window was open: the `Requests held:` line, from `admission_refusal` under
 `pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker is open),
 `circuit_half_open` (it waits for the drain's claims to settle before one probe claim),
-`settlement_refused`, `no_runnable_crew`, `host_suppressed`, or the owner probe's refusal.
+`settlement_refused`, `no_runnable_crew`, `host_suppressed`,
+`host_shutdown_scheduled` (a shutdown or reboot inside
+`machine.host_shutdown_hold_minutes`), or the owner probe's refusal.
 The value is set afresh each pass. This host's resource throttle has its own `Throttled:` line,
 and degradation has its own warning. Follower readiness repeats the refusal as
 `Pull drain requests held:` (`capacity.pull_drain_refusal`).

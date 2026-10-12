@@ -16,10 +16,11 @@ use super::resolve::{
     DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
     resolve_bounded_minutes, resolve_choice, resolve_cpu_light_leaves,
-    resolve_distributed_completion, resolve_machine_id, resolve_machine_name,
-    resolve_material_fields, resolve_memory_limit, resolve_non_empty, resolve_optional_choice,
-    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
-    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
+    resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
+    resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
+    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
+    resolve_retention_days, resolve_task_prefix, resolve_validation_path_mode,
+    resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -307,6 +308,12 @@ define_config_settings! {
         description: "Most recent completed deliveries retained per profile key; at least min_profile_deliveries (default 50).",
         section: ConfigSection::Machine, order: 35,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(50)),
+    },
+    machine_host_shutdown_hold_minutes: u32 => u32 {
+        key: "machine.host_shutdown_hold_minutes", value_type: "integer",
+        description: "Hold new unattended admissions only when a scheduled host shutdown or reboot is this many minutes away or sooner (>= 1, default 180). A later schedule is still reported and admission continues.",
+        section: ConfigSection::Machine, order: 31,
+        resolve: |raw: Option<u32>| resolve_host_shutdown_hold_minutes(raw),
     },
     machine_name: Option<String> => String {
         key: "machine.name", value_type: "string",

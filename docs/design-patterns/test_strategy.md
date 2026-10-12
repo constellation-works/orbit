@@ -123,6 +123,10 @@ Admitted unit tests:
 
 - `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::store_schema_prefix_goldens` (criterion 3, persisted-schema safety): applies each shipped ledger prefix independently and compares its normalized SQLite schema with a lossless per-version golden. The public store-open boundary always applies the latest registry and cannot exercise historical prefixes without widening production visibility. The legacy recreation and actor data backfill cases use the public boundary in `tests/migration_freeze.rs`.
 
+- `crates/orbit-config/src/tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values` (criterion 3, fail-closed crafted input). Zero is rejected by the resolver with a message that names `machine.host_shutdown_hold_minutes`; a negative fails the integer read and names the same key. The default 180 and an uncapped 10080 are controls in the same test. The load helpers that write a global file and refuse a workspace `[machine]` table are `pub(super)` in this crate's existing machine tests, so the check stays beside them [ORB-15796].
+- `the_hold_includes_the_horizon_and_a_later_instant_admits` (criterion 1), beside `crates/orbit-core/src/runtime/host_signal.rs`. One table pins the horizon arithmetic: equality holds, one second later admits, and a past timestamp holds. The pull and local drain tests, and the sweep test below, place the schedule with `Utc::now()` at minute granularity, so they cannot pin the one-second boundary without a race [ORB-15796].
+- `crates/orbit-core/src/application/routines/tests/sweep.rs::a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires` (criterion 2). The public `test_support::run_sweep_at` hardcodes the default host-signal probe, so a crate-root test cannot place a shutdown on either side of the horizon. The test drives `pub(crate)` `run_sweep_at_with_providers_at` with an injected clock and a 30-minute horizon, and asserts the tick skips at the horizon and fires one minute past it. A hardcoded 180 would still hold that far side [ORB-15796].
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.

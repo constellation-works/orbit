@@ -3,9 +3,10 @@
 //! A host that has scheduled its own shutdown or reboot will kill every run
 //! started before it, so unattended admission points (routine and auto-task
 //! fires from the scheduler tick, drain waves, the registry ship sweep) hold
-//! new work while one is pending. Runs already in flight are never touched:
-//! the probe only answers "is a shutdown scheduled", and callers decide what
-//! not to *start*.
+//! new work while one is pending *within* `machine.host_shutdown_hold_minutes`.
+//! A schedule further away is reported and does not idle the host. Runs
+//! already in flight are never touched: the probe only answers "is a shutdown
+//! scheduled", and callers decide what not to *start*.
 //!
 //! On systemd hosts logind persists the pending schedule, unprivileged, in
 //! [`SYSTEMD_SCHEDULED_SHUTDOWN_PATH`] — the same state it exposes as the
@@ -56,6 +57,23 @@ impl ScheduledShutdown {
              or the host restarts",
             self.describe()
         )
+    }
+
+    /// Whether unattended admission should stand down for this schedule.
+    ///
+    /// The hold starts at `now + hold_minutes` and includes that instant, so
+    /// work admitted on the near side of the horizon can finish before the
+    /// reboot. A timestamp that cannot be added (the horizon overflows) holds:
+    /// that is the direction that does not start work into an unknown reboot.
+    #[must_use]
+    pub fn holds_admission(&self, now: DateTime<Utc>, hold_minutes: u32) -> bool {
+        let Some(horizon) = chrono::Duration::try_minutes(i64::from(hold_minutes)) else {
+            return true;
+        };
+        match now.checked_add_signed(horizon) {
+            Some(deadline) => self.scheduled_at <= deadline,
+            None => true,
+        }
     }
 }
 

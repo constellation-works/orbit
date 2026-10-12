@@ -158,6 +158,23 @@ pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitErr
     }
 }
 
+/// Default `machine.host_shutdown_hold_minutes`: long enough for work admitted
+/// now to finish, short enough that a reboot scheduled for tomorrow does not
+/// idle the host all day.
+pub(super) const DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
+
+/// Admit a positive shutdown-hold horizon. There is no upper bound: a host
+/// that wants a longer quiet period before a reboot may set one.
+pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
+    match raw {
+        Some(0) => Err(OrbitError::InvalidInput(
+            "machine.host_shutdown_hold_minutes has invalid value 0; expected >= 1".to_string(),
+        )),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES),
+    }
+}
+
 pub(super) fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
     let Some(value) = resolve_optional_non_empty(raw, "machine.id")? else {
         return Ok(None);

@@ -129,6 +129,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.host_shutdown_hold_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.id": {
       "scope": "built-in",
       "state": "unset",

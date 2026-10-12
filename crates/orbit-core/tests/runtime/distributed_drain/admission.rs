@@ -2387,3 +2387,76 @@ fn a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing() {
     let after: Vec<String> = pair.tasks.iter().map(|id| pair.owner_status(id)).collect();
     assert_eq!(before, after, "no task changed status");
 }
+
+/// A reboot inside the hold horizon requests nothing and records why. One
+/// strictly later requests a claim. Equality with the horizon holds, so the
+/// near side is scheduled exactly `hold_minutes` out and the far side one
+/// minute past that, measured at the pass.
+#[test]
+fn a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requests_one() {
+    if !isolated(
+        module_path!(),
+        "a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requests_one",
+    ) {
+        return;
+    }
+    let mut pair = Pair::new(1);
+    let drain = pair.start_drain();
+    let schedule = |minutes: i64| orbit_core::runtime::host_signal::ScheduledShutdown {
+        mode: "reboot".into(),
+        scheduled_at: Utc::now() + chrono::Duration::minutes(minutes),
+        source: "fixture".into(),
+    };
+    let install = |pair: &mut Pair, minutes: i64| {
+        pair.follower = pair
+            .follower
+            .clone()
+            .with_host_shutdown_hold_minutes(30)
+            .with_host_signal_probe(Arc::new(
+                orbit_core::runtime::host_signal::FixedHostSignals::scheduled(schedule(minutes)),
+            ));
+    };
+
+    install(&mut pair, 30);
+    let held = pair.pass(&drain);
+    assert_eq!(held["admitting"], false, "{held}");
+    assert_eq!(held["admitted"], 0, "{held}");
+    assert!(
+        held["refusal"]
+            .as_str()
+            .is_some_and(|refusal| refusal.starts_with("host_shutdown_scheduled")),
+        "{held}"
+    );
+    assert!(
+        held["host_shutdown"]
+            .as_str()
+            .is_some_and(|text| text.contains("reboot")),
+        "{held}"
+    );
+    assert!(
+        pair.wire.calls("orbit.task.pull").is_empty(),
+        "a hold must not request a claim: {held}"
+    );
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("the pass is recorded");
+    assert!(
+        recorded
+            .admission_refusal
+            .as_deref()
+            .is_some_and(|refusal| refusal.starts_with("host_shutdown_scheduled")),
+        "{recorded:?}"
+    );
+
+    install(&mut pair, 31);
+    let _leaf = pair.queued_leaf(&drain, 1);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        1,
+        "a schedule past the horizon is admitted"
+    );
+}

@@ -2432,3 +2432,113 @@ pub(super) fn admitted_frozen_batch(
     });
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
+
+/// A shutdown inside the configured horizon holds a local wave, readiness, and
+/// an unattended entry. One minute past that horizon admits, while readiness
+/// and the entry decision still name the schedule.
+#[test]
+fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
+    if !isolated(
+        "a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(repo.join("src/queued.rs"), "fn queued() {}\n").unwrap();
+    std::fs::write(
+        global.join("config.toml"),
+        "[machine]\nhost_shutdown_hold_minutes = 30\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("runtime")
+        .with_host_resource_probe(PressureProbe::calm());
+    assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
+    let queued = seed(
+        &runtime,
+        Seed {
+            context_files: Some(&["file:src/queued.rs"]),
+            ..Seed::default()
+        },
+    );
+    let schedule = |minutes: i64| {
+        orbit_core::runtime::host_signal::FixedHostSignals::scheduled(
+            orbit_core::runtime::host_signal::ScheduledShutdown {
+                mode: "reboot".into(),
+                scheduled_at: Utc::now() + chrono::Duration::minutes(minutes),
+                source: "fixture".into(),
+            },
+        )
+    };
+    let presented = |minutes: i64| {
+        runtime
+            .clone()
+            .with_host_signal_probe(Arc::new(schedule(minutes)))
+    };
+
+    let holding = presented(30);
+    let drain = running_run(&holding, "workspace_auto_pipeline", json!({}));
+    let held = classify(&holding, &drain);
+    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
+    assert_eq!(held["free_slots"], 0, "{held}");
+    assert_eq!(held["host_shutdown_holding"], true, "{held}");
+    assert!(held["host_shutdown"]["scheduled_at"].is_string(), "{held}");
+    let held_pass = holding
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("local pass");
+    assert_eq!(held_pass.admission_refusal, None, "{held_pass:?}");
+    let held_ready = holding
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(held_ready["capacity"]["host_shutdown_holding"], true);
+    assert!(
+        held_ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
+        "{held_ready}"
+    );
+    assert_eq!(
+        readiness_task(&held_ready, &queued.id)["reason"],
+        "host_shutdown_scheduled"
+    );
+    let refused = holding
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .unwrap();
+    assert_eq!(refused.refusal.unwrap().code(), "host_shutdown_scheduled");
+    assert!(refused.host_shutdown.is_some());
+
+    let open = presented(31);
+    let drain = running_run(&open, "workspace_auto_pipeline", json!({}));
+    let wave = classify(&open, &drain);
+    assert_eq!(wave["loose_task_ids"], json!([queued.id]), "{wave}");
+    assert_eq!(wave["host_shutdown_holding"], false, "{wave}");
+    assert!(wave["host_shutdown"]["scheduled_at"].is_string(), "{wave}");
+    let open_pass = open
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("local pass");
+    assert_eq!(open_pass.admission_refusal, None, "{open_pass:?}");
+    let ready = open.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    assert_eq!(ready["capacity"]["host_shutdown_holding"], false);
+    assert!(
+        ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
+        "{ready}"
+    );
+    let admitted = readiness_task(&ready, &queued.id);
+    assert_ne!(admitted["reason"], "host_shutdown_scheduled", "{admitted}");
+    assert_eq!(admitted["reason"], "ready", "{admitted}");
+    let decision = open
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .unwrap();
+    assert!(decision.refusal.is_none(), "{decision:?}");
+    assert!(decision.host_shutdown.is_some(), "{decision:?}");
+}
