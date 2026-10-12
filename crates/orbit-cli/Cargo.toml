@@ -49,6 +49,8 @@ predicates.workspace = true
 regex.workspace = true
 # Settings › Hosts HTTP API against a served dashboard [ORB-14451].
 reqwest.workspace = true
+# Signs the fake release mirror `orbit_cmd::update` tests verify against.
+rsa.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

@@ -7,4 +7,4 @@ Command groups that need both a Core runtime and Registry state (`orbit-registry
 - Pure consumer of `orbit_core::OrbitRuntime`'s public API. If a seam is missing, add it in Core deliberately, then consume it here. Never re-implement a Core rule.
 - No `clap`, no `axum`. Return plain result structs both surfaces can render. Logic needed by Core's own runtime internals belongs in `orbit-core::adapter::command`.
 - [`assets/agent-rules.md`](assets/agent-rules.md) is the `--inject-agent-rules` block; its markers live in the asset, so edit the asset, not marker handling.
-- No crate-root `tests/`; end-to-end coverage lives in the CLI's integration tests.
+- No crate-root `tests/`; end-to-end coverage, and tests of this crate's exported entry points, live in the CLI's integration tests.

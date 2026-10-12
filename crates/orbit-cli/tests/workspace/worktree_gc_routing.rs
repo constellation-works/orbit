@@ -128,19 +128,29 @@ fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_
         .find(|row| row["check"] == "worktree-reclaim")
         .unwrap();
     assert_eq!(row["status"], "warning", "{row}");
-    assert!(
-        row["remediation"]
-            .as_str()
-            .unwrap()
-            .contains("orbit gc worktrees --reclaim")
-    );
+    let remediation = row["remediation"].as_str().unwrap();
+    assert!(remediation.contains("orbit gc worktrees --reclaim"));
     assert!(
         worktree.join("target/output").exists(),
         "doctor never reclaims output"
     );
-    let output = command(&repo, &home)
-        .env("ORBIT_OPERATOR", "1")
-        .args(["gc", "worktrees", "--reclaim", "--confirm", "--json"])
+    // `--confirm` is governed, so the printed command must carry the operator
+    // override. Pasted from a plain shell without it, the operator's own
+    // command was refused (dk-server-2, 2026-10-09). Run it as printed.
+    let printed = remediation
+        .split('`')
+        .find(|command| command.contains("--confirm"))
+        .unwrap_or_else(|| panic!("no confirming command in {remediation}"));
+    let mut words = printed.split_whitespace().peekable();
+    let mut reclaim = command(&repo, &home);
+    while let Some((name, value)) = words.peek().and_then(|word| word.split_once('=')) {
+        reclaim.env(name, value);
+        words.next();
+    }
+    assert_eq!(words.next(), Some("orbit"), "{printed}");
+    let output = reclaim
+        .args(words)
+        .arg("--json")
         .assert()
         .success()
         .get_output()

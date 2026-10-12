@@ -1,10 +1,14 @@
 //! Recovery after the shared task registry is lost: every workspace's tasks
-//! come back through reindex, and no issued id is reissued.
+//! come back through reindex, no issued id is reissued, and the orphan
+//! task-store repair (`orbit_cmd::task_store`) deletes no populated partition
+//! it cannot prove dead.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_cmd::task_store::{inspect_task_store_partitions, remove_unclaimed_task_stores};
+use orbit_cmd::task_store_partition_path;
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
@@ -24,7 +28,8 @@ impl Fixture {
             home: temp.path().join("home"),
             root: temp.path().join("orbit-root"),
             alpha: temp.path().join("alpha"),
-            beta: temp.path().join("beta"),
+            // Beneath its own parent, so a case can make that parent unreadable.
+            beta: temp.path().join("volume").join("beta"),
             _temp: temp,
         };
         fs::create_dir_all(&fixture.home).expect("home");
@@ -52,6 +57,10 @@ impl Fixture {
     }
 
     fn orbit(&self, cwd: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
+        self.command(cwd, args).assert()
+    }
+
+    fn command(&self, cwd: &Path, args: &[&str]) -> assert_cmd::Command {
         let mut command = cargo_bin_cmd!("orbit");
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
@@ -63,7 +72,7 @@ impl Fixture {
             .arg("--root")
             .arg(&self.root)
             .args(args);
-        command.assert()
+        command
     }
 
     fn json(&self, cwd: &Path, args: &[&str]) -> Value {
@@ -217,4 +226,85 @@ fn lost_registry_refuses_allocation_until_the_high_water_mark_is_reestablished()
             assert_eq!(shown["workspace"]["id"], workspace, "task {id}");
         }
     }
+}
+
+/// [ORB-12131] A lost `tasks/index.sqlite` is recreated empty by the next
+/// runtime bootstrap, which rebinds only the checkout the command runs from.
+/// A live partition no catalog workspace claims then looks unclaimed, so the
+/// repair must leave its bundles for `orbit task reindex` instead of deleting
+/// them.
+#[test]
+fn losing_the_task_registry_leaves_populated_partitions_for_reindex() {
+    let fixture = Fixture::new();
+    fixture.add(&fixture.alpha, "Alpha one");
+    let beta_task = fixture.add(&fixture.beta, "Beta one");
+    // Removing beta from the catalog keeps its partition, claimed only by the
+    // checkout evidence the registry holds.
+    fixture
+        .command(&fixture.alpha, &["workspace", "remove", "beta"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+
+    fixture.lose_registry();
+    // The bootstrap that recreates the registry rebinds only this checkout.
+    fixture
+        .orbit(&fixture.alpha, &["task", "reindex"])
+        .success();
+
+    let partitions = inspect_task_store_partitions(&fixture.root)
+        .expect("inspect partitions")
+        .expect("partitions directory exists");
+    assert_eq!(partitions.scanned, 2);
+    assert!(
+        partitions.removable.is_empty(),
+        "no populated partition may be offered for deletion: {:?}",
+        partitions.removable
+    );
+    assert_eq!(
+        partitions
+            .unowned
+            .iter()
+            .map(|partition| partition.path.clone())
+            .collect::<Vec<_>>(),
+        vec![task_store_partition_path(&fixture.root, "ws_beta")]
+    );
+
+    let removed = remove_unclaimed_task_stores(&fixture.root).expect("run the repair");
+    assert!(removed.is_empty(), "the repair removed {removed:?}");
+    assert!(
+        task_store_partition_path(&fixture.root, "ws_beta")
+            .join(&beta_task)
+            .is_dir(),
+        "the unclaimed checkout's task bundle must survive the repair"
+    );
+}
+
+/// [ORB-12143] Absence is the only stat answer that authorizes deleting
+/// bundles. Here the checkout path resolves through a non-directory (`ENOTDIR`),
+/// which is a failure to answer rather than a missing checkout.
+#[test]
+fn a_stat_failure_other_than_absence_keeps_a_populated_partition() {
+    let fixture = Fixture::new();
+    let beta_task = fixture.add(&fixture.beta, "Beta one");
+
+    let parent = fixture.beta.parent().expect("checkout parent");
+    fs::remove_dir_all(parent).expect("remove checkout parent");
+    fs::write(parent, b"not a directory").expect("replace checkout parent with a file");
+    let error = fs::metadata(&fixture.beta).expect_err("stat must fail beneath a regular file");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+
+    let partitions = inspect_task_store_partitions(&fixture.root)
+        .expect("inspect partitions")
+        .expect("partitions directory exists");
+    assert!(partitions.stale.is_empty(), "{:?}", partitions.stale);
+    assert_eq!(partitions.unreachable.len(), 1, "{partitions:?}");
+
+    let removed = remove_unclaimed_task_stores(&fixture.root).expect("run the repair");
+    assert!(removed.is_empty(), "the repair removed {removed:?}");
+    assert!(
+        task_store_partition_path(&fixture.root, "ws_beta")
+            .join(&beta_task)
+            .is_dir()
+    );
 }

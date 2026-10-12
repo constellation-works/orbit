@@ -84,7 +84,6 @@ Admitted unit tests:
 - `crates/orbit-core/src/application/job/pipeline/worker/tests/supervisor.rs`: `store_read_faults_retain_supervision_and_reap_in_a_live_parent` (criterion 2, fault injection). A SQLite store wrapper injects unreadable and missing startup records and a post-exit read fault while a socket rendezvous bounds a real child. The isolated parent asserts fresh-state settlement and OS reaping before it exits; the public runtime cannot inject these observer reads.
 - The [admissions-stop regressions](../../crates/orbit-core/src/application/job/run/tests/admissions_stop.rs) and `crates/orbit-core/src/application/job/run/tests/drain_cancel.rs`: initialization races (criterion 2, deterministic interleaving). One-shot seams after `NoState` force a worker's first checkpoint and child dispatch, or terminalization with and without that checkpoint, before control initialization. They verify preserved progress and lineage, a merged control for a live drain, and no new effective control for a terminal drain. Crate-root integration tests cannot force this transaction ordering [ORB-15611].
 - `crates/orbit-cli/src/tests/main.rs`: `every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions` (criterion 1). It walks the assembled command tree, including hidden and plugin-derived leaves that help goldens cannot enumerate, and asserts that every leaf accepts `--json`. The only exclusion is a plugin tool input named `json`.
-- `crates/orbit-cmd/src/tests/agent_rules.rs`: `bad_markers_in_one_guide_leave_every_guide_unchanged` (criterion 3). It guards the no-partial-write invariant for injected agent guides: when any target has unbalanced or misordered markers, `inject_agent_rules` writes none of them. Reaching this through `orbit workspace init` would need a full workspace fixture per case, and the write ordering is decided inside `inject_agent_rules`.
 - `crates/orbit-cmd/src/doctor/tests/worker_token.rs`: `clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits` (criterion 1). It is a table over every pairing of clock-file credential names with the workspace's effective pass, asserting that the clock is ready only when an admitted credential is held, and that a held credential the pass omits is named and warned. The boundary needs an installed launchd or systemd clock to reach this classification. `absent_empty_refused_and_mismatched_clock_files_stay_distinct` (criterion 1) pins that absent, empty, refused and mismatched files stay distinct states.
 - `crates/orbit-core/src/runtime/host_resource/tests/platform.rs`: `missing_descendant_reports_its_existing_ancestor_filesystem` and `relative_path_is_refused_instead_of_resolved_against_the_working_directory` (criteria 3 and 4). The disk probe canonicalizes the nearest existing ancestor before statting it, and refuses relative paths so it never resolves against the process working directory. Platform statvfs on a missing worktrees directory has no integration test on any platform.
 - `crates/orbit-core/src/runtime/host_resource/tests/platform.rs`: `cpu_window_reuses_advancing_or_repeated_ticks_without_refreshing_the_baseline`, `cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window`, `cpu_window_native_failures_clock_reversal_and_stalls_remain_unknown`, and `cpu_window_handles_tick_wrap_and_the_freshness_boundary` (criteria 1 and 2). Injected counters, timestamps and waits cover XNU cache plateaus, expiry endpoints, failed reads, clock jumps and counter wrap deterministically without generating host load or waiting for a real wrap. The macOS CLI integration test covers actual cross-process history reuse and cold-start recovery.
@@ -230,3 +229,61 @@ runtime initialization and before an `AuditGuard` exists. The built-CLI
 `tool_run_unusable_input_does_not_migrate_a_pending_layout` case proves that
 refusal precedes migration. Retire the simulated duplicate rather than change
 this deliberate bootstrap behavior to satisfy its stale scenario.
+
+## Command-layer admission audit reconciliation
+
+`orbit-cmd` keeps no crate-root `tests/`, so the 2026-10-12 audit cleanup
+moves its boundary cases into the CLI crate's existing integration binaries.
+Those binaries link `orbit_cmd` and call its exported entry points directly,
+or run the built CLI where it already sets up the state:
+
+- `process` (`update::flow`, `update::bundled_bwrap`,
+  `update::local_candidate_inputs`) calls `run_update`, `stage_bundled_bwrap`,
+  `executable_target` and `CandidateManifest::parse` against a shell-script
+  installation and a mirror signed with a throwaway key
+  (`update::release_fixture`). The oversized-input case makes each input a
+  sparse file larger than every limit instead of one byte past each private
+  limit, so it does not pin the limit values.
+- `workspace` (`agent_rules`, `layout_version`, `doctor_runtime`) calls
+  `inject_agent_rules`, `OrbitRuntime::from_roots` with `migrate_dry_run_at`,
+  the `task-relations` probe from `doctor_report_probes`, and the graph and
+  stale-lock repairs on `DoctorCommands`.
+- `task` (`task_registry_recovery`) calls `inspect_task_store_partitions` and
+  `remove_unclaimed_task_stores` after the built-CLI fixture loses the task
+  registry. The workspace catalog now claims a registered checkout's
+  partition, so the unclaimed case first runs `orbit workspace remove`, which
+  keeps the partition and its bundles.
+
+Four moves already had an exact built-CLI duplicate, so the source test was
+retired instead:
+
+- `update/tests/flow.rs::a_tampered_archive_fails_the_checksum_and_never_reaches_the_install_path`,
+  `an_archive_carrying_more_than_the_orbit_binary_is_rejected` and
+  `a_second_concurrent_update_is_refused_rather_than_queued` duplicate
+  `process/update/integrity.rs`'s
+  `a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned`,
+  `an_archive_with_extra_members_including_traversal_is_rejected` and
+  `a_second_concurrent_update_is_refused`. Each built-CLI case asserts the same
+  refusal, an untouched install and no staging file.
+- `doctor/tests/permissions.rs::ownership_scan_never_visits_or_reports_worktree_or_target_contents`
+  duplicates `output/doctor.rs::permission_remediation_repairs_legacy_state_and_preserves_excluded_trees`.
+  That case leaves writable worktree and `target` trees under both roots. The
+  permission row turns `ok` after the repair, and every excluded directory
+  stays `0777` through the first and a repeated repair. The ignored
+  `default_doctor_large_store_and_worktrees_under_five_seconds` measures the
+  walk cost of 10,000 `target` directories.
+
+The three retirements consolidate rather than drop cases. The off-macOS and
+no-Claude skip controls join
+`doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is`.
+The full-object-id commit forms join the relocated
+`manifests_are_v1_operator_attested_documents_only`, because the manifest's
+`source_commit` passes through the same normalizer. The worktree-reclaim
+command guard (dk-server-2, 2026-10-09) now lives in
+`workspace/worktree_gc_routing.rs::reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout`.
+That test runs the confirming command doctor prints, including its
+environment prefix, instead of supplying the operator override itself.
+
+The 15 admitted `orbit-cmd` tests remain. Their update fixture is now trimmed
+to the restore-callback fault injection, and the stale-lock holder helpers
+sit beside the one test that uses them.

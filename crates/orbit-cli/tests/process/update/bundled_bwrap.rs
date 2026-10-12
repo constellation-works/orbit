@@ -2,9 +2,11 @@
 //! manifest before `orbit init` may install it as root.
 
 use chrono::NaiveDate;
+use orbit_cmd::update::bundled_bwrap::{
+    StagedBwrap, bundled_bwrap_asset_name, stage_bundled_bwrap,
+};
 
-use super::fixture::{Fixture, test_trusted_keys};
-use crate::update::bundled_bwrap::{bundled_bwrap_asset_name, stage_bundled_bwrap};
+use super::release_fixture::{Fixture, test_trusted_keys};
 
 const VERSION: &str = "0.9.0";
 const BINARY: &[u8] = b"\x7fELF static bubblewrap";
@@ -13,7 +15,7 @@ fn asset() -> String {
     bundled_bwrap_asset_name("x86_64").expect("x86_64 asset")
 }
 
-fn stage(fixture: &Fixture) -> Result<crate::update::bundled_bwrap::StagedBwrap, String> {
+fn stage(fixture: &Fixture) -> Result<StagedBwrap, String> {
     stage_bundled_bwrap(
         &fixture.source(),
         VERSION,
@@ -26,6 +28,8 @@ fn stage(fixture: &Fixture) -> Result<crate::update::bundled_bwrap::StagedBwrap,
 
 #[test]
 fn a_signed_listed_binary_is_staged_executable_with_its_digest() {
+    use std::os::unix::fs::PermissionsExt;
+
     let fixture = Fixture::new(VERSION);
     fixture.publish_assets(VERSION, &[(asset().as_str(), BINARY)], true);
 
@@ -37,15 +41,11 @@ fn a_signed_listed_binary_is_staged_executable_with_its_digest() {
         orbit_common::security::release::sha256_hex(BINARY)
     );
     assert_eq!(staged.signing_key_id, "orbit-test-key-1");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(staged.path())
-            .expect("staged metadata")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o755);
-    }
+    let mode = std::fs::metadata(staged.path())
+        .expect("staged metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755);
     let directory = staged.path().parent().expect("staging dir").to_path_buf();
     drop(staged);
     assert!(!directory.exists(), "staging is removed with the handle");

@@ -8,6 +8,9 @@
 //! signatures, archive shape, staged version checks, downgrade, the install
 //! lock, and a stale writer — is exercised through the same binary in the
 //! `integrity` module, and operator-built candidates in `local_candidate`.
+//! `flow`, `bundled_bwrap` and `local_candidate_inputs` call `orbit_cmd::update`'s
+//! exported entry points directly, against the shell-script installation and
+//! signed mirror in `release_fixture`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,9 +23,16 @@ use tempfile::tempdir;
 // Integration-test crate roots resolve modules beside `tests/`, not in a
 // directory named after the test file, so the path is explicit.
 #[cfg(unix)]
+mod bundled_bwrap;
+#[cfg(unix)]
+mod flow;
+#[cfg(unix)]
 mod integrity;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod local_candidate;
+mod local_candidate_inputs;
+#[cfg(unix)]
+mod release_fixture;
 
 fn orbit(cwd: &Path, home: &Path, mirror: &Path) -> assert_cmd::Command {
     fixture_env(cargo_bin_cmd!("orbit"), cwd, home, mirror)
