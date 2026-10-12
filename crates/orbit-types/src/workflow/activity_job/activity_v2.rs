@@ -400,6 +400,21 @@ impl Provider {
     pub fn has_cli_runtime(self) -> bool {
         !matches!(self, Provider::OpenaiCompat)
     }
+
+    /// Whether this provider's CLI has a native file-read and command surface
+    /// a pinned-source inspection activity can enable. Only Codex and Claude
+    /// do; crew selection for such an activity draws only these providers,
+    /// and the CLI runner refuses any other before launch.
+    pub fn has_native_inspection(self) -> bool {
+        matches!(self, Provider::Codex | Provider::Claude)
+    }
+}
+
+/// Whether an activity input asks for native pinned-source inspection: it
+/// carries the `inspection_revision` and `partition_index` fields of the
+/// task-pilot contract, which finding verification shares.
+pub fn requires_native_inspection(input: &Value) -> bool {
+    input.get("inspection_revision").is_some() && input.get("partition_index").is_some()
 }
 
 impl fmt::Display for Provider {

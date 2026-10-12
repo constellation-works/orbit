@@ -15,6 +15,7 @@ use orbit_config::{
 use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::RunStateUpdate;
+use orbit_types::workflow::activity_job::{Provider, requires_native_inspection};
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember, FINAL_RECOVERY_CREWS_KEY};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -96,6 +97,18 @@ pub(crate) struct CrewCandidate {
 }
 
 pub(crate) type CapturedCrewPools = BTreeMap<String, CapturedCrewPool>;
+
+/// The members of one complexity pool that can inspect pinned source natively
+/// [ORB-15792]: the first tier, from the one asked for upward, whose enabled
+/// pool has such a member with a positive weight.
+pub(crate) struct InspectionPool {
+    /// The tier the members were drawn from.
+    pub(crate) tier: TaskComplexity,
+    pub(crate) candidates: Vec<CrewCandidate>,
+    /// Enabled members passed over, in this tier and the ones below it,
+    /// because their provider has no native inspection surface.
+    pub(crate) skipped: Vec<String>,
+}
 
 impl OrbitRuntime {
     /// Recover legacy assignment provenance only from the latest assignment
@@ -383,6 +396,58 @@ impl OrbitRuntime {
             .map(|(candidates, _)| candidates))
     }
 
+    /// The pool an inspection-requiring draw for `tier` uses [ORB-15792].
+    ///
+    /// A pool whose enabled members cannot inspect, or hold no ticket, passes
+    /// to the next tier up (low → medium → hard → xhard). `None` when no tier
+    /// from `tier` upward has an inspection-capable member, which sends the
+    /// caller to [`Self::inspection_capable_default_crew`].
+    pub(crate) fn inspection_capable_pool(
+        &self,
+        tier: TaskComplexity,
+    ) -> Result<Option<InspectionPool>, OrbitError> {
+        let mut skipped = Vec::new();
+        for tier in COMPLEXITIES.into_iter().skip_while(|each| *each != tier) {
+            let (capable, unable): (Vec<_>, Vec<_>) = self
+                .configured_complexity_pool(tier)?
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|candidate| candidate.weight > 0)
+                .partition(|candidate| can_inspect(&candidate.crew));
+            skipped.extend(unable.into_iter().map(|candidate| candidate.crew.name));
+            if !capable.is_empty() {
+                return Ok(Some(InspectionPool {
+                    tier,
+                    candidates: capable,
+                    skipped,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `workflow.default_crew` for an inspection-requiring activity whose
+    /// pools from `tier` upward hold no inspection-capable member. Refused
+    /// with [`INSPECTION_CREW_UNAVAILABLE`] before dispatch when it cannot
+    /// inspect either [ORB-15792].
+    pub(crate) fn inspection_capable_default_crew(
+        &self,
+        tier: TaskComplexity,
+    ) -> Result<Crew, OrbitError> {
+        let crew = self.resolve_crew_for_task(None, None)?;
+        if can_inspect(&crew) {
+            return Ok(crew);
+        }
+        Err(OrbitError::InvalidInput(format!(
+            "{INSPECTION_CREW_UNAVAILABLE}: this activity inspects pinned source natively, but \
+             no crew in `{}` or a higher tier, nor workflow.default_crew `{}` (provider `{}`), \
+             has a native file-read and command surface; add a Codex or Claude crew to a pool",
+            complexity_crews_key(tier),
+            crew.name,
+            crew.assignment.provider,
+        )))
+    }
+
     /// Decide the crew a task is created with [ORB-12717].
     ///
     /// Creation and complexity re-rates draw from the complexity pools;
@@ -600,6 +665,11 @@ impl OrbitRuntime {
     /// limit. An empty or wholly disabled pool falls back to
     /// `workflow.default_crew`, as an unassigned task does, and the frozen
     /// record's source says so.
+    ///
+    /// [ORB-15792] An activity that inspects pinned source natively (the task
+    /// pilot) draws only crews whose provider has that surface, through
+    /// [`Self::inspection_activity_candidates`], and its source names the
+    /// filter. Any other activity draws from the whole pool.
     pub(crate) fn complexity_pool_activity_crew(
         &self,
         input: &Value,
@@ -607,26 +677,69 @@ impl OrbitRuntime {
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Crew, OrbitError> {
         let key = complexity_crews_key(complexity);
+        let inspection = requires_native_inspection(input);
         self.frozen_activity_crew(input, &key, &mut |allowlist| {
-            let (candidates, source) = match self.configured_complexity_pool(complexity)? {
-                Some(candidates) => (candidates, key.clone()),
-                None => {
-                    tracing::warn!(
-                        pool = %key,
-                        "the pool is empty or wholly disabled; this run's activity crew falls \
-                         back to workflow.default_crew",
-                    );
-                    (
-                        vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
-                        format!("workflow.default_crew ({key} is empty)"),
-                    )
-                }
+            let (candidates, source) = if inspection {
+                self.inspection_activity_candidates(complexity)?
+            } else if let Some(candidates) = self.configured_complexity_pool(complexity)? {
+                (candidates, key.clone())
+            } else {
+                tracing::warn!(
+                    pool = %key,
+                    "the pool is empty or wholly disabled; this run's activity crew falls back \
+                     to workflow.default_crew",
+                );
+                (
+                    vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
+                    format!("workflow.default_crew ({key} is empty)"),
+                )
             };
             let candidates = permitted_candidates(candidates, &source, allowlist)?;
             let (candidates, source) = self.provider_unlimited_candidates(candidates, source);
             let selected = weighted_draw(&candidates, &source, random)?;
             Ok(activity_crew_draw(selected, &source, &candidates))
         })
+    }
+
+    /// The candidates and source of an inspection-requiring activity draw
+    /// from `complexity`'s pool, before the run's allowlist and provider
+    /// limits apply: the inspection-capable members of the first tier from
+    /// `complexity` upward that has one, else an inspection-capable
+    /// `workflow.default_crew`.
+    fn inspection_activity_candidates(
+        &self,
+        complexity: TaskComplexity,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        let key = complexity_crews_key(complexity);
+        let Some(pool) = self.inspection_capable_pool(complexity)? else {
+            tracing::warn!(
+                pool = %key,
+                "no crew in the pool or a higher tier can inspect natively; this run's activity \
+                 crew falls back to workflow.default_crew",
+            );
+            return Ok((
+                vec![sole_candidate(
+                    self.inspection_capable_default_crew(complexity)?,
+                )],
+                format!(
+                    "workflow.default_crew (native inspection: no crew in {key} or a higher tier \
+                     can inspect)"
+                ),
+            ));
+        };
+        let mut source = complexity_crews_key(pool.tier);
+        if pool.tier != complexity {
+            source.push_str(&format!(" (no crew in {key} can inspect)"));
+        }
+        if pool.skipped.is_empty() {
+            source.push_str("; native inspection");
+        } else {
+            source.push_str(&format!(
+                "; native inspection, skipped: {}",
+                pool.skipped.join(", ")
+            ));
+        }
+        Ok((pool.candidates, source))
     }
 
     /// Run `draw` once per run and `key`, freezing its record in the executing
@@ -791,6 +904,15 @@ fn activity_crew_draw(
             })
             .collect(),
     }
+}
+
+/// The reason an inspection-requiring activity names when no crew it may
+/// draw can inspect [ORB-15792].
+pub(crate) const INSPECTION_CREW_UNAVAILABLE: &str = "inspection_crew_unavailable";
+
+/// Whether `crew`'s provider has a native file-read and command surface.
+pub(crate) fn can_inspect(crew: &Crew) -> bool {
+    Provider::parse(&crew.assignment.provider).is_ok_and(Provider::has_native_inspection)
 }
 
 fn sole_candidate(crew: Crew) -> CrewCandidate {

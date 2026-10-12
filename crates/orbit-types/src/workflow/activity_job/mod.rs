@@ -160,6 +160,7 @@ pub use activity_v2::{
     ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity,
     ProviderParseError, ProviderResolution, ProviderResolveRequest, ProviderSource,
     RETIRED_BACKEND_MIGRATION, RetiredAgentBackend, check_retired_backend_value,
+    requires_native_inspection,
 };
 pub use audit_envelope::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,

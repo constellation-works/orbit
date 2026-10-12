@@ -1,5 +1,6 @@
 //! Native read surfaces for task pilots, independent of MCP grants.
 
+use orbit_types::workflow::activity_job::{Provider, requires_native_inspection};
 use serde_json::Value;
 
 use super::super::dispatcher::DispatchError;
@@ -14,7 +15,7 @@ pub(super) fn prepare_inspection_tools(
 ) -> Result<Option<InspectionTools>, DispatchError> {
     // These are the required task-pilot input fields. Other read-only
     // inspection callers retain their existing provider/tool contracts.
-    if input.get("inspection_revision").is_none() || input.get("partition_index").is_none() {
+    if !requires_native_inspection(input) {
         return Ok(None);
     }
     let unavailable = |reason: &str| DispatchError::InspectionToolsUnavailable {
@@ -26,8 +27,13 @@ pub(super) fn prepare_inspection_tools(
             "native inspection requires the reviewer filesystem profile",
         ));
     }
-    let surface = match provider {
-        "codex" => InspectionTools {
+    // Crew selection draws only providers with a native surface for these
+    // activities; this refusal covers an explicit or run crew without one.
+    let native = Provider::parse(provider)
+        .ok()
+        .filter(|provider| provider.has_native_inspection());
+    let surface = match native {
+        Some(Provider::Codex) => InspectionTools {
             // Invocation overrides also cover a user config that disables
             // the shell. The outer reviewer sandbox remains authoritative.
             args: vec![
@@ -38,7 +44,7 @@ pub(super) fn prepare_inspection_tools(
             ],
             instruction: "Provider inspection surface: Codex native shell tools are enabled. Use the native shell announced by this harness to read files with cat or sed and run read-only git/rg commands. These native tools are separate from the Orbit MCP tool list.",
         },
-        "claude" => {
+        Some(Provider::Claude) => {
             let selected = option_values(static_args, &["--tools"]);
             if let Some(selected) = &selected
                 && !selected.contains(&"default")

@@ -22,6 +22,7 @@ use super::dispatch_admission::isolated;
 
 const LOW: &str = "workflow.low_complexity_crews";
 const MEDIUM: &str = "workflow.medium_complexity_crews";
+const HARD: &str = "workflow.hard_complexity_crews";
 
 /// `medium` is left empty so a draw from it falls back to the default crew.
 const CONFIG: &str = r#"[workflow]
@@ -59,12 +60,16 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(CONFIG)
+}
+
+fn fixture_with(config: &str) -> Fixture {
     let root = TempDir::new().unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-    std::fs::write(repo.join(".orbit/config.toml"), CONFIG).unwrap();
+    std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
     let jobs = orbit_store::compose::workspace_job_run_store(
         runtime.sqlite_store().unwrap(),
@@ -266,4 +271,162 @@ fn the_retired_system_route_draws_from_the_medium_pool() {
             "{input}"
         );
     }
+}
+
+/// A mixed pool shaped like a host's low pool, where one member's provider
+/// has no native inspection surface, and a medium pool where none has.
+const INSPECTION_CONFIG: &str = r#"[workflow]
+default_crew = "fallback"
+low_complexity_crews = ["gemini_flash:50", "haiku:100", "luna:100"]
+medium_complexity_crews = ["medium_grok"]
+hard_complexity_crews = ["hard_codex", "hard_gemini"]
+
+[crews.fallback]
+provider = "codex"
+model = "fixture-fallback"
+
+[crews.gemini_flash]
+provider = "gemini"
+model = "fixture-gemini-flash"
+
+[crews.haiku]
+provider = "claude"
+model = "fixture-haiku"
+
+[crews.luna]
+provider = "codex"
+model = "fixture-luna"
+
+[crews.medium_grok]
+provider = "grok"
+model = "fixture-medium-grok"
+
+[crews.hard_codex]
+provider = "codex"
+model = "fixture-hard-codex"
+
+[crews.hard_gemini]
+provider = "gemini"
+model = "fixture-hard-gemini"
+"#;
+
+/// The pilot's activity input: `inspection_revision` and `partition_index`
+/// are what make it inspect pinned source natively.
+fn pilot_input(run: &str, key: &str) -> Value {
+    json!({
+        "job_run_id": run, "crew_config_key": key,
+        "inspection_revision": "0".repeat(40), "partition_index": 0,
+    })
+}
+
+fn pool_names(draw: &ActivityCrewDraw) -> Vec<&str> {
+    draw.eligible_pool
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect()
+}
+
+#[test]
+fn an_inspecting_activity_draws_only_inspection_capable_crews() {
+    if !isolated("system_work_crews::an_inspecting_activity_draws_only_inspection_capable_crews") {
+        return;
+    }
+    let fx = fixture_with(INSPECTION_CONFIG);
+    for _ in 0..12 {
+        let run = fx.run("task_pilot_pipeline");
+        let model = fx.model_for(pilot_input(&run, LOW));
+        let draw = fx.draws(&run)[LOW].clone();
+        assert_ne!(draw.crew, "gemini_flash", "{draw:?}");
+        assert_eq!(
+            pool_names(&draw),
+            ["haiku", "luna"],
+            "the filter keeps the capable members"
+        );
+        assert_eq!(
+            draw.eligible_pool
+                .iter()
+                .map(|member| member.weight)
+                .collect::<Vec<_>>(),
+            [100, 100],
+            "and their weights"
+        );
+        assert_eq!(
+            draw.source,
+            format!("{LOW}; native inspection, skipped: gemini_flash")
+        );
+        // The draw stays frozen for the run.
+        for _ in 0..3 {
+            assert_eq!(
+                fx.model_for(json!({"run_id": run, "crew_config_key": LOW,
+                    "inspection_revision": null, "partition_index": 1})),
+                model
+            );
+        }
+    }
+
+    // An activity that does not inspect keeps the whole pool.
+    let run = fx.run("task_pr_pipeline");
+    fx.model_for(json!({"run_id": run, "crew_config_key": LOW}));
+    let draw = fx.draws(&run)[LOW].clone();
+    assert_eq!(draw.source, LOW);
+    assert_eq!(pool_names(&draw), ["gemini_flash", "haiku", "luna"]);
+}
+
+#[test]
+fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails() {
+    if !isolated(
+        "system_work_crews::an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails",
+    ) {
+        return;
+    }
+    // No member of the medium pool can inspect: the next tier up draws, over
+    // its capable members only.
+    let fx = fixture_with(INSPECTION_CONFIG);
+    let run = fx.run("task_pilot_pipeline");
+    assert_eq!(
+        fx.model_for(pilot_input(&run, MEDIUM)),
+        "fixture-hard-codex"
+    );
+    let draw = fx.draws(&run)[MEDIUM].clone();
+    assert_eq!(pool_names(&draw), ["hard_codex"]);
+    assert_eq!(
+        draw.source,
+        format!(
+            "{HARD} (no crew in {MEDIUM} can inspect); native inspection, skipped: medium_grok, \
+             hard_gemini"
+        )
+    );
+
+    // No tier from medium upward can inspect: the default crew does.
+    let no_capable_pool = INSPECTION_CONFIG.replace(
+        r#"hard_complexity_crews = ["hard_codex", "hard_gemini"]"#,
+        r#"hard_complexity_crews = ["hard_gemini"]"#,
+    );
+    let fx = fixture_with(&no_capable_pool);
+    let run = fx.run("task_pilot_pipeline");
+    assert_eq!(fx.model_for(pilot_input(&run, MEDIUM)), "fixture-fallback");
+    let draw = fx.draws(&run)[MEDIUM].clone();
+    assert!(
+        draw.source.starts_with("workflow.default_crew")
+            && draw.source.contains("native inspection"),
+        "{}",
+        draw.source
+    );
+
+    // Nor can the default: preparation fails, naming the reason, and freezes
+    // no draw.
+    let fx = fixture_with(&no_capable_pool.replace(
+        r#"default_crew = "fallback""#,
+        r#"default_crew = "medium_grok""#,
+    ));
+    let run = fx.run("task_pilot_pipeline");
+    let error = fx
+        .runtime
+        .agent_crew_config_for_input(&pilot_input(&run, MEDIUM))
+        .expect_err("no crew can inspect");
+    assert!(
+        error.to_string().contains("inspection_crew_unavailable"),
+        "{error}"
+    );
+    assert!(fx.draws(&run).is_empty());
 }
