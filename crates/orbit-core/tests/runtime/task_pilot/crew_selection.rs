@@ -22,7 +22,6 @@ fn workspace_with_low_pool(populated: bool) -> Workspace {
         r#"
 [workflow]
 default_crew = "low_lane"
-system_crew = "low_lane"
 low_complexity_crews = ["low_lane"]
 hard_complexity_crews = ["hard_lane"]
 [crews.low_lane]

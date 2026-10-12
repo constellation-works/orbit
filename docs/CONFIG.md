@@ -93,7 +93,6 @@ task_prefix = "ORB"
 [workflow]
 base_branch = "main"
 default_crew = "opus"
-system_crew = "luna"
 low_complexity_crews = []
 medium_complexity_crews = []
 hard_complexity_crews = []
@@ -109,9 +108,9 @@ provider_limit_explicit_crews = "wait"
 |---|---|---|
 | `workflow.base_branch` | `main` | Fallback base branch for ship, auto and pilot. The workspace registry's value (`orbit workspace show`) wins; `--base <branch>` overrides both. For a two-branch repo, register with `--base-branch agent-main`. |
 | `workflow.default_crew` | see [resolution](#resolution-precedence) | Crew for a task with no `crew`. Must name a defined crew. |
-| `workflow.system_crew` | `system` | Crew for system work such as step-failure recovery and the task pilot. See [the `system` crew name](#the-system-crew-name). |
-| `workflow.low_complexity_crews` | `[]` | Pool a crew-less `low` task draws from at creation; empty uses `default_crew`. See [pools](#automatic-crew-pools-by-complexity). |
-| `workflow.medium_complexity_crews` | `[]` | The same, for `medium`. |
+| `workflow.system_crew` | — | **Deprecated, ignored.** Loads with a deprecation warning for one release; `config get`/`set` refuse it. System work draws from the complexity pools instead: see [system work](#system-work-draws-from-the-complexity-pools). Delete the key. |
+| `workflow.low_complexity_crews` | `[]` | Pool a crew-less `low` task, and the task pilot, draws from; empty uses `default_crew`. See [pools](#automatic-crew-pools-by-complexity). |
+| `workflow.medium_complexity_crews` | `[]` | The same, for `medium`; step-failure and PR conflict recovery draw from it too. |
 | `workflow.hard_complexity_crews` | `[]` | The same, for `hard`. |
 | `workflow.xhard_complexity_crews` | `[]` | The same, for `xhard`. |
 | `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted pool for the final-recovery activity; `[]` disables it. See [final recovery pool](#final-recovery-pool). |
@@ -129,7 +128,6 @@ Only the global file, and only when it is absent (or under `--force`):
 
 - every [built-in crew](#crewsname--which-provider-model-runs-the-task), enabled for each detected provider CLI and `enabled = false` otherwise;
 - `default_crew`: the default crew of the first detected family in preference order;
-- `system_crew`: the first detected of `luna`, `haiku`, `grok`, `antigravity`, `gemini`, `copilot`, `cursor`, `pi`, `opencode` (cheapest tier first);
 - the four complexity pools, as bare lists:
 
   | Detected | `low` | `medium` | `hard` | `xhard` |
@@ -140,7 +138,7 @@ Only the global file, and only when it is absent (or under `--force`):
 
   On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`, and a Google CLI's crew to `low` (`antigravity` when `agy` is detected, otherwise `gemini`). Other families leave the pools `[]`, which route to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
 
-Interactive init asks for both lane crews by name, offering only enabled crews, unless there is one candidate. With no supported CLI, every crew is written disabled and both keys stay unset, so `default_crew` resolves to the disabled `opus` and agent dispatch refuses until you run `orbit config set crews.<name>.enabled true`; deterministic jobs such as store retention still run. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
+Interactive init asks for the default crew by name, offering only enabled crews. It no longer writes or asks for `workflow.system_crew`: system work draws from the pools. With no supported CLI, every crew is written disabled and `default_crew` stays unset, so it resolves to the disabled `opus` and agent dispatch refuses until you run `orbit config set crews.<name>.enabled true`; deterministic jobs such as store retention still run. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
 ### `[workflow.resource_throttle]` — host pressure
 
@@ -318,7 +316,7 @@ model = "gemini-3.8-flash"
 provider = "gemini"
 ```
 
-**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set plus a built-in `system` crew (`claude`, `sonnet`). Existing explicit model pins are kept as written.
+**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written.
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
@@ -355,11 +353,21 @@ orbit config set crews.gemini.enabled true
 
 `config set` refuses invalid values, unsupported provider/model combinations and misspelled fields. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns each checkout's effective normalized crews with `enabled` (schema version 3), or `crews_error` when its config cannot be read.
 
-**Dashboard.** **Settings › Crews** lists provider, model, usage **Limit** ([provider usage limits](#provider-usage-limits)), effort, tags, layer and **Used by** (inline field labels at 900 px or less). **Used by** is resolved server-side from the default, system and review crews, the final-recovery and complexity pools, and enabled auto-tasks with an explicit crew whose plugin is active; if the auto-task listing fails, it omits them and logs a warning, and crew writes still work.
+**Dashboard.** **Settings › Crews** lists provider, model, usage **Limit** ([provider usage limits](#provider-usage-limits)), effort, tags, layer and **Used by** (inline field labels at 900 px or less). **Used by** is resolved server-side from the default and review crews, the final-recovery and complexity pools, and enabled auto-tasks with an explicit crew whose plugin is active; if the auto-task listing fails, it omits them and logs a warning, and crew writes still work.
 
-### The `system` crew name
+### System work draws from the complexity pools
 
-Shipped job steps such as `task_pilot_pipeline` name `crew: system`. At load, `system` aliases to the crew `workflow.system_crew` names (`system_crew = "luna"` runs the task pilot on Luna); a user-authored `[crews.system]` wins. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
+Orbit's own work has no crew lane of its own; it draws from the [complexity pools](#automatic-crew-pools-by-complexity) like a task does.
+
+| Work | Pool | Why |
+|---|---|---|
+| Shipped auto-task templates (code review, QA sweeps, doc duties, …) | the template's `complexity` | The minted task carries no crew, so it draws like any crew-less task. A `template.crew` setting, an explicit template `crew`, and `operation.review_crew` for `delivery-code-review` still win. |
+| Task pilot (`task_pilot_pipeline`) | `low` | Piloting reads tasks and writes a bounded proposal. |
+| Step-failure recovery, PR conflict recovery | `medium` | Recovery diagnoses failures in work of any tier, so it is not low work; medium is also the tier an unassessed task is verified on. |
+
+A pilot or recovery activity names its pool as `crew_config_key: workflow.<tier>_complexity_crews`. The run draws once per pool on its first such dispatch: the pool's weights apply, disabled crews and those outside the run's `allowed_crews` are skipped, and crews at a [provider usage limit](#provider-usage-limits) are skipped while another member is left. Every later dispatch of that pool in the run, and a resume, reuses the draw, which the run's state records with the eligible members. An empty or wholly disabled pool falls back to `workflow.default_crew`, as an unassigned task does, and the recorded draw says so.
+
+**Migration.** `workflow.system_crew` still loads for one release but is ignored, with a deprecation warning naming the pools. Orbit no longer defines a built-in `system` crew or aliases it to `[crews.qa]`. A template, job or activity still naming `crew: system` (or `crew_config_key: workflow.system_crew`) resolves through the pools with a warning: a template by its complexity, a job or activity step through `medium`. A user-authored `[crews.system]` table is an ordinary crew and keeps working wherever it is named.
 
 ### Disabled crews
 
@@ -367,7 +375,7 @@ Shipped job steps such as `task_pilot_pipeline` name `crew: system`. At load, `s
 
 - **Listed.** `orbit config show` has an `ENABLED` column and counts disabled crews; `orbit config get crews.<name>.enabled` answers `true`/`false`; `orbit.workspace.list` carries `enabled`; the dashboard Config tab marks the row and offers a toggle.
 - **Skipped by pools.** A disabled member is never drawn. An all-disabled pool acts as empty, so the task falls through to `default_crew`. It may stay listed, so re-enabling restores its share.
-- **Refused for agent dispatch, never substituted.** A task's `crew`, an explicit run or activity crew, `workflow.default_crew`, `workflow.system_crew` or a shipped step's `crew: system` that resolves to a disabled crew fails with its name and `orbit config set crews.<name>.enabled true` (naming the mirrored crew's table for `system`).
+- **Refused for agent dispatch, never substituted.** A task's `crew`, an explicit run or activity crew, or `workflow.default_crew` that resolves to a disabled crew fails with its name and `orbit config set crews.<name>.enabled true`.
 - **Deterministic jobs still run.** A job whose steps and hooks are all deterministic accepts a disabled crew and records no run crew, so retention and reap jobs run on hosts without a provider CLI. An unknown crew name still fails at startup.
 - **Load succeeds.** A lane key naming a disabled crew does not stop unrelated commands; `orbit doctor` warns under `config` with the enabling command.
 - **Not pinned at creation.** A crew-less task created while `default_crew` is disabled keeps `crew` unset, so dispatch refuses the default by name. `orbit task show` and the dashboard still report a disabled configured crew.
@@ -390,7 +398,7 @@ error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':'; ...
 Edit '~/.orbit/config.toml' and rename or remove the [crews."gpt-5:codex"] table, then rerun the command
 ```
 
-Rename the table (or delete it), update every reference (`default_crew`, `system_crew`, pool entries, a task's `crew`), and rerun.
+Rename the table (or delete it), update every reference (`default_crew`, pool entries, a task's `crew`), and rerun.
 
 ---
 
@@ -544,7 +552,7 @@ xhard_complexity_crews = ["fable", "astra"]
 - **Complexity changes redraw automatic crews.** When the pilot or `task update --complexity` changes the tier, a crew sourced from another pool or the `default` fallback is redrawn in the same mutation, logged as `crew_redrawn` with previous and new source and crew. Explicit crews stay pinned, even when an update names the crew a pool already chose; status transitions keep the selection. `task update --crew <name>` pins; [`--crew ""`](#setting-taskcrew) redraws. Every stored change records the actor, prior and new crew, and whether it was named or drawn.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool: the task gets `default_crew`, as it does when all members are [disabled](#disabled-crews). Blank entries and unknown crew names fail before dispatch.
-- **Preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name, except that a standing [provider failure hold](#provider-failure-holds) redirects a task-crew draw away from the crews it excludes, and a [provider usage limit](#provider-usage-limits) removes limited crews from the draw.
+- **Preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and review and preparation jobs keep the crew they name, except that a standing [provider failure hold](#provider-failure-holds) redirects a task-crew draw away from the crews it excludes, and a [provider usage limit](#provider-usage-limits) removes limited crews from the draw.
 - **Admission** (drain or ship) checks a pool-sourced crew against the current tier and its enabled, positive-weight members. A stale pool assignment or `default` fallback, or no crew, draws from the current pool, else the default chain; a default fallback is never an explicit pin. Without `crew_source`, legacy assignment history recovers provenance, and a crew with no assignment evidence counts as explicit. Admission never writes back to the task.
 - **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that pool for one drain; with no names it disables it. `orbit run ship` has no override flags.
 
@@ -625,7 +633,7 @@ A redrawn task's `crew_selection.source` names the limit. A task left with no un
 
 - `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `gating`, `partial`, `threshold`, `gated`, `until` and `crews` (enabled crews covered).
 - `orbit run show <pull-drain>`: `excluded <crew> (provider_limit until <time>): <reading>`.
-- `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew uses (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`), plus `provider-limits:workflow.system_crew` and `provider-limits:operation.review_crew` warnings when those ungated lanes use a gated provider. Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
+- `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew uses (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`), plus a `provider-limits:operation.review_crew` warning when that ungated lane uses a gated provider. Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
 - Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge); the Drain card names gated readings and lists tasks waiting with `provider_limit`.
 
 #### Budgets for providers that report no usage
@@ -906,9 +914,10 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `knowledge.task_id_pattern` | Deprecated. |
 | `execution.env.inherit` | Inheritance is fixed off. |
 
-**Deprecated keys warn and are translated.** Still honoured, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors.
+**Deprecated keys warn and are translated or ignored.** Still loaded, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors.
 
 | Deprecated | Translation |
 |---|---|
+| `workflow.system_crew` | Ignored: system work draws from `workflow.<tier>_complexity_crews` ([system work](#system-work-draws-from-the-complexity-pools)). Delete the key and set those pools. |
 | `operation.review_policy` | `before-pr` sets `review.before_pr = true`. `after-landing` enables the `delivery-code-review` auto-task while no operator has configured it; once its `enabled` flag is set by `orbit auto-task toggle` or any other edit, that flag decides. `none` turns neither on. A `[review]` table in the same file wins. |
 | `operation.review_minutes` | Becomes `review.minutes`, now one candidate's review limit rather than a lineage total. |

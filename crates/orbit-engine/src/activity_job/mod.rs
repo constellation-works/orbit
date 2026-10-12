@@ -18,7 +18,7 @@ pub mod workspace;
 mod tests;
 
 pub use audit_writer::V2AuditWriter;
-pub use crew::{ResolvedAgentSettings, inject_system_crew_input, resolve_crew_settings};
+pub use crew::{ResolvedAgentSettings, resolve_crew_settings};
 pub use dispatcher::{
     DispatchError, DispatchOutcome, LinuxRuntimeWriteAuthority, ResolvedCliExecutor,
     ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2DispatchInput, dispatch_error_to_orbit,

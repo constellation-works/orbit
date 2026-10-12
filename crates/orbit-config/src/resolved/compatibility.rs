@@ -166,12 +166,14 @@ fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
     );
 }
 
-/// [ORB-13992] A deprecated key is still honoured — translated into its
-/// replacement when the document is parsed — and warned on every load. A
-/// later release makes it an error; delete its
-/// [`registry::DEPRECATED_CONFIG_KEYS`] entry and translation then.
-pub(crate) const DEPRECATED_CONFIG_KEY_WARNING: &str = "config key is deprecated and translated \
-     on load; move it to its replacement — a later release makes it an error";
+/// [ORB-13992] A deprecated key still loads — translated into its
+/// replacement when the document is parsed, or ignored where its note says
+/// so (`workflow.system_crew`, [ORB-15663]) — and is warned on every load.
+/// The note names the replacement. A later release makes it an error; delete
+/// its [`registry::DEPRECATED_CONFIG_KEYS`] entry and translation then.
+pub(crate) const DEPRECATED_CONFIG_KEY_WARNING: &str = "config key is deprecated; its note says \
+     how this release reads it — move it to its replacement before a later release makes it \
+     an error";
 
 fn warn_deprecated_key(config_path: &Path, key: &str, note: &str) {
     let path = redact_home_dir(&config_path.display().to_string());

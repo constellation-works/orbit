@@ -52,10 +52,6 @@ impl RuntimeHost for Host {
         })
     }
 
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        Some("fixture".to_string())
-    }
-
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         assert_eq!(
             run_id, RUN,

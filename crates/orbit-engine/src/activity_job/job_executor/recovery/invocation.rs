@@ -118,7 +118,7 @@ pub(super) fn dispatch_recovery(
                 .map_err(|error| ("input", error.to_string()))?;
         }
         inject_recovery_evidence(ctx, &mut input).map_err(|error| ("input", error))?;
-        input["system_crew"] = Value::Bool(true);
+        input["crew_config_key"] = Value::String(RECOVERY_CREWS_KEY.to_string());
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
         .map_err(|error| ("decision", error.to_string()))?;
@@ -131,8 +131,6 @@ pub(super) fn dispatch_recovery(
             recovery_base_ref(ctx, &input),
         )
     });
-    let input =
-        inject_system_crew_input(ctx.host, &input).map_err(|error| ("crew", error.to_string()))?;
     let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
         .map_err(|error| ("crew", error.to_string()))?;
     let spec = crew_overridden_spec.as_ref().unwrap_or(&recovery.spec);
@@ -167,8 +165,7 @@ pub(in crate::activity_job::job_executor) fn crew_overridden_recovery_spec(
     let ActivityV2Spec::AgentLoop(inline_spec) = &recovery.spec else {
         return Ok(None);
     };
-    let input = inject_system_crew_input(ctx.host, input)?;
-    let Some(resolved) = resolve_crew_settings(ctx.host, inline_spec, &input, &ctx.input)? else {
+    let Some(resolved) = resolve_crew_settings(ctx.host, inline_spec, input, &ctx.input)? else {
         return Ok(None);
     };
     let mut spec = inline_spec.clone();

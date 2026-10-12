@@ -96,7 +96,7 @@ impl CrewAllowlist {
 /// Refuse a resolved crew the run's window does not permit [ORB-11242].
 ///
 /// `origin` names where the crew came from (the task, an explicit activity
-/// crew, `workflow.system_crew`) so the failure is actionable without reading
+/// crew, a complexity pool) so the failure is actionable without reading
 /// the pipeline. There is deliberately no fallback: a restricted drain that
 /// quietly re-routed to a permitted crew would spend a budget the operator
 /// scoped, against work they did not choose.
@@ -360,7 +360,7 @@ impl OrbitRuntime {
     /// Resolve the crew a dispatch will run, refusing a disabled one.
     ///
     /// Every path that launches a provider — task start, run and activity
-    /// dispatch, the system lane, pool candidates — resolves through here, so
+    /// dispatch, pool candidates — resolves through here, so
     /// a crew with `enabled = false` is refused with the table and command
     /// that enable it. There is no fallback to another crew: an operator who
     /// disabled a provider did not ask Orbit to spend a different one.
@@ -373,13 +373,6 @@ impl OrbitRuntime {
         if crew.enabled {
             return Ok(crew);
         }
-        // Only the synthesized `system` entry carries an alias, so any other
-        // crew name is its own table.
-        let mirrors = self
-            .context
-            .settings()
-            .system_crew_alias()
-            .filter(|_| crew.name == "system");
         let origin = match source {
             ProviderSource::TaskConfig => "task.crew selects ",
             ProviderSource::WorkspaceDefault => "workflow.default_crew selects ",
@@ -387,7 +380,7 @@ impl OrbitRuntime {
         };
         Err(OrbitError::InvalidInput(format!(
             "{origin}{}",
-            orbit_config::disabled_crew_message(&crew.name, mirrors)
+            orbit_config::disabled_crew_message(&crew.name)
         )))
     }
 
@@ -404,6 +397,26 @@ impl OrbitRuntime {
             .map(|(crew, _)| crew)
     }
 
+    /// A task's or template's crew, or `None` when it names the retired
+    /// `system` crew [ORB-15663]. A task minted with that name before the
+    /// system lane was retired, or a template still naming it, routes like an
+    /// unassigned one — through the complexity pool for its complexity —
+    /// instead of failing on a crew this host no longer defines.
+    pub(crate) fn crew_unless_retired<'a>(&self, crew: Option<&'a str>) -> Option<&'a str> {
+        match crew {
+            Some(name)
+                if orbit_config::names_retired_system_crew(
+                    name,
+                    self.context.settings().crews(),
+                ) =>
+            {
+                tracing::warn!(crew = name, "{}", orbit_config::RETIRED_SYSTEM_CREW_WARNING);
+                None
+            }
+            other => other,
+        }
+    }
+
     fn select_configured_crew(
         &self,
         cli_override: Option<&str>,
@@ -415,7 +428,7 @@ impl OrbitRuntime {
         // re-read here and cannot drift during a run.
         let selection = select_crew_name(
             cli_override,
-            task_crew,
+            self.crew_unless_retired(task_crew),
             self.context.settings().default_crew(),
             None,
             None,

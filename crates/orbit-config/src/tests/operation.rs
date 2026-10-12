@@ -60,7 +60,7 @@ fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
 
 fn warned_deprecated(logs: &str, key: &str) -> bool {
     logs.lines()
-        .any(|line| line.contains(key) && line.contains("deprecated and translated"))
+        .any(|line| line.contains(key) && line.contains("config key is deprecated"))
 }
 
 fn warned_removed(logs: &str, key: &str) -> bool {

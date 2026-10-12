@@ -285,7 +285,6 @@ pub(crate) fn build_context_from_roots(
     };
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
-    let system_crew = runtime_config.system_crew.clone();
     let operation = runtime_config.operation.clone();
 
     Ok(OrbitContext::new(
@@ -332,8 +331,6 @@ pub(crate) fn build_context_from_roots(
             runtime_config.complexity_crews.clone(),
             runtime_config.snapshot.final_recovery_crews().to_vec(),
             runtime_config.snapshot.provider_limit_policy(),
-            system_crew,
-            runtime_config.system_crew_alias.clone(),
             operation,
             runtime_config.snapshot.worker_containment(),
             runtime_config

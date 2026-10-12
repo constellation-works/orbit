@@ -248,7 +248,8 @@ orbit run readiness --allow-crew opus,sonnet
   configuration is changed. An unknown or empty crew name fails before
   anything is dispatched.
 - **Enforced throughout.** Every activity in the run is checked against the
-  crew that actually resolved, including `[workflow] system_crew`. The check
+  crew that actually resolved, including a recovery crew drawn from a
+  complexity pool. The check
   compares effective provider and model, not crew name: an alias of a
   permitted crew runs, and a crew that resolves to an excluded provider or
   model is refused. The allowlist gates the crew that normal precedence picks;

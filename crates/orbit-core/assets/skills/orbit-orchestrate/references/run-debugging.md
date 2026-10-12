@@ -116,8 +116,12 @@ available. Do not infer provider usage or token cost from the requested or
 resolved crew, and do not charge deterministic workflow wrapper steps to a
 model.
 
-Activities with `system_crew: true` are routed through `[workflow].system_crew`
-(which overwrites an activity `crew` during dispatch). Other activities use an
+Activities with a `crew_config_key` draw from that pool once per run: the task
+pilot from `workflow.low_complexity_crews`, step-failure and PR conflict
+recovery from `workflow.medium_complexity_crews`, final recovery from
+`workflow.final_recovery_crews`. The run state's `activity_crew_draws` records
+each draw, its source and the eligible members; an empty complexity pool falls
+back to `workflow.default_crew` and the source says so. Other activities use an
 explicit activity `crew` when present, otherwise the run's resolved crew.
 Check `activity_provenance` after execution to verify the effective route,
 especially after changing crew configuration.

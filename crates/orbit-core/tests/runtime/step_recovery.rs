@@ -308,10 +308,6 @@ impl RuntimeHost for RecoveryHost<'_> {
             .tool_context_for_activity(run_id, fs_profile, fs_audit, proc_allowed_programs)
     }
 
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        Some("sol".to_string())
-    }
-
     fn agent_crew_config_for_input(
         &self,
         _input: &Value,

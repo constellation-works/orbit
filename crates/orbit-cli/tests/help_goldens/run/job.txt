@@ -47,7 +47,7 @@ Examples:
 
 There is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.
 That picks this run's resolved crew; an activity with an explicit `crew` or
-`system_crew: true` still routes there instead. Check `activity_provenance` in
+`crew_config_key` pool still routes there instead. Check `activity_provenance` in
 `orbit run show <RUN_ID> --json` for what actually dispatched.
 
 The run is submitted to a detached worker and the command returns as soon as it is durable.

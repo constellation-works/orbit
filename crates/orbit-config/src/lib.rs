@@ -116,7 +116,8 @@ pub use registry::{
     immutable_key_note, is_global_only_key,
 };
 pub use resolved::{
-    CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, ResolvedConfig, disabled_crew_message,
+    CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW,
+    RETIRED_SYSTEM_CREW_WARNING, ResolvedConfig, disabled_crew_message, names_retired_system_crew,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};

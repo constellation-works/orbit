@@ -214,7 +214,7 @@ impl Fixture {
         // stopping at crew admission so the guard reaches preparation.
         std::fs::write(
             self.work.join(".orbit/config.toml"),
-            "[workflow]\ndefault_crew = \"isolation\"\nsystem_crew = \"isolation\"\n\n\
+            "[workflow]\ndefault_crew = \"isolation\"\n\n\
              [crews.isolation]\nprovider = \"codex\"\nmodel = \"fixture\"\nenabled = true\n",
         )
         .expect("write fixture dispatch config");

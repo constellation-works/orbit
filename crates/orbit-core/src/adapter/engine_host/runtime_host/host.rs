@@ -919,10 +919,6 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
-    fn system_crew_for_dispatch(&self) -> Option<String> {
-        Some(self.context.settings().system_crew().to_string())
-    }
-
     fn agent_crew_config_for_input(
         &self,
         input: &serde_json::Value,

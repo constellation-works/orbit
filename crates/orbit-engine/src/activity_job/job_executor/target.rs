@@ -29,11 +29,6 @@ pub(super) fn run_target(
     {
         input.insert("final_recovery_resume".to_string(), context.clone());
     }
-    // [ORB-10902] Rebind before dispatch so `system_crew: true` reaches the
-    // activity input, not only the local copy used to resolve crew settings.
-    // Recovery does the same; injection is independent of target spec type.
-    let rendered_input = inject_system_crew_input(ctx.host, &rendered_input)?;
-
     // A rendered activity `crew` or `crew_config_key` selects an assignment;
     // otherwise dispatch inherits the run's resolved crew.
     let crew_override = crew_overridden_spec(t, ctx, &rendered_input)?;
@@ -399,11 +394,10 @@ pub(super) fn crew_overridden_spec(
     let ActivityV2Spec::AgentLoop(inline_spec) = &t.spec else {
         return Ok(None);
     };
-    let rendered_input = inject_system_crew_input(ctx.host, rendered_input)?;
     // Crew selection precedes dispatch. A stateful pool draw needs the same
     // executing identity here that dispatch supplies when `run_id` names a
     // different, originating run (such as a failed follower claim).
-    let rendered_input = super::super::dispatcher::inject_run_id(&rendered_input, &ctx.run_id);
+    let rendered_input = super::super::dispatcher::inject_run_id(rendered_input, &ctx.run_id);
     let Some(resolved) = resolve_crew_settings(ctx.host, inline_spec, &rendered_input, &ctx.input)?
     else {
         return Ok(None);

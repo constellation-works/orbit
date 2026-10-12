@@ -909,11 +909,21 @@ fn diverged_history_rejects_stopped_evidence_as_source_unverifiable() {
 }
 
 fn enable_review_crew(fixture: &Fixture) {
+    // The review auto-task draws from its complexity pool, which init seeds
+    // per detected family; pin every pool to the enabled review crew.
+    let pooled = format!("[\"{REVIEW_CREW}\"]");
+    let pools = ["low", "medium", "hard", "xhard"]
+        .map(|tier| (format!("workflow.{tier}_complexity_crews"), pooled.clone()));
     for (key, value) in [
         ("crews.sonnet.enabled", "true"),
         ("workflow.default_crew", REVIEW_CREW),
-        ("workflow.system_crew", REVIEW_CREW),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        pools
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    ) {
         fixture
             .command(&["config", "set", "--global", key, value])
             .assert()

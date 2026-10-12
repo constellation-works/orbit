@@ -47,7 +47,7 @@ orbit run show <run_id> --json
 There is no `--crew` flag on `run job` — crew selection is always a run input.
 That picks the run's resolved crew (`resolved_run_crew` in `orbit run show
 --json`); an individual activity can still route elsewhere via an explicit
-activity `crew` or `system_crew: true`, which overrides even an explicit
+activity `crew` or a `crew_config_key` pool, which overrides even an explicit
 request. [run-debugging.md](run-debugging.md#verify-model-routing-before-reading-logs)
 covers reading `activity_provenance` for what actually dispatched.
 

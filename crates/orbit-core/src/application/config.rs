@@ -46,7 +46,7 @@ const CREW_FIELDS: &[&str] = &[
 /// `workflow.*` keys that name a crew by name. Deleting the crew they point at
 /// leaves the workspace unable to resolve work, so the delete is refused with
 /// the key that still names it.
-const CREW_REFERENCE_KEYS: &[&str] = &["workflow.default_crew", "workflow.system_crew"];
+const CREW_REFERENCE_KEYS: &[&str] = &["workflow.default_crew"];
 
 /// Weighted or bare crew lists whose membership the settings view reports.
 const CREW_POOL_KEYS: &[&str] = &[

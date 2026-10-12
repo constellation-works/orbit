@@ -48,7 +48,7 @@ const EFFECTIVE = {
   workspace_binding: null,
   sections: [{ id: 'crews', kind: 'crews', title: 'Crews', blurb: 'Named provider and model pairs.', rows: [], counts: { set: 3, total: 3 } }],
   crews: [
-    crew('opus', 'claude', 'opus-model', { referenced_by: ['workflow.system_crew'], limit: limit('opus', 'claude', 93, RESETS, true) }),
+    crew('opus', 'claude', 'opus-model', { referenced_by: ['operation.review_crew'], limit: limit('opus', 'claude', 93, RESETS, true) }),
     crew('sol', 'codex', 'gpt-6-sol', { referenced_by: ['workflow.default_crew'], limit: limit('sol', 'codex', 40, CODEX_RESETS, false) }),
     crew('gem', 'gemini', 'gem-model'),
   ],

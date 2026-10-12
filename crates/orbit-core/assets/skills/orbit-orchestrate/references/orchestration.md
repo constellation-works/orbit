@@ -122,7 +122,7 @@ for an auto drain it is opt-in and scoped to that run's window:
 - Scope is the run and everything it admits: the leaf pipelines it starts
   inherit the same restriction, and the check runs again at each activity
   against the crew that was *actually* resolved — including an activity that
-  names `workflow.system_crew` — so an excluded provider cannot be reached
+  draws from a complexity pool — so an excluded provider cannot be reached
   through an alias. Matching is by effective configured identity, so a differently
   named crew resolving to the same provider/model is permitted; naming a wrapper
   is not itself provider usage. Precedence is unchanged: explicit > task.crew >
@@ -244,9 +244,9 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
-The shipped pilot steps explicitly select the `system` crew. Neither a
-`--crew` flag nor `--input crew=<name>` changes those steps. Inspect the effective
-job and system-crew configuration before promising a provider; see
+The shipped pilot steps draw their crew from `workflow.low_complexity_crews`.
+Neither a `--crew` flag nor `--input crew=<name>` changes those steps. Inspect
+the effective job and that pool before promising a provider; see
 [crew selection](loop.md#select-an-allowed-crew).
 
 Zero-input mode discovers only `proposed`/`backlog` tasks in the invoking

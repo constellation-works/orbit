@@ -421,10 +421,6 @@ pub(crate) struct OrbitRuntimeSettings {
     /// Admitted `workflow.provider_limit_*`: how close to a usage limit a
     /// provider's crews stay admissible.
     provider_limit: orbit_config::ProviderLimitPolicy,
-    system_crew: String,
-    /// Crew the synthesized `system` entry mirrors, so a disabled-crew
-    /// refusal can name the table that actually disables it.
-    system_crew_alias: Option<String>,
     /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,
     /// Global `machine.worker_*` limits for detached workers [ORB-12903].
@@ -457,8 +453,6 @@ impl OrbitRuntimeSettings {
         complexity_crews: orbit_config::ComplexityCrewPools,
         final_recovery_crews: Vec<String>,
         provider_limit: orbit_config::ProviderLimitPolicy,
-        system_crew: String,
-        system_crew_alias: Option<String>,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
         machine_task_prefix: String,
@@ -485,8 +479,6 @@ impl OrbitRuntimeSettings {
             complexity_crews,
             final_recovery_crews,
             provider_limit,
-            system_crew,
-            system_crew_alias,
             operation,
             worker_containment,
             machine_task_prefix,
@@ -579,14 +571,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn default_crew(&self) -> Option<&str> {
         self.default_crew.as_deref()
-    }
-
-    pub(crate) fn system_crew(&self) -> &str {
-        &self.system_crew
-    }
-
-    pub(crate) fn system_crew_alias(&self) -> Option<&str> {
-        self.system_crew_alias.as_deref()
     }
 }
 
