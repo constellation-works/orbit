@@ -231,25 +231,17 @@ pub trait RuntimeHost: Send + Sync {
         Ok(Vec::new())
     }
 
-    // ── Operation-mode rechecks [ORB-11332] ────────────────────────────
+    // ── Step-recovery hooks [ORB-11332] ────────────────────────────────
 
-    /// Ask before dispatching a step-recovery hook. Hosts without operation
-    /// mode allow every recovery, which is the pre-existing behavior.
+    /// Ask before dispatching a step-recovery hook. The default allows every
+    /// recovery. A host that gates recovery answers `Denied` with the reason;
+    /// the recovery tests override this to exercise that path.
     fn authorize_step_recovery(
         &self,
         _run_id: &str,
         _step_id: &str,
     ) -> Result<StepRecoveryAdmission, OrbitError> {
         Ok(StepRecoveryAdmission::Allowed)
-    }
-    /// Record the wall time a reserved recovery episode consumed.
-    fn settle_step_recovery(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-        _elapsed_seconds: u64,
-    ) -> Result<(), OrbitError> {
-        Ok(())
     }
     /// Allocate the run-local file one `step_failure_recovery` invocation
     /// writes its decision to, beneath the assigned worktree's scratch
@@ -287,15 +279,6 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability(
             "validate_step_recovery_mutation",
         ))
-    }
-    /// Recheck the run's authority immediately before the guarded
-    /// `review -> done` transition. An error refuses completion.
-    fn authorize_task_completion(
-        &self,
-        _run_id: &str,
-        _task_ids: &[String],
-    ) -> Result<(), OrbitError> {
-        Ok(())
     }
 
     // ── Before-PR review coverage [ORB-11333] ───────────────────────────
