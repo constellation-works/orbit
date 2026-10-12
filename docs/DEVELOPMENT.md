@@ -134,7 +134,7 @@ The production Clippy pass in `make ci-lint` disallows `std::fs::create_dir_all`
 | Orbit-owned directory | `create_private_dir_all`, or `create_private_dir` for exclusive creation. Owner-only on Unix regardless of umask; existing modes are left alone. |
 | Replace a durable file | `atomic_write_text` / `atomic_write_bytes`: stage a private sibling, sync, rename, sync the parent. Permissions are preserved. |
 | Validate between staging and commit | `StagedTextFile`; dropping an uncommitted stage removes it. |
-| New private file, exclusively | `write_new_private_text` |
+| New private file, exclusively | `write_new_private_text`: stage and sync a private sibling, then hard-link it into place, failing if the path exists. The path never holds partial content. |
 | Deliberate new-file or disposable write (not atomic) | `write_text_with_parent` |
 
 State and task-artifact writers must use the private helpers; `orbit doctor --fix-state-directory-permissions` repairs legacy writable state. An exception is scoped to the one intentional call and names its reason in `#[allow(clippy::disallowed_methods, reason = "...")]`. Current exceptions: external source, installation, service-manager and Cargo output directories; in-place edits of dotfile-linked user TOML configs; artifact exports to user-selected paths (including symlinks and devices); scaffold sources with their `--force` behavior. None promises crash-safe replacement. Test fixtures may write directly.

@@ -249,8 +249,10 @@ decisions writes once to `tasks/typed-decisions.since` in the Orbit root. Text
 an older binary wrote before that host upgraded therefore keeps its effect, and
 the same text written later is not a decision. Do not delete that file:
 the next open would record a later boundary and honour text written in
-between. Until a writable open records it, text written from 2026-10-12 on
-is not a decision.
+between. A file an interrupted write left empty or cut short counts from its
+modification time, with a warning naming it, and the next writable open
+writes that instant into it. Until a writable open records it, text written
+from 2026-10-12 on is not a decision.
 
 Applied task-pilot `blocked_by` findings that name an unfinished task in the
 same workspace add a dependency in the assessment's atomic write. Proposed,
