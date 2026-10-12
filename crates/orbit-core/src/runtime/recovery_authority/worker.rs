@@ -35,14 +35,7 @@ impl RecoveryAuthority {
         binding.validate()?;
         let identity = orbit_common::process::identity::process_start_identity_token(pid)
             .ok_or_else(|| OrbitError::Execution("worker process identity unavailable".into()))?;
-        self.connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS worker_process_binding (
-            pid INTEGER NOT NULL, identity TEXT NOT NULL, binding_json TEXT NOT NULL,
-            PRIMARY KEY(pid, identity)
-        ) WITHOUT ROWID;",
-            )
-            .map_err(|error| authority_error("create worker binding table", error))?;
+
         let json =
             serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
         self.connection.execute(
@@ -158,6 +151,7 @@ fn resolve_worker_binding(
     }
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| authority_error("read worker authority", error))?;
+    super::schema::check_read_compatibility(&connection)?;
     let namespace_table: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_namespace_binding')", [], |row| row.get(0),
     ).map_err(|error| authority_error("inspect namespace authority", error))?;
@@ -293,13 +287,6 @@ impl RecoveryAuthority {
         key: &str,
         binding: &orbit_types::tool::WorkerInvocation,
     ) -> Result<(), OrbitError> {
-        self.connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS worker_namespace_binding (
-            namespace_key TEXT PRIMARY KEY, binding_json TEXT NOT NULL
-        ) WITHOUT ROWID;",
-            )
-            .map_err(|error| authority_error("create worker namespace table", error))?;
         let json =
             serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
         self.connection.execute("INSERT INTO worker_namespace_binding(namespace_key,binding_json) VALUES (?1,?2) ON CONFLICT(namespace_key) DO NOTHING", params![key,json])

@@ -89,6 +89,8 @@ pub enum StateComponent {
     StoreSchema,
     /// The host task registry's ledger (`tasks/index.sqlite`).
     TaskRegistry,
+    /// The host-only recovery authority ledger (`authority.db`).
+    RecoveryAuthority,
     /// A feature crate's namespaced schema ledger.
     FeatureSchema,
 }
@@ -100,6 +102,7 @@ impl StateComponent {
             Self::WorkspaceLayout => "workspace layout",
             Self::StoreSchema => "store schema",
             Self::TaskRegistry => "task registry",
+            Self::RecoveryAuthority => "recovery authority",
             Self::FeatureSchema => "feature schema",
         }
     }

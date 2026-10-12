@@ -143,6 +143,12 @@ flowchart BT
 - **`workflow`** holds the explicit import, export, reindex, repair, publication, and layout-upgrade operations. Nothing imports implicitly on open.
 - **`compose`** builds the concrete stores. Construction and migrations stay in composition, bootstrap, and maintenance code.
 
+The operator-only `maintenance::migration` surface also exposes the shared
+SQLite ledger engine for databases owned by other crates. Core's protected
+recovery authority supplies its own frozen registry; the engine records its
+migration and compatibility metadata in that same database and serializes
+adoption with the store and task registry's transaction rules.
+
 The dependency-direction script enforces these arrows too.
 
 Job catalog listings fetch the latest run for all selected jobs through the

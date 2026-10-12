@@ -330,7 +330,10 @@ fn a_pre_attempt_certificate_verifies_until_a_new_attempt_is_certified() {
             .connection
             .execute_batch(
                 "DROP TABLE rebase_recovery_attempt;
-                 DROP TABLE rebase_recovery_attempt_certificate;",
+                 DROP TABLE rebase_recovery_attempt_certificate;
+                 DROP TABLE worker_process_binding;
+                 DROP TABLE worker_namespace_binding;
+                 DROP TABLE schema_meta;",
             )
             .expect("strip attempt tables");
         authority

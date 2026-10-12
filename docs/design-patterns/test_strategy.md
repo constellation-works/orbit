@@ -128,6 +128,8 @@ Admitted unit tests:
 - `the_hold_includes_the_horizon_and_a_later_instant_admits` (criterion 1), beside `crates/orbit-core/src/runtime/host_signal.rs`. One table pins the horizon arithmetic: equality holds, one second later admits, and a past timestamp holds. The pull and local drain tests, and the sweep test below, place the schedule with `Utc::now()` at minute granularity, so they cannot pin the one-second boundary without a race [ORB-15796].
 - `crates/orbit-core/src/application/routines/tests/sweep.rs::a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires` (criterion 2). The public `test_support::run_sweep_at` hardcodes the default host-signal probe, so a crate-root test cannot place a shutdown on either side of the horizon. The test drives `pub(crate)` `run_sweep_at_with_providers_at` with an injected clock and a 30-minute horizon, and asserts the tick skips at the horizon and fires one minute past it. A hardcoded 180 would still hold that far side [ORB-15796].
 
+- `schema` in `crates/orbit-core/src/runtime/recovery_authority/tests/mod.rs` (criterion 3, persisted-authority safety): exercises adoption from a frozen pre-ledger SQL fixture across the shipped certificate and optional binding shapes, preserving each existing SQLite table definition and row, and checks newer-schema writer/read-only/refusal decisions and WAL sidecar retention after those opens close. Host authority is private and cannot be seeded or opened directly through the public leaf runtime API without weakening its trust boundary. Mutable cases re-execute in isolated children.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.
