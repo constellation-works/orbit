@@ -9,15 +9,18 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
+use super::claim::carry_to_durable_ref;
 use super::freshness::commit_sha;
 use super::git::{
-    GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_output, git_success,
+    GitTimeoutBudget, GitTimeoutBudgetGuard, fetch_remote_base, git_command_success, git_output,
+    git_success, normalize_base_branch,
 };
 use super::handoff::{
-    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, load_handoff_context,
-    record_failed_handoff,
+    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, completed_task_ids_from_input,
+    load_handoff_context, record_failed_handoff,
 };
 use super::operations;
+use super::pr::{PrMergeState, classify_pr_state};
 use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
@@ -140,6 +143,14 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     if let Some(lease) = &lease
         && remote_sha.as_deref() != Some(lease.as_str())
     {
+        // A pull request merged at the published head (merge or squash) deletes
+        // the branch out from under the review. The repair is not lost: it is
+        // preserved and the step fails typed, instead of as a lost lease.
+        if let Some(outcome) =
+            review_repair_after_merge(host, input, workspace_path, &branch, lease, &local_sha)?
+        {
+            return Err(outcome);
+        }
         return Err(OrbitError::Execution(format!(
             "push_lease_lost: 'origin/{branch}' is at {}, not the published head {lease} the \
              review settled on; the reviewer fix is not pushed",
@@ -373,6 +384,281 @@ fn validate_rewrite_checkpoint(
         )));
     }
     Ok(())
+}
+
+/// Marker a before-landing repair uses once its pull request merged at the
+/// leased head. The failure handoff reads it; it is not a new blocker kind.
+const REVIEW_REPAIR_AFTER_MERGE: &str = "review_repair_after_merge:";
+
+/// The unpublished repair on top of `lease`, when the open pull request
+/// merged at that lease.
+///
+/// `Ok(None)` leaves the caller on `push_lease_lost` and preserves nothing:
+/// the predicate did not hold, or the pull-request read could not confirm it.
+/// A Git timeout is returned, so a stalled fetch is not recorded as a lost
+/// lease. `Ok(Some(_))` is the typed failure, after the repair was pushed to
+/// the evidence ref or the durable candidate ref.
+fn review_repair_after_merge<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &Path,
+    branch: &str,
+    lease: &str,
+    local_sha: &str,
+) -> Result<Option<OrbitError>, OrbitError> {
+    let Some(pr_number) = input_string_field(input, "pr_number") else {
+        return Ok(None);
+    };
+    let Some(base) = input_string_field(input, "base") else {
+        return Ok(None);
+    };
+    let base = match normalize_base_branch(&base) {
+        Ok(base) => base,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "review repair after merge skipped: base branch is not a name"
+            );
+            return Ok(None);
+        }
+    };
+    let Some(repairs) = repair_commits(workspace_path, lease, local_sha)? else {
+        return Ok(None);
+    };
+    let merged = match merged_at_lease(host, workspace_path, &pr_number, lease) {
+        Ok(Some(merge_commit)) => merge_commit,
+        Ok(None) => return Ok(None),
+        Err(error) if error.is_timeout() => return Err(error),
+        Err(error) => {
+            tracing::warn!(
+                pr = %pr_number,
+                error = %error,
+                "review repair after merge skipped: pull request status could not be read"
+            );
+            return Ok(None);
+        }
+    };
+    if !merge_commit_on_base(workspace_path, &base, &merged)? {
+        return Ok(None);
+    }
+    let preserved = preserve_review_repair(host, input, workspace_path, branch, local_sha);
+    Ok(Some(OrbitError::Execution(review_repair_message(
+        &pr_number, lease, &repairs, local_sha, &base, &preserved,
+    ))))
+}
+
+/// Commits strictly after `lease` on the way to `local_sha`. `None` when
+/// `lease` is not an ancestor, or the range is empty: there is no repair to
+/// preserve, and the lost lease stands.
+fn repair_commits(
+    workspace_path: &Path,
+    lease: &str,
+    local_sha: &str,
+) -> Result<Option<Vec<String>>, OrbitError> {
+    if !git_command_success(
+        workspace_path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            lease,
+            local_sha,
+        ],
+    )? {
+        return Ok(None);
+    }
+    let listed = git_output(
+        workspace_path,
+        &[
+            "rev-list",
+            "--reverse",
+            "--end-of-options",
+            &format!("{lease}..{local_sha}"),
+        ],
+    )?;
+    let repairs: Vec<String> = listed
+        .split_whitespace()
+        .filter(|sha| !sha.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    Ok((!repairs.is_empty()).then_some(repairs))
+}
+
+/// The merge commit when pull request `pr_number` is merged at `lease`.
+/// `Ok(None)` is any other state, including a status the forge could not
+/// confirm. A timeout is the caller's to surface.
+fn merged_at_lease<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+    lease: &str,
+) -> Result<Option<String>, OrbitError> {
+    let response = host.run_private_vcs_operation(
+        operations::PR_STATUS,
+        json!({
+            "pr": pr_number,
+            "workspace_path": workspace_path.to_string_lossy(),
+        }),
+    )?;
+    let pull_request = response.get("pull_request").cloned().unwrap_or(Value::Null);
+    if !matches!(classify_pr_state(&pull_request), PrMergeState::Merged) {
+        return Ok(None);
+    }
+    let head = pull_request
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if head != lease {
+        return Ok(None);
+    }
+    Ok(pull_request
+        .get("mergeCommit")
+        .and_then(|commit| commit.get("oid"))
+        .and_then(Value::as_str)
+        .filter(|oid| !oid.is_empty())
+        .map(ToOwned::to_owned))
+}
+
+/// Whether `merge_commit` is on `origin/<base>` after a fresh fetch.
+/// A timeout propagates. Any other fetch or ancestry failure means the merge
+/// is not confirmed, so the caller keeps `push_lease_lost`.
+fn merge_commit_on_base(
+    workspace_path: &Path,
+    base: &str,
+    merge_commit: &str,
+) -> Result<bool, OrbitError> {
+    if let Err(error) = fetch_remote_base(workspace_path, base) {
+        if error.is_timeout() {
+            return Err(error);
+        }
+        tracing::warn!(
+            base,
+            error = %error,
+            "review repair after merge skipped: origin base could not be fetched"
+        );
+        return Ok(false);
+    }
+    let remote_base = format!("refs/remotes/origin/{base}");
+    git_command_success(
+        workspace_path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            merge_commit,
+            &remote_base,
+        ],
+    )
+}
+
+/// Where the repair was pushed, or why neither ref accepted it.
+enum PreservedRepair {
+    Ref(String),
+    Unpushed(String),
+}
+
+/// Push `local_sha` to the evidence-hold ref, then to the durable candidate
+/// ref. A refused evidence ref does not hide the repair: the fallback is
+/// tried, and a double refusal is named rather than dropped.
+fn preserve_review_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &Path,
+    branch: &str,
+    local_sha: &str,
+) -> PreservedRepair {
+    let mut evidence_failure = None;
+    if let Some(target) = evidence_ref(branch) {
+        match git_success(
+            workspace_path,
+            &[
+                "push",
+                "--quiet",
+                "origin",
+                &format!("+{local_sha}:{target}"),
+            ],
+        ) {
+            Ok(()) => return PreservedRepair::Ref(target),
+            Err(error) => {
+                tracing::warn!(
+                    target = %target,
+                    error = %error,
+                    "review repair could not be pushed to the evidence ref"
+                );
+                evidence_failure = Some(error.to_string());
+            }
+        }
+    }
+    let Some(task_id) = completed_task_ids_from_input(input).and_then(|ids| ids.into_iter().next())
+    else {
+        return PreservedRepair::Unpushed(evidence_failure.unwrap_or_else(|| {
+            "the run names no task, so the durable candidate ref was not tried".to_string()
+        }));
+    };
+    let run_id = match required_job_run_id(input, "git_push") {
+        Ok(run_id) => run_id.to_string(),
+        Err(error) => {
+            return PreservedRepair::Unpushed(format!(
+                "{}; {error}",
+                evidence_failure.unwrap_or_else(|| "evidence ref was not pushed".to_string())
+            ));
+        }
+    };
+    match carry_to_durable_ref(host, workspace_path, branch, local_sha, &task_id, &run_id) {
+        Ok(reference) => PreservedRepair::Ref(reference),
+        Err(reason) => {
+            let prior =
+                evidence_failure.unwrap_or_else(|| "evidence ref was not pushed".to_string());
+            PreservedRepair::Unpushed(format!("{prior}; durable candidate ref: {reason}"))
+        }
+    }
+}
+
+/// `refs/heads/orbit-evidence/<branch>` when `branch` is safe to interpolate
+/// into a refspec. Anything else skips the evidence ref and uses the fallback.
+fn evidence_ref(branch: &str) -> Option<String> {
+    if branch.is_empty()
+        || branch.starts_with('-')
+        || branch.contains("..")
+        || branch.contains('@')
+        || branch.contains(':')
+        || branch.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    Some(format!("refs/heads/orbit-evidence/{branch}"))
+}
+
+fn review_repair_message(
+    pr_number: &str,
+    lease: &str,
+    repairs: &[String],
+    local_sha: &str,
+    base: &str,
+    preserved: &PreservedRepair,
+) -> String {
+    let shas = repairs.join(" ");
+    let (where_kept, recipe) = match preserved {
+        PreservedRepair::Ref(reference) => (
+            format!("are preserved at {reference}"),
+            format!(
+                "  git fetch origin {reference}\n  git checkout -B review-repair origin/{base}\n  \
+                 git cherry-pick {lease}..FETCH_HEAD"
+            ),
+        ),
+        PreservedRepair::Unpushed(diagnostic) => (
+            format!("stay in this worktree at {local_sha}; {diagnostic}"),
+            format!(
+                "  git checkout -B review-repair origin/{base}\n  git cherry-pick {lease}..{local_sha}"
+            ),
+        ),
+    };
+    format!(
+        "{REVIEW_REPAIR_AFTER_MERGE} pull request #{pr_number} merged at {lease} while the \
+         before-landing review's repair was still unpublished. Repair commits {shas} {where_kept}.\n\
+         \nThe merged pull request does not contain this repair. Land it as a follow-up pull \
+         request:\n{recipe}\nThen open a pull request from review-repair into {base}."
+    )
 }
 
 fn push_output(

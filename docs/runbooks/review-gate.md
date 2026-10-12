@@ -86,13 +86,16 @@ With `review.before_landing` captured, the table above applies to the
 | --- | --- | --- |
 | `accept` | completion merges the reviewed head | `done` with `--complete`, else `review` |
 | `accept_with_fixes` | owner validation reruns on the reviewer commit, which `landing_push` pushes onto the published head under a lease; hosted CI restarts and completion merges that head | `done` with `--complete`, else `review` |
+| `review_repair_after_merge` | the pull request was merged (merge or squash) at the published head the review settled on, and its branch is gone; `landing_push` pushes the unpublished repair commits to `refs/heads/orbit-evidence/<branch>` on origin, or to `refs/orbit/candidates/<task>/<run>` if that push fails | the task is `blocked`; the handoff comment names the merged pull request, the repair commits and the preserved ref, and the commands to fetch that ref, cherry-pick the repair onto the base and open a follow-up pull request |
 | `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed, except that an `incomplete` review's reviewer commit is pushed unvalidated to the PR branch under a lease on the published head (`reviewer_push` in the handoff) | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
 
 A refusal that leaves the PR open for a recorded decision (`reject`, any
 `incomplete`, or an abandoned review below) ends the run `held` with code
 `review_decision_pending`, not `failed`: nothing went wrong, and the gate and
 auto parents waiting on it pass it as held. A reviewer timeout, failed
-revalidation or `push_lease_lost` still ends the run `failed`.
+revalidation, `push_lease_lost` or `review_repair_after_merge` still ends the run
+`failed`. The last of those also blocks the task; the others leave it in
+`review`.
 
 A reviewer that exits cleanly with only its initial placeholder report is
 released, not settled: the refusal leads with `review_abandoned:`, the failure
@@ -484,7 +487,11 @@ Identify the failed step from `orbit run show`, then act:
   decision, or re-queue the task for a fresh run (a new lineage reviews the
   new candidate). To drop it, reject the task; `pr.close_on_terminal` closes
   the PR then. `push_lease_lost` means the PR branch moved after the review
-  settled: inspect who pushed before deciding.
+  settled: inspect who pushed before deciding. `review_repair_after_merge`
+  means the pull request was merged at the head the review settled on while
+  the repair was still unpublished. The comment names the preserved ref.
+  Fetch it, cherry-pick the named range onto the base, and open a follow-up
+  pull request; the merged pull request does not contain the repair.
 
 - **`review` timed out**: read the retained partial report and timeout
   handoff. The first timeout requeues automatically. If

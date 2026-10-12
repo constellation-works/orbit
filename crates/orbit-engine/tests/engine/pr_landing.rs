@@ -38,7 +38,7 @@ use chrono::Utc;
 use orbit_common::{
     NotFoundKind, OrbitError, RecoverableVcsConflict, process::run_bounded_capped, test_env,
 };
-use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
+use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
     BaselineHoldStatus, ClaimExecutionContext, ClaimedKnownRed, DispatchError, KnownRedUnconfirmed,
     RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
@@ -790,6 +790,356 @@ fn a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merge
             assert_eq!(host.status(TASK_ID), TaskStatus::Review);
         },
     );
+}
+
+/// A pull request merged at the leased head, including a squash, does not
+/// lose the before-landing repair. Both shipped pipelines preserve it and
+/// block with the operator recipe. A branch that moved somewhere else, or
+/// that moved and was then merged, still loses the lease and preserves nothing.
+#[test]
+fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease() {
+    isolated(
+        "a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease",
+        |sandbox| {
+            for pipeline in ["task_pr_pipeline.yaml", "task_claimed_pr_pipeline.yaml"] {
+                for method in ["squash", "merge"] {
+                    let fx = Fixture::new(sandbox);
+                    let lease = fx.candidate.clone();
+                    let first = commit_local(&fx, "src/repair-a.txt", "repair a\n");
+                    let second = commit_local(&fx, "src/repair-b.txt", "repair b\n");
+                    merge_remote_head(&fx, &lease, method);
+                    delete_remote_branch(&fx, BRANCH);
+
+                    let host = landing_host(&fx, pipeline);
+                    let error = run_shipped_landing_push(&fx, &host, pipeline)
+                        .expect_err("a merged lease preserves the repair and fails the step");
+
+                    assert!(
+                        error.contains("review_repair_after_merge:"),
+                        "{pipeline} {method}: {error}"
+                    );
+                    assert!(
+                        !error.contains("push_lease_lost"),
+                        "{pipeline} {method}: {error}"
+                    );
+                    assert!(
+                        error.contains(&format!("pull request #{PR_NUMBER}")),
+                        "{pipeline} {method}: {error}"
+                    );
+                    assert!(error.contains(&first), "{pipeline} {method}: {error}");
+                    assert!(error.contains(&second), "{pipeline} {method}: {error}");
+                    let evidence = format!("refs/heads/orbit-evidence/{BRANCH}");
+                    assert!(error.contains(&evidence), "{pipeline} {method}: {error}");
+                    assert_eq!(
+                        remote_ref(&fx, &evidence).as_deref(),
+                        Some(second.as_str()),
+                        "{pipeline} {method}: the preserved ref is the repair tip"
+                    );
+                    assert!(
+                        remote_ref(&fx, &format!("refs/heads/{BRANCH}")).is_none(),
+                        "{pipeline} {method}: the merged branch stays deleted"
+                    );
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+                    let recipes: Vec<_> = host
+                        .comments(TASK_ID)
+                        .into_iter()
+                        .filter(|comment| comment.message.starts_with("review_repair_after_merge:"))
+                        .collect();
+                    assert_eq!(recipes.len(), 1, "{pipeline} {method}: one recipe comment");
+                    let recipe = &recipes[0].message;
+                    assert!(recipe.contains("git fetch origin"), "{recipe}");
+                    assert!(recipe.contains("git cherry-pick"), "{recipe}");
+                    assert!(recipe.contains("open a pull request"), "{recipe}");
+                    assert!(!recipe.contains(TASK_ID), "{recipe}");
+                }
+
+                let fx = Fixture::new(sandbox);
+                let _repair = commit_local(&fx, "src/repair-a.txt", "repair a\n");
+                open_pr_files(&fx);
+                advance_remote_branch(&fx, BRANCH);
+                let host = landing_host(&fx, pipeline);
+                let started = host.status(TASK_ID);
+                let error = run_shipped_landing_push(&fx, &host, pipeline)
+                    .expect_err("an unmerged move loses the lease");
+                assert!(
+                    error.contains("push_lease_lost"),
+                    "{pipeline} unmerged: {error}"
+                );
+                assert!(
+                    !error.contains("review_repair_after_merge"),
+                    "{pipeline} unmerged: {error}"
+                );
+                assert!(remote_ref(&fx, &format!("refs/heads/orbit-evidence/{BRANCH}")).is_none());
+                assert_eq!(host.status(TASK_ID), started);
+
+                let fx = Fixture::new(sandbox);
+                let lease = fx.candidate.clone();
+                let _repair = commit_local(&fx, "src/repair-a.txt", "repair a\n");
+                let moved = advance_remote_branch(&fx, BRANCH);
+                assert_ne!(moved, lease);
+                merge_remote_head(&fx, &moved, "squash");
+                delete_remote_branch(&fx, BRANCH);
+                let host = landing_host(&fx, pipeline);
+                let started = host.status(TASK_ID);
+                let error = run_shipped_landing_push(&fx, &host, pipeline)
+                    .expect_err("a branch moved and then merged loses the lease");
+                assert!(
+                    error.contains("push_lease_lost"),
+                    "{pipeline} moved-then-merged: {error}"
+                );
+                assert!(
+                    !error.contains("review_repair_after_merge"),
+                    "{pipeline} moved-then-merged: {error}"
+                );
+                assert!(remote_ref(&fx, &format!("refs/heads/orbit-evidence/{BRANCH}")).is_none());
+                assert_eq!(host.status(TASK_ID), started);
+            }
+        },
+    );
+}
+
+fn landing_host(fx: &Fixture, pipeline: &str) -> DeliveryHost {
+    let status = if pipeline.contains("claimed") {
+        TaskStatus::InProgress
+    } else {
+        TaskStatus::Review
+    };
+    let host = DeliveryHost::new(&fx.repo, status);
+    host.publish_pr(TASK_ID);
+    host
+}
+
+fn commit_local(fx: &Fixture, file: &str, contents: &str) -> String {
+    let path = fx.repo.join(file);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
+    git(&fx.repo, &["add", file]);
+    git(
+        &fx.repo,
+        &["commit", "-m", &format!("review repair {file}")],
+    );
+    fx.head()
+}
+
+fn open_pr_files(fx: &Fixture) {
+    fs::write(fx.forge.join("pr-head"), format!("{BRANCH}\n")).unwrap();
+    fs::write(fx.forge.join("pr-base"), format!("{BASE}\n")).unwrap();
+}
+
+fn advance_remote_branch(fx: &Fixture, branch: &str) -> String {
+    let git_dir = path_str(&fx.forge.join("remote.git")).to_string();
+    let parent = git(
+        &fx.repo,
+        &[
+            "--git-dir",
+            &git_dir,
+            "rev-parse",
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+    let tree = git(
+        &fx.repo,
+        &[
+            "--git-dir",
+            &git_dir,
+            "rev-parse",
+            &format!("{parent}^{{tree}}"),
+        ],
+    );
+    let next = commit_tree(fx, &tree, &[&parent], "unreviewed move");
+    git(
+        &fx.repo,
+        &[
+            "--git-dir",
+            &git_dir,
+            "update-ref",
+            &format!("refs/heads/{branch}"),
+            &next,
+            &parent,
+        ],
+    );
+    next
+}
+
+/// Land `head` on the remote base the way the forge does, and remember `head`
+/// as the merged pull request's head oid.
+fn merge_remote_head(fx: &Fixture, head: &str, method: &str) {
+    let git_dir = path_str(&fx.forge.join("remote.git")).to_string();
+    let base_ref = format!("refs/heads/{BASE}");
+    let parent = git(&fx.repo, &["--git-dir", &git_dir, "rev-parse", &base_ref]);
+    let tree = git(
+        &fx.repo,
+        &[
+            "--git-dir",
+            &git_dir,
+            "rev-parse",
+            &format!("{head}^{{tree}}"),
+        ],
+    );
+    let parents: Vec<&str> = if method == "merge" {
+        vec![&parent, head]
+    } else {
+        vec![&parent]
+    };
+    let landed = commit_tree(fx, &tree, &parents, "Land pull request #42");
+    git(
+        &fx.repo,
+        &[
+            "--git-dir",
+            &git_dir,
+            "update-ref",
+            &base_ref,
+            &landed,
+            &parent,
+        ],
+    );
+    open_pr_files(fx);
+    fs::write(fx.forge.join("merged"), format!("{landed}\n")).unwrap();
+    fs::write(fx.forge.join("merged-head"), format!("{head}\n")).unwrap();
+}
+
+fn delete_remote_branch(fx: &Fixture, branch: &str) {
+    let git_dir = path_str(&fx.forge.join("remote.git")).to_string();
+    git(
+        &fx.repo,
+        &[
+            "--git-dir",
+            &git_dir,
+            "update-ref",
+            "-d",
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+}
+
+fn commit_tree(fx: &Fixture, tree: &str, parents: &[&str], message: &str) -> String {
+    let git_dir = path_str(&fx.forge.join("remote.git")).to_string();
+    let mut args = vec![
+        "-c".to_string(),
+        "user.name=Forge".to_string(),
+        "-c".to_string(),
+        "user.email=forge@example.invalid".to_string(),
+        "--git-dir".to_string(),
+        git_dir,
+        "commit-tree".to_string(),
+        tree.to_string(),
+    ];
+    for parent in parents {
+        args.push("-p".to_string());
+        args.push((*parent).to_string());
+    }
+    args.push("-m".to_string());
+    args.push(message.to_string());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    git(&fx.repo, &refs)
+}
+
+fn remote_ref(fx: &Fixture, reference: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args([
+            "--git-dir",
+            "remote.git",
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .current_dir(&fx.forge)
+        .output()
+        .unwrap();
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+/// The shipped pipeline's real `landing_push` step, with the stubs its
+/// templates read, and that pipeline's real failure activity.
+fn run_shipped_landing_push(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    pipeline: &str,
+) -> Result<(), String> {
+    host.script(
+        "test_stub_worktree",
+        json!({ "job_run_id": RUN_ID, "workspace_path": fx.repo, "base_sha": fx.base_sha }),
+    );
+    host.script(
+        "test_stub_sync_base",
+        json!({ "head": BRANCH, "base": BASE, "base_ref": BASE, "base_sha": fx.base_sha }),
+    );
+    host.script(
+        "test_stub_push",
+        json!({ "branch": BRANCH, "local_sha": fx.candidate, "phase": "push", "decision": "reused_current" }),
+    );
+    host.script("test_stub_pr_open", json!({ "pr_number": PR_NUMBER }));
+    host.script(
+        "test_stub_landing_review_gate_settle",
+        json!({ "reviewer_fixed": true }),
+    );
+    host.script(
+        "test_stub_implement_one",
+        json!({ "summary": "implemented" }),
+    );
+
+    let shipped = fs::read_to_string(
+        workspace_root()
+            .join("crates/orbit-core/assets/jobs")
+            .join(pipeline),
+    )
+    .unwrap();
+    let shipped = load_job_asset(&shipped).unwrap().spec;
+    let mut landing = shipped
+        .steps
+        .iter()
+        .find(|step| step.id == "landing_push")
+        .cloned()
+        .unwrap_or_else(|| panic!("{pipeline} has no landing_push"));
+    landing.recovery_activity = None;
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": format!("test_stub_{id}"), "config": {} },
+        })
+    };
+    let mut job = job_asset(json!([
+        stub("worktree"),
+        stub("sync_base"),
+        stub("push"),
+        stub("pr_open"),
+        stub("landing_review_gate_settle"),
+        stub("implement_one"),
+    ]));
+    job.steps.push(landing);
+    job.failure_activity = shipped.failure_activity.clone();
+    let mut catalog = V2ActivityCatalog::new();
+    for name in ["git_push", "pr_failure_handoff", "claim_candidate_carry"] {
+        let yaml = fs::read_to_string(
+            workspace_root()
+                .join("crates/orbit-core/assets/activities")
+                .join(format!("{name}.yaml")),
+        )
+        .unwrap();
+        let asset = load_activity_asset(&yaml).unwrap();
+        catalog.insert(asset.name, asset.spec);
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
+    match execute_job_with_resume(
+        &job,
+        json!({ "task_ids": [TASK_ID], "base_sync": "local" }),
+        RUN_ID,
+        writer,
+        host,
+        None,
+    ) {
+        Ok(outcome) if outcome.success => Ok(()),
+        Ok(outcome) => Err(outcome.message.unwrap_or_default()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// A required check that fails, before or after a wait, or an outstanding
@@ -6634,8 +6984,15 @@ status() {
     pr_base=$(cat "$forge/pr-base")
     if [ -f "$forge/merged" ]; then
         touch "$forge/merged-reads"
+        # GitHub keeps headRefOid after the head branch is deleted. `land`
+        # records it; a forge that merged before this substitute did falls
+        # back to the live branch.
+        merged_head=$(head_sha)
+        if [ -f "$forge/merged-head" ]; then
+            merged_head=$(cat "$forge/merged-head")
+        fi
         printf '{"number":42,"state":"MERGED","mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
-            "$(check success)" "$pr_head" "$(head_sha)" "$pr_base" "$(cat "$forge/merged")" "$url"
+            "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
         return
     fi
     reads=$(( $(cat "$forge/reads" 2>/dev/null || echo 0) + 1 ))
@@ -6728,6 +7085,11 @@ advance() {
 
 # Squash `$1` onto the PR base and mark the PR merged.
 land() {
+    # Remember the head oid before any later deletion. GitHub still reports
+    # it on a merged pull request after the branch is gone.
+    if [ ! -f "$forge/merged-head" ]; then
+        printf '%s\n' "$(head_sha)" > "$forge/merged-head"
+    fi
     base_ref="refs/heads/$(cat "$forge/pr-base")"
     parent=$(git --git-dir="$remote" rev-parse "$base_ref")
     tree=$(git --git-dir="$remote" rev-parse "$1^{tree}")

@@ -311,7 +311,12 @@ the same activities again, while hosted CI runs on the published head:
   and the ownership check on it, and `landing_push` pushes it to the PR
   branch under a lease on the published head (`lease_remote_sha`): the remote
   branch must still be at that head, and the push is conditional on it, else
-  the step fails `push_lease_lost`. The new head restarts hosted CI.
+  the step fails `push_lease_lost`. One exception: the pull request merged at
+  that head (merge or squash) and the repair is still only local. The step
+  then pushes the repair to the evidence ref and fails
+  `review_repair_after_merge`, and the task is blocked with the operator
+  recipe for a follow-up pull request. It does not change the reviewed-head
+  rule or the handoff record. The new head restarts hosted CI.
 
 These steps run whatever `completion` is, so a review-only run hands off a
 reviewed PR. `complete_pr` receives the settle's head as
@@ -325,7 +330,9 @@ failed revalidation or a settle error — fails the run with the PR open and
 unmerged, and the failure handoff keeps the task in `review` with a comment
 naming the step's typed reason (`review_gate_blocked`,
 `review_timeout_incomplete`, `push_lease_lost`, ...) and decision
-`landing_review_failure`. No outcome closes the PR. One exception to "no
+`landing_review_failure`. `review_repair_after_merge` is the exception to
+staying in `review`: the pull request is already merged, and the task is
+blocked with the recipe that lands the preserved repair. No outcome closes the PR. One exception to "no
 push": a reviewer commit that settled `incomplete` is not left in the run's
 host-local worktree. Settlement has already committed the reviewer's repair, so
 the failure handoff pushes it onto the published head under the same lease as

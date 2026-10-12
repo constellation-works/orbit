@@ -220,6 +220,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     let base_ref = input_string_field(input, "base_ref")
         .map(|value| format!("Base checkpoint: {value}\n"))
         .unwrap_or_default();
+    let repair = review_repair_body(&error.to_string());
     let timed_out = error.is_timeout();
     let recovery = if matches!(phase, FailedHandoffPhase::Rebase)
         && rebase_in_progress(&context.workspace_path).unwrap_or(false)
@@ -234,23 +235,44 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     } else {
         "Recovery:\n  Reconcile the recorded phase in this worktree, then resume the same job step. Later handoff phases have not been replayed."
     };
-    let message = format!(
-        "{header}\n\nHead branch: {head}\nWorktree: {worktree}\nBase branch: {base}\n{base_ref}Failing phase: {phase}\nError: {error}\n\n{recovery}",
-        worktree = context.workspace_path.display(),
-        phase = phase.label(),
-    );
+    let message = if let Some(body) = repair.clone() {
+        body
+    } else {
+        format!(
+            "{header}\n\nHead branch: {head}\nWorktree: {worktree}\nBase branch: {base}\n{base_ref}Failing phase: {phase}\nError: {error}\n\n{recovery}",
+            worktree = context.workspace_path.display(),
+            phase = phase.label(),
+        )
+    };
+    // A claimed worker must not set Blocked here. That write, with or without
+    // a summary, settles the claim, and the leaf's later Candidate-class Fail
+    // then finds the claim already finished. The comment is enough: the owner
+    // blocks the task and copies this error, recipe included, into the summary.
+    let block = repair.is_some() && host.worker_invocation().is_none();
 
     for task in &context.tasks {
-        if host
-            .get_task_comments(&task.id)?
-            .iter()
-            .any(|comment| comment.message.starts_with(&header))
-        {
+        let comments = host.get_task_comments(&task.id)?;
+        let duplicate = if let Some(prefix) = repair.as_deref().and_then(review_repair_prefix) {
+            comments
+                .iter()
+                .any(|comment| comment.message.starts_with(prefix))
+        } else {
+            comments
+                .iter()
+                .any(|comment| comment.message.starts_with(&header))
+        };
+        if duplicate {
             continue;
         }
         host.apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
+                status: block.then_some(TaskStatus::Blocked),
+                status_event: block.then(|| "review_repair_after_merge".to_string()),
+                status_note: block.then(|| {
+                    "before-landing review repair preserved after the pull request merged"
+                        .to_string()
+                }),
                 append_comments: vec![TaskComment {
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
@@ -261,6 +283,22 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
         )?;
     }
     Ok(())
+}
+
+/// The operator recipe inside `error`, starting at its typed marker.
+/// `None` for every other handoff failure.
+fn review_repair_body(error: &str) -> Option<String> {
+    let start = error.find("review_repair_after_merge:")?;
+    Some(error[start..].to_string())
+}
+
+/// Stable dedup key: the marker plus the merged pull-request number.
+fn review_repair_prefix(body: &str) -> Option<&str> {
+    const MARKER: &str = "review_repair_after_merge: pull request #";
+    let line = body.lines().next()?.trim();
+    let rest = line.strip_prefix(MARKER)?;
+    let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+    (digits > 0).then_some(&line[..MARKER.len() + digits])
 }
 
 pub(super) fn rebase_in_progress(workspace_path: &Path) -> Result<bool, OrbitError> {

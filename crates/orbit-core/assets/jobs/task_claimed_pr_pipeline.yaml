@@ -474,6 +474,7 @@ spec:
         base: "{{ steps.sync_base.output.base }}"
         base_ref: "{{ steps.sync_base.output.base_ref }}"
         lease_remote_sha: "{{ steps.push.output.local_sha }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
         implementation: "{{ steps.implement_one.output }}"
 
     # The leaf's published pull request pins the validation that already

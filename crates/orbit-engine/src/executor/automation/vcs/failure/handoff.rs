@@ -32,6 +32,58 @@ use super::preserve::{
 use super::review_gate::preserve_review_gate_candidate;
 use super::{COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, REVIEW_GATE_STEPS};
 
+/// Block on a merged pull request whose review repair was preserved.
+///
+/// The push step's handoff comment may already carry the recipe. This does
+/// not add another, and it does not invent a blocker kind: `decision` is the
+/// existing free-form failure-handoff field.
+fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    failed_step_id: &str,
+    error_message: &str,
+) -> Result<Option<Value>, OrbitError> {
+    let Some(start) = error_message.find("review_repair_after_merge:") else {
+        return Ok(None);
+    };
+    let recipe = &error_message[start..];
+    let already = host
+        .get_task_comments(&task.id)?
+        .iter()
+        .any(|comment| comment.message.contains("review_repair_after_merge:"));
+    let blocked = task.status == TaskStatus::Blocked;
+    if !already || !blocked {
+        let mut append_comments = Vec::new();
+        if !already {
+            append_comments.push(TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: recipe.to_string(),
+            });
+        }
+        host.apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: (!blocked).then_some(TaskStatus::Blocked),
+                status_event: (!blocked).then(|| "review_repair_after_merge".to_string()),
+                status_note: (!blocked).then(|| {
+                    "before-landing review repair preserved after the pull request merged"
+                        .to_string()
+                }),
+                append_comments,
+                ..TaskAutomationUpdate::default()
+            },
+        )?;
+    }
+    Ok(Some(json!({
+        "phase": "failure_handoff",
+        "decision": "review_repair_after_merge",
+        "failed_step_id": failed_step_id,
+        "task_status": "blocked",
+        "candidate_preserved": true,
+    })))
+}
+
 /// Terminal hook for `task_pr_pipeline`.
 ///
 /// The original job error remains authoritative. Failures before publication
@@ -73,6 +125,15 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     })?;
     let task = host.get_task(task_id)?;
     ensure_failure_handoff_ownership(host, input, &task, run_id)?;
+
+    // A before-landing repair whose pull request merged at the leased head is
+    // already preserved. Leave the task blocked with the operator recipe,
+    // instead of the completion path that keeps a task in review.
+    if let Some(outcome) =
+        review_repair_after_merge_handoff(host, &task, failed_step_id, error_message)?
+    {
+        return Ok(outcome);
+    }
 
     // [ORB-14258] Completion failures normally preserve their published PR,
     // but a required check that the base shares is not a candidate failure.
