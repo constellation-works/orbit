@@ -35,7 +35,7 @@ use super::super::spawn::SpawnError;
 use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
 use super::super::supervisor::{
     OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
-    StoppedDescendantReporter, kill_child_process_tree, spawn_for_supervision, spawn_with_timeout,
+    StoppedDescendantReporter, spawn_for_supervision, spawn_with_timeout,
 };
 use super::completion::{ProviderExit, project_completion};
 use super::policy::{
@@ -619,21 +619,20 @@ pub(crate) fn run_cli_backend_for_step(
     )
     .and_then(|mut spawned| {
         let registered = host
-            .register_worker_process(spawned.child.id())
+            .register_worker_process(spawned.child.pid())
             .and_then(|()| {
                 if sandbox.is_some_and(|sandbox| {
                     sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
                 }) {
-                    host.register_worker_pid_namespace(spawned.child.id())
+                    host.register_worker_pid_namespace(spawned.child.pid())
                 } else {
                     Ok(())
                 }
             });
         if let Err(error) = registered {
-            kill_child_process_tree(&mut spawned.child);
             return Err(SpawnError::permanent(error.to_string()));
         }
-        plugin_broker.bind_sandbox(spawned.child.id());
+        plugin_broker.bind_sandbox(spawned.child.pid());
         linux_post_run_guard = spawned.take_linux_post_run_guard();
         spawn_with_timeout(SpawnWithTimeoutRequest {
             program: &resolved_program,

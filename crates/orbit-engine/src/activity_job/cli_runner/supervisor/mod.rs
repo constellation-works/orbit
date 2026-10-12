@@ -66,7 +66,7 @@ mod tests;
 pub(super) use capture::{CapturedOutput, OutputProgress};
 pub(super) use spawn::{
     ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest, StoppedDescendantReporter,
-    kill_child_process_tree, spawn_for_supervision, spawn_with_timeout,
+    spawn_for_supervision, spawn_with_timeout,
 };
 
 /// Default wall-clock timeout when `AgentLoopSpec::wall_clock_timeout_seconds`

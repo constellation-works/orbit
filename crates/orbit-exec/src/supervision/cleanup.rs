@@ -1,20 +1,9 @@
-use std::process::Child;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
+#[cfg(all(test, unix))]
 use orbit_common::process::OwnedChild;
 
-pub(super) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
-
-// Transitional adapter for build phases, which still hold a bare Child.
-pub(crate) fn terminate_process_group(
-    child: &mut Child,
-    signal: i32,
-    poll_interval: Duration,
-) -> Result<(), OrbitError> {
-    OwnedChild::terminate_spawned(child, signal, TERMINATION_GRACE_PERIOD, poll_interval)
-        .map_err(|error| OrbitError::Execution(format!("failed waiting for process: {error}")))
-}
+pub(crate) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
 pub(crate) fn termination_signal() -> i32 {

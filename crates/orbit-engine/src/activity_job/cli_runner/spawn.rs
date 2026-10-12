@@ -1,8 +1,11 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
 use std::sync::Arc;
+
+use orbit_common::process::OwnedChild;
 
 #[cfg(test)]
 use orbit_exec::bwrap_program_for_audit;
@@ -222,7 +225,8 @@ impl SpawnError {
 
 #[derive(Debug)]
 pub(crate) struct SpawnedChild {
-    pub(crate) child: Child,
+    /// Drops before the mount plan, including when unwinding.
+    pub(crate) child: OwnedChild,
     /// Linux mount-source descriptors retained until the provider exits.
     ///
     /// Closing a duplicate SQLite database descriptor can release this
@@ -329,7 +333,7 @@ fn spawn_linux_bwrap(
     })
     .map_err(|error| SpawnError::transient(error.to_string()))?;
     Ok(SpawnedChild {
-        child,
+        child: OwnedChild::from_spawned(child),
         _linux_mount_plan: Some(plan),
     })
 }
@@ -436,7 +440,7 @@ fn spawn_bare(
     let child_result = command.spawn();
     let child = child_result.map_err(|err| SpawnError::from_spawn_io(program, &err))?;
     Ok(SpawnedChild {
-        child,
+        child: OwnedChild::from_spawned(child),
         _linux_mount_plan: None,
     })
 }
@@ -497,7 +501,7 @@ fn spawn_macos_sandboxed(
     })
     .map_err(|err| SpawnError::transient(err.to_string()))?;
     Ok(SpawnedChild {
-        child,
+        child: OwnedChild::from_spawned(child),
         _linux_mount_plan: None,
     })
 }

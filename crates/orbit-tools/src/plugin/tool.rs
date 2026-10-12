@@ -10,7 +10,10 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, spawn_supervised_cancellable};
+use orbit_common::process::OwnedChild;
+use orbit_exec::{
+    EnvironmentMode, ExecRequest, Sandbox, StdinMode, spawn_owned_supervised_cancellable,
+};
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -194,14 +197,10 @@ impl PluginTool {
         // Signals are intercepted before the spawn and stay pending through
         // `bind_pid`: a SIGTERM there would otherwise exit the host on its
         // default disposition and orphan the backend's process group.
-        let output = spawn_supervised_cancellable(
+        let output = spawn_owned_supervised_cancellable(
             || {
-                let mut child = sandbox.spawn(&request)?;
-                if let Err(error) = callback.bind_pid(child.id()) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(error);
-                }
+                let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);
+                callback.bind_pid(child.pid())?;
                 Ok(child)
             },
             Some(timeout_ms),

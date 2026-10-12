@@ -3,10 +3,11 @@
 use super::super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
+use orbit_common::process::OwnedChild;
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     time::Duration,
 };
 
@@ -23,29 +24,6 @@ pub(in crate::application::automation) const OUTPUT_LIMIT: u64 = 1_048_576;
 /// Largest listing [`Source::git_matching_paths`] streams through a filter.
 /// Only the kept paths are held in memory, so this bounds disk, not evidence.
 pub(in crate::application::automation) const LISTING_LIMIT: u64 = 256 * 1_048_576;
-
-/// A source command owns its descendants as well as its direct child. Drop
-/// cleans up on timeout, I/O failure and a leader exiting before its helpers.
-struct SourceChild(Child);
-
-impl Drop for SourceChild {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Ok(group) = i32::try_from(self.0.id()) {
-            // SAFETY: this child was made a group leader with process_group(0).
-            // No caller memory is accessed; never signal our own group or a
-            // reused PID that now belongs to a different process group.
-            unsafe {
-                let current = libc::getpgid(group);
-                if group > 1 && group != libc::getpgrp() && (current < 0 || current == group) {
-                    libc::killpg(group, libc::SIGKILL);
-                }
-            }
-        }
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
 
 impl<'a> Source<'a> {
     pub(crate) fn new(root: &'a Path) -> Self {
@@ -209,7 +187,7 @@ impl<'a> Source<'a> {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = SourceChild(
+        let mut child = OwnedChild::from_spawned(
             command
                 .current_dir(self.root)
                 .stdin(stdin)
@@ -228,7 +206,7 @@ impl<'a> Source<'a> {
 
         loop {
             if let Some(status) = child
-                .0
+                .child_mut()
                 .try_wait()
                 .map_err(|e| AutomationError::Deferred(e.to_string()))?
             {

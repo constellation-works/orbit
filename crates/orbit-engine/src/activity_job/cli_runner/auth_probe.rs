@@ -11,8 +11,7 @@ use super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::orchestrator::provider_child_environment;
 use super::spawn::{SpawnError, prepare_sandbox_for_dispatch};
 use super::supervisor::{
-    SpawnTraceContext, SpawnWithTimeoutRequest, kill_child_process_tree, spawn_for_supervision,
-    spawn_with_timeout,
+    SpawnTraceContext, SpawnWithTimeoutRequest, spawn_for_supervision, spawn_with_timeout,
 };
 use crate::{DispatchError, RuntimeHost};
 
@@ -120,18 +119,17 @@ pub fn run_auth_probe(
     .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     let guard = spawned.take_linux_post_run_guard();
     let registered = host
-        .register_worker_process(spawned.child.id())
+        .register_worker_process(spawned.child.pid())
         .and_then(|()| {
             if prepared.effective.is_some_and(|sandbox| {
                 sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
             }) {
-                host.register_worker_pid_namespace(spawned.child.id())
+                host.register_worker_pid_namespace(spawned.child.pid())
             } else {
                 Ok(())
             }
         });
     if let Err(error) = registered {
-        kill_child_process_tree(&mut spawned.child);
         return Err(DispatchError::CliInvocationPermanent(error.to_string()));
     }
     let cwd_text = cwd.display().to_string();

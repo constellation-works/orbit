@@ -18,7 +18,7 @@ related_artifacts: [ORB-15722]
 
 This doc covers every place Orbit waits on a child process it spawned:
 the three supervisors, two ad-hoc wait loops, and their callers, verified
-at `f9d7a0ccd`, with step 1 ownership changes reflected below. §1–§3
+at `f9d7a0ccd`, with steps 1–2 ownership changes reflected below. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -115,12 +115,13 @@ runs provider CLIs (`spawn_for_supervision`, then `spawn_with_timeout`).
 - **Test seams.** An injected clock, a try-wait hook, a cancel-pair hook and
   a live-reader counter.
 
-`SpawnedChild` holds the bare `Child` with no `Drop`. Kills are explicit:
-on stdin-setup failure and after every wait in `spawn.rs`, and on worker
-registration failure in `orchestrator/dispatch.rs` and `auth_probe.rs`. A
-panic, or a new early return, between spawn and the final kill leaks the
-provider's group. Its only `Drop` is the test-only `LiveReaderGuard`. It
-installs no signal fan-out. Non-Unix stdin is refused.
+`SpawnedChild` holds `process::OwnedChild`, which kills and reaps the
+provider group on early return or panic during worker registration, broker
+binding or `on_spawn`. The container stays intact through supervision so
+the owned child drops before the Linux mount plan. The macOS profile is
+passed inline; there is no profile temp file to retain. After every wait,
+the handle explicitly kills and drains the group before pipe readers finish.
+It installs no signal fan-out. Non-Unix stdin is refused.
 
 ### 1.4 Ad-hoc wait loops
 
@@ -129,20 +130,21 @@ installs no signal fan-out. Non-Unix stdin is refused.
   It sets `setsid` and `RLIMIT_CORE=0` in `pre_exec`. Two relay threads send
   chunks over a channel into one head/tail `BuildLog` (1 MiB). It enforces a
   wall clock, checks the build-directory size every second, and stops
-  through exec's `terminate_process_group`. After exit it drains for 2 s.
-  `try_wait()?` returns without stopping the phase, and a reader that has not
-  finished is detached, not joined.
+  through `OwnedChild::terminate_with_signal` with exec's five-second grace.
+  The owned handle stops and reaps the group on a wait error or panic,
+  before the sandbox guard drops. After exit it drains for 2 s; a reader
+  that has not finished is detached, not joined.
 - **Automation source commands** —
   [`source/command.rs`](../../../crates/orbit-core/src/application/automation/source/command.rs).
   Stdin, stdout and stderr are unlinked temp files, so a large Git listing
   streams from disk. A 10 ms `try_wait` loop enforces the per-command budget,
-  `SOURCE_DEADLINE` and the size of the stdout file. `SourceChild` is its
-  own kill-on-drop group handle.
+  `SOURCE_DEADLINE` and the size of the stdout file.
+  `OwnedChild` kills and reaps its group on completion, timeout or I/O failure.
 - **Plugin MCP sessions** —
   [`crates/orbit-tools/src/plugin/mcp.rs`](../../../crates/orbit-tools/src/plugin/mcp.rs). This is
-  a long-lived stdio JSON-RPC session, not a run to completion. It has its
-  own `kill_group` and `Drop for McpSession`. Only its ownership handle is
-  in scope (§5 step 2); its request loop is not a supervisor wait loop.
+  a long-lived stdio JSON-RPC session, not a run to completion. It uses the
+  shared `OwnedChild` handle for startup failures and session cleanup. Only its ownership
+  is in scope (§5 step 2); its request loop is not a supervisor wait loop.
 
 ## 2. Caller inventory
 
@@ -179,13 +181,13 @@ Tests that call a supervisor directly are left out.
 | `orbit-tools/src/external.rs`, `builtin/proc/spawn.rs` (`proc.spawn`) | `run_process` | Stdin payload, deadline, capture, debug echo |
 | `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process`; `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop |
 | `orbit-tools/src/plugin/source.rs` | `run_process`; `run_process_streaming_stdout` | Deadline, stdout relay |
-| `orbit-tools/src/plugin/tool.rs` (exec backend) | `spawn_supervised_cancellable` | Signal guard over spawn and `bind_pid`, stdin payload, cancellation flag |
+| `orbit-tools/src/plugin/tool.rs` (exec backend) | `spawn_owned_supervised_cancellable` | Owned transfer, signal guard over spawn and `bind_pid`, stdin payload, cancellation flag |
 | `orbit-engine/src/executor/automation/{dependabot,ci}/query.rs` | `run_process` | Deadline, capture |
 | `orbit-engine/src/executor/automation/vcs/{git,host_evidence}.rs`, `vcs/commit/git_ops.rs`, `vcs/worktree/cleanup.rs`, `vcs/operations/process.rs` | `run_process`; `run_process_streaming_stdout` (`vcs/git.rs`) | Deadline, capture or stdout relay |
 | `orbit-engine/src/executor/automation/vcs/required_command.rs` | `run_process_supervised` | Deadline, typed stop cause for inconclusive runs |
-| `orbit-engine/src/executor/automation/shell.rs`, `vcs/deferral_probe.rs` | `supervise_child` (sandbox-spawned child) | Adopt a spawned child, empty stdin, deadline, `timed_out` |
+| `orbit-engine/src/executor/automation/shell.rs`, `vcs/deferral_probe.rs` | `spawn_owned_supervised_cancellable` (sandbox-spawned child) | Adopt an owned child, empty stdin, deadline, `timed_out` |
 | `orbit-exec/src/validation_env.rs` | `run_probe_process` | Kill at once on deadline (an interactive shell ignores SIGTERM) |
-| `orbit-exec/src/build_sandbox/supervise.rs` | `terminate_process_group` only | Group termination with grace (§1.4) |
+| `orbit-exec/src/build_sandbox/supervise.rs` | `OwnedChild::terminate_with_signal` | Group termination with grace (§1.4) |
 
 ### 2.3 Engine provider supervisor callers
 
@@ -206,14 +208,14 @@ Tests that call a supervisor directly are left out.
 
 | Capability | Bounded | Exec | Engine | Build phase | Source |
 |------------|---------|------|--------|-------------|--------|
-| Kill-on-drop ownership | no | yes | no | no | yes |
-| Survives `?` from pipe/wait errors | no | yes | yes (explicit) | no | yes |
+| Kill-on-drop ownership | yes | yes | yes | yes | yes |
+| Survives `?` from pipe/wait errors | yes | yes | yes | yes | yes |
 | SIGINT/SIGTERM fan-out to child groups | no | yes | no | no | no |
 | Stdin payload | no (null) | yes (thread, stop-aware) | yes (nonblocking, cancel pair + flag fallback) | no | temp file |
 | Capture policy | prefix, continue | fail at limit | redacted head + protocol tail, continue | merged head/tail | file + size limit |
 | Stdout relay to a consumer | no | yes | no | no | no |
 | Line trace events | no | debug echo only | yes | no | no |
-| Termination | TERM, 200 ms, KILL | TERM, 5 s, KILL (or KILL) | KILL, 1 s group drain | exec's (5 s) | KILL |
+| Termination | TERM, 200 ms, KILL | TERM, 5 s, KILL (or KILL) | KILL, 1 s group drain | exec's (5 s) | KILL, 1 s group drain |
 | Cancellation flag | no | yes | no | no | no |
 | Post-exit drain bound | 500 ms (≤ deadline) | 1 s, workers stopped | 500 ms, then cancel | 2 s, readers detached | n/a |
 | Require EOF before success | optional | no | no | no | n/a |
@@ -316,9 +318,10 @@ provider- or plugin-specific policy.
 
 Step 1 introduces `orbit_common::process::OwnedChild`. The bounded runner,
 exec's `SupervisedChild` and the child-test runner own their processes through
-it. Engine teardown and the build-phase termination adapter delegate to its
-borrowed-child helpers until step 2 migrates their ownership. These adapters
-share the handle's own-group and reused-PID checks; they add no new wait loop.
+it. Step 2 extends that ownership to the engine, plugin startup and MCP
+sessions, build phases and automation source commands. The plugin exec
+backend transfers its handle through `spawn_owned_supervised_cancellable`;
+the existing bare-child entry point remains available. No wait loop changes.
 
 Each step is its own task, keeps every public entry point's signature, and
 must pass the existing tests of the code it replaces.
@@ -330,7 +333,7 @@ must pass the existing tests of the code it replaces.
 | 3 | Move exec's supervisor into `orbit_common::process::supervisor` with the §4.2 options exec needs; `orbit-exec::supervision` becomes an adapter | Single implementation of the loop | [ORB-15828] |
 | 4 | Re-implement `run_bounded*` on the supervisor; delete bounded's loop | Bounded callers gain the drain bound and kill-on-drop | [ORB-15829] |
 | 5 | Run the engine provider runner on the supervisor (adds `on_spawn`, the periodic hook, extendable deadline, stopped reporter, flag fallback, test seams) | Engine loop and readers deleted | [ORB-15830] |
-| 6 | Run plugin build phases on the supervisor | Build-phase `?` leak and detached readers | [ORB-15831] |
+| 6 | Run plugin build phases on the supervisor | Build-phase loop and detached readers replaced | [ORB-15831] |
 | 7 | Run automation source commands on the supervisor | Last ad-hoc loop deleted | [ORB-15832] |
 
 Steps 1 and 2 come first because they close the leak class without

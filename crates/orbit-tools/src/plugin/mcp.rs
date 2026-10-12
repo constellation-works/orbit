@@ -24,12 +24,13 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin};
+use std::process::ChildStdin;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::process::OwnedChild;
 use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode};
 use serde_json::{Value, json};
 
@@ -103,7 +104,7 @@ struct McpSessionHandle {
 }
 
 struct McpSession {
-    child: Child,
+    child: OwnedChild,
     stdin: ChildStdin,
     lines: Receiver<String>,
     next_id: i64,
@@ -287,7 +288,7 @@ impl McpBackend {
             return Ok(handle);
         }
         let mut session = self.spawn(ctx, &key.cwd)?;
-        let pid = session.child.id();
+        let pid = session.child.pid();
         if let Err(error) = session.handshake(deadline) {
             return Err(OrbitError::Execution(format!(
                 "plugin tool '{tool_name}': the plugin's mcp server {error}"
@@ -399,11 +400,8 @@ impl McpBackend {
         };
         let sandbox = profile.with_callback_session(&callback);
         sandbox.validate(&request)?;
-        let mut child = sandbox.spawn(&request)?;
-        if let Err(error) = callback.bind_pid(child.id()) {
-            kill_group(&mut child);
-            return Err(error);
-        }
+        let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);
+        callback.bind_pid(child.pid())?;
         let mut session = McpSession::start(child)?;
         session.callback = Some(callback);
         session.cancelled = ctx
@@ -544,9 +542,11 @@ pub(crate) fn tool_result(tool_name: &str, response: &Value) -> Result<Value, Or
 }
 
 impl McpSession {
-    fn start(mut child: Child) -> Result<Self, OrbitError> {
-        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-            kill_group(&mut child);
+    fn start(mut child: OwnedChild) -> Result<Self, OrbitError> {
+        let (Some(stdin), Some(stdout)) = (
+            child.child_mut().stdin.take(),
+            child.child_mut().stdout.take(),
+        ) else {
             return Err(OrbitError::Execution(
                 "mcp server has no stdio pipes".to_string(),
             ));
@@ -562,7 +562,6 @@ impl McpSession {
                     libc::fcntl(stdin.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK)
                 } < 0
             {
-                kill_group(&mut child);
                 return Err(OrbitError::Execution(
                     "cannot make MCP stdin nonblocking".to_string(),
                 ));
@@ -589,7 +588,7 @@ impl McpSession {
             }
         });
         // Stderr is drained so a chatty server cannot block on a full pipe.
-        if let Some(stderr) = child.stderr.take() {
+        if let Some(stderr) = child.child_mut().stderr.take() {
             std::thread::spawn(move || {
                 let mut sink = std::io::sink();
                 let _ = std::io::copy(&mut BufReader::new(stderr), &mut sink);
@@ -756,7 +755,7 @@ impl McpSession {
         if self.ended {
             return false;
         }
-        if matches!(self.child.try_wait(), Ok(None)) {
+        if matches!(self.child.child_mut().try_wait(), Ok(None)) {
             return true;
         }
         // Reclaim descendants immediately, even if another waiter retains
@@ -766,34 +765,14 @@ impl McpSession {
     }
 
     /// End the callback identity, kill the process group and reap the child.
-    /// Idempotent, because Drop runs it again.
+    /// Idempotent; owned cleanup is disarmed once the group has ended.
     fn end(&mut self) {
         if !self.ended {
             self.ended = true;
             self.callback.take();
-            kill_group(&mut self.child);
+            self.child.kill_and_reap();
         }
     }
-}
-
-/// Unpublishing a session is what ends it: the last holder — the map, or the
-/// call that was still using it — drops the child here, so no path leaves a
-/// server running past the backend that spawned it.
-impl Drop for McpSession {
-    fn drop(&mut self) {
-        self.end();
-    }
-}
-
-/// All sandbox spawn paths create a process group with the child's PID.
-fn kill_group(child: &mut Child) {
-    #[cfg(unix)]
-    // SAFETY: this session owns the child group created by the sandbox.
-    unsafe {
-        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
-    }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 fn lock_for_call<'a, T>(

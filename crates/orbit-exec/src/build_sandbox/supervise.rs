@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::process::OwnedChild;
 
 use super::{BuildPhaseEnd, BuildPhaseRequest};
 
@@ -131,16 +132,18 @@ pub(super) fn run<G>(
             });
         }
     }
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = OwnedChild::from_spawned(command.spawn().map_err(|error| {
         OrbitError::Execution(format!("failed to start the build sandbox: {error}"))
-    })?;
+    })?);
     let (sender, output) = mpsc::sync_channel::<Vec<u8>>(OUTPUT_CHANNEL_CHUNKS);
     let readers: Vec<_> = [
         child
+            .child_mut()
             .stdout
             .take()
             .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
         child
+            .child_mut()
             .stderr
             .take()
             .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
@@ -161,6 +164,7 @@ pub(super) fn run<G>(
             log.push(&chunk);
         }
         let status = child
+            .child_mut()
             .try_wait()
             .map_err(|error| OrbitError::Execution(format!("wait for the build: {error}")))?;
         if let Some(status) = status {
@@ -220,12 +224,14 @@ fn relay(mut pipe: Box<dyn Read + Send>, sender: &mpsc::SyncSender<Vec<u8>>) {
     }
 }
 
-fn stop(child: &mut std::process::Child) -> Result<(), OrbitError> {
-    crate::supervision::terminate_process_group(
-        child,
-        crate::supervision::termination_signal(),
-        KILL_POLL_INTERVAL,
-    )
+fn stop(child: &mut OwnedChild) -> Result<(), OrbitError> {
+    child
+        .terminate_with_signal(
+            crate::supervision::termination_signal(),
+            crate::supervision::TERMINATION_GRACE_PERIOD,
+            KILL_POLL_INTERVAL,
+        )
+        .map_err(|error| OrbitError::Execution(format!("failed waiting for process: {error}")))
 }
 
 fn exit_end(status: std::process::ExitStatus) -> BuildPhaseEnd {
