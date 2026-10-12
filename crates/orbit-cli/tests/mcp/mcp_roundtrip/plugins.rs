@@ -787,6 +787,168 @@ fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
     );
 }
 
+/// Definitions gate the whole plugin, even though they do not declare tools.
+/// Compare one live server with new processes after edits to every kind.
+#[cfg(unix)]
+#[test]
+fn a_live_session_refreshes_definition_admission_and_membership() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Discovery and built-in calls never execute the plugin backend, so this
+    // fixture needs no nested Seatbelt probe.
+    let workspace = McpWorkspace::init();
+    let source = write_plugin(&workspace.home, "definitionscache");
+    let definitions = [
+        (
+            "activities",
+            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: probe\nspec:\n  type: deterministic\n  description: Fixture activity.\n  action: sleep\n  config: {}\n",
+        ),
+        (
+            "jobs",
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: probe\nspec:\n  state: enabled\n  steps:\n    - id: probe\n      target: activity:probe\n",
+        ),
+        (
+            "routines",
+            "schemaVersion: 1\nname: probe\ndescription: Fixture routine.\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:probe\n",
+        ),
+        (
+            "auto_tasks",
+            "schemaVersion: 1\nname: probe\ndescription: Fixture auto-task.\nenabled: false\nschedule:\n  cron: '0 * * * *'\ntemplate:\n  title: Fixture task\n  description: Fixture task description.\n",
+        ),
+    ];
+    let manifest_path = source.join("plugin.yaml");
+    let mut manifest = std::fs::read_to_string(&manifest_path).expect("manifest");
+    manifest.push_str("  definitions:\n");
+    for (kind, body) in definitions {
+        std::fs::create_dir_all(source.join(kind)).expect("definition directory");
+        std::fs::write(source.join(kind).join("probe.yaml"), body).expect("valid definition");
+        manifest.push_str(&format!("    {kind}: [{kind}/*.yaml]\n"));
+    }
+    // Literal paths must also notice disappearance and repair.
+    std::fs::create_dir_all(source.join("literal")).expect("literal directory");
+    std::fs::write(source.join("literal/probe.yaml"), definitions[0].1)
+        .expect("literal definition");
+    manifest = manifest.replace(
+        "activities/*.yaml]",
+        "activities/*.yaml, literal/probe.yaml]",
+    );
+    std::fs::write(&manifest_path, manifest).expect("manifest with definitions");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ],
+    );
+    let shown = run_orbit(
+        &workspace,
+        &["plugin", "show", "definitionscache", "--format", "json"],
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("plugin record");
+    let installed = PathBuf::from(shown["install_path"].as_str().expect("install path"));
+    let installed_manifest =
+        std::fs::read(installed.join("plugin.yaml")).expect("installed manifest");
+
+    let log_path = workspace.home.join("definition-surface.log");
+    let log = std::fs::File::create(&log_path).expect("server log");
+    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["mcp", "serve"])
+        .env("RUST_LOG", "orbit.mcp.plugin=debug")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log))
+        .spawn()
+        .map(ChildGuard::new)
+        .expect("start live MCP session");
+    let mut client = McpClient::new(child);
+    workspace.initialize(&mut client);
+    let assert_surface = |client: &mut McpClient, active: bool| {
+        let names = advertised_tool_names(client);
+        let fresh = advertised_tool_names(&mut workspace.serve());
+        let has_tool = |names: &[String]| names.iter().any(|name| name == "definitionscache_echo");
+        assert_eq!(has_tool(&fresh), active, "fresh admission: {fresh:?}");
+        assert_eq!(
+            has_tool(&names),
+            has_tool(&fresh),
+            "live admission: {names:?}"
+        );
+    };
+    let rebuilds = || {
+        std::fs::read_to_string(&log_path)
+            .expect("server log")
+            .lines()
+            .filter(|line| line.contains("rebuilding plugin MCP surface"))
+            .count()
+    };
+    assert_surface(&mut client, true);
+    let before = rebuilds();
+    client.call_tool_ok("orbit_task_list", json!({}));
+    client.call_tool_ok("orbit_workspace_list", json!({}));
+    assert_surface(&mut client, true);
+    assert_eq!(
+        rebuilds(),
+        before,
+        "unchanged definitions and unrelated audit writes reuse admission"
+    );
+
+    for (kind, body) in definitions {
+        let path = installed.join(kind).join("probe.yaml");
+        let modified = std::fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
+        let invalid = body
+            .replacen("schemaVersion: 2", "schemaVersion: 9", 1)
+            .replacen("schemaVersion: 1", "schemaVersion: 9", 1);
+        std::fs::write(&path, invalid).expect("invalidate definition without changing its length");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open definition")
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .expect("restore mtime");
+        assert_surface(&mut client, false);
+        // Also warm a server while the contribution is already invalid.
+        let mut initially_refused = workspace.serve();
+        assert_surface(&mut initially_refused, false);
+        std::fs::write(&path, body).expect("repair definition");
+        assert_surface(&mut client, true);
+        assert_surface(&mut initially_refused, true);
+
+        let permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("deny reads");
+        assert!(
+            std::fs::read(&path).is_err(),
+            "fixture must actually make {kind} unreadable"
+        );
+        assert_surface(&mut client, false);
+        std::fs::set_permissions(&path, permissions).expect("restore reads");
+        assert_surface(&mut client, true);
+
+        let added = installed.join(kind).join("added.yaml");
+        std::fs::write(&added, "[invalid definition").expect("add invalid wildcard member");
+        assert_surface(&mut client, false);
+        std::fs::rename(&added, added.with_extension("disabled")).expect("remove wildcard member");
+        assert_surface(&mut client, true);
+    }
+    let literal = installed.join("literal/probe.yaml");
+    let missing = literal.with_extension("disabled");
+    std::fs::rename(&literal, &missing).expect("remove literal definition");
+    assert_surface(&mut client, false);
+    std::fs::rename(&missing, &literal).expect("restore literal definition");
+    assert_surface(&mut client, true);
+    assert_eq!(
+        std::fs::read(installed.join("plugin.yaml")).expect("manifest"),
+        installed_manifest
+    );
+    let before = rebuilds();
+    assert_surface(&mut client, true);
+    assert_eq!(rebuilds(), before, "repaired definitions remain reusable");
+}
+
 /// Add a `mcp_scope: global` tool beside the fixture's workspace-scoped one.
 fn add_global_tool(source: &Path) {
     let manifest = source.join("plugin.yaml");

@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::SystemTime;
 
-use orbit_tools::plugin::{LoadedPlugin, PluginLoadError, load_plugin_dir, manifest_digest};
+use orbit_tools::plugin::{
+    LoadedPlugin, PluginLoadError, load_plugin_dir, manifest_digest, resolve_plugin_definitions,
+};
 use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME};
 
 /// The cheap facts used to decide whether a previously loaded manifest can be
@@ -36,7 +38,8 @@ impl PluginManifestStamp {
 /// path, and recorded digest all affect admission. The manifest stamp is the
 /// common fast path. When only that stamp changes, the bytes are hashed before
 /// the expensive symlink walk: an unchanged digest still names the same
-/// manifest this process already resolved.
+/// manifest this process already resolved. Definition patterns are re-expanded
+/// before reuse so file membership cannot remain pinned to the first load.
 #[derive(Clone)]
 struct CachedPluginLoad {
     installed: InstalledPlugin,
@@ -67,14 +70,15 @@ pub(crate) fn load_installed_plugin(
     let root = PathBuf::from(&installed.install_path);
     let manifest_stamp = PluginManifestStamp::read(&root);
     let cached = plugin_host_load_cache().plugins.get(&root).cloned();
-    if let Some(cached) = cached.filter(|cached| cached.installed == *installed) {
-        if cached.manifest_stamp == manifest_stamp {
-            return Ok(cached.loaded);
-        }
-        if std::fs::read(root.join(MANIFEST_FILE_NAME))
-            .ok()
-            .is_some_and(|bytes| manifest_digest(&bytes) == cached.loaded.manifest_digest)
-        {
+    if let Some(cached) = cached.filter(|cached| cached.installed == *installed)
+        && (cached.manifest_stamp == manifest_stamp
+            || std::fs::read(root.join(MANIFEST_FILE_NAME))
+                .ok()
+                .is_some_and(|bytes| manifest_digest(&bytes) == cached.loaded.manifest_digest))
+        && resolve_plugin_definitions(&cached.loaded.root, &cached.loaded.manifest)?
+            == cached.loaded.definitions
+    {
+        if cached.manifest_stamp != manifest_stamp {
             plugin_host_load_cache().plugins.insert(
                 root,
                 CachedPluginLoad {
@@ -82,8 +86,8 @@ pub(crate) fn load_installed_plugin(
                     ..cached.clone()
                 },
             );
-            return Ok(cached.loaded);
         }
+        return Ok(cached.loaded);
     }
 
     let loaded = Arc::new(load_plugin_dir(&root)?);

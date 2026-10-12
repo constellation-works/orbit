@@ -1025,10 +1025,14 @@ removed. A typed task field would do the same job as the tag but change the pers
 - The tree is built at startup from the enabled `plugins` rows (SQLite opened read-only; no
   enabled row, no manifest read). Manifests are cached per process and shared by CLI, runtime
   and host-global MCP discovery; a changed `plugin.yaml` stamp re-checks the digest before the
-  symlink walk and schema resolution are repeated.
+  symlink walk and schema resolution are repeated. Definition patterns are re-expanded
+  on each load; changed membership reloads the plugin even with an unchanged manifest.
 - A running MCP server also caches the host plugin tool surface. It retains global config
   and a read-only store handle, compares plugin rows and file stamps for config, manifests
-  and admission witnesses, and rebuilds only when those inputs change. Audit writes alone
+  and admission witnesses, plus resolved definition paths and readable content digests.
+  Definition edits, read failures, wildcard additions/removals and literal-path repairs
+  refresh admission on the next request, including plugins previously refused for invalid
+  definitions. The server rebuilds only when those inputs change. Audit writes alone
   leave the surface reusable. The adapter replaces definitions, wire-name translation and
   tool-list caches together, so install, upgrade and host toggles reach the next request.
   Workspace toggles are applied to each list and enforced by workspace dispatch.
