@@ -6,7 +6,9 @@
 //! needed:
 //!
 //! - **CPU** is `cpu.stat` `usage_usec` deltas over wall time, in cores. A
-//!   minute's figure is the mean over the minute.
+//!   minute's figure is the mean over the minute. Counter intervals are split
+//!   proportionally by wall time at each boundary, before completed rows are
+//!   written; activity within an interval is not observable.
 //! - **Memory** is the scope's non-reclaimable bytes,
 //!   `memory.current - file + shmem` ([`WorkerScopeCgroup::usage`]). A
 //!   minute's figure is the maximum seen in it, because a short rustc or
@@ -86,6 +88,19 @@ pub(crate) struct RunResourceSampler {
     last_host: Option<(DateTime<Utc>, HostUsageReading)>,
 }
 
+fn positive_usec(duration: TimeDelta) -> Option<u64> {
+    u64::try_from(duration.num_microseconds()?)
+        .ok()
+        .filter(|wall| *wall > 0)
+}
+
+/// Difference of cumulative proportional shares: rounding stays in the interval
+/// and the sum of all segments is exactly the original counter delta.
+fn interval_share(delta: u64, from: u64, to: u64, wall: u64) -> u64 {
+    let scaled = |elapsed| u128::from(delta) * u128::from(elapsed) / u128::from(wall);
+    (scaled(to) - scaled(from)) as u64
+}
+
 impl RunResourceSampler {
     /// A sampler for `run_id` that reads `scope` and `<proc_root>/{stat,meminfo}`.
     /// A run that already has minutes was restarted part way through: it
@@ -141,45 +156,75 @@ impl RunResourceSampler {
     }
 
     fn sample_scope(&mut self, at: DateTime<Utc>, cpu_usec: u64, memory_bytes: u64) {
-        let Some(elapsed) = (at - self.started_at)
-            .num_seconds()
-            .checked_div(60)
-            .and_then(|minutes| u32::try_from(minutes).ok())
-        else {
+        let Some(index) = self.run_index(at) else {
             return;
         };
-        let index = self.first_minute.saturating_add(elapsed);
-        if self.run.as_ref().is_some_and(|minute| index < minute.index) {
+        if self
+            .last_scope
+            .is_some_and(|(previous_at, _)| at < previous_at)
+        {
             // The wall clock stepped back; keep the minute being built.
             return;
         }
+        if let Some((previous_at, previous_usec)) = self.last_scope
+            && let (Some(wall), Some(cpu)) = (
+                positive_usec(at - previous_at),
+                cpu_usec.checked_sub(previous_usec),
+            )
+        {
+            let mut cursor = previous_at;
+            let mut covered = 0;
+            while cursor < at {
+                let Some(segment_index) = self.run_index(cursor) else {
+                    break;
+                };
+                let boundary = self.started_at
+                    + TimeDelta::minutes(i64::from(segment_index - self.first_minute) + 1);
+                let end = at.min(boundary);
+                // Use a common origin for truncated microsecond durations so
+                // sub-microsecond rounding cannot lose time at a boundary.
+                let next_covered = positive_usec(end - previous_at).unwrap_or(0);
+                // Wall coverage uses the run origin across samples too, so
+                // a fully covered minute always has exactly 60 seconds.
+                let duration = positive_usec(end - self.started_at).unwrap_or(0)
+                    - positive_usec(cursor - self.started_at).unwrap_or(0);
+                let minute = self.run_minute(segment_index);
+                minute.cpu_usec = minute.cpu_usec.saturating_add(interval_share(
+                    cpu,
+                    covered,
+                    next_covered,
+                    wall,
+                ));
+                minute.wall_usec = minute.wall_usec.saturating_add(duration);
+                covered = next_covered;
+                cursor = end;
+            }
+        }
+        let minute = self.run_minute(index);
+        minute.memory_max = minute.memory_max.max(memory_bytes);
+        minute.samples += 1;
+        self.last_scope = Some((at, cpu_usec));
+    }
+
+    fn run_index(&self, at: DateTime<Utc>) -> Option<u32> {
+        let elapsed = (at - self.started_at).num_microseconds()?;
+        let minute = u32::try_from(elapsed.checked_div(60_000_000)?).ok()?;
+        (elapsed >= 0).then(|| self.first_minute.saturating_add(minute))
+    }
+
+    fn run_minute(&mut self, index: u32) -> &mut RunMinute {
         if self.run.as_ref().is_some_and(|minute| index > minute.index)
             && let Some(done) = self.run.take()
         {
             self.write_run_minute(done);
         }
-        let minute = self.run.get_or_insert(RunMinute {
+        self.run.get_or_insert(RunMinute {
             index,
             cpu_usec: 0,
             wall_usec: 0,
             memory_max: 0,
             samples: 0,
-        });
-        if let Some((previous_at, previous_usec)) = self.last_scope
-            && let (Some(wall), Some(cpu)) = (
-                (at - previous_at)
-                    .num_microseconds()
-                    .and_then(|wall| u64::try_from(wall).ok())
-                    .filter(|wall| *wall > 0),
-                cpu_usec.checked_sub(previous_usec),
-            )
-        {
-            minute.cpu_usec = minute.cpu_usec.saturating_add(cpu);
-            minute.wall_usec = minute.wall_usec.saturating_add(wall);
-        }
-        minute.memory_max = minute.memory_max.max(memory_bytes);
-        minute.samples += 1;
-        self.last_scope = Some((at, cpu_usec));
+        })
     }
 
     fn sample_host(&mut self, at: DateTime<Utc>, reading: HostUsageReading) {
@@ -187,49 +232,75 @@ impl RunResourceSampler {
             return;
         };
         if self
-            .host
-            .as_ref()
-            .is_some_and(|minute| minute_at < minute.at)
+            .last_host
+            .is_some_and(|(previous_at, _)| at < previous_at)
         {
             return;
         }
-        if self
-            .host
-            .as_ref()
-            .is_some_and(|minute| minute_at > minute.at)
+        if let Some((previous_at, previous)) = self.last_host
+            && let (Some(wall), Some(total), Some(busy)) = (
+                positive_usec(at - previous_at),
+                reading.total_ticks.checked_sub(previous.total_ticks),
+                reading.busy_ticks.checked_sub(previous.busy_ticks),
+            )
+            && busy <= total
+        {
+            let mut cursor = previous_at;
+            let mut covered = 0;
+            while cursor < at {
+                let Ok(segment_at) = cursor.duration_trunc(MINUTE) else {
+                    break;
+                };
+                let end = at.min(segment_at + MINUTE);
+                // Use a common origin for truncated microsecond durations so
+                // sub-microsecond rounding cannot lose time at a boundary.
+                let next_covered = positive_usec(end - previous_at).unwrap_or(0);
+                let minute = self.host_minute(segment_at, reading, cursor == segment_at);
+                let busy_share = interval_share(busy, covered, next_covered, wall);
+                // Split idle separately so integer rounding cannot produce a
+                // segment with more busy ticks than total ticks.
+                let idle_share = interval_share(total - busy, covered, next_covered, wall);
+                minute.total_ticks += busy_share + idle_share;
+                minute.busy_ticks += busy_share;
+                covered = next_covered;
+                cursor = end;
+            }
+        }
+        // The point reading belongs to the minute containing `at`, while the
+        // preceding counter interval has already been credited and flushed.
+        let whole = self
+            .last_host
+            .is_some_and(|(previous_at, _)| previous_at <= minute_at);
+        let minute = self.host_minute(minute_at, reading, whole);
+        minute.cpu_count = minute.cpu_count.max(reading.cpu_count);
+        minute.memory_max = minute.memory_max.max(reading.memory_used_bytes);
+        minute.memory_total = minute.memory_total.max(reading.memory_total_bytes);
+        minute.samples += 1;
+        self.last_host = Some((at, reading));
+    }
+
+    fn host_minute(
+        &mut self,
+        at: DateTime<Utc>,
+        reading: HostUsageReading,
+        whole: bool,
+    ) -> &mut HostMinute {
+        if self.host.as_ref().is_some_and(|minute| at > minute.at)
             && let Some(done) = self.host.take()
             && done.whole
         {
             self.offer_host_minute(done);
         }
-        let last_host = self.last_host;
-        let minute = self.host.get_or_insert_with(|| HostMinute {
-            at: minute_at,
-            whole: last_host.is_some_and(|(previous_at, _)| {
-                previous_at <= minute_at && minute_at - previous_at <= MINUTE / 6
-            }),
+        self.host.get_or_insert(HostMinute {
+            at,
+            whole,
             busy_ticks: 0,
             total_ticks: 0,
             cpu_count: reading.cpu_count,
             memory_max: 0,
             memory_total: reading.memory_total_bytes,
             samples: 0,
-        });
-        if let Some((_, previous)) = last_host
-            && let (Some(total), Some(busy)) = (
-                reading.total_ticks.checked_sub(previous.total_ticks),
-                reading.busy_ticks.checked_sub(previous.busy_ticks),
-            )
-            && busy <= total
-        {
-            minute.total_ticks += total;
-            minute.busy_ticks += busy;
-        }
-        minute.cpu_count = minute.cpu_count.max(reading.cpu_count);
-        minute.memory_max = minute.memory_max.max(reading.memory_used_bytes);
-        minute.memory_total = minute.memory_total.max(reading.memory_total_bytes);
-        minute.samples += 1;
-        self.last_host = Some((at, reading));
+        })
     }
 
     fn write_run_minute(&self, minute: RunMinute) {
