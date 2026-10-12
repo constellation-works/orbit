@@ -234,9 +234,8 @@ impl TaskCommitBoundary {
         }
         if let Some(len) = intent.evidence.comments_len {
             truncate_jsonl_file(&root.join(TASK_COMMENTS_FILE_NAME), len)?;
-            for comment in &intent.evidence.comments {
-                self.bundle_store.append_comment(id, comment)?;
-            }
+            self.bundle_store
+                .append_comments(id, &intent.evidence.comments)?;
         }
         for artifact in &intent.evidence.artifacts {
             let destination = root

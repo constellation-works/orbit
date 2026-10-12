@@ -1,4 +1,5 @@
 use chrono::Utc;
+use orbit_common::fs::io::hold_step;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
@@ -7,8 +8,15 @@ use super::super::TaskCommitBoundary;
 use super::super::landing::LandingStop;
 use super::codec::{CLAIM, RECEIPT, RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS, STATE};
 use super::releases::release_budget_comment;
-use super::{ClaimAuthority, MutationReceipt, decode, encode, invalid, row};
+use super::{ClaimAuthority, MutationReceipt, decode, decode_state, encode, invalid, row};
 use crate::contracts::*;
+
+/// Steps of a claim mutation's admission section, so a long hold's report
+/// names where it went rather than the section's whole operation.
+const RECEIPT_STEP: &str = "claim receipt";
+const AUTHORITY_STEP: &str = "claim authority";
+const DECISION_STEP: &str = "claim decision";
+const COMMIT_STEP: &str = "claim commit";
 
 impl TaskCommitBoundary {
     /// Trusted-context seam for application callers and the later generic tool adapter.
@@ -26,13 +34,92 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("invalid claim invocation"));
         }
-        let result =
-            self.with_admission(|| self.mutate_claim_locked(auth, mutation_id, mutation))?;
+        let mut identity = mutation.clone();
+        if let ClaimMutation::Friction(params) = &mut identity {
+            params.created_at = chrono::DateTime::UNIX_EPOCH;
+        }
+        let input = encode(&(
+            &auth.task_id,
+            &auth.claim_id,
+            &auth.machine_id,
+            &auth.run,
+            auth.operator,
+            &identity,
+        ))?;
+        let receipt_id = sha256_hex(encode(&(&auth.claim_id, mutation_id))?.as_bytes());
+        // A retry of a recorded mutation only reads, so it replays in an
+        // ordinary section instead of excluding the partition's readers. The
+        // peek outside the boundary only picks the route: the replay reads
+        // the receipt again once any pending commit is settled, and a
+        // mutation whose receipt lands after the peek finds it inside the
+        // admission section.
+        let recorded = self
+            .store
+            .task_coordination_row(&self.workspace_id, RECEIPT, &receipt_id)?
+            .is_some();
+        let replayed = if recorded {
+            self.enter_ordinary(|| self.replay_claim_receipt(auth, mutation, &receipt_id, &input))?
+        } else {
+            None
+        };
+        let result = match replayed {
+            Some(result) => result,
+            None => self
+                .with_admission(|| self.mutate_claim_locked(auth, mutation, &receipt_id, input))?,
+        };
         // Each settlement sweeps receipts past retention, outside the section.
         if !result.phase.is_unsettled() {
             self.prune_settled_receipts_after_settlement();
         }
         Ok(result)
+    }
+
+    /// The recorded outcome of the mutation `receipt_id` names, or `None`
+    /// when it has none. A receipt recorded for different input is refused.
+    fn replay_claim_receipt(
+        &self,
+        auth: &ClaimInvocation,
+        mutation: &ClaimMutation,
+        receipt_id: &str,
+        input: &str,
+    ) -> Result<Option<ClaimMutationResult>, OrbitError> {
+        let Some(receipt) = self.coordination_row(RECEIPT, receipt_id)? else {
+            return Ok(None);
+        };
+        let receipt: MutationReceipt = decode(&receipt.payload_json)?;
+        if receipt.input != input {
+            return Err(invalid("mutation_mismatch"));
+        }
+        // A persisted send intent is uncertainty, never permission to send again.
+        // The landing consumer must reconcile external state, including after a
+        // later revocation or a changed candidate. Do not replay launch authority.
+        if matches!(
+            mutation,
+            ClaimMutation::MergeIntent {
+                resolved: false,
+                ..
+            }
+        ) {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::MergeIntentReplayUnreconciled,
+            ));
+        }
+        // Binding is also a launch gate. Never replay historical launch permission
+        // after handoff, failure, or revocation; other receipts are advisory outcomes.
+        if let ClaimMutation::Bind { run, .. } = mutation {
+            let current: ExecutionClaim = self
+                .coordination_row(CLAIM, &auth.claim_id)?
+                .map(|row| decode(&row.payload_json))
+                .transpose()?
+                .ok_or_else(|| OrbitError::claim_refused(ClaimRefusalKind::StaleClaim))?;
+            if current.phase != ExecutionClaimPhase::Running
+                || self.claim_state(current)?.bound_run.as_ref() != Some(run)
+            {
+                return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+            }
+        }
+        self.with_friction_result(receipt.result, receipt_id)
+            .map(Some)
     }
 
     /// The claim `auth` acts under, refused as `stale_claim` unless it is the
@@ -151,56 +238,14 @@ impl TaskCommitBoundary {
     fn mutate_claim_locked(
         &self,
         auth: &ClaimInvocation,
-        mutation_id: &str,
         mutation: &ClaimMutation,
+        receipt_id: &str,
+        input: String,
     ) -> Result<ClaimMutationResult, OrbitError> {
-        let mut identity = mutation.clone();
-        if let ClaimMutation::Friction(params) = &mut identity {
-            params.created_at = chrono::DateTime::UNIX_EPOCH;
-        }
-        let input = encode(&(
-            &auth.task_id,
-            &auth.claim_id,
-            &auth.machine_id,
-            &auth.run,
-            auth.operator,
-            &identity,
-        ))?;
-        let receipt_id = sha256_hex(encode(&(&auth.claim_id, mutation_id))?.as_bytes());
-        if let Some(receipt) = self.coordination_row(RECEIPT, &receipt_id)? {
-            let receipt: MutationReceipt = decode(&receipt.payload_json)?;
-            if receipt.input != input {
-                return Err(invalid("mutation_mismatch"));
-            }
-            // A persisted send intent is uncertainty, never permission to send again.
-            // The landing consumer must reconcile external state, including after a
-            // later revocation or a changed candidate. Do not replay launch authority.
-            if matches!(
-                mutation,
-                ClaimMutation::MergeIntent {
-                    resolved: false,
-                    ..
-                }
-            ) {
-                return Err(OrbitError::claim_refused(
-                    ClaimRefusalKind::MergeIntentReplayUnreconciled,
-                ));
-            }
-            // Binding is also a launch gate. Never replay historical launch permission
-            // after handoff, failure, or revocation; other receipts are advisory outcomes.
-            if let ClaimMutation::Bind { run, .. } = mutation {
-                let current = self
-                    .execution_claims()?
-                    .into_iter()
-                    .find(|c| c.claim_id == auth.claim_id)
-                    .ok_or_else(|| OrbitError::claim_refused(ClaimRefusalKind::StaleClaim))?;
-                if current.phase != ExecutionClaimPhase::Running
-                    || self.claim_state(current)?.bound_run.as_ref() != Some(run)
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-            }
-            return self.with_friction_result(receipt.result, &receipt_id);
+        if let Some(result) = hold_step(RECEIPT_STEP, || {
+            self.replay_claim_receipt(auth, mutation, receipt_id, &input)
+        })? {
+            return Ok(result);
         }
         let ClaimAuthority {
             row: old,
@@ -209,7 +254,9 @@ impl TaskCommitBoundary {
             state_row: old_state,
             bundle,
             expected_status,
-        } = self.claim_authority(auth, matches!(mutation, ClaimMutation::Recover { .. }))?;
+        } = hold_step(AUTHORITY_STEP, || {
+            self.claim_authority(auth, matches!(mutation, ClaimMutation::Recover { .. }))
+        })?;
         let mut params = TaskCoordinationCommitParams {
             task_id: claim.task_id.clone(),
             actor: auth.machine_id.clone(),
@@ -220,404 +267,415 @@ impl TaskCommitBoundary {
         let mut binding = None;
         let mut release = false;
         let mut handoff_effects = ClaimCommitEffects::default();
-        match mutation {
-            ClaimMutation::Update(value) => {
-                if auth.operator
-                    || !matches!(
-                        claim.phase,
-                        ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
-                    )
-                    || value
-                        .expected_status
-                        .is_some_and(|status| status != expected_status)
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-                if let Some(status) = value.status {
-                    if status == TaskStatus::Blocked && claim.phase == ExecutionClaimPhase::Running
+        hold_step(DECISION_STEP, || -> Result<(), OrbitError> {
+            match mutation {
+                ClaimMutation::Update(value) => {
+                    if auth.operator
+                        || !matches!(
+                            claim.phase,
+                            ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
+                        )
+                        || value
+                            .expected_status
+                            .is_some_and(|status| status != expected_status)
                     {
-                        if value
-                            .evidence
-                            .summary
-                            .as_deref()
-                            .is_none_or(|text| text.trim().is_empty())
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+                    }
+                    if let Some(status) = value.status {
+                        if status == TaskStatus::Blocked
+                            && claim.phase == ExecutionClaimPhase::Running
                         {
+                            if value
+                                .evidence
+                                .summary
+                                .as_deref()
+                                .is_none_or(|text| text.trim().is_empty())
+                            {
+                                return Err(invalid("failure settlement requires evidence"));
+                            }
+                            state.claim.phase = ExecutionClaimPhase::Failed;
+                            state.landing_invalidated = true;
+                            state.settlement = Some(ClaimSettlementRecord::of(
+                                ClaimSettlementKind::Fail,
+                                &value.evidence,
+                                Utc::now().to_rfc3339(),
+                            ));
+                            params.status = Some(status);
+                            release = true;
+                        } else if status != expected_status {
+                            return Err(invalid(
+                                "worker lifecycle transition requires typed handoff",
+                            ));
+                        }
+                    }
+                    if value
+                        .context_files
+                        .as_ref()
+                        .is_some_and(|context| context != &bundle.envelope.context_files)
+                    {
+                        return Err(invalid(
+                            "claim footprint changes require recovery and readmission",
+                        ));
+                    }
+                    if claim.phase == ExecutionClaimPhase::HandedOff
+                        && (value.evidence != ClaimEvidence::default()
+                            || value.plan.is_some()
+                            || value.status_note.is_some()
+                            || value.external_refs.iter().any(|reference| {
+                                !bundle.envelope.external_refs.contains(reference)
+                            }))
+                    {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+                    }
+                    evidence = value.evidence.clone();
+                    params.status_note = value.status_note.clone();
+                    handoff_effects.worker_update = Some(value.clone());
+                    state.last_event = "claim_updated".into();
+                }
+                ClaimMutation::Friction(value) => {
+                    if auth.operator
+                        || claim.phase != ExecutionClaimPhase::Running
+                        || value
+                            .during_task
+                            .as_ref()
+                            .is_some_and(|task| task != &auth.task_id)
+                    {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+                    }
+                    let mut value = value.clone();
+                    value.during_task = Some(auth.task_id.clone());
+                    handoff_effects.friction = Some((value, receipt_id.to_string()));
+                    state.last_event = "claim_friction".into();
+                }
+                ClaimMutation::Bind { run, ship } => {
+                    if auth.operator
+                        || claim.phase != ExecutionClaimPhase::Claimed
+                        || state.bound_run.is_some()
+                        || run.machine_id != auth.machine_id
+                        || run.run_id.trim().is_empty()
+                    {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+                    }
+                    let original = self.lookup_admission(
+                        &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
+                        &claim.request_id,
+                    )?;
+                    let AdmissionLookup::Found { receipt, .. } = original else {
+                        return Err(invalid("claim receipt unavailable"));
+                    };
+                    if receipt.request.ship != *ship {
+                        return Err(invalid("claim policy mismatch"));
+                    }
+                    // One host-qualified leaf cannot belong to two attempts, even after settlement.
+                    if self
+                        .coordination_rows_mentioning(STATE, &run.run_id)?
+                        .iter()
+                        .any(|r| {
+                            decode_state(&r.payload_json)
+                                .is_ok_and(|s| s.bound_run.as_ref() == Some(run))
+                        })
+                    {
+                        return Err(invalid("leaf run already bound"));
+                    }
+                    binding = Some(run.clone());
+                    state.bound_run = binding.clone();
+                    state.claim.phase = ExecutionClaimPhase::Running;
+                    state.last_event = "claim_bound".into();
+                }
+                ClaimMutation::Handoff(_) => return Err(invalid("typed handoff required")),
+                ClaimMutation::AcceptHandoff(handoff) => {
+                    state.claim.footprint = self.accept_typed_handoff(
+                        auth,
+                        &state,
+                        handoff,
+                        &mut params,
+                        &mut handoff_effects,
+                    )?;
+                    evidence.summary = Some(handoff.execution_summary.clone());
+                    state.claim.phase = ExecutionClaimPhase::HandedOff;
+                    params.status = Some(TaskStatus::Review);
+                    release = true;
+                    state.last_event = "claim_handed_off".into();
+                }
+                ClaimMutation::ApproveHandoff {
+                    handoff_id,
+                    candidate,
+                } => {
+                    self.approve_typed_handoff(auth, &state, handoff_id, candidate, &mut params)?;
+                    state.last_event = "handoff_approved".into();
+                }
+                ClaimMutation::RevokeHandoff { handoff_id, reason } => {
+                    if !auth.operator
+                        || claim.phase != ExecutionClaimPhase::HandedOff
+                        || reason.trim().is_empty()
+                    {
+                        return Err(invalid("operator handoff revocation requires a reason"));
+                    }
+                    if state.unresolved_merge_intent.is_some() {
+                        return Err(OrbitError::claim_refused(
+                            ClaimRefusalKind::UnresolvedMergeIntent,
+                        ));
+                    }
+                    if self.accepted_handoff(&auth.claim_id)?.handoff_id != *handoff_id {
+                        return Err(OrbitError::claim_refused(
+                            ClaimRefusalKind::HandoffIdentityMismatch,
+                        ));
+                    }
+                    self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
+                    state.landing_invalidated = true;
+                    state.last_event = "handoff_revoked".into();
+                    params.status_note = Some(reason.clone());
+                }
+                ClaimMutation::Evidence(value) | ClaimMutation::Fail(value) => {
+                    if auth.operator
+                        || !matches!(
+                            claim.phase,
+                            ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
+                        )
+                    {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+                    }
+                    evidence = value.clone();
+                    state.last_event = "claim_evidence".into();
+                    if matches!(mutation, ClaimMutation::Fail(_)) {
+                        if value.summary.as_deref().is_none_or(|s| s.trim().is_empty()) {
                             return Err(invalid("failure settlement requires evidence"));
                         }
                         state.claim.phase = ExecutionClaimPhase::Failed;
                         state.landing_invalidated = true;
+                        params.status = Some(TaskStatus::Blocked);
+                        release = true;
+                        state.last_event = "claim_failed".into();
                         state.settlement = Some(ClaimSettlementRecord::of(
                             ClaimSettlementKind::Fail,
-                            &value.evidence,
+                            value,
                             Utc::now().to_rfc3339(),
                         ));
-                        params.status = Some(status);
-                        release = true;
-                    } else if status != expected_status {
-                        return Err(invalid(
-                            "worker lifecycle transition requires typed handoff",
-                        ));
+                        state.preserved_candidate =
+                            self.preserve_candidate(&claim.task_id, value)?;
                     }
                 }
-                if value
-                    .context_files
-                    .as_ref()
-                    .is_some_and(|context| context != &bundle.envelope.context_files)
-                {
-                    return Err(invalid(
-                        "claim footprint changes require recovery and readmission",
-                    ));
-                }
-                if claim.phase == ExecutionClaimPhase::HandedOff
-                    && (value.evidence != ClaimEvidence::default()
-                        || value.plan.is_some()
-                        || value.status_note.is_some()
-                        || value
-                            .external_refs
-                            .iter()
-                            .any(|reference| !bundle.envelope.external_refs.contains(reference)))
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-                evidence = value.evidence.clone();
-                params.status_note = value.status_note.clone();
-                handoff_effects.worker_update = Some(value.clone());
-                state.last_event = "claim_updated".into();
-            }
-            ClaimMutation::Friction(value) => {
-                if auth.operator
-                    || claim.phase != ExecutionClaimPhase::Running
-                    || value
-                        .during_task
-                        .as_ref()
-                        .is_some_and(|task| task != &auth.task_id)
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-                let mut value = value.clone();
-                value.during_task = Some(auth.task_id.clone());
-                handoff_effects.friction = Some((value, receipt_id.clone()));
-                state.last_event = "claim_friction".into();
-            }
-            ClaimMutation::Bind { run, ship } => {
-                if auth.operator
-                    || claim.phase != ExecutionClaimPhase::Claimed
-                    || state.bound_run.is_some()
-                    || run.machine_id != auth.machine_id
-                    || run.run_id.trim().is_empty()
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-                let original = self.lookup_admission(
-                    &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
-                    &claim.request_id,
-                )?;
-                let AdmissionLookup::Found { receipt, .. } = original else {
-                    return Err(invalid("claim receipt unavailable"));
-                };
-                if receipt.request.ship != *ship {
-                    return Err(invalid("claim policy mismatch"));
-                }
-                // One host-qualified leaf cannot belong to two attempts, even after settlement.
-                if self.coordination_rows(STATE)?.iter().any(|r| {
-                    decode::<ClaimInspection>(&r.payload_json)
-                        .is_ok_and(|s| s.bound_run.as_ref() == Some(run))
-                }) {
-                    return Err(invalid("leaf run already bound"));
-                }
-                binding = Some(run.clone());
-                state.bound_run = binding.clone();
-                state.claim.phase = ExecutionClaimPhase::Running;
-                state.last_event = "claim_bound".into();
-            }
-            ClaimMutation::Handoff(_) => return Err(invalid("typed handoff required")),
-            ClaimMutation::AcceptHandoff(handoff) => {
-                state.claim.footprint = self.accept_typed_handoff(
-                    auth,
-                    &state,
-                    handoff,
-                    &mut params,
-                    &mut handoff_effects,
-                )?;
-                evidence.summary = Some(handoff.execution_summary.clone());
-                state.claim.phase = ExecutionClaimPhase::HandedOff;
-                params.status = Some(TaskStatus::Review);
-                release = true;
-                state.last_event = "claim_handed_off".into();
-            }
-            ClaimMutation::ApproveHandoff {
-                handoff_id,
-                candidate,
-            } => {
-                self.approve_typed_handoff(auth, &state, handoff_id, candidate, &mut params)?;
-                state.last_event = "handoff_approved".into();
-            }
-            ClaimMutation::RevokeHandoff { handoff_id, reason } => {
-                if !auth.operator
-                    || claim.phase != ExecutionClaimPhase::HandedOff
-                    || reason.trim().is_empty()
-                {
-                    return Err(invalid("operator handoff revocation requires a reason"));
-                }
-                if state.unresolved_merge_intent.is_some() {
-                    return Err(OrbitError::claim_refused(
-                        ClaimRefusalKind::UnresolvedMergeIntent,
-                    ));
-                }
-                if self.accepted_handoff(&auth.claim_id)?.handoff_id != *handoff_id {
-                    return Err(OrbitError::claim_refused(
-                        ClaimRefusalKind::HandoffIdentityMismatch,
-                    ));
-                }
-                self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
-                state.landing_invalidated = true;
-                state.last_event = "handoff_revoked".into();
-                params.status_note = Some(reason.clone());
-            }
-            ClaimMutation::Evidence(value) | ClaimMutation::Fail(value) => {
-                if auth.operator
-                    || !matches!(
-                        claim.phase,
-                        ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
-                    )
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-                evidence = value.clone();
-                state.last_event = "claim_evidence".into();
-                if matches!(mutation, ClaimMutation::Fail(_)) {
-                    if value.summary.as_deref().is_none_or(|s| s.trim().is_empty()) {
-                        return Err(invalid("failure settlement requires evidence"));
+                ClaimMutation::Release(value) => {
+                    if auth.operator
+                        || !matches!(
+                            claim.phase,
+                            ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
+                        )
+                    {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                     }
-                    state.claim.phase = ExecutionClaimPhase::Failed;
-                    state.landing_invalidated = true;
-                    params.status = Some(TaskStatus::Blocked);
-                    release = true;
-                    state.last_event = "claim_failed".into();
+                    let Some(reason) = value.summary.as_deref().filter(|s| !s.trim().is_empty())
+                    else {
+                        return Err(invalid("claim release requires a reason"));
+                    };
+                    let released_at = Utc::now();
+                    // [ORB-14257] A typed failure releases only when its class
+                    // does not block and the task's release budget allows it. A
+                    // provider usage limit is not counted [ORB-14695].
+                    let blocked = match &value.failure {
+                        Some(failure) if failure.class.blocks() => Some(None),
+                        Some(failure) if failure.budgeted() => {
+                            let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
+                            (earlier.len() >= RELEASE_BUDGET).then(|| {
+                                Some(release_budget_comment(&earlier, failure, &released_at))
+                            })
+                        }
+                        _ => None,
+                    };
+                    state.release = value.failure.as_ref().map(|failure| ClaimReleaseRecord {
+                        class: failure.class,
+                        reason: failure.reason.clone(),
+                        released_at: released_at.to_rfc3339(),
+                        budget_exhausted: matches!(blocked, Some(Some(_))),
+                        forge_unavailable: value.forge_hold.is_some(),
+                        provider_limit: failure.provider_limit,
+                    });
                     state.settlement = Some(ClaimSettlementRecord::of(
-                        ClaimSettlementKind::Fail,
+                        ClaimSettlementKind::Release,
                         value,
-                        Utc::now().to_rfc3339(),
+                        released_at.to_rfc3339(),
                     ));
                     state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
-                }
-            }
-            ClaimMutation::Release(value) => {
-                if auth.operator
-                    || !matches!(
-                        claim.phase,
-                        ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
-                    )
-                {
-                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-                }
-                let Some(reason) = value.summary.as_deref().filter(|s| !s.trim().is_empty()) else {
-                    return Err(invalid("claim release requires a reason"));
-                };
-                let released_at = Utc::now();
-                // [ORB-14257] A typed failure releases only when its class
-                // does not block and the task's release budget allows it. A
-                // provider usage limit is not counted [ORB-14695].
-                let blocked = match &value.failure {
-                    Some(failure) if failure.class.blocks() => Some(None),
-                    Some(failure) if failure.budgeted() => {
-                        let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
-                        (earlier.len() >= RELEASE_BUDGET)
-                            .then(|| Some(release_budget_comment(&earlier, failure, &released_at)))
-                    }
-                    _ => None,
-                };
-                state.release = value.failure.as_ref().map(|failure| ClaimReleaseRecord {
-                    class: failure.class,
-                    reason: failure.reason.clone(),
-                    released_at: released_at.to_rfc3339(),
-                    budget_exhausted: matches!(blocked, Some(Some(_))),
-                    forge_unavailable: value.forge_hold.is_some(),
-                    provider_limit: failure.provider_limit,
-                });
-                state.settlement = Some(ClaimSettlementRecord::of(
-                    ClaimSettlementKind::Release,
-                    value,
-                    released_at.to_rfc3339(),
-                ));
-                state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
-                state.landing_invalidated = true;
-                release = true;
-                if let Some(budget_comment) = blocked {
-                    let exhausted = budget_comment.is_some();
-                    evidence = ClaimEvidence {
-                        comment: budget_comment.or_else(|| value.comment.clone()),
-                        ..ClaimEvidence::default()
-                    };
-                    state.claim.phase = ExecutionClaimPhase::Failed;
-                    params.status = Some(TaskStatus::Blocked);
-                    params.status_note = Some(if exhausted {
-                        format!(
-                            "release budget exhausted ({RELEASE_BUDGET} in \
-                             {RELEASE_BUDGET_WINDOW_HOURS}h): {reason}"
-                        )
+                    state.landing_invalidated = true;
+                    release = true;
+                    if let Some(budget_comment) = blocked {
+                        let exhausted = budget_comment.is_some();
+                        evidence = ClaimEvidence {
+                            comment: budget_comment.or_else(|| value.comment.clone()),
+                            ..ClaimEvidence::default()
+                        };
+                        state.claim.phase = ExecutionClaimPhase::Failed;
+                        params.status = Some(TaskStatus::Blocked);
+                        params.status_note = Some(if exhausted {
+                            format!(
+                                "release budget exhausted ({RELEASE_BUDGET} in \
+                                 {RELEASE_BUDGET_WINDOW_HOURS}h): {reason}"
+                            )
+                        } else {
+                            reason.to_string()
+                        });
+                        state.last_event = if exhausted {
+                            "claim_release_budget_exhausted"
+                        } else {
+                            "claim_failed"
+                        }
+                        .into();
                     } else {
-                        reason.to_string()
-                    });
-                    state.last_event = if exhausted {
-                        "claim_release_budget_exhausted"
-                    } else {
-                        "claim_failed"
+                        // The task goes back to the backlog untouched: its
+                        // execution summary stays whatever the last real attempt
+                        // left, and the reason travels as the status note and the
+                        // comment.
+                        evidence = ClaimEvidence {
+                            comment: value.comment.clone(),
+                            ..ClaimEvidence::default()
+                        };
+                        state.claim.phase = ExecutionClaimPhase::Revoked;
+                        params.status = Some(TaskStatus::Backlog);
+                        // A release for a review evidence hold keeps the task in
+                        // progress under the hold, the latest decision, so
+                        // receipt of the named evidence queues a fresh review.
+                        // The note names the held run as a local hold's does.
+                        if let Some(hold) = &value.evidence_hold {
+                            params.status = None;
+                            params.status_note = Some(format!(
+                                "run={}; candidate={}; awaiting named external checks; receipt \
+                                 queues a fresh review. {reason}",
+                                hold.run_id, hold.candidate.commit
+                            ));
+                            state.last_event = "review_awaiting_evidence".into();
+                        // [ORB-14258] A release for a red base is recorded as the
+                        // hold itself, so owner admission withholds the task until
+                        // the command passes on a new base tip.
+                        } else if let Some(hold) = &value.baseline_red {
+                            params.status_note = Some(hold.text(reason));
+                            state.last_event =
+                                orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
+                        // [ORB-15573] A release its leaf's provider refused is
+                        // recorded as the hold the owner computed, so owner and
+                        // pull admission draw the task onto another provider.
+                        } else if let Some(hold) = &auth.provider_hold {
+                            params.status_note = Some(hold.text(reason));
+                            state.last_event =
+                                orbit_types::workflow::PROVIDER_FAILURE_HOLD_EVENT.into();
+                        } else {
+                            params.status_note = Some(reason.to_string());
+                            state.last_event = "claim_released".into();
+                        }
                     }
-                    .into();
-                } else {
-                    // The task goes back to the backlog untouched: its
-                    // execution summary stays whatever the last real attempt
-                    // left, and the reason travels as the status note and the
-                    // comment.
-                    evidence = ClaimEvidence {
-                        comment: value.comment.clone(),
-                        ..ClaimEvidence::default()
-                    };
-                    state.claim.phase = ExecutionClaimPhase::Revoked;
-                    params.status = Some(TaskStatus::Backlog);
-                    // A release for a review evidence hold keeps the task in
-                    // progress under the hold, the latest decision, so
-                    // receipt of the named evidence queues a fresh review.
-                    // The note names the held run as a local hold's does.
-                    if let Some(hold) = &value.evidence_hold {
-                        params.status = None;
-                        params.status_note = Some(format!(
-                            "run={}; candidate={}; awaiting named external checks; receipt \
-                             queues a fresh review. {reason}",
-                            hold.run_id, hold.candidate.commit
+                }
+                ClaimMutation::Recover { status, reason } => {
+                    if !auth.operator {
+                        return Err(invalid("operator recovery capability required"));
+                    }
+                    if state.unresolved_merge_intent.is_some() {
+                        return Err(OrbitError::claim_refused(
+                            ClaimRefusalKind::UnresolvedMergeIntent,
                         ));
-                        state.last_event = "review_awaiting_evidence".into();
-                    // [ORB-14258] A release for a red base is recorded as the
-                    // hold itself, so owner admission withholds the task until
-                    // the command passes on a new base tip.
-                    } else if let Some(hold) = &value.baseline_red {
-                        params.status_note = Some(hold.text(reason));
-                        state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
-                    // [ORB-15573] A release its leaf's provider refused is
-                    // recorded as the hold the owner computed, so owner and
-                    // pull admission draw the task onto another provider.
-                    } else if let Some(hold) = &auth.provider_hold {
-                        params.status_note = Some(hold.text(reason));
-                        state.last_event =
-                            orbit_types::workflow::PROVIDER_FAILURE_HOLD_EVENT.into();
-                    } else {
-                        params.status_note = Some(reason.to_string());
-                        state.last_event = "claim_released".into();
                     }
+                    if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog)
+                        || reason.trim().is_empty()
+                    {
+                        return Err(invalid(
+                            "recovery requires a reason and blocked or backlog target",
+                        ));
+                    }
+                    self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
+                    state.claim.phase = ExecutionClaimPhase::Revoked;
+                    state.landing_invalidated = true;
+                    params.status = Some(*status);
+                    params.status_note = Some(reason.clone());
+                    release = true;
+                    state.last_event = "claim_revoked".into();
                 }
-            }
-            ClaimMutation::Recover { status, reason } => {
-                if !auth.operator {
-                    return Err(invalid("operator recovery capability required"));
-                }
-                if state.unresolved_merge_intent.is_some() {
-                    return Err(OrbitError::claim_refused(
-                        ClaimRefusalKind::UnresolvedMergeIntent,
-                    ));
-                }
-                if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog)
-                    || reason.trim().is_empty()
-                {
-                    return Err(invalid(
-                        "recovery requires a reason and blocked or backlog target",
-                    ));
-                }
-                self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
-                state.claim.phase = ExecutionClaimPhase::Revoked;
-                state.landing_invalidated = true;
-                params.status = Some(*status);
-                params.status_note = Some(reason.clone());
-                release = true;
-                state.last_event = "claim_revoked".into();
-            }
-            ClaimMutation::DispatchLanding {
-                handoff_id,
-                job_run_id,
-            } => {
-                self.dispatch_landing_attempt(
-                    auth,
-                    &state,
+                ClaimMutation::DispatchLanding {
                     handoff_id,
-                    job_run_id.as_ref(),
-                    &mut params,
-                    &mut handoff_effects,
-                )?;
-                state.last_event = "landing_dispatched".into();
-            }
-            ClaimMutation::CompleteLanding {
-                handoff_id,
-                evidence: proof,
-            } => {
-                self.complete_landing_attempt(
-                    auth,
-                    &state,
+                    job_run_id,
+                } => {
+                    self.dispatch_landing_attempt(
+                        auth,
+                        &state,
+                        handoff_id,
+                        job_run_id.as_ref(),
+                        &mut params,
+                        &mut handoff_effects,
+                    )?;
+                    state.last_event = "landing_dispatched".into();
+                }
+                ClaimMutation::CompleteLanding {
                     handoff_id,
-                    proof,
-                    &mut params,
-                    &mut handoff_effects,
-                )?;
-                state.claim.phase = ExecutionClaimPhase::Landed;
-                state.last_event = "landing_completed".into();
-            }
-            ClaimMutation::StopLanding {
-                handoff_id,
-                reason,
-                repairable,
-            } => {
-                match self.stop_landing_attempt(
-                    auth,
-                    &state,
+                    evidence: proof,
+                } => {
+                    self.complete_landing_attempt(
+                        auth,
+                        &state,
+                        handoff_id,
+                        proof,
+                        &mut params,
+                        &mut handoff_effects,
+                    )?;
+                    state.claim.phase = ExecutionClaimPhase::Landed;
+                    state.last_event = "landing_completed".into();
+                }
+                ClaimMutation::StopLanding {
                     handoff_id,
                     reason,
-                    *repairable,
-                    &mut params,
-                    &mut handoff_effects,
-                )? {
-                    LandingStop::Stopped => {}
-                    LandingStop::Repair => {
-                        state.claim.phase = ExecutionClaimPhase::RepairPending;
-                        state.landing_invalidated = true;
+                    repairable,
+                } => {
+                    match self.stop_landing_attempt(
+                        auth,
+                        &state,
+                        handoff_id,
+                        reason,
+                        *repairable,
+                        &mut params,
+                        &mut handoff_effects,
+                    )? {
+                        LandingStop::Stopped => {}
+                        LandingStop::Repair => {
+                            state.claim.phase = ExecutionClaimPhase::RepairPending;
+                            state.landing_invalidated = true;
+                        }
+                        LandingStop::Blocked(comment) => {
+                            state.claim.phase = ExecutionClaimPhase::Failed;
+                            state.landing_invalidated = true;
+                            evidence.comment = Some(comment);
+                            release = true;
+                        }
                     }
-                    LandingStop::Blocked(comment) => {
-                        state.claim.phase = ExecutionClaimPhase::Failed;
-                        state.landing_invalidated = true;
-                        evidence.comment = Some(comment);
-                        release = true;
-                    }
+                    state.last_event = "landing_stopped".into();
                 }
-                state.last_event = "landing_stopped".into();
+                ClaimMutation::MergeIntent {
+                    intent_id,
+                    resolved,
+                    evidence: proof,
+                } => {
+                    if !auth.operator
+                        || claim.phase != ExecutionClaimPhase::HandedOff
+                        || state.landing_invalidated
+                    {
+                        return Err(invalid("current operator landing context required"));
+                    }
+                    if intent_id.trim().is_empty() || proof.trim().is_empty() {
+                        return Err(invalid("merge intent evidence required"));
+                    }
+                    if *resolved {
+                        if state.unresolved_merge_intent.as_ref() != Some(intent_id) {
+                            return Err(invalid("merge intent mismatch"));
+                        }
+                        state.unresolved_merge_intent = None;
+                    } else {
+                        if state.unresolved_merge_intent.is_some() {
+                            return Err(invalid("merge intent already unresolved"));
+                        }
+                        self.check_handoff_landing(auth, &state)?;
+                        state.unresolved_merge_intent = Some(intent_id.clone());
+                    }
+                    params.status_note = Some(encode(&(intent_id, resolved, proof))?);
+                    state.last_event = "claim_merge_intent".into();
+                }
             }
-            ClaimMutation::MergeIntent {
-                intent_id,
-                resolved,
-                evidence: proof,
-            } => {
-                if !auth.operator
-                    || claim.phase != ExecutionClaimPhase::HandedOff
-                    || state.landing_invalidated
-                {
-                    return Err(invalid("current operator landing context required"));
-                }
-                if intent_id.trim().is_empty() || proof.trim().is_empty() {
-                    return Err(invalid("merge intent evidence required"));
-                }
-                if *resolved {
-                    if state.unresolved_merge_intent.as_ref() != Some(intent_id) {
-                        return Err(invalid("merge intent mismatch"));
-                    }
-                    state.unresolved_merge_intent = None;
-                } else {
-                    if state.unresolved_merge_intent.is_some() {
-                        return Err(invalid("merge intent already unresolved"));
-                    }
-                    self.check_handoff_landing(auth, &state)?;
-                    state.unresolved_merge_intent = Some(intent_id.clone());
-                }
-                params.status_note = Some(encode(&(intent_id, resolved, proof))?);
-                state.last_event = "claim_merge_intent".into();
-            }
-        }
+            Ok(())
+        })?;
         state.updated_at = Utc::now().to_rfc3339();
         state.age_seconds = None;
         params.status_event = Some(state.last_event.clone());
@@ -629,7 +687,7 @@ impl TaskCommitBoundary {
         };
         params.rows.push(row(
             RECEIPT,
-            &receipt_id,
+            receipt_id,
             &MutationReceipt {
                 input,
                 result: result.clone(),
@@ -658,16 +716,18 @@ impl TaskCommitBoundary {
         if !state.claim.phase.protects_footprint() {
             self.attach_deferred_branch_observations(&claim.task_id, &mut evidence, &mut effects)?;
         }
-        let outcome = self.commit_locked_effects(
-            &params,
-            &mut |_| Ok(params.rows.clone()),
-            &effects,
-            &evidence,
-            binding.as_ref(),
-        )?;
+        let outcome = hold_step(COMMIT_STEP, || {
+            self.commit_locked_effects(
+                &params,
+                &mut |_| Ok(params.rows.clone()),
+                &effects,
+                &evidence,
+                binding.as_ref(),
+            )
+        })?;
         match outcome {
             TaskCoordinationCommitOutcome::Committed(_) => {
-                self.with_friction_result(result, &receipt_id)
+                self.with_friction_result(result, receipt_id)
             }
             _ => Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)),
         }

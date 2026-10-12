@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use serde::Serialize;
 
-use crate::contracts::TaskCoordinationRow;
+use crate::contracts::{ClaimInspection, TaskCoordinationRow};
 
 pub(in super::super) const CLAIM: &str = "distributed-execution-claim-v1";
 pub(in super::super) const STATE: &str = "distributed-claim-lifecycle-v1";
@@ -27,6 +27,20 @@ pub(in super::super) fn decode<T: serde::de::DeserializeOwned>(
 ) -> Result<T, OrbitError> {
     serde_json::from_str(value).map_err(|e| OrbitError::Store(e.to_string()))
 }
+/// Decode one claim lifecycle ([`STATE`]) row's payload. Every lifecycle
+/// decode goes through here, so a test can count what one section decodes.
+pub(in super::super) fn decode_state(value: &str) -> Result<ClaimInspection, OrbitError> {
+    #[cfg(test)]
+    STATE_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
+    decode(value)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Claim lifecycle rows decoded on this thread.
+    pub(crate) static STATE_DECODES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 pub(in super::super) fn row<T: Serialize>(
     kind: &str,
     id: &str,

@@ -3,7 +3,7 @@ use orbit_common::OrbitError;
 
 use super::super::{Section, TaskCommitBoundary};
 use super::codec::{CLAIM, STATE};
-use super::{decode, invalid};
+use super::{decode, decode_state, invalid};
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
@@ -50,7 +50,7 @@ impl TaskCommitBoundary {
             self.store
                 .task_coordination_row(&self.workspace_id, STATE, &claim.claim_id)?;
         let mut state = match existing {
-            Some(row) => decode::<ClaimInspection>(&row.payload_json)?,
+            Some(row) => decode_state(&row.payload_json)?,
             None => {
                 let created = chrono::DateTime::parse_from_rfc3339(&claim.reservation_expires_at)
                     .map_err(|e| OrbitError::Store(e.to_string()))?

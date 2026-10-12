@@ -22,6 +22,15 @@ pub const DEFAULT_FILE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_FILE_LOCK_WARN_AFTER: Duration = Duration::from_secs(3);
 const FILE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
+/// First and longest pause between a contended acquisition's attempts. The
+/// pause doubles from the first to the longest, so a short hold is followed
+/// within a millisecond or two and a waiter never sleeps more than the
+/// longest past a release. A flat 50 ms pause left the lock idle for up to
+/// 50 ms after every release, and a convoy of queued sections paid that gap
+/// once per holder (ORB-15797).
+const CONTENDED_RETRY_FIRST: Duration = Duration::from_millis(1);
+const CONTENDED_RETRY_LONGEST: Duration = Duration::from_millis(10);
+
 /// How long a single-shot acquisition waits out a refusal that no holder
 /// claims — see [`try_acquire_exclusive_file_lock`]. Sized for a forked child
 /// to reach `execve` on a loaded host, not for a holder to finish its work.
@@ -770,6 +779,8 @@ struct ContentionWait<'a> {
     options: FileLockOptions,
     started: Instant,
     warned: bool,
+    /// The pause before the next attempt; see [`CONTENDED_RETRY_FIRST`].
+    retry: Duration,
 }
 
 impl<'a> ContentionWait<'a> {
@@ -780,6 +791,7 @@ impl<'a> ContentionWait<'a> {
             options,
             started: Instant::now(),
             warned: false,
+            retry: CONTENDED_RETRY_FIRST,
         }
     }
 
@@ -802,7 +814,8 @@ impl<'a> ContentionWait<'a> {
             self.warned = true;
             warn_for_contention(self.lock_path, self.label, elapsed, &holder());
         }
-        std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(self.options.timeout - elapsed));
+        std::thread::sleep(self.retry.min(self.options.timeout - elapsed));
+        self.retry = (self.retry * 2).min(CONTENDED_RETRY_LONGEST);
         Ok(())
     }
 }
