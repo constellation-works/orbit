@@ -53,7 +53,10 @@ impl LocalInstall {
         for directory in [&home, &builds, &mirror] {
             fs::create_dir_all(directory).expect("fixture directory");
         }
-        super::init_git_repo(&repo);
+        crate::git_repo::SeededRepo::new(&repo)
+            .host_default_branch()
+            .readme("# update root test\n")
+            .build();
         super::orbit(&repo, &home, &mirror)
             .args([
                 "init",

@@ -26,7 +26,9 @@ impl Fixture {
         let root = temp.path().join("custom-root");
         fs::create_dir_all(&home).expect("create empty home");
         fs::create_dir_all(&repo).expect("create repo");
-        init_git_repo(&repo);
+        crate::git_repo::SeededRepo::new(&repo)
+            .readme("# routine root test\n")
+            .build();
 
         let root_arg = root.to_string_lossy().into_owned();
         run_success(
@@ -229,7 +231,9 @@ fn routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces()
     let root_repo = temp.path().join("root-repo");
     fs::create_dir_all(&home).expect("create isolated home");
     fs::create_dir_all(&root_repo).expect("create root repo");
-    init_git_repo(&root_repo);
+    crate::git_repo::SeededRepo::new(&root_repo)
+        .readme("# routine root test\n")
+        .build();
     run_success(
         &root_repo,
         &home,
@@ -252,7 +256,9 @@ fn routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces()
 
     let other_repo = temp.path().join("other-repo");
     fs::create_dir_all(&other_repo).expect("create other repo");
-    init_git_repo(&other_repo);
+    crate::git_repo::SeededRepo::new(&other_repo)
+        .readme("# routine root test\n")
+        .build();
     run_success(
         &other_repo,
         &home,
@@ -276,7 +282,9 @@ fn routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces()
 
     let empty_repo = temp.path().join("empty-repo");
     fs::create_dir_all(&empty_repo).expect("create empty repo");
-    init_git_repo(&empty_repo);
+    crate::git_repo::SeededRepo::new(&empty_repo)
+        .readme("# routine root test\n")
+        .build();
     run_success(
         &empty_repo,
         &home,
@@ -560,33 +568,6 @@ fn assert_home_empty(home: &Path) {
             .is_none(),
         "routine command touched isolated HOME at {}",
         home.display()
-    );
-}
-
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# routine root test\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }
 

@@ -20,8 +20,8 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
+use crate::fixture_crew;
 use crate::routine_runs::RoutineRuns;
-use crate::{fixture_crew, git_repo};
 
 const OWNER: &str = "gc-owner";
 const REPLICA: &str = "gc-replica";
@@ -51,8 +51,12 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     let owner_repo = temp.path().join("owner");
     let replica_repo = temp.path().join("replica");
     fs::create_dir_all(&home).expect("create home");
-    init_git_repo(&owner_repo);
-    init_git_repo(&replica_repo);
+    crate::git_repo::SeededRepo::new(&owner_repo)
+        .readme("# replica routines\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&replica_repo)
+        .readme("# replica routines\n")
+        .build();
 
     run_success(
         &owner_repo,
@@ -339,8 +343,12 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
     let owner_repo = temp.path().join("owner");
     let replica_repo = temp.path().join("replica");
     fs::create_dir_all(&home).expect("create home");
-    init_git_repo(&owner_repo);
-    init_git_repo(&replica_repo);
+    crate::git_repo::SeededRepo::new(&owner_repo)
+        .readme("# replica routines\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&replica_repo)
+        .readme("# replica routines\n")
+        .build();
 
     run_success(
         &owner_repo,
@@ -529,7 +537,7 @@ fn seed_replica_worktree(repo: &Path, home: &Path) -> PathBuf {
     let worktree = repo
         .join(".orbit/state/worktrees")
         .join(format!("orbit-{run_id}"));
-    run_git(
+    crate::git_repo::run(
         repo,
         &[
             "worktree",
@@ -711,27 +719,4 @@ fn isolated(name: &str) -> bool {
     let output = test_env::run_child_test(&mut child, &qualified, temp.path());
     test_env::assert_child_test_passed(&qualified, output.status, &output.stdout, &output.stderr);
     false
-}
-
-fn init_git_repo(repo: &Path) {
-    git_repo::init(repo);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# replica routines\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = git_repo::command()
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("spawn git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

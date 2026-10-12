@@ -51,7 +51,7 @@ impl ExternalRootFixture {
         for directory in [&home, &elsewhere] {
             fs::create_dir_all(directory).expect("fixture directory");
         }
-        init_git_repo(&checkout);
+        crate::git_repo::SeededRepo::new(&checkout).build();
 
         let fixture = Self {
             _temp: temp,
@@ -1055,8 +1055,8 @@ impl SharedRootCheckoutPairFixture {
         for directory in [&home, &elsewhere] {
             fs::create_dir_all(directory).expect("fixture directory");
         }
-        init_git_repo(&checkout_a);
-        init_git_repo(&checkout_b);
+        crate::git_repo::SeededRepo::new(&checkout_a).build();
+        crate::git_repo::SeededRepo::new(&checkout_b).build();
 
         let fixture = Self {
             _temp: temp,
@@ -1156,8 +1156,8 @@ impl RegisteredCheckoutPairFixture {
         let checkout_a = temp.path().join("checkout-a");
         let checkout_b = temp.path().join("checkout-b");
         fs::create_dir_all(&home).expect("fixture home");
-        init_git_repo(&checkout_a);
-        init_git_repo(&checkout_b);
+        crate::git_repo::SeededRepo::new(&checkout_a).build();
+        crate::git_repo::SeededRepo::new(&checkout_b).build();
 
         let fixture = Self {
             _temp: temp,
@@ -1251,36 +1251,4 @@ fn generated_server_args(config_path: &Path) -> Vec<String> {
         .iter()
         .map(|value| value.as_str().expect("arg is a string").to_string())
         .collect()
-}
-
-fn init_git_repo(repo: &Path) {
-    fs::create_dir_all(repo).expect("create repo");
-    run_git(repo, &["init", "--initial-branch", "main"]);
-    assert!(
-        repo.join(".git").is_dir(),
-        "fixture needs its own repository"
-    );
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# repo\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

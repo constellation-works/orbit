@@ -26,7 +26,10 @@ fn managed_cli_proc_spawn_enforces_program_policy_and_inherits_parent_reads() {
     fs::create_dir_all(workspace.join("denied")).expect("create denied directory");
     fs::write(workspace.join("allowed/visible.txt"), "visible").expect("write allowed fixture");
     fs::write(workspace.join("denied/private.txt"), "private").expect("write denied fixture");
-    init_git_repo(&workspace);
+    crate::git_repo::SeededRepo::new(&workspace)
+        .host_default_branch()
+        .readme("# fixture\n")
+        .build();
     workspace_init(&workspace, &home);
     fs::write(
         home.join(".orbit/resources/policies/default.yaml"),
@@ -99,7 +102,10 @@ fn managed_proc_spawn_timeout_ceiling_follows_the_activity_deadline() {
     let workspace = temp.path().join("workspace");
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&workspace).expect("create workspace");
-    init_git_repo(&workspace);
+    crate::git_repo::SeededRepo::new(&workspace)
+        .host_default_branch()
+        .readme("# fixture\n")
+        .build();
     workspace_init(&workspace, &home);
     let output = orbit_command(&workspace, &home)
         .args([
@@ -197,10 +203,13 @@ fn managed_pilot_proc_spawn_inspects_the_pinned_checkout_not_the_primary() {
     let primary = temp.path().join("primary");
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&primary).expect("create primary");
-    init_git_repo(&primary);
+    crate::git_repo::SeededRepo::new(&primary)
+        .host_default_branch()
+        .readme("# fixture\n")
+        .build();
     fs::write(primary.join("subject.txt"), "pinned snapshot\n").expect("write pinned subject");
-    run_git(&primary, &["add", "subject.txt"]);
-    run_git(&primary, &["commit", "-m", "prepared"]);
+    crate::git_repo::run(&primary, &["add", "subject.txt"]);
+    crate::git_repo::run(&primary, &["commit", "-m", "prepared"]);
     let pinned = git_stdout(&primary, &["rev-parse", "HEAD"]);
     workspace_init(&primary, &home);
     let workspace_id = registered_workspace_id(&primary, &home);
@@ -210,10 +219,10 @@ fn managed_pilot_proc_spawn_inspects_the_pinned_checkout_not_the_primary() {
     // in-flight edits: a later commit, an unstaged edit, a staged file and an
     // untracked file. None of it may leak into, or be touched by, inspection.
     fs::write(primary.join("subject.txt"), "primary later\n").expect("write later subject");
-    run_git(&primary, &["commit", "-am", "later"]);
+    crate::git_repo::run(&primary, &["commit", "-am", "later"]);
     fs::write(primary.join("README.md"), "# unstaged edit\n").expect("write unstaged edit");
     fs::write(primary.join("staged.txt"), "staged\n").expect("write staged file");
-    run_git(&primary, &["add", "staged.txt"]);
+    crate::git_repo::run(&primary, &["add", "staged.txt"]);
     fs::write(primary.join("untracked.txt"), "untracked\n").expect("write untracked file");
     let primary_head = git_stdout(&primary, &["rev-parse", "HEAD"]);
     assert_ne!(
@@ -325,9 +334,9 @@ fn materialize_inspection_slot(primary: &Path, revision: &str) -> std::path::Pat
     fs::create_dir_all(&checkout).expect("create inspection checkout");
     fs::write(slot.join("owner"), "orbit-source-inspection-v1\n").expect("write owner marker");
     fs::write(slot.join("lease"), "").expect("write lease");
-    run_git(&checkout, &["init", "--quiet", "--template="]);
+    crate::git_repo::run(&checkout, &["init", "--quiet", "--template="]);
     let common = primary.join(".git");
-    run_git(
+    crate::git_repo::run(
         &checkout,
         &[
             "-c",
@@ -339,7 +348,7 @@ fn materialize_inspection_slot(primary: &Path, revision: &str) -> std::path::Pat
             revision,
         ],
     );
-    run_git(&checkout, &["checkout", "--quiet", "--detach", revision]);
+    crate::git_repo::run(&checkout, &["checkout", "--quiet", "--detach", revision]);
     fs::create_dir_all(checkout.join(".orbit/tmp")).expect("create inspection scratch");
     checkout
 }
@@ -513,34 +522,4 @@ fn orbit_command(workspace: &Path, home: &Path) -> AssertCommand {
         .env("HOME", home)
         .env("USERPROFILE", home);
     command
-}
-
-fn init_git_repo(workspace: &Path) {
-    run_git(workspace, &["init"]);
-    run_git(workspace, &["config", "user.name", "Orbit Test"]);
-    run_git(
-        workspace,
-        &["config", "user.email", "orbit-test@example.com"],
-    );
-    run_git(workspace, &["config", "commit.gpgsign", "false"]);
-    fs::write(workspace.join("README.md"), "# fixture\n").expect("write readme");
-    run_git(workspace, &["add", "README.md"]);
-    run_git(workspace, &["commit", "-m", "initial"]);
-}
-
-fn run_git(workspace: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(workspace)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        workspace.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

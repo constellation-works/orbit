@@ -39,8 +39,14 @@ fn web_serve_honors_an_explicit_root_over_the_global_registry() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&custom_repo).expect("create custom repo");
     std::fs::create_dir_all(&home_repo).expect("create home repo");
-    init_git_repo(&custom_repo);
-    init_git_repo(&home_repo);
+    crate::git_repo::SeededRepo::new(&custom_repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
+    crate::git_repo::SeededRepo::new(&home_repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
 
     let root_arg = custom_root.to_string_lossy().into_owned();
     // A workspace registered only under the custom root ...
@@ -107,7 +113,10 @@ fn web_serve_without_an_explicit_root_still_serves_the_global_registry() {
     let repo = temp.path().join("repo");
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
 
     orbit(
         &repo,
@@ -145,7 +154,10 @@ fn web_serve_approved_hosts_announce_reachable_api_and_health_urls() {
     let repo = temp.path().join("repo");
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
     orbit(
         &repo,
         &home,
@@ -191,7 +203,10 @@ fn web_serve_rejects_hosts_outside_the_host_gate() {
     let repo = temp.path().join("repo");
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
     orbit(
         &repo,
         &home,
@@ -258,23 +273,6 @@ fn orbit(cwd: &Path, home: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn init_git_repo(repo: &Path) {
-    for args in [
-        vec!["init", "--initial-branch=main"],
-        vec!["config", "user.email", "fixture@example.com"],
-        vec!["config", "user.name", "fixture"],
-    ] {
-        let status = crate::git_repo::command()
-            .current_dir(repo)
-            .args(&args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("run git");
-        assert!(status.success(), "git {args:?} failed");
-    }
 }
 
 fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>) -> BoundServer {

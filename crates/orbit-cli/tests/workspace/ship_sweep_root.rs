@@ -21,8 +21,12 @@ fn ship_sweep_selects_explicit_environment_and_default_registries() {
     for dir in [&home, &custom_repo, &home_repo, &scheduler_cwd] {
         fs::create_dir_all(dir).expect("fixture directory");
     }
-    init_git_repo(&custom_repo);
-    init_git_repo(&home_repo);
+    crate::git_repo::SeededRepo::new(&custom_repo)
+        .readme("# fixture\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&home_repo)
+        .readme("# fixture\n")
+        .build();
 
     let root = custom_root.to_str().expect("UTF-8 custom root");
     orbit(
@@ -124,7 +128,9 @@ fn ship_sweep_preserves_unchanged_registry_modification_time() {
     for dir in [&home, &custom_repo, &scheduler_cwd] {
         fs::create_dir_all(dir).expect("fixture directory");
     }
-    init_git_repo(&custom_repo);
+    crate::git_repo::SeededRepo::new(&custom_repo)
+        .readme("# fixture\n")
+        .build();
 
     let root = custom_root.to_str().expect("UTF-8 custom root");
     orbit(
@@ -222,7 +228,9 @@ fn ship_sweep_dry_run_does_not_persist_invalid_status_flip_for_missing_checkout(
     for dir in [&home, &custom_repo, &scheduler_cwd] {
         fs::create_dir_all(dir).expect("fixture directory");
     }
-    init_git_repo(&custom_repo);
+    crate::git_repo::SeededRepo::new(&custom_repo)
+        .readme("# fixture\n")
+        .build();
 
     let root = custom_root.to_str().expect("UTF-8 custom root");
     orbit(
@@ -381,36 +389,4 @@ fn orbit(cwd: &Path, home: &Path, root_env: Option<&Path>, args: &[&str]) -> Vec
         .get_output()
         .stdout
         .clone()
-}
-
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    for args in [
-        vec!["config", "user.name", "Orbit Test"],
-        vec!["config", "user.email", "orbit-test@example.com"],
-        vec!["config", "commit.gpgsign", "false"],
-    ] {
-        let status = crate::git_repo::command()
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .status()
-            .expect("run git");
-        assert!(status.success(), "git setup failed");
-    }
-    fs::write(repo.join("README.md"), "# fixture\n").expect("write fixture file");
-    let status = crate::git_repo::command()
-        .arg("-C")
-        .arg(repo)
-        .args(["add", "README.md"])
-        .status()
-        .expect("git add");
-    assert!(status.success(), "git add failed");
-    let status = crate::git_repo::command()
-        .arg("-C")
-        .arg(repo)
-        .args(["commit", "--quiet", "-m", "initial"])
-        .status()
-        .expect("git commit");
-    assert!(status.success(), "git commit failed");
 }

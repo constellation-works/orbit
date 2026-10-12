@@ -38,8 +38,8 @@ fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
     let target = temp.path().join("target");
     let foreign = temp.path().join("foreign");
     fs::create_dir_all(&home).expect("home");
-    init_git_repo(&target);
-    init_git_repo(&foreign);
+    crate::git_repo::SeededRepo::new(&target).build();
+    crate::git_repo::SeededRepo::new(&foreign).build();
     // Teardown is invoked from neither checkout. That cwd still needs its
     // own lookup boundary, or a nested TMPDIR discovers the enclosing
     // config before the named workspace can be resolved.
@@ -194,7 +194,7 @@ fn workspace_remove_deregisters_deleted_checkout_by_name_id_and_path() {
         &deleted_by_id,
         &deleted_by_path,
     ] {
-        init_git_repo(repo);
+        crate::git_repo::SeededRepo::new(repo).build();
     }
 
     run_orbit(
@@ -275,8 +275,8 @@ fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&elsewhere).expect("elsewhere");
 
-    init_git_repo(&orbit_repo);
-    init_git_repo(&other_repo);
+    crate::git_repo::SeededRepo::new(&orbit_repo).build();
+    crate::git_repo::SeededRepo::new(&other_repo).build();
 
     run_orbit(
         &orbit_repo,
@@ -447,7 +447,7 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
     fs::create_dir_all(&home).expect("home");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo).build();
     run_orbit(
         &repo,
         &home,
@@ -490,8 +490,8 @@ fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorde
     let survivor_repo = temp.path().join("survivor");
     let deleted_repo = temp.path().join("deleted");
     fs::create_dir_all(&home).expect("home");
-    init_git_repo(&survivor_repo);
-    init_git_repo(&deleted_repo);
+    crate::git_repo::SeededRepo::new(&survivor_repo).build();
+    crate::git_repo::SeededRepo::new(&deleted_repo).build();
 
     run_orbit(
         &survivor_repo,
@@ -605,8 +605,8 @@ fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
     let alpha_repo = temp.path().join("alpha");
     let beta_repo = temp.path().join("beta");
     fs::create_dir_all(&home).expect("home");
-    init_git_repo(&alpha_repo);
-    init_git_repo(&beta_repo);
+    crate::git_repo::SeededRepo::new(&alpha_repo).build();
+    crate::git_repo::SeededRepo::new(&beta_repo).build();
     // Orbit reports each checkout at its resolved path and the assertions
     // below compare with these, so spell them that way. The default macOS temp
     // directory sits behind `/var`, a symlink.
@@ -761,8 +761,8 @@ fn tool_run_workspace_selection_uses_global_flag_and_input_precedence() {
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&elsewhere).expect("elsewhere");
 
-    init_git_repo(&orbit_repo);
-    init_git_repo(&other_repo);
+    crate::git_repo::SeededRepo::new(&orbit_repo).build();
+    crate::git_repo::SeededRepo::new(&other_repo).build();
 
     run_orbit(
         &orbit_repo,
@@ -902,8 +902,8 @@ fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&elsewhere).expect("elsewhere");
 
-    init_git_repo(&alpha_repo);
-    init_git_repo(&shadow_repo);
+    crate::git_repo::SeededRepo::new(&alpha_repo).build();
+    crate::git_repo::SeededRepo::new(&shadow_repo).build();
 
     run_orbit(
         &alpha_repo,
@@ -1020,8 +1020,8 @@ fn publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&elsewhere).expect("elsewhere");
 
-    init_git_repo(&alpha_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&alpha_repo).build();
+    crate::git_repo::run(
         &alpha_repo,
         &[
             "remote",
@@ -1030,8 +1030,8 @@ fn publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name
             "git@github.com:example/alpha.git",
         ],
     );
-    init_git_repo(&shadow_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&shadow_repo).build();
+    crate::git_repo::run(
         &shadow_repo,
         &[
             "remote",
@@ -1188,8 +1188,8 @@ fn task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter() 
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&elsewhere).expect("elsewhere");
 
-    init_git_repo(&orbit_repo);
-    init_git_repo(&other_repo);
+    crate::git_repo::SeededRepo::new(&orbit_repo).build();
+    crate::git_repo::SeededRepo::new(&other_repo).build();
 
     run_orbit(
         &orbit_repo,
@@ -1287,8 +1287,8 @@ fn tool_run_task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&elsewhere).expect("elsewhere");
 
-    init_git_repo(&orbit_repo);
-    init_git_repo(&other_repo);
+    crate::git_repo::SeededRepo::new(&orbit_repo).build();
+    crate::git_repo::SeededRepo::new(&other_repo).build();
 
     run_orbit(
         &orbit_repo,
@@ -1454,33 +1454,6 @@ fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
     serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
 }
 
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# repo\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 #[test]
 fn workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refusal() {
     let temp = tempdir().unwrap();
@@ -1488,8 +1461,8 @@ fn workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refu
     let owner_repo = temp.path().join("owner");
     let replica_repo = temp.path().join("replica");
     fs::create_dir_all(&home).unwrap();
-    init_git_repo(&owner_repo);
-    init_git_repo(&replica_repo);
+    crate::git_repo::SeededRepo::new(&owner_repo).build();
+    crate::git_repo::SeededRepo::new(&replica_repo).build();
     run_orbit(
         &owner_repo,
         &home,

@@ -36,18 +36,136 @@ pub(crate) fn command() -> Command {
 /// them, and leaving them set makes `git init` update the enclosing
 /// repository instead of the fixture.
 pub(crate) fn init(path: &Path) {
+    initialize(path, Some("main"));
+}
+
+fn initialize(path: &Path, branch: Option<&str>) {
     std::fs::create_dir_all(path).expect("create fixture checkout");
-    let output = command()
-        .args(["init", "--quiet", "--initial-branch=main"])
-        .current_dir(path)
-        .output()
-        .expect("spawn git init");
+    let mut git = command();
+    git.args(["init", "--quiet"]);
+    if let Some(branch) = branch {
+        git.arg(format!("--initial-branch={branch}"));
+    }
+    let output = git.current_dir(path).output().expect("spawn git init");
     assert!(
         output.status.success(),
         "git init failed in fixture checkout {}: {}",
         path.display(),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Run Git inside a fixture, checking success and returning trimmed stdout.
+/// Inherited repository and Orbit authority are scrubbed by [`command`].
+pub(crate) fn run(path: &Path, args: &[&str]) -> String {
+    let output = command()
+        .args(args)
+        .current_dir(path)
+        .output()
+        .expect("run fixture git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed in {}:\nstdout:\n{}\nstderr:\n{}",
+        path.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+enum SeedCommit<'a> {
+    Readme(&'a str),
+    Empty(&'a str),
+    None,
+}
+
+/// A fixture checkout on `main` with a committed README by default.
+/// Branch, README, identity and commit options keep specialized fixtures
+/// explicit at their call sites. Uncommitted repositories have no seed file.
+/// Some test binaries include this module only for [`init`].
+#[allow(dead_code)]
+pub(crate) struct SeededRepo<'a> {
+    path: &'a Path,
+    branch: Option<&'a str>,
+    commit: SeedCommit<'a>,
+    identity: Option<(&'a str, &'a str)>,
+}
+
+#[allow(dead_code)]
+impl<'a> SeededRepo<'a> {
+    pub(crate) fn new(path: &'a Path) -> Self {
+        Self {
+            path,
+            branch: Some("main"),
+            commit: SeedCommit::Readme("# repo\n"),
+            identity: None,
+        }
+    }
+
+    /// Pin the initial branch independently of the host Git configuration.
+    pub(crate) fn branch(mut self, branch: &'a str) -> Self {
+        self.branch = Some(branch);
+        self
+    }
+
+    /// Preserve plain `git init` semantics for fixtures that accept any branch.
+    pub(crate) fn host_default_branch(mut self) -> Self {
+        self.branch = None;
+        self
+    }
+
+    /// Seed these README bytes in an `initial` commit.
+    pub(crate) fn readme(mut self, contents: &'a str) -> Self {
+        self.commit = SeedCommit::Readme(contents);
+        self
+    }
+
+    /// Create an empty initial commit with this message and no seed file.
+    pub(crate) fn empty_commit(mut self, message: &'a str) -> Self {
+        self.commit = SeedCommit::Empty(message);
+        self
+    }
+
+    /// Leave the branch unborn, without creating a README or a commit.
+    pub(crate) fn no_commit(mut self) -> Self {
+        self.commit = SeedCommit::None;
+        self
+    }
+
+    /// Set a fixture-local identity, including for an uncommitted checkout.
+    pub(crate) fn identity(mut self, name: &'a str, email: &'a str) -> Self {
+        self.identity = Some((name, email));
+        self
+    }
+
+    pub(crate) fn build(self) {
+        initialize(self.path, self.branch);
+        let identity = self.identity.or_else(|| {
+            (!matches!(self.commit, SeedCommit::None))
+                .then_some(("Orbit Test", "orbit-test@example.com"))
+        });
+        if let Some((name, email)) = identity {
+            run(self.path, &["config", "user.name", name]);
+            run(self.path, &["config", "user.email", email]);
+        }
+        match self.commit {
+            SeedCommit::Readme(contents) => {
+                run(self.path, &["config", "commit.gpgsign", "false"]);
+                std::fs::write(self.path.join("README.md"), contents)
+                    .expect("write fixture README");
+                run(self.path, &["add", "README.md"]);
+                run(self.path, &["commit", "--quiet", "-m", "initial"]);
+            }
+            SeedCommit::Empty(message) => {
+                run(self.path, &["config", "commit.gpgsign", "false"]);
+                run(
+                    self.path,
+                    &["commit", "--quiet", "--allow-empty", "-m", message],
+                );
+            }
+            SeedCommit::None => {}
+        }
+    }
 }
 
 /// Make `path` a Git checkout whose ordinary lookup cannot climb to an

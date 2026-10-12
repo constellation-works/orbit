@@ -28,7 +28,10 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
         "[machine]\nid = \"hm_cli_tool\"\nname = \"cli-tool\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("machine identity");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
     run_orbit_success(&repo, &home, &["workspace", "init"], None);
 
     let workspaces = run_orbit_json(
@@ -144,17 +147,17 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&main_repo).expect("create main repo");
 
-    run_git(&main_repo, &["init"]);
-    run_git(&main_repo, &["config", "user.name", "Orbit Test"]);
-    run_git(
+    crate::git_repo::run(&main_repo, &["init"]);
+    crate::git_repo::run(&main_repo, &["config", "user.name", "Orbit Test"]);
+    crate::git_repo::run(
         &main_repo,
         &["config", "user.email", "orbit-test@example.com"],
     );
-    run_git(&main_repo, &["config", "commit.gpgsign", "false"]);
+    crate::git_repo::run(&main_repo, &["config", "commit.gpgsign", "false"]);
     fs::write(main_repo.join("README.md"), "# orbit\n").expect("write readme");
-    run_git(&main_repo, &["add", "README.md"]);
-    run_git(&main_repo, &["commit", "-m", "initial"]);
-    run_git(
+    crate::git_repo::run(&main_repo, &["add", "README.md"]);
+    crate::git_repo::run(&main_repo, &["commit", "-m", "initial"]);
+    crate::git_repo::run(
         &main_repo,
         &[
             "worktree",
@@ -300,8 +303,11 @@ fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
     let linked = temp.path().join("linked");
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&main_repo).expect("main repository");
-    init_git_repo(&main_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
         &main_repo,
         &["worktree", "add", linked.to_str().expect("worktree path")],
     );
@@ -354,9 +360,15 @@ fn init_submodule_fixture(superproject: &Path) -> PathBuf {
     let source = superproject.parent().expect("fixture root").join("source");
     fs::create_dir_all(&source).expect("submodule source");
     fs::create_dir_all(superproject).expect("superproject");
-    init_git_repo(&source);
-    init_git_repo(superproject);
-    run_git(
+    crate::git_repo::SeededRepo::new(&source)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::SeededRepo::new(superproject)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
         superproject,
         &[
             "-c",
@@ -432,7 +444,10 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     let repo = temp.path().join("repo");
     fs::create_dir_all(&home).expect("home");
     fs::create_dir_all(&repo).expect("repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
     run_orbit_success(&repo, &home, &["workspace", "init"], None);
     let global = home.join(".orbit");
     let lock = global.join(".workspaces.json.lock");
@@ -504,8 +519,11 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     let linked_worktree = temp.path().join("repo-candidate");
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&main_repo).expect("create main repo");
-    init_git_repo(&main_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
         &main_repo,
         &[
             "worktree",
@@ -732,8 +750,11 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&main_repo).expect("create main repo");
     fs::create_dir_all(&elsewhere).expect("create unrelated cwd");
-    init_git_repo(&main_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
         &main_repo,
         &[
             "worktree",
@@ -968,7 +989,10 @@ fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
     let custom_root = temp.path().join("custom-orbit");
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
 
     run_orbit_success(
         &repo,
@@ -1070,8 +1094,11 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&main_repo).expect("create main repo");
 
-    init_git_repo(&main_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
         &main_repo,
         &[
             "worktree",
@@ -1188,7 +1215,10 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     };
     for (name, repo) in checkouts {
         fs::create_dir_all(&repo).expect("create checkout");
-        init_git_repo(&repo);
+        crate::git_repo::SeededRepo::new(&repo)
+            .host_default_branch()
+            .readme("# orbit\n")
+            .build();
         let before = task_store_partitions(&partitions);
         run_orbit_success(&repo, &home, &["workspace", "init", "--name", name], None);
         run_orbit_success(
@@ -1355,7 +1385,10 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
     run_orbit_success(&repo, &home, &["workspace", "init"], None);
 
     let state_dir = repo.join(".orbit/state");
@@ -1415,7 +1448,10 @@ fn doctor_graph_cleanup_never_deletes_through_symlinks() {
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
     run_orbit_success(&repo, &home, &["workspace", "init"], None);
     let orbit_dir = repo.join(".orbit");
 
@@ -1494,9 +1530,15 @@ fn root_resolution_precedence() {
     for dir in [&home, &main_repo, &other_repo, &outside, &uninitialized] {
         fs::create_dir_all(dir).expect("create fixture directory");
     }
-    init_git_repo(&main_repo);
-    init_git_repo(&other_repo);
-    run_git(
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&other_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
         &main_repo,
         &[
             "worktree",
@@ -1899,36 +1941,6 @@ fn stub_first_path(bin: &Path) -> std::ffi::OsString {
     std::env::join_paths(entries).expect("join PATH entries")
 }
 
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn init_git_repo(main_repo: &Path) {
-    run_git(main_repo, &["init"]);
-    run_git(main_repo, &["config", "user.name", "Orbit Test"]);
-    run_git(
-        main_repo,
-        &["config", "user.email", "orbit-test@example.com"],
-    );
-    run_git(main_repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(main_repo.join("README.md"), "# orbit\n").expect("write readme");
-    run_git(main_repo, &["add", "README.md"]);
-    run_git(main_repo, &["commit", "-m", "initial"]);
-}
-
 fn write_auto_task_fixture(orbit_dir: &Path, description: &str) {
     let directory = orbit_dir.join("auto_tasks");
     fs::create_dir_all(&directory).expect("create auto-task fixture directory");
@@ -1974,7 +1986,10 @@ fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&data_dir).expect("create data dir");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
 
     let data_dir_arg = data_dir.to_string_lossy().into_owned();
     run_orbit_success(
@@ -2045,7 +2060,10 @@ fn clean_root_workspace_init_then_auto_task_list_succeeds() {
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&data_dir).expect("create data dir");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
 
     let data_dir_arg = data_dir.to_string_lossy().into_owned();
     run_orbit_success(
@@ -2092,7 +2110,10 @@ fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&data_dir).expect("create data dir");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
 
     let data_dir_arg = data_dir.to_string_lossy().into_owned();
     run_orbit_success(
