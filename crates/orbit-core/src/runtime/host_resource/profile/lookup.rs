@@ -86,8 +86,10 @@ impl ProfileSet {
     ///
     /// 0. the delivery's own key;
     /// 1. drop complexity (not for a template, whose key has none);
-    /// 2. for a template, its base class in the same workspace;
-    /// 3. the heaviest profile of the base class on the host;
+    /// 2. for a template, its base class in the same workspace, including
+    ///    template deliveries;
+    /// 3. the heaviest profile of the base class on the host, including
+    ///    template profiles of that base class;
     /// 4. the heaviest profile on the host, sparse or not;
     /// 5. none, only on a host with no profiles.
     ///
@@ -136,11 +138,9 @@ impl ProfileSet {
             return answer;
         }
         let every = || self.profiles.iter().chain(self.class_profiles.iter());
-        let of_class = heaviest(every().filter(|profile| {
-            !profile.sparse
-                && profile.key.template().is_none()
-                && profile.base_class == lookup.base_class
-        }));
+        let of_class = heaviest(
+            every().filter(|profile| !profile.sparse && profile.base_class == lookup.base_class),
+        );
         if let Some(answer) = found(ProfileSource::HeaviestOfClass, of_class) {
             return answer;
         }

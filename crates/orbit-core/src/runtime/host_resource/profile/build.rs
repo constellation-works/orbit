@@ -123,17 +123,16 @@ pub(crate) fn build_profiles(
                     BaseClass::Change
                 }
             }
-            None => {
-                by_class
-                    .entry(ProfileKey {
-                        complexity: None,
-                        ..key.clone()
-                    })
-                    .or_default()
-                    .extend(deliveries.iter());
-                base_of(&key.work_class)
-            }
+            None => base_of(&key.work_class),
         };
+        by_class
+            .entry(ProfileKey {
+                workspace_id: key.workspace_id.clone(),
+                work_class: base.as_str().to_string(),
+                complexity: None,
+            })
+            .or_default()
+            .extend(deliveries.iter());
         let window: Vec<&Delivery> = deliveries.iter().take(bounds.window).collect();
         profiles.push(Arc::new(profile(key.clone(), base, &window, bounds)));
     }
@@ -327,10 +326,12 @@ fn profile(
             .sum(),
         memory_means.iter().sum(),
     );
-    let flaggable =
-        base_class == BaseClass::NoDiff && !key.template().is_some_and(auto_task_builds_by_design);
-    let build_like = if flaggable {
-        window.iter().filter_map(|d| build_like(d)).collect()
+    let build_like = if base_class == BaseClass::NoDiff {
+        window
+            .iter()
+            .filter(|d| !d.template().is_some_and(auto_task_builds_by_design))
+            .filter_map(|d| build_like(d))
+            .collect()
     } else {
         Vec::new()
     };

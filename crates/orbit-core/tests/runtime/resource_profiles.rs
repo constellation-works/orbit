@@ -455,7 +455,7 @@ fn lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles() {
     let dropped = dropped.profile.unwrap();
     assert_eq!(
         (dropped.key.work_class.as_str(), dropped.delivery_count),
-        ("no-diff", 3)
+        ("no-diff", 6)
     );
 
     let base = lookup(&here, "auto-task:friction-curation", None, true);
@@ -481,6 +481,238 @@ fn lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles() {
     let new_template = lookup("ws_new", "auto-task:new-template", None, false);
     assert_eq!(new_template.source, ProfileSource::HeaviestOfClass);
     assert_eq!(new_template.profile.unwrap().key.work_class, "change");
+}
+
+/// Template profiles on another workspace answer step 3, even when opposite
+/// class history is much heavier. The lighter template keeps the base-class
+/// rollup below the heavier template, so this also exercises template ranking.
+#[test]
+fn host_fallback_uses_template_history_with_or_without_opposite_class_history() {
+    if !super::dispatch_admission::isolated(
+        "resource_profiles::host_fallback_uses_template_history_with_or_without_opposite_class_history",
+    ) {
+        return;
+    }
+    for with_change in [false, true] {
+        let fixture = Fixture::new("min_profile_deliveries = 2\n");
+        for (template, cores) in [("delivery-code-review", 1.0), ("docs-audit", 0.1)] {
+            let task = fixture.template_task(template, true);
+            for _ in 0..2 {
+                fixture.delivery(
+                    "ws_other",
+                    &task,
+                    &format!("auto-task:{template}"),
+                    None,
+                    vec![RunSeed::flat(1, cores, GIB)],
+                );
+            }
+        }
+        if with_change {
+            let task = fixture.template_task("building-template", false);
+            for class in ["change", "auto-task:building-template"] {
+                for _ in 0..2 {
+                    fixture.delivery(
+                        "ws_change",
+                        &task,
+                        class,
+                        None,
+                        vec![RunSeed::flat(1, 100.0, 10 * GIB)],
+                    );
+                }
+            }
+        }
+        if with_change {
+            // A sparse local key must not prevent borrowing usable host history.
+            fixture.delivery(
+                &fixture.workspace,
+                "ORB-sparse-local",
+                "no-diff",
+                Some("hard"),
+                vec![RunSeed::flat(1, 200.0, GIB)],
+            );
+        }
+        for class in ["no-diff", "auto-task:delivery-code-review"] {
+            let answer = fixture
+                .runtime
+                .resource_profile_for(&ProfileLookup::new(
+                    &fixture.workspace,
+                    class,
+                    Some("hard".into()),
+                    true,
+                ))
+                .unwrap();
+            assert_eq!(answer.source, ProfileSource::HeaviestOfClass);
+            let profile = answer.profile.unwrap();
+            assert_eq!(profile.key.workspace_id, "ws_other");
+            assert_eq!(profile.key.work_class, "auto-task:delivery-code-review");
+            assert_eq!(profile.base_class, BaseClass::NoDiff);
+            assert!(!profile.sparse);
+        }
+    }
+}
+
+/// Sparse same-class templates still fall through to step 4; a populated
+/// Change-based template also cannot answer a NoDiff same-class fallback.
+#[test]
+fn sparse_or_opposite_class_templates_do_not_answer_the_same_class_fallback() {
+    if !super::dispatch_admission::isolated(
+        "resource_profiles::sparse_or_opposite_class_templates_do_not_answer_the_same_class_fallback",
+    ) {
+        return;
+    }
+    for no_diff in [true, false] {
+        let fixture = Fixture::new("min_profile_deliveries = 2\n");
+        let task = fixture.template_task("docs-audit", no_diff);
+        let deliveries = if no_diff { 1 } else { 2 };
+        for _ in 0..deliveries {
+            fixture.delivery(
+                "ws_other",
+                &task,
+                "auto-task:docs-audit",
+                None,
+                vec![RunSeed::flat(1, 1.0, GIB)],
+            );
+        }
+        let answer = fixture
+            .runtime
+            .resource_profile_for(&ProfileLookup::new(
+                &fixture.workspace,
+                "no-diff",
+                None,
+                false,
+            ))
+            .unwrap();
+        assert_eq!(answer.source, ProfileSource::HeaviestOnHost);
+        let profile = answer.profile.unwrap();
+        assert_eq!(profile.sparse, no_diff);
+        assert_eq!(
+            profile.base_class,
+            if no_diff {
+                BaseClass::NoDiff
+            } else {
+                BaseClass::Change
+            }
+        );
+    }
+}
+
+/// Templates compete with class profiles using core-minutes first, then
+/// memory peak when CPU ties.
+#[test]
+fn host_fallback_ranks_templates_and_class_profiles_by_cpu_then_memory() {
+    if !super::dispatch_admission::isolated(
+        "resource_profiles::host_fallback_ranks_templates_and_class_profiles_by_cpu_then_memory",
+    ) {
+        return;
+    }
+    for (cores, memory, template_wins) in [
+        (1.0, 8 * GIB, false),
+        (2.0, 3 * GIB, false),
+        (2.0, 5 * GIB, true),
+        (3.0, GIB, true),
+    ] {
+        let fixture = Fixture::new("min_profile_deliveries = 2\n");
+        let template = fixture.template_task("docs-audit", true);
+        let lighter = fixture.template_task("friction-curation", true);
+        for _ in 0..2 {
+            for (workspace, task, class, cpu, mem) in [
+                ("ws_class", "ORB-class", "no-diff", 2.0, 4 * GIB),
+                (
+                    "ws_template",
+                    template.as_str(),
+                    "auto-task:docs-audit",
+                    cores,
+                    memory,
+                ),
+                (
+                    "ws_template",
+                    lighter.as_str(),
+                    "auto-task:friction-curation",
+                    0.1,
+                    GIB,
+                ),
+            ] {
+                fixture.delivery(
+                    workspace,
+                    task,
+                    class,
+                    None,
+                    vec![RunSeed::flat(1, cpu, mem)],
+                );
+            }
+        }
+        let answer = fixture
+            .runtime
+            .resource_profile_for(&ProfileLookup::new("ws_new", "no-diff", None, false))
+            .unwrap();
+        assert_eq!(answer.source, ProfileSource::HeaviestOfClass);
+        let profile = answer.profile.unwrap();
+        assert_eq!(
+            profile.key.work_class,
+            if template_wins {
+                "auto-task:docs-audit"
+            } else {
+                "no-diff"
+            }
+        );
+        assert_eq!(
+            profile.expected_core_minutes,
+            if template_wins { cores } else { 2.0 }
+        );
+        assert_eq!(
+            profile.peak_memory_bytes.value,
+            if template_wins { memory } else { 4 * GIB }
+        );
+    }
+}
+
+/// Different sparse templates of one base class can together populate the
+/// local rollup. The opposite class never contributes deliveries to it.
+#[test]
+fn local_base_class_rollups_include_template_only_history() {
+    if !super::dispatch_admission::isolated(
+        "resource_profiles::local_base_class_rollups_include_template_only_history",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("min_profile_deliveries = 2\n");
+    for (template, no_diff, cores) in [
+        ("docs-audit", true, 1.0),
+        ("friction-curation", true, 3.0),
+        ("building-template", false, 100.0),
+    ] {
+        let task = fixture.template_task(template, no_diff);
+        fixture.delivery(
+            &fixture.workspace,
+            &task,
+            &format!("auto-task:{template}"),
+            None,
+            vec![RunSeed::flat(1, cores, GIB)],
+        );
+        assert!(
+            fixture
+                .profile(&format!("auto-task:{template}"), None)
+                .sparse
+        );
+    }
+    for (class, source) in [
+        ("auto-task:docs-audit", ProfileSource::BaseClass),
+        ("auto-task:new-template", ProfileSource::BaseClass),
+        ("no-diff", ProfileSource::WithoutComplexity),
+    ] {
+        let answer = fixture
+            .runtime
+            .resource_profile_for(&ProfileLookup::new(&fixture.workspace, class, None, true))
+            .unwrap();
+        assert_eq!(answer.source, source);
+        let profile = answer.profile.unwrap();
+        assert_eq!(profile.key.workspace_id, fixture.workspace);
+        assert_eq!(profile.key.work_class, "no-diff");
+        assert_eq!(profile.base_class, BaseClass::NoDiff);
+        assert_eq!(profile.delivery_count, 2);
+        assert_eq!(profile.expected_core_minutes, 2.0);
+        assert!(!profile.sparse);
+    }
 }
 
 /// Step 4 answers only when the base class has no profile anywhere, and takes
@@ -653,6 +885,20 @@ fn no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_de
     assert_eq!(audit_profile.base_class, BaseClass::NoDiff);
     assert_eq!(audit_profile.build_like.len(), 1);
     assert_eq!(audit_profile.build_like[0].task_id, audit);
+
+    let profiles = fixture.runtime.resource_profiles().unwrap();
+    let rollup = profiles
+        .class_profiles
+        .iter()
+        .find(|profile| profile.key.work_class == "no-diff")
+        .unwrap();
+    assert_eq!(rollup.build_like.len(), 2);
+    assert!(
+        rollup
+            .build_like
+            .iter()
+            .all(|delivery| delivery.task_id != qa)
+    );
 
     let qa_profile = fixture.profile("auto-task:qa-sweep", None);
     assert_eq!(qa_profile.base_class, BaseClass::NoDiff);

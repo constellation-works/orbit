@@ -284,9 +284,10 @@ the first key that has enough. Each lookup reports which step answered:
 
 1. drop complexity: `(host, workspace, class)`;
 2. for a template, its base class: `no-diff` or `change` in the same
-   workspace;
+   workspace, rolling up both template and non-template deliveries of that
+   base class;
 3. the heaviest profile of the same class on the host (for a template, of
-   its base class);
+   its base class), including template profiles with that base class;
 4. the heaviest profile on the host, so unknown work is assumed expensive;
    when every profile is sparse, the heaviest sparse one;
 5. no profile at all, only on a host with no profiles: today's admission.
