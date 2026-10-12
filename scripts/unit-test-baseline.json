@@ -167,6 +167,7 @@
         "process/tests/bounded.rs::bounded_run_times_out_and_reaps_the_process_group",
         "process/tests/bounded.rs::flood_cleanup_preserves_unmarked_pids_and_other_group_members",
         "process/tests/bounded.rs::flood_cleanup_requires_every_nonempty_marker",
+        "process/tests/bounded.rs::leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped",
         "process/tests/bounded.rs::unreadable_argv_is_not_a_reaped_child_and_authorizes_no_signal",
         "process/tests/identity.rs::darwin_native_probes_classify_an_unreaped_zombie_and_its_group_as_exited",
         "process/tests/identity.rs::libproc_start_time_renders_exactly_as_ps_lstart",
