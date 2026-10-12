@@ -1,23 +1,15 @@
-use super::super::spawn::{
-    MAX_CACHED_PROFILES, MacosSandboxSpawnRequest, TEST_PROFILE_CACHE_LOCK,
-    cached_profile_tempfile, profile_cache_len, spawn_under_macos_sandbox,
-};
+#[cfg(target_os = "macos")]
+use super::super::spawn::{MacosSandboxSpawnRequest, spawn_under_macos_sandbox};
 #[cfg(target_os = "macos")]
 use super::super::test_support::{
     EnvOverrides, NEUTRAL_PROVIDER, compile_with_env, profile, shell_escape,
 };
-use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::process::Stdio;
-use std::sync::PoisonError;
 
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
-    // Every spawn inserts into the process-wide profile cache that the
-    // LRU tests below measure.
-    let _lock = TEST_PROFILE_CACHE_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
     if !crate::macos_sandbox_test_guard(
         "spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path",
     ) {
@@ -47,7 +39,7 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
     let poisoned_path = format!("{}:/usr/bin:/bin", fake_dir.display());
     let args = ["-c".to_string(), "exit 0".to_string()];
     let env = [("PATH".to_string(), poisoned_path)];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: "(version 1)\n(allow default)\n",
         program: "/bin/sh",
         args: &args,
@@ -80,11 +72,6 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
-    // Every spawn inserts into the process-wide profile cache that the
-    // LRU tests below measure.
-    let _lock = TEST_PROFILE_CACHE_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
     if !crate::macos_sandbox_test_guard(
         "spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment",
     ) {
@@ -102,7 +89,7 @@ fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ("ORB_10917_SUPPLIED".to_string(), "present".to_string()),
     ];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: "(version 1)\n(allow default)\n",
         program: "/bin/sh",
         args: &args,
@@ -171,11 +158,6 @@ fn pty_probe_process() {
 #[cfg(target_os = "macos")]
 #[test]
 fn pty_allocation_is_allowed_under_compiled_profile() {
-    // Every spawn inserts into the process-wide profile cache that the
-    // LRU tests below measure.
-    let _lock = TEST_PROFILE_CACHE_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
     if !crate::macos_sandbox_test_guard("pty_allocation_is_allowed_under_compiled_profile") {
         return;
     }
@@ -189,7 +171,7 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
         "--ignored".to_string(),
     ];
     let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program: current_exe.to_str().expect("utf8 test binary path"),
         args: &args,
@@ -208,162 +190,5 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
         output.status,
         &output.stdout,
         &output.stderr,
-    );
-}
-
-/// [ORB-13454] Inactive profile tempfile retention must stay bounded to
-/// [`MAX_CACHED_PROFILES`] and evicted inactive tempfiles must be reclaimed
-/// from disk when more distinct profiles are requested than the cache bound.
-#[test]
-fn cached_profile_tempfiles_stay_bounded_and_evict_inactive_entries() {
-    let _lock = TEST_PROFILE_CACHE_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
-    let p0 = cached_profile_tempfile("(version 1)\n(allow default)\n; orb-13454-bound-0\n")
-        .expect("cache profile 0");
-    let path0 = p0.path().to_path_buf();
-    assert!(
-        path0.exists(),
-        "initial profile tempfile should exist on disk"
-    );
-
-    // Drop the strong Arc handle; the file is now inactive and retained only by the cache.
-    drop(p0);
-    assert!(
-        path0.exists(),
-        "inactive profile must remain in cache until evicted"
-    );
-
-    // Request MAX_CACHED_PROFILES distinct profiles, each dropped immediately so they are inactive.
-    for i in 1..=MAX_CACHED_PROFILES {
-        let profile_text = format!("(version 1)\n(allow default)\n; orb-13454-bound-{i}\n");
-        let p = cached_profile_tempfile(&profile_text).expect("cache profile");
-        assert!(p.path().exists());
-    }
-
-    // Since MAX_CACHED_PROFILES + 1 distinct profiles were requested, p0 must have been evicted.
-    // Because no active caller retains p0, the tempfile descriptor and disk file must be reclaimed.
-    assert!(
-        !path0.exists(),
-        "evicted inactive profile tempfile must be unlinked and reclaimed from disk"
-    );
-    assert!(
-        profile_cache_len() <= MAX_CACHED_PROFILES,
-        "profile cache size must stay bounded to MAX_CACHED_PROFILES (len={})",
-        profile_cache_len()
-    );
-}
-
-/// [ORB-13454] Active consumers holding [`Arc<NamedTempFile>`] retain their
-/// profile files on disk even after eviction from the cache, and the file is
-/// reclaimed as soon as the active handle drops.
-#[test]
-fn profiles_referenced_by_active_callers_remain_available_until_dropped() {
-    let _lock = TEST_PROFILE_CACHE_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
-    let active_profile =
-        cached_profile_tempfile("(version 1)\n(allow default)\n; orb-13454-active-retained\n")
-            .expect("cache active profile");
-    let active_path = active_profile.path().to_path_buf();
-    assert!(
-        active_path.exists(),
-        "active profile tempfile should exist on disk"
-    );
-
-    // Evict active_profile from the cache by inserting MAX_CACHED_PROFILES distinct profiles.
-    for i in 1..=MAX_CACHED_PROFILES {
-        let profile_text = format!("(version 1)\n(allow default)\n; orb-13454-active-evict-{i}\n");
-        let _ = cached_profile_tempfile(&profile_text).expect("cache profile");
-    }
-
-    // Even though active_profile was evicted from the process-wide cache, the caller's Arc
-    // reference must keep the file alive and readable for the child's lifetime.
-    assert!(
-        active_path.exists(),
-        "profile still referenced by active caller must remain available on disk"
-    );
-    let content = std::fs::read_to_string(&active_path).expect("read active profile file");
-    assert!(
-        content.contains("; orb-13454-active-retained"),
-        "active profile content must be intact"
-    );
-
-    // Once the active caller drops its handle, the temporary file must be reclaimed.
-    drop(active_profile);
-    assert!(
-        !active_path.exists(),
-        "profile tempfile must be reclaimed once active handle is dropped"
-    );
-}
-
-/// [ORB-13454] Repeated failed spawns cannot grow inactive profile retention
-/// without bound.
-#[test]
-fn repeated_failed_spawns_cannot_grow_inactive_profile_retention_without_bound() {
-    let _lock = TEST_PROFILE_CACHE_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
-    // A missing working directory makes `Command::spawn` itself fail on every
-    // host. A nonexistent program alone does not: where `sandbox-exec` exists,
-    // it spawns fine and only the confined exec fails later.
-    let missing_cwd = Path::new("/nonexistent/orbit-test-fail-spawn-cwd");
-
-    // First failed spawn creates and caches a profile tempfile before failing.
-    let first_profile = "(version 1)\n(allow default)\n; orb-13454-failed-spawn-0\n";
-    let first_res = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
-        profile_text: first_profile,
-        program: "/nonexistent/binary/orbit-test-fail-spawn",
-        args: &[],
-        env: &[],
-        cwd: Some(missing_cwd),
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-        inherited_fds: &[],
-    });
-    assert!(
-        first_res.is_err(),
-        "spawn with nonexistent binary should fail"
-    );
-
-    // The profile tempfile was cached prior to the spawn failure.
-    let first_cached = cached_profile_tempfile(first_profile).expect("get cached first profile");
-    let first_path = first_cached.path().to_path_buf();
-    drop(first_cached);
-    assert!(
-        first_path.exists(),
-        "failed spawn profile tempfile was cached and exists on disk"
-    );
-
-    // Perform more failed spawns than the cache capacity.
-    for i in 1..=(MAX_CACHED_PROFILES + 5) {
-        let profile_text = format!("(version 1)\n(allow default)\n; orb-13454-failed-spawn-{i}\n");
-        let res = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
-            profile_text: &profile_text,
-            program: "/nonexistent/binary/orbit-test-fail-spawn",
-            args: &[],
-            env: &[],
-            cwd: Some(missing_cwd),
-            stdin: Stdio::null(),
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
-            inherited_fds: &[],
-        });
-        assert!(res.is_err(), "spawn with nonexistent binary should fail");
-    }
-
-    // The first failed spawn profile must have been evicted and reclaimed.
-    assert!(
-        !first_path.exists(),
-        "first failed spawn profile tempfile must have been evicted and reclaimed"
-    );
-    assert!(
-        profile_cache_len() <= MAX_CACHED_PROFILES,
-        "profile cache size must remain bounded after repeated failed spawns (len={})",
-        profile_cache_len()
     );
 }

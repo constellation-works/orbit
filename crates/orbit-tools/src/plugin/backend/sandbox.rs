@@ -405,7 +405,7 @@ fn spawn_confined(
         StdinMode::Null => Stdio::null(),
         StdinMode::Bytes(_) => Stdio::piped(),
     };
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program: &req.program,
         args: &req.args,

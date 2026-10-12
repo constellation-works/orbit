@@ -78,7 +78,7 @@ probe write-root ': > "$WRITE_ROOT/written"'
         ("SOURCE".to_string(), readable.display().to_string()),
         ("WRITE_ROOT".to_string(), write_root.display().to_string()),
     ];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program: "/bin/sh",
         args: &["-c".to_string(), script.to_string()],
@@ -177,7 +177,7 @@ deny sh -c 'printf created > "$1/created.txt"' sh "$DENIED"
             ("DENIED".to_string(), denied.display().to_string()),
             ("PREPARED".to_string(), prepared.to_string()),
         ];
-        let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
             profile_text: &profile_text,
             program: "/bin/sh",
             args: &["-c".to_string(), script.to_string()],
@@ -269,7 +269,7 @@ probe move-unmatched 'mv "$WS/plain" "$WS/plain-moved"'
         ("WS".to_string(), workspace.display().to_string()),
         ("AWAY".to_string(), away.path().display().to_string()),
     ];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program: "/bin/sh",
         args: &["-c".to_string(), script.to_string()],
@@ -311,6 +311,107 @@ probe move-unmatched 'mv "$WS/plain" "$WS/plain-moved"'
         moved.is_empty(),
         "nothing may leave the workspace: {moved:?}"
     );
+}
+
+/// Profile delivery must leave nothing in the writable temp root for a
+/// confined process to replace before a retry. Isolate TMPDIR in a child test
+/// so other tests and concurrent runs cannot affect the no-file assertion.
+#[test]
+fn sandbox_exec_passes_profiles_inline_without_a_writable_cache() {
+    if !macos_sandbox_test_guard("sandbox_exec_passes_profiles_inline_without_a_writable_cache") {
+        return;
+    }
+    const PROBE: &str = "macos_sandbox::inline_profile_probe_process";
+    let root = tempfile::tempdir().expect("isolated probe root");
+    let cache = root.path().join("cache");
+    std::fs::create_dir(&cache).expect("isolated temp root");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command.args(["--exact", PROBE, "--ignored", "--nocapture"]);
+    command.env("TMPDIR", &cache);
+    let output = orbit_common::test_env::run_child_test(&mut command, PROBE, root.path());
+    orbit_common::test_env::assert_child_test_passed(
+        PROBE,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    assert_eq!(
+        std::fs::read_dir(&cache).expect("list temp root").count(),
+        0,
+        "inline profile delivery must not create a writable profile or retain cache files"
+    );
+}
+
+#[test]
+#[ignore = "spawned with isolated TMPDIR by the inline-profile boundary test"]
+fn inline_profile_probe_process() {
+    let scratch = std::env::temp_dir()
+        .canonicalize()
+        .expect("isolated TMPDIR");
+    let denied = scratch.join("denied");
+    std::fs::create_dir(&denied).expect("masked tree");
+    let witness = denied.join("witness");
+    std::fs::write(&witness, "unchanged").expect("masked witness");
+    let profile = ResolvedFsProfile {
+        name: "inline-probe".to_string(),
+        read: vec![],
+        modify: vec![],
+    };
+    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    append_macos_subpath_mask(&mut profile_text, std::slice::from_ref(&denied));
+    let script = r#"
+set -eu
+for file in "$TMPDIR"/orbit-sandbox-*.sb; do
+    if [ -e "$file" ]; then
+        printf '(version 1)\n(allow default)\n' > "$file"
+        echo 'writable profile file found' >&2
+        exit 91
+    fi
+done
+if (printf changed > "$WITNESS") 2>/dev/null; then
+    echo 'profile did not enforce its write denial' >&2
+    exit 92
+fi
+printf 'inline-profile-enforced\n'
+"#;
+    let env = [
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("TMPDIR".to_string(), scratch.display().to_string()),
+        ("WITNESS".to_string(), witness.display().to_string()),
+    ];
+    // Identical text exercises the former cache-hit path as well as first use.
+    for _ in 0..2 {
+        let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: "/bin/sh",
+            args: &["-c".to_string(), script.to_string()],
+            env: &env,
+            cwd: Some(&scratch),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn inline profile probe");
+        let (stdout, stderr) = wait_bounded(child);
+        assert_eq!(stdout, "inline-profile-enforced\n", "stderr: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(&witness).expect("witness"),
+            "unchanged"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&scratch)
+            .expect("list isolated temp root")
+            .map(|entry| entry.expect("temp entry").file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            [std::ffi::OsString::from("denied")],
+            "no profile file may exist after first use or retry"
+        );
+    }
+    // The parent checks the entire temp root after this probe exits.
+    std::fs::remove_file(&witness).expect("remove owned witness");
+    std::fs::remove_dir(&denied).expect("remove owned empty masked tree");
 }
 
 /// Wait for the sandboxed child within [`CHILD_DEADLINE`], then collect its
