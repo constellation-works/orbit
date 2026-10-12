@@ -60,11 +60,12 @@ unless it cites a task.
 ### Single-writer replication
 
 CouchDB-style multi-master replication needs conflict revisions because any
-node may write any document. Orbit avoids the problem rather than solving it:
-the prefix is a static partition of the write set, so replication degenerates to
-"copy the partitions you do not own". This is the same simplification that
-makes per-shard ownership cheap in sharded databases — no consensus, because no
-two nodes ever contend for the same key.
+node may write any document. Orbit avoids that conflict: the task prefix names
+the canonical owner, and only that owner's store accepts task mutations.
+Replicas may hold read-only mirrors, while an admitted follower can execute a
+fenced claim whose task access and settlement return through the owner. This
+keeps one writer for each task without requiring the execution machine to own
+it.
 
 ### Git remotes
 
@@ -82,23 +83,27 @@ refs; local-prefix bundles are your branches.
 - [federated-mcp](../federated-mcp/1_overview.md) is the implemented cross-host
   discovery surface; a mirror that is visible but read-only is a natural fit for
   its capability split.
+- [distributed-drain setup](../../runbooks/distributed-drain.md#procedure-owner-and-follower-setup)
+  documents the shipped pull-claim path: an admitted follower executes an
+  owner task without changing its ID or taking mutation authority.
 
 ## 3. What May Be Distinctive
 
 Most task trackers solve multi-host by having exactly one host. Orbit's
 distinctive move is that ownership rides on the id itself: a reader can tell
-from `DANI-00012` alone which machine may write it, and an importer can decide
-overwrite-or-skip without consulting any other state. That makes the sync
-logic small enough to be obviously correct, at the cost of forbidding the case
-where two hosts collaborate on one task — which the [decisions](./4_decisions.md)
-accept deliberately.
+from `DANI-00012` alone which machine is the canonical writer, and an importer
+can decide overwrite-or-skip without consulting any other state. An admitted
+follower can collaborate by executing a fenced claim, while task mutations
+still go through the owner. The historical [execute-where-you-mint decision](./4_decisions.md#execute-where-you-mint-superseded-for-claimed-execution)
+is superseded for this claimed execution path; the owner remains the sole
+authority.
 
 ## 4. References
 
 **Orbit-internal**
 
 - [1_overview](./1_overview.md) — the migration recipe and §5 authority rules
-- [4_decisions](./4_decisions.md) — why prefix ownership, and why execute-where-you-mint
+- [4_decisions](./4_decisions.md) — why prefix ownership and the superseded execute-where-you-mint rule
 
 **External**
 

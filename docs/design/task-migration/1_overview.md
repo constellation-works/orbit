@@ -7,7 +7,7 @@ status: Draft
 feature: task-migration
 doc_role: overview
 type: design
-summary: Move orbit tasks between hosts with export/import (tar.zst); hosts stay disjoint by task_prefix, and the minting host owns each task.
+summary: Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority.
 tags: [task-migration, multi-host, task-prefix]
 paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [task-migration, task-artifacts, host-registry]
@@ -244,17 +244,22 @@ registered as live tasks.
 ## 5. Multi-host authority
 
 Prefixes make it safe for the same repository to be a workspace on more than
-one host — the usual case is a box that runs the bulk of the fleet plus a
-laptop that wants to mint and run its own work when the box is saturated or
-unreachable. The rules that keep two live stores coherent without a merge
-algorithm:
+one host. A host can mint and run its own tasks, and an admitted follower can
+also execute a claim for a task owned by another host. Task authority stays
+with one canonical owner; execution on a follower does not make its local
+mirror writable or create a second writer. The rules that keep the stores
+coherent are:
 
-- **The minting host owns the task.** Status, verdicts, relations, artifacts —
-  every mutation happens on the host whose prefix the id carries. A copy of the
-  task on any other host is a mirror and is never written locally.
-- **Execute where you mint.** A task is dispatched and run by its owner. Minting
-  `DANI-*` on the laptop and expecting the box to pick it up would make the box a
-  second writer of laptop-owned state; the model forbids it by construction.
+- **The task prefix identifies its canonical owner.** Status, verdicts,
+  relations, artifacts, and other task mutations remain in the owner store.
+  Copies on other hosts are read-only mirrors; a mirror does not grant mutation
+  authority.
+- **An admitted follower may execute an owner task under a claim.** The
+  follower's pull drain requests a fenced claim from the owner, runs the
+  claimed task under its original ID, and returns its candidate and evidence
+  through the claim protocol. Owner-routed task access keeps the owner as the
+  only writer. See the [distributed-drain setup procedure](../../runbooks/distributed-drain.md#procedure-owner-and-follower-setup)
+  for the shipped operator path.
 - **Off-host clients that own no checkout reach the owner over MCP** rather than
   minting locally (`orbit mcp serve --mode remote <host>`,
   [remote-access](../remote-access/1_overview.md)). A route that targets a
@@ -285,8 +290,10 @@ algorithm:
   workspace registration created by that run are rolled back, while owner-wins
   replacements already applied stay because the owner's copy is the newer one.
 
-The reasoning for choosing prefix ownership over a single authoritative host is
-in [4_decisions](./4_decisions.md).
+Prefix ownership keeps task authority singular while permitting fenced
+execution on an admitted follower. The historical execute-where-you-mint rule
+is superseded for claimed execution; see [4_decisions](./4_decisions.md) for
+that record and the current [distributed-drain setup procedure](../../runbooks/distributed-drain.md#procedure-owner-and-follower-setup).
 
 ## Task References
 

@@ -7,7 +7,7 @@ status: Draft
 feature: task-migration
 doc_role: decisions
 type: design
-summary: Why task authority is per task_prefix rather than per host, why a task runs where it was minted, and why disjoint id ranges were retired in favour of prefixes.
+summary: Why canonical task authority follows task_prefix, why admitted claims may execute on a follower without changing that authority, and why disjoint id ranges were retired in favour of prefixes.
 tags: [task-migration, multi-host, task-prefix]
 paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-config/src/raw.rs"]
 related_features: [task-migration, host-registry]
@@ -47,15 +47,16 @@ mirror sync rather than a collision.
 
 - Duplicate workspaces across hosts are supported, with zero merge logic — the
   importer decides overwrite-or-skip from the id alone.
-- The single-authority policy is superseded; "where is the task?" is now
-  answered by its prefix.
-- Cost: two hosts can never collaborate on one task. Reassigning a task to the
-  other host means re-minting it there (a new id) and closing the original —
-  identity does not survive a change of owner.
+- The single-machine-authority policy is superseded; the canonical owner of
+  each task is still identified by its prefix.
+- Cost: a foreign host cannot mutate a mirrored task directly. Reassigning
+  ownership outside the admitted claim path means re-minting it there (a new
+  id) and closing the original — identity does not survive a change of owner.
 
-## Execute where you mint
+## Execute where you mint (superseded for claimed execution)
 
 **Recorded:** 2026-09 · [ORB-12126]
+**Status:** Superseded for execution placement by the [distributed-drain pull-claim procedure](../../runbooks/distributed-drain.md#procedure-owner-and-follower-setup). An admitted follower may execute the owner's task under its original ID and return the candidate and evidence through a fenced claim. The owner remains the sole task authority; mirrors remain read-only.
 
 ### Context
 
