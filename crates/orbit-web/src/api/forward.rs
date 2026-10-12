@@ -41,8 +41,9 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Request headers passed to the remote. Host and Origin are replaced with the
 /// remote's own loopback authority; cookies and the rest stay here.
-const FORWARDED_REQUEST_HEADERS: [HeaderName; 3] = [
+const FORWARDED_REQUEST_HEADERS: [HeaderName; 4] = [
     header::ACCEPT,
+    header::ACCEPT_ENCODING,
     header::CONTENT_TYPE,
     HeaderName::from_static("last-event-id"),
 ];
@@ -51,8 +52,10 @@ const FORWARDED_REQUEST_HEADERS: [HeaderName; 3] = [
 /// attachment disposition survive, and so does the audit listing's
 /// continuation cursor; hop-by-hop headers do not, and this dashboard's own
 /// security and nosniff layers still apply.
-const FORWARDED_RESPONSE_HEADERS: [HeaderName; 5] = [
+const FORWARDED_RESPONSE_HEADERS: [HeaderName; 7] = [
     header::CONTENT_TYPE,
+    header::CONTENT_ENCODING,
+    header::VARY,
     header::CONTENT_DISPOSITION,
     header::CONTENT_SECURITY_POLICY,
     header::CACHE_CONTROL,

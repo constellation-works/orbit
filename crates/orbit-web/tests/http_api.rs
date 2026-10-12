@@ -9,6 +9,8 @@ mod auto_tasks;
 mod automation;
 #[path = "http_api/codebase.rs"]
 mod codebase;
+#[path = "http_api/compression.rs"]
+mod compression;
 #[path = "http_api/diagnostics_errors.rs"]
 mod diagnostics_errors;
 #[path = "http_api/doctor.rs"]

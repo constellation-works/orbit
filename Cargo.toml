@@ -81,6 +81,7 @@ hostname = "0.4"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync"] }
+tower-http = { version = "0.6", features = ["compression-gzip"] }
 jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
 rusqlite = { version = "0.31", features = ["bundled", "chrono", "trace"] }
