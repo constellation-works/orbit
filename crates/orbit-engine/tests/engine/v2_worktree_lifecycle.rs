@@ -2205,18 +2205,29 @@ fn git_rebase_decision_follows_the_checkout_state() {
                 )
             })
             .collect::<Vec<_>>();
-        for matching in [(2, 3), (1, 2), (1, 3)] {
+        for (sources, deterministic) in [
+            ([Some(0), Some(1), Some(1)], true),
+            ([Some(0), Some(0), Some(2)], true),
+            ([Some(0), Some(1), Some(0)], true),
+            ([None, Some(1), Some(1)], true),
+            ([None, Some(1), Some(2)], false),
+            ([Some(0), None, Some(0)], false),
+            ([Some(0), Some(0), None], false),
+        ] {
             use std::io::Write;
-            let input = entries
+            // Clear the old stages so absent entries really are absent.
+            let mut input = format!("0 {}\tREADME.md\n", "0".repeat(entries[0].1.len()));
+            input += &sources
                 .iter()
                 .enumerate()
-                .map(|(index, entry)| {
-                    let content = if index + 1 == matching.1 {
-                        &entries[matching.0 - 1]
-                    } else {
-                        entry
-                    };
-                    format!("{} {} {}\t{}\n", content.0, content.1, entry.2, entry.3)
+                .filter_map(|(index, source)| {
+                    let content = &entries[(*source)?];
+                    Some(format!(
+                        "{} {} {}\tREADME.md\n",
+                        content.0,
+                        content.1,
+                        index + 1
+                    ))
                 })
                 .collect::<String>();
             let mut command = Command::new("git")
@@ -2234,6 +2245,7 @@ fn git_rebase_decision_follows_the_checkout_state() {
                 .write_all(input.as_bytes())
                 .unwrap();
             assert!(command.wait_with_output().unwrap().status.success());
+            let before = git(&conflicted.checkout.path, &["ls-files", "--unmerged"]);
             let OrbitError::RecoverableVcsConflict(diagnosed) = conflicted.rebase().unwrap_err()
             else {
                 panic!("expected the stopped rebase's structured conflict");
@@ -2242,13 +2254,15 @@ fn git_rebase_decision_follows_the_checkout_state() {
                 diagnosed.conflicting_files,
                 vec![orbit_common::ConflictedFile {
                     path: "README.md".to_string(),
-                    deterministically_resolvable: true,
-                }]
+                    deterministically_resolvable: deterministic,
+                }],
+                "stage sources: {sources:?}"
             );
             assert_eq!(
                 git(&conflicted.checkout.path, &["ls-files", "--unmerged"]),
-                input.trim()
+                before
             );
+            assert!(rebase_in_progress(&conflicted.checkout.path));
         }
 
         assert!(rebase_in_progress(&conflicted.checkout.path));
@@ -2284,6 +2298,74 @@ fn git_rebase_decision_follows_the_checkout_state() {
         assert!(rebase_dir.join("orig-head").is_file());
         assert_eq!(foreign.head(), foreign.candidate);
     });
+}
+
+#[test]
+fn git_rebase_rename_delete_conflicts_remain_for_recovery() {
+    isolated(
+        "git_rebase_rename_delete_conflicts_remain_for_recovery",
+        || {
+            for candidate_renames in [true, false] {
+                let edit = |repo: &Path, rename: bool| {
+                    if rename {
+                        git(repo, &["mv", "README.md", "renamed.md"]);
+                    } else {
+                        git(repo, &["rm", "README.md"]);
+                    }
+                    git(repo, &["commit", "-m", "rename or delete"]);
+                    git(repo, &["rev-parse", "HEAD"])
+                };
+                let prepared = PreparedRebase::with_edits(
+                    "jrun-rebase-rename-delete",
+                    |repo| edit(repo, candidate_renames),
+                    |repo| edit(repo, !candidate_renames),
+                );
+                let OrbitError::RecoverableVcsConflict(conflict) = prepared.rebase().unwrap_err()
+                else {
+                    panic!("expected Git's rename/delete conflict");
+                };
+                let index = git(&prepared.checkout.path, &["ls-files", "--unmerged"]);
+                let entries = index
+                    .lines()
+                    .map(|line| {
+                        let (entry, path) = line.split_once('\t').unwrap();
+                        let fields = entry.split_whitespace().collect::<Vec<_>>();
+                        (fields[0], fields[1], fields[2], path)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(entries.len(), 2, "Git produced a missing-side conflict");
+                assert_eq!(entries[0].2, "1");
+                assert_eq!(entries[1].2, if candidate_renames { "3" } else { "2" });
+                assert_eq!(entries[0].0, entries[1].0, "unchanged mode");
+                assert_eq!(entries[0].1, entries[1].1, "unchanged content");
+                assert!(entries.iter().all(|entry| entry.3 == "renamed.md"));
+                assert_eq!(conflict.conflicting_paths, ["renamed.md"]);
+                assert_eq!(
+                    conflict.conflicting_files,
+                    vec![orbit_common::ConflictedFile {
+                        path: "renamed.md".to_string(),
+                        deterministically_resolvable: false,
+                    }]
+                );
+
+                // Re-observing the stop supplies diagnostics without resolving
+                // the rename/delete choice or certifying recovery.
+                let head = prepared.head();
+                let OrbitError::RecoverableVcsConflict(diagnosed) = prepared.rebase().unwrap_err()
+                else {
+                    panic!("expected the stopped rebase's structured conflict");
+                };
+                assert_eq!(diagnosed.conflicting_files, conflict.conflicting_files);
+                assert_eq!(
+                    git(&prepared.checkout.path, &["ls-files", "--unmerged"]),
+                    index
+                );
+                assert_eq!(prepared.head(), head);
+                assert!(rebase_in_progress(&prepared.checkout.path));
+                assert!(prepared.host.checkpoints().is_empty());
+            }
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
