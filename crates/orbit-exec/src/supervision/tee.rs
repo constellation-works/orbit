@@ -8,6 +8,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use orbit_common::process::output_capture::{BoundedOutputCapture, capture_limit_from_env};
+#[cfg(unix)]
+use orbit_common::process::pipe::set_nonblocking;
 use orbit_common::security::redaction::redact_sensitive_env_bytes;
 
 pub(super) const ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV: &str =
@@ -308,19 +310,6 @@ fn wait_ready(fd: BorrowedFd<'_>, events: libc::c_short, stop: &StopWatch) -> io
             return Err(err);
         }
     }
-}
-
-#[cfg(unix)]
-fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<()> {
-    // SAFETY: `fcntl` reads and updates status flags of a descriptor this
-    // worker owns; the pipe's other end has its own open file description.
-    unsafe {
-        let flags = libc::fcntl(fd.as_raw_fd(), libc::F_GETFL);
-        if flags < 0 || libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    Ok(())
 }
 
 #[cfg(unix)]

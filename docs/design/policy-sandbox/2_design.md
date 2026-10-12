@@ -472,11 +472,11 @@ namespace denial leaves this gate incomplete until host execution succeeds.
 `crates/orbit-exec/src/supervision/cleanup.rs` is the termination layer. The escalation policy:
 
 1. Send `SIGTERM` (or the supplied signal) to the entire process group via `killpg`.
-2. Poll `process_group_is_alive(pid)` for up to `TERMINATION_GRACE_PERIOD = 5 seconds`.
+2. Poll `probe_process_group_liveness(pgid)` (orbit-common) for up to `TERMINATION_GRACE_PERIOD = 5 seconds`.
 3. If the group is gone, return success.
 4. Otherwise send `SIGKILL` to the group, then call `child.kill()` and `child.wait()` to reap.
 
-`process_group_is_alive` uses `killpg(pid, 0)`, treats `ESRCH` as "all gone," and treats other errno values as "still alive" so cleanup errs toward SIGKILL.
+`probe_process_group_liveness` treats pgid 0 and 1 as exited, reports a group whose only members are zombies as exited, and reports a group with a running member as alive. A group it cannot inspect is `Unknown`, which callers treat as alive so cleanup errs toward SIGKILL.
 
 `SignalHandlerGuard` is RAII and refcounted: the first live waiter installs SIGINT/SIGTERM handlers and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal so a long-running server's original handler (tokio `ctrl_c` / SIGTERM, or SIG_DFL) still runs. `SIG_IGN` is not re-raised. When the previous disposition is SIG_DFL, the process stderr is annotated with `process interrupted by signal SIG…` before `raise`, because the wait result is discarded as the process terminates. A process-wide mutex covers only that install/drop critical section — never `raise` — so concurrent `run_process` waits overlap. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: it stores the signal, increments the generation, records a pending forward, and `killpg`s every registered group. Waiters that miss a slot still observe the generation counter on the next poll and run the ordinary termination path.
 

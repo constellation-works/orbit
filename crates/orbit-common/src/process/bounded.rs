@@ -17,6 +17,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::output_capture::BoundedOutputCapture;
+#[cfg(unix)]
+use super::pipe::set_nonblocking;
 use crate::OrbitError;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -448,12 +450,12 @@ fn prepare_pipes(
     stdout: Option<&std::process::ChildStdout>,
     stderr: Option<&std::process::ChildStderr>,
 ) -> io::Result<()> {
-    use std::os::unix::io::AsRawFd;
+    use std::os::unix::io::AsFd;
     if let Some(pipe) = stdout {
-        set_nonblocking(pipe.as_raw_fd())?;
+        set_nonblocking(pipe.as_fd())?;
     }
     if let Some(pipe) = stderr {
-        set_nonblocking(pipe.as_raw_fd())?;
+        set_nonblocking(pipe.as_fd())?;
     }
     Ok(())
 }
@@ -463,21 +465,6 @@ fn prepare_pipes(
     _stdout: Option<&std::process::ChildStdout>,
     _stderr: Option<&std::process::ChildStderr>,
 ) -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_nonblocking(fd: std::os::unix::io::RawFd) -> io::Result<()> {
-    // Safety: `fd` is an open pipe this supervisor owns. The two `fcntl` calls
-    // only read and replace that descriptor's status flags.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if rc < 0 {
-        return Err(io::Error::last_os_error());
-    }
     Ok(())
 }
 

@@ -11,9 +11,13 @@ use std::fs::File;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd};
 
 use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
+#[cfg(unix)]
+use orbit_common::process::identity::{KernelLiveness, probe_process_group_liveness};
+#[cfg(unix)]
+use orbit_common::process::pipe::set_nonblocking;
 use orbit_common::process::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
 use wait_timeout::ChildExt;
 
@@ -26,7 +30,6 @@ use super::capture::{
 #[cfg(unix)]
 use super::output::{
     CancelPairHook, PipeCancel, PollOutcome, pipe_cancellation, poll_pipe_or_cancel,
-    set_nonblocking,
 };
 use super::output::{
     OUTPUT_READER_JOIN_TIMEOUT, OutputReaderContext, join_output_reader, spawn_output_reader,
@@ -413,7 +416,7 @@ fn spawn_stdin_writer(
     let mut writer = unsafe { File::from_raw_fd(fd) };
     // Unlike a ready read, a large write can block even after POLLOUT.
     // Nonblocking mode is mandatory before starting the worker.
-    set_nonblocking(writer.as_raw_fd())?;
+    set_nonblocking(writer.as_fd())?;
     let (cancel, watch) = pipe_cancellation(cancel_pair);
     let bytes = bytes.to_vec();
     let join = thread::Builder::new().spawn(move || {
@@ -470,23 +473,16 @@ pub(in crate::activity_job::cli_runner) fn kill_child_process_tree(child: &mut C
 
 #[cfg(unix)]
 fn wait_for_process_group_exit(child_id: u32) {
+    // An id beyond `pid_t` names no group. Pgid 0 probes as exited, so it never waits.
+    let pgid = libc::pid_t::try_from(child_id).unwrap_or(0);
     let deadline = Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT;
-    while process_group_is_alive(child_id) {
+    while probe_process_group_liveness(pgid) != KernelLiveness::Exited {
         let _ = signal_child_process_group(child_id, libc::SIGKILL);
         if Instant::now() >= deadline {
             break;
         }
         thread::sleep(Duration::from_millis(1));
     }
-}
-
-#[cfg(unix)]
-fn process_group_is_alive(child_id: u32) -> bool {
-    if child_id == 0 || child_id > i32::MAX as u32 {
-        return false;
-    }
-    let rc = unsafe { libc::killpg(child_id as libc::pid_t, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 #[cfg(unix)]
