@@ -83,7 +83,7 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
         });
     }
 
-    let definitions = resolve_definitions(&root, &manifest)?;
+    let definitions = resolve_plugin_definitions(&root, &manifest)?;
     let skills = resolve_skills(&root, &manifest)?;
     let (config_schema, config_defaults) = resolve_config_section(&root, &manifest)?;
     let tests = resolve_tests(&root, &manifest)?;
@@ -166,7 +166,10 @@ fn resolve_tests(
 }
 
 /// Resolve every `spec.definitions` pattern against the plugin root.
-fn resolve_definitions(
+/// Re-expand definitions without reloading the manifest or its tool schemas.
+/// Long-lived hosts use this to observe literal removals and wildcard membership
+/// changes even when the manifest itself is unchanged.
+pub fn resolve_plugin_definitions(
     root: &Path,
     manifest: &PluginManifest,
 ) -> Result<PluginDefinitionFiles, PluginLoadError> {
