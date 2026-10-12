@@ -4,6 +4,8 @@ pub mod build_budget;
 pub mod identity;
 pub mod jitter;
 pub mod output_capture;
+#[cfg(unix)]
+pub mod pipe;
 pub mod shell;
 #[cfg(unix)]
 pub mod signal;

@@ -3,6 +3,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+#[cfg(unix)]
+use orbit_common::process::identity::{KernelLiveness, probe_process_group_liveness};
 
 pub(super) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
@@ -90,6 +92,8 @@ fn wait_for_process_group_exit(
     timeout: Duration,
     poll_interval: Duration,
 ) -> Result<bool, OrbitError> {
+    // An id beyond `pid_t` names no group. Pgid 0 probes as exited, so it never waits.
+    let pgid = libc::pid_t::try_from(pid).unwrap_or(0);
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(child) = child.as_deref_mut() {
@@ -97,7 +101,7 @@ fn wait_for_process_group_exit(
                 .try_wait()
                 .map_err(|e| OrbitError::Execution(format!("failed waiting for process: {e}")))?;
         }
-        if !process_group_is_alive(pid) {
+        if probe_process_group_liveness(pgid) == KernelLiveness::Exited {
             if let Some(child) = child.as_deref_mut() {
                 child.wait().ok();
             }
@@ -108,17 +112,4 @@ fn wait_for_process_group_exit(
         }
         thread::sleep(poll_interval);
     }
-}
-
-#[cfg(unix)]
-fn process_group_is_alive(pid: u32) -> bool {
-    // `killpg(..., 0)` checks whether any process still belongs to the group.
-    let rc = unsafe { libc::killpg(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return true;
-    }
-    !matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
-    )
 }

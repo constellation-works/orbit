@@ -7,11 +7,14 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
+
+#[cfg(unix)]
+use orbit_common::process::pipe::set_nonblocking;
 
 use super::capture::SharedOutputCapture;
 
@@ -127,7 +130,7 @@ where
     let mut reader = unsafe { File::from_raw_fd(fd) };
     // The reader only calls `read` after `poll` reports the pipe ready, so a
     // failure here cannot turn it into a blocking reader.
-    let _ = set_nonblocking(reader.as_raw_fd());
+    let _ = set_nonblocking(reader.as_fd());
     let (cancel, watch) = pipe_cancellation(cancel_pair);
 
     // One reader sends one completion signal; capacity one cannot block it.
@@ -391,22 +394,6 @@ fn fd_is_readable(fd: RawFd) -> bool {
     // SAFETY: `pfd` is a valid pollfd we own; `fd` is the reader thread's pipe.
     let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
     rc > 0 && pfd.revents != 0
-}
-
-#[cfg(unix)]
-pub(super) fn set_nonblocking(fd: RawFd) -> io::Result<()> {
-    // SAFETY: `fd` is an owned descriptor; F_GETFL reads flags only.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `fd` is still owned; F_SETFL only adds O_NONBLOCK.
-    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if rc < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
 }
 
 fn emit_output_chunk(
