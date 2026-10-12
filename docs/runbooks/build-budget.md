@@ -4,7 +4,7 @@ summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and 
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
 related_artifacts: [ORB-11754, ORB-11760]
-last_validated: 2026-10-11
+last_validated: 2026-10-12
 ---
 
 # Bound Concurrent Orbit Repository Builds
@@ -40,7 +40,7 @@ scripts/build-budget.py -- cargo test -p orbit-core command::job
 
 An ordinary `cargo ...` remains the explicit escape path when admission is inappropriate.
 For a Make target, `ORBIT_BUILD_BUDGET=0 make check` bypasses only slot admission and still
-sets the resolved Cargo job count and test-thread setting.
+sets the resolved Cargo job count, test-thread setting, and child priority policy.
 
 ## Configuration
 
@@ -70,7 +70,7 @@ through 1024. Precedence is `ORBIT_CARGO_JOBS`, `CARGO_BUILD_JOBS`, `cargo-jobs`
 default of 4. These environment and file settings are deliberate capacity decisions and
 may exceed the defaults. `ORBIT_BUILD_BUDGET` must be `0` or `1`; invalid values exit with
 status 64 before running the command. `ORBIT_BUILD_BUDGET=0` bypasses only slot admission
-and still applies the resolved Cargo job count.
+and still applies the resolved Cargo job count and the child priority policy.
 
 The optional `test-threads` file, or `ORBIT_TEST_THREADS`, sets how many test threads each
 admitted command may use, as a decimal integer from 1 through 1024. Precedence is
@@ -149,6 +149,25 @@ Fresh managed `proc.spawn` calls include accumulated queue credit in the activit
 remaining budget, while their configured per-call timeout still applies. Prefer
 the provider's native long-running shell transport for build validation.
 
+## Child priority
+
+Commands the wrapper launches run at lower CPU and IO priority than Orbit's control
+processes, so a saturated host favors the store, lock holders, and CLI over compilation:
+
+- CPU: niceness is raised to at least 10. This is a floor, not a setting: a caller already
+  nicer than 10 keeps its level, and the wrapper never lowers it.
+- IO (Linux only): the command runs in the best-effort class at level 7, the lowest
+  best-effort level, through `ionice -c 2 -n 7`. The idle class is not used, because it can
+  starve compilation while Orbit's store keeps issuing IO. Where `ionice` is not on `PATH`,
+  the IO class is left unchanged and the CPU policy still applies.
+
+The policy covers both admitted runs and the budget bypass (`ORBIT_BUILD_BUDGET=0`). Cargo
+invoked directly, outside the wrapper, keeps the caller's priority.
+
+`ORBIT_BUILD_LOW_PRIORITY=0` restores the caller's priority for every wrapped command. It is
+read from the environment only, and any value other than `0` or `1` exits with status 64
+before the command runs.
+
 ## Verification
 
 Run the deterministic process test without compiling the workspace:
@@ -162,7 +181,9 @@ success, failure, and termination, release despite a surviving detached child, s
 forwarding and status preservation, nested admission, job-count and test-thread precedence
 and export, bypass, invalid settings, `make run` releasing its slot before application
 runtime, and
-`make watch` admitting each check/test iteration without retaining a slot while idle.
+`make watch` admitting each check/test iteration without retaining a slot while idle. It
+also asserts child niceness and IO class for admitted and bypassed runs, and that the
+opt-out and a caller already nicer than the floor keep their priority.
 Commands expected to run have a 30-second bound to allow delayed admission or
 interpreter startup. The wait-reporting case polls for an elapsed-time progress
 line and limits the number of lines relative to the observation time, so a slow

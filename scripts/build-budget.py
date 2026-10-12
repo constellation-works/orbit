@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -26,6 +27,12 @@ TEST_THREAD_VARIABLES = ("NEXTEST_TEST_THREADS", "RUST_TEST_THREADS")
 DEFAULT_WAIT_REPORT_INTERVAL_SECONDS = 45.0
 TEST_WAIT_REPORT_INTERVAL_ENV = "_ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS"
 WAIT_DIRECTORY_ENV = "ORBIT_ACTIVITY_BUILD_BUDGET_DIR"
+LOW_PRIORITY_ENV = "ORBIT_BUILD_LOW_PRIORITY"
+# Wrapped commands run at this niceness or higher, so Orbit's control processes win CPU contention.
+CHILD_NICENESS = 10
+# Lowest best-effort IO level. The idle class is avoided: it can starve compiles while Orbit's
+# store keeps issuing IO.
+CHILD_IONICE_ARGUMENTS = ("-c", "2", "-n", "7")
 
 
 class ManagedWait:
@@ -100,7 +107,9 @@ def command_arguments(arguments: list[str]) -> list[str]:
             "<budget-dir>/cargo-jobs (default 4); ORBIT_TEST_THREADS overrides "
             "<budget-dir>/test-threads (default unset). The budget directory is "
             "ORBIT_BUILD_BUDGET_DIR or ~/.orbit/cache/build-budget. "
-            "ORBIT_BUILD_BUDGET=0 bypasses admission."
+            "ORBIT_BUILD_BUDGET=0 bypasses admission. ORBIT_BUILD_LOW_PRIORITY=0 keeps "
+            "the caller's CPU and IO priority (default: niceness at least 10, and best-effort "
+            "IO level 7 on Linux)."
         )
         raise SystemExit(0)
 
@@ -182,6 +191,13 @@ def configured_budget() -> tuple[int, int, int | None, bool]:
         fail(f"ORBIT_BUILD_BUDGET must be 0 or 1; got {enabled!r}")
 
     return slots, jobs, test_threads, enabled == "1"
+
+
+def low_priority_enabled() -> bool:
+    value = os.environ.get(LOW_PRIORITY_ENV, "1")
+    if value not in {"0", "1"}:
+        fail(f"{LOW_PRIORITY_ENV} must be 0 or 1; got {value!r}")
+    return value == "1"
 
 
 def lock_directory() -> Path:
@@ -276,9 +292,31 @@ def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
         raise
 
 
+def lower_own_priority() -> None:
+    """Raise this process's niceness to CHILD_NICENESS without ever lowering it."""
+    try:
+        if os.getpriority(os.PRIO_PROCESS, 0) < CHILD_NICENESS:
+            os.setpriority(os.PRIO_PROCESS, 0, CHILD_NICENESS)
+    except OSError:
+        # Priority is advisory: a refused change leaves the command at its inherited level.
+        pass
+
+
+def prioritized_command(command: list[str], environment: dict[str, str]) -> list[str]:
+    """Prefix a Linux command with ionice so it runs at the lowest best-effort IO level."""
+    if not sys.platform.startswith("linux"):
+        return command
+    ionice = shutil.which("ionice")
+    # A missing command or ionice keeps the command unchanged, so the caller reports it as before.
+    if ionice is None or shutil.which(command[0], path=environment.get("PATH", os.defpath)) is None:
+        return command
+    return [ionice, *CHILD_IONICE_ARGUMENTS, "--", *command]
+
+
 def main() -> None:
     command = command_arguments(sys.argv[1:])
     slots, cargo_jobs, test_threads, enabled = configured_budget()
+    low_priority = low_priority_enabled()
 
     environment = os.environ.copy()
     environment["CARGO_BUILD_JOBS"] = str(cargo_jobs)
@@ -288,15 +326,19 @@ def main() -> None:
             environment.setdefault(name, str(test_threads))
 
     already_admitted = environment.get("ORBIT_BUILD_BUDGET_HELD") == "1"
+    launched = prioritized_command(command, environment) if low_priority else command
     if not enabled or already_admitted:
-        os.execvpe(command[0], command, environment)
+        if low_priority:
+            # This process becomes the command, so the lowered priority carries over exec.
+            lower_own_priority()
+        os.execvpe(launched[0], launched, environment)
 
     slot, descriptor = acquire_slot(lock_directory(), slots)
     environment["ORBIT_BUILD_BUDGET_HELD"] = "1"
     environment["ORBIT_BUILD_BUDGET_SLOT"] = str(slot)
 
     try:
-        status = run_admitted_command(command, environment)
+        status = run_admitted_command(launched, environment, low_priority)
     except FileNotFoundError:
         fail(f"command not found: {command[0]}", 127)
     except OSError as error:
@@ -313,7 +355,7 @@ def main() -> None:
     raise SystemExit(status)
 
 
-def run_admitted_command(command: list[str], environment: dict[str, str]) -> int:
+def run_admitted_command(command: list[str], environment: dict[str, str], low_priority: bool) -> int:
     """Hold admission in the parent until the direct command has exited."""
     child = None
     pending_signals: list[int] = []
@@ -332,7 +374,13 @@ def run_admitted_command(command: list[str], environment: dict[str, str]) -> int
 
     # In particular, never pass the flock descriptor to the command. Descendants
     # may outlive it, but only this supervising process owns the build slot.
-    child = subprocess.Popen(command, env=environment, close_fds=True)
+    # Priority applies only to the child: the parent keeps its level while it holds admission.
+    child = subprocess.Popen(
+        command,
+        env=environment,
+        close_fds=True,
+        preexec_fn=lower_own_priority if low_priority else None,
+    )
     for signum in pending_signals:
         child.send_signal(signum)
     return child.wait()
