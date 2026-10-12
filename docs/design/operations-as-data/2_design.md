@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_updated: 2026-10-08
+last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
 doc_role: design
