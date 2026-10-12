@@ -66,16 +66,17 @@ impl Fixture {
     /// A workspace whose config ends with `review`, a `[review]` table or
     /// nothing.
     fn with_review(review: &str) -> Self {
+        Self::with_config(&format!("{FIXTURE_CONFIG}{review}"))
+    }
+
+    /// A workspace whose whole `config.toml` is `config`.
+    fn with_config(config: &str) -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-        std::fs::write(
-            repo.join(".orbit/config.toml"),
-            format!("{FIXTURE_CONFIG}{review}"),
-        )
-        .unwrap();
+        std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
         for args in [
             &["init", "-b", "main"][..],
             &["config", "user.name", "Orbit Test"],
@@ -186,15 +187,20 @@ impl Fixture {
 
     /// One task's prepared verifier crew.
     fn prepared_crew(prepared: &Value, task: &Task) -> String {
+        Self::prepared_entry(prepared, task)["crew"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// One task's prepared record.
+    fn prepared_entry<'a>(prepared: &'a Value, task: &Task) -> &'a Value {
         prepared["tasks"]
             .as_array()
             .unwrap()
             .iter()
             .find(|entry| entry["task_id"] == task.id.as_str())
-            .unwrap()["crew"]
-            .as_str()
             .unwrap()
-            .to_string()
     }
 
     fn verification(&self, task: &Task) -> Option<FindingVerification> {
@@ -496,6 +502,136 @@ fn the_verifier_is_not_the_filers_crew_when_the_pool_offers_another() {
     assert_eq!(
         Fixture::prepared_crew(&fixture.prepare(&[&task.id]), &task),
         "low_lane"
+    );
+}
+
+/// Pools mixing crews whose providers cannot inspect pinned source natively
+/// (gemini, grok) with ones that can. `shared_claude` sits in two tiers.
+const MIXED_POOL_CONFIG: &str = r#"
+[workflow]
+default_crew = "default_codex"
+low_complexity_crews = ["low_gemini", "shared_claude", "low_grok"]
+medium_complexity_crews = ["medium_grok"]
+hard_complexity_crews = ["shared_claude", "hard_codex", "hard_gemini"]
+[crews.default_codex]
+provider = "codex"
+model = "fixture-default"
+[crews.low_gemini]
+provider = "gemini"
+model = "fixture-low-gemini"
+[crews.low_grok]
+provider = "grok"
+model = "fixture-low-grok"
+[crews.shared_claude]
+provider = "claude"
+model = "fixture-shared-claude"
+[crews.medium_grok]
+provider = "grok"
+model = "fixture-medium-grok"
+[crews.hard_codex]
+provider = "codex"
+model = "fixture-hard-codex"
+[crews.hard_gemini]
+provider = "gemini"
+model = "fixture-hard-gemini"
+[review]
+verify_findings = true
+"#;
+
+#[test]
+fn verifiers_are_drawn_only_from_inspection_capable_crews() {
+    if !isolated("finding_verification::verifiers_are_drawn_only_from_inspection_capable_crews") {
+        return;
+    }
+    let fixture = Fixture::with_config(MIXED_POOL_CONFIG);
+    let low = (0..6)
+        .map(|index| fixture.finding(&format!("Low finding {index}"), TaskComplexity::Low))
+        .collect::<Vec<_>>();
+    let medium = (0..6)
+        .map(|index| fixture.finding(&format!("Medium finding {index}"), TaskComplexity::Medium))
+        .collect::<Vec<_>>();
+    let ids = low
+        .iter()
+        .chain(&medium)
+        .map(|task| task.id.as_str())
+        .collect::<Vec<_>>();
+    let prepared = fixture.prepare(&ids);
+    for task in &low {
+        let entry = Fixture::prepared_entry(&prepared, task);
+        assert_eq!(entry["crew"], "shared_claude", "{entry}");
+        assert_eq!(entry["tier"], "low", "{entry}");
+    }
+    // No medium member can inspect: the hard tier verifies, over its capable
+    // members only, and the assignment names the tier drawn from.
+    for task in &medium {
+        let entry = Fixture::prepared_entry(&prepared, task);
+        assert!(
+            ["shared_claude", "hard_codex"].contains(&entry["crew"].as_str().unwrap()),
+            "{entry}"
+        );
+        assert_eq!(entry["tier"], "hard", "{entry}");
+    }
+
+    // A doubtful low verdict escalates past the medium pool to the hard one,
+    // which still prefers a crew that has not judged the task.
+    let first = fixture.apply(
+        &prepared,
+        &low.iter()
+            .map(|task| rejected(task, "high"))
+            .chain(medium.iter().map(|task| confirmed(task, "high")))
+            .collect::<Vec<_>>(),
+        None,
+    );
+    let escalation = &first["escalation_prepared"];
+    assert_eq!(escalation["task_count"], 6, "{first}");
+    for task in &low {
+        let entry = Fixture::prepared_entry(escalation, task);
+        assert_eq!(entry["crew"], "hard_codex", "{entry}");
+        assert_eq!(entry["tier"], "hard", "{entry}");
+    }
+}
+
+#[test]
+fn without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails() {
+    if !isolated(
+        "finding_verification::without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails",
+    ) {
+        return;
+    }
+    let no_capable_pool = MIXED_POOL_CONFIG
+        .replace(
+            r#"low_complexity_crews = ["low_gemini", "shared_claude", "low_grok"]"#,
+            r#"low_complexity_crews = ["low_gemini", "low_grok"]"#,
+        )
+        .replace(
+            r#"hard_complexity_crews = ["shared_claude", "hard_codex", "hard_gemini"]"#,
+            r#"hard_complexity_crews = ["hard_gemini"]"#,
+        );
+    let fixture = Fixture::with_config(&no_capable_pool);
+    let task = fixture.finding("Defaulted", TaskComplexity::Low);
+    let prepared = fixture.prepare(&[&task.id]);
+    assert_eq!(Fixture::prepared_crew(&prepared, &task), "default_codex");
+
+    let fixture = Fixture::with_config(&no_capable_pool.replace(
+        r#"default_crew = "default_codex""#,
+        r#"default_crew = "low_gemini""#,
+    ));
+    let task = fixture.finding("Uninspectable", TaskComplexity::Low);
+    let error = fixture
+        .runtime
+        .run_deterministic(
+            "prepare_finding_verification",
+            &json!({}),
+            &json!({
+                "task_ids": [task.id], "workspace_path": fixture.repo, "base_branch": "main",
+                "run_id": "fixture-run",
+            }),
+            ToolContext::default(),
+        )
+        .expect_err("no crew can inspect the finding");
+    assert!(
+        error.to_string().contains("inspection_crew_unavailable"),
+        "{error}"
     );
 }
 

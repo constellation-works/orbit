@@ -149,10 +149,11 @@ from the step's id and collect alias.
 The shipped finding verification job passes these errors into apply as
 `partition_errors`. A failed partition stays unverified with `verifier_failed`
 and its crew and diagnostic; a successful verifier that omits a task's verdict
-still reports `missing_verdict`. Native pinned-source inspection currently
-supports Codex and Claude. Other providers, including Gemini and Grok, fail
-before launching with `inspection_tools_unavailable`; their refusal is retained
-alongside successful partitions' verdicts.
+still reports `missing_verdict`. Native pinned-source inspection supports
+Codex and Claude, so verifiers are drawn only from crews of those providers;
+a tier without one passes to the next tier and then the default crew. A
+verifier that still fails, for any reason, keeps its refusal alongside
+successful partitions' verdicts.
 
 ## Modifiers
 

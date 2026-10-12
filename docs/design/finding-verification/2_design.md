@@ -1,7 +1,7 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-10-11
+last_updated: 2026-10-12
 last_validated: 2026-10-11
 status: Accepted
 feature: finding-verification
@@ -80,9 +80,7 @@ The shipped job forwards the position-aligned `fan_in.errors` array to apply
 as `partition_errors`: a failed verifier leaves `verifier_failed`, with its
 partition, crew and dispatch diagnostic. Failed workers retain null output
 slots, so one failed partition cannot shift or discard successful siblings'
-verdicts. Gemini and Grok currently fail native pinned-source inspection
-before launch with `inspection_tools_unavailable`; Codex and Claude provide
-that inspection surface.
+verdicts.
 
 The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 
@@ -101,18 +99,30 @@ The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 There is no verification-specific crew setting. The verifier of a task is
 drawn from `workflow.<tier>_complexity_crews`. The tier is the task's
 complexity, and an unassessed task reads as `medium`. Only pool members with
-a positive weight are drawn. When the pool offers another crew, a crew named
-by the task's filer (`created_by`, matched by crew name, model, provider or
-agent family) is passed over. The draw is seeded by task and tier, so a
-retried preparation draws the same crew. When the tier's pool has no enabled
-member, the default crew verifies.
+a positive weight are drawn.
+
+`verify_finding` inspects the pinned source with the provider's native
+file-read and command tools, which only Codex and Claude have
+(`Provider::has_native_inspection`). The draw therefore keeps only enabled
+members of those providers; Gemini, Grok and other crews are never drawn as
+verifiers [ORB-15792]. A tier whose pool has no such member passes to the
+next tier up (low → medium → hard → xhard), and the assignment records the
+tier actually drawn from. When no tier from the task's upward has one, the
+default crew verifies if it can inspect. Otherwise preparation fails with
+`inspection_crew_unavailable` before any verifier is dispatched.
+
+When the pool offers another crew, a crew named by the task's filer
+(`created_by`, matched by crew name, model, provider or agent family) is
+passed over. The draw is seeded by task and tier, so a retried preparation
+draws the same crew.
 
 In the initial round, a REJECTED verdict from the `low` tier, or a verdict of
 `low` confidence from any tier, is not recorded. The task is judged again by
-a crew from the next tier's pool (low → medium → hard → xhard). That draw
-passes over every crew that already judged the task, and the filer's. The
-second verdict decides. With no next-tier pool member, or from `xhard`, the
-first verdict stands. There is one escalation round. The escalation checkpoint
+a crew from the next tier's pool (low → medium → hard → xhard), under the same
+inspection rule: a tier with no inspection-capable member passes upward. That
+draw passes over every crew that already judged the task, and the filer's.
+The second verdict decides. With no inspection-capable member from the next
+tier upward, or from `xhard`, the first verdict stands. There is one escalation round. The escalation checkpoint
 retains the initial finding fingerprint, even when its task re-read sees edited
 material; the final write checks that original fingerprint.
 
