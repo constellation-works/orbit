@@ -35,7 +35,7 @@ use super::super::spawn::SpawnError;
 use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
 use super::super::supervisor::{
     OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
-    StoppedDescendantReporter, spawn_for_supervision, spawn_with_timeout,
+    StoppedDescendantReporter, kill_child_process_tree, spawn_for_supervision, spawn_with_timeout,
 };
 use super::completion::{ProviderExit, project_completion};
 use super::policy::{
@@ -630,8 +630,7 @@ pub(crate) fn run_cli_backend_for_step(
                 }
             });
         if let Err(error) = registered {
-            let _ = spawned.child.kill();
-            let _ = spawned.child.wait();
+            kill_child_process_tree(&mut spawned.child);
             return Err(SpawnError::permanent(error.to_string()));
         }
         plugin_broker.bind_sandbox(spawned.child.id());
