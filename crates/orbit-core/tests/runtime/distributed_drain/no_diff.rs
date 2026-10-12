@@ -266,6 +266,7 @@ impl CleanLeaf {
     /// An untagged clean leaf whose implementer reports `no-diff.json` and
     /// names `selectors` as its already-resolved outcome, on a follower whose
     /// validation PATH resolves `cargo` to `replay` [ORB-15747].
+    #[cfg(unix)]
     fn resolved(replay: &Replay, selectors: &[&str]) -> Self {
         let mut fixture =
             Self::build_requiring(false, "done", &[], true, None, CHECK, &replay.config());
@@ -1981,6 +1982,7 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
 /// A stand-in `cargo` the follower's validation PATH resolves first, for an
 /// already-resolved replay [ORB-15747]. It records each argv and prints what
 /// it was last told to, from outside both checkouts so neither tree changes.
+#[cfg(unix)]
 struct Replay {
     _dir: TempDir,
     bin: PathBuf,
@@ -1988,6 +1990,7 @@ struct Replay {
     runs: PathBuf,
 }
 
+#[cfg(unix)]
 impl Replay {
     /// The incident's selector: a test that skips inside the agent sandbox.
     const SELECTOR: &'static str =
@@ -2080,6 +2083,7 @@ impl Replay {
 /// Before, an empty diff gave the affected-test gate nothing to run, and the
 /// task blocked until an operator ran the test by hand.
 #[test]
+#[cfg(unix)]
 fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr() {
     if !isolated(
         module_path!(),
@@ -2142,6 +2146,7 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
 /// its output, before any handoff, and the leaf's settlement blocks the task
 /// on the owner with that output; the full log is on the owner's task.
 #[test]
+#[cfg(unix)]
 fn a_failing_already_resolved_replay_blocks_the_task_with_its_output() {
     if !isolated(
         module_path!(),
@@ -2205,6 +2210,7 @@ fn a_failing_already_resolved_replay_blocks_the_task_with_its_output() {
 /// test` grammar (refused before anything runs), a replay that runs no test
 /// or skips its path, and a declaration on a candidate that changes its base.
 #[test]
+#[cfg(unix)]
 fn an_already_resolved_claim_that_runs_no_named_test_is_refused() {
     if !isolated(
         module_path!(),
