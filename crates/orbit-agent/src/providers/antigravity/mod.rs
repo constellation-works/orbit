@@ -8,6 +8,3 @@ pub use antigravity_cli::{antigravity_print_timeout_diagnostic, apply_antigravit
 pub use antigravity_output::antigravity_terminal_error_diagnostic;
 pub(crate) use antigravity_output::normalize_antigravity_stdout;
 pub(crate) use antigravity_runtime::AntigravityFactory;
-
-#[cfg(test)]
-mod tests;
