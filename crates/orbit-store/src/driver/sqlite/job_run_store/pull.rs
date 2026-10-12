@@ -17,7 +17,7 @@ use super::state::read_state_json_conn;
 use crate::Store;
 use crate::contracts::{
     AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
-    LocalPullMutation, LocalPullPhase, PullDestination,
+    LocalPullMutation, LocalPullPhase, PullDestination, PullFailureStreak,
 };
 use crate::driver::sqlite::migration::FeatureMigration;
 
@@ -210,15 +210,17 @@ pub(super) fn unsettled(
     })
 }
 
-/// How many of `run_id`'s most recent settled claims against `destination`
-/// failed in a row, without creating the feature schema.
+/// `run_id`'s most recent settled claims against `destination` that failed
+/// in a row, without creating the feature schema.
 ///
 /// The breaker that stops a failing drain reads this on every pass, so it must
 /// not decode the whole table: SQL narrows to this drain's settled claims,
 /// newest first, and the walk stops at the first one that did not fail. A claim
 /// closed obsolete (settled with an owner refusal) says nothing about this
-/// executor, so it neither extends nor resets the streak; nor does a claim a
-/// cancel released back to the owner.
+/// executor, so it neither extends nor resets the streak; nor does a released
+/// claim — a cancel, a provider, a red base, a review hold for owed evidence —
+/// or a failure that does not [trip the breaker](crate::contracts::ClaimFailure::trips_breaker),
+/// such as Orbit's refusal of the implementer's handoff [ORB-15639].
 ///
 /// `claim_id IS NOT NULL` is the cheap column test that lets SQLite skip the
 /// idle polls and refused requests, the rows that pile up unbounded, without
@@ -229,10 +231,10 @@ pub(super) fn consecutive_failed_settlements(
     workspace: &str,
     destination: &PullDestination,
     run_id: &str,
-) -> Result<usize, OrbitError> {
+) -> Result<PullFailureStreak, OrbitError> {
     store.with_read_connection(|conn| {
         if !admissions_table_exists(conn)? {
-            return Ok(0);
+            return Ok(PullFailureStreak::default());
         }
         let mut stmt = conn
             .prepare(
@@ -255,7 +257,7 @@ pub(super) fn consecutive_failed_settlements(
                 destination.selector,
             ])
             .map_err(db_error)?;
-        let mut streak = 0;
+        let mut streak = PullFailureStreak::default();
         while let Some(row) = rows.next().map_err(db_error)? {
             let record = decode(row.get::<_, String>(0).map_err(db_error)?)?;
             // SQL only narrows; the record stays the authority.
@@ -267,8 +269,12 @@ pub(super) fn consecutive_failed_settlements(
                 continue;
             }
             match record.settlement {
-                Some(ClaimMutation::Fail(_)) => streak += 1,
-                // A claim handed back by a cancel says nothing about the owner.
+                Some(ClaimMutation::Fail(evidence)) => match evidence.failure {
+                    Some(failure) if !failure.trips_breaker() => continue,
+                    Some(failure) => streak.classes.push(failure.class.as_str().to_string()),
+                    None => streak.classes.push("untyped".to_string()),
+                },
+                // A released claim says nothing about this executor.
                 Some(ClaimMutation::Release(_)) => continue,
                 _ => break,
             }

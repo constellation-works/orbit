@@ -13,8 +13,8 @@ use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDis
 use super::{
     ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
     DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint,
-    FinalRecoveryCheckpoint, PullAuthRecovery, PullCrewPreflight, PullSinglePass, PullWindowClose,
-    TaskCancellationPolicy,
+    FinalRecoveryCheckpoint, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullSinglePass,
+    PullWindowClose, TaskCancellationPolicy,
 };
 
 /// The PR leaf step that admits the before-landing review of its open pull
@@ -135,6 +135,11 @@ pub struct PipelineState {
     /// so a retried pass never admits past it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_window_close: Option<PullWindowClose>,
+    /// This pull drain's failure breaker while it is open or half-open
+    /// [ORB-15639]; absent while closed. Survives terminalization, so `run
+    /// show` reports the breaker a drain ended with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_breaker: Option<PullBreaker>,
     /// What this drain's last admission pass left waiting. Survives
     /// terminalization: it is how `run show` reports the backlog a finished
     /// drain never started.
@@ -230,6 +235,7 @@ impl PipelineState {
             pull_auth_recovery: BTreeMap::new(),
             pull_single_pass: None,
             pull_window_close: None,
+            pull_breaker: None,
             drain_last_pass: None,
             drain_approvals: None,
             failure_activity_checkpoint: None,

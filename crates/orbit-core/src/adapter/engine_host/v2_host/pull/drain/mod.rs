@@ -1,5 +1,6 @@
 //! Pull refill loop. The owner transport and the leaf launcher are injected;
 //! the loop owns only the durable checkpoint discipline between them.
+mod breaker;
 mod failure;
 mod reconcile;
 mod refill_pass;
@@ -13,6 +14,12 @@ use orbit_store::contracts::{
 
 use crate::application::job::pipeline::WorkerLaunchError;
 
+#[cfg(test)]
+mod tests;
+
+pub(crate) use breaker::{
+    BreakerGate, DEFAULT_BREAKER_COOLDOWN_SECONDS, admits_request, breaker_gate, settle_breaker,
+};
 #[cfg(test)]
 pub(crate) use failure::release_settlement;
 pub(crate) use failure::{leaf_failure_settlement, operator_cancel_release};
@@ -89,16 +96,6 @@ pub(crate) enum RefusedDelivery {
     /// operator who fixed the owner need not wait it out.
     Now,
 }
-
-/// Consecutive claims a drain settled as failures, with no handoff between
-/// them, after which it stops requesting new work.
-///
-/// A leaf that fails fast frees its slot within seconds, so without a breaker
-/// a systemic executor fault — a missing credential, a broken toolchain, an
-/// incompatible owner — would claim and block the owner's backlog one task per
-/// poll. Settlement of work already running is unaffected, and an operator
-/// resets the breaker by starting a new drain.
-pub(crate) const CONSECUTIVE_FAILURE_BREAKER: usize = 3;
 
 /// What one [`PullDrain::refill_pass`] did: the claims it admitted, the
 /// error that ended it, if one did, and the owner's last answer. The three are

@@ -46,20 +46,21 @@ pub trait JobRunStoreBackend: Send + Sync {
         ))
     }
 
-    /// How many of the drain `run_id`'s most recent settled claims against
-    /// `destination` failed in a row: the failure breaker's streak.
+    /// The drain `run_id`'s most recent settled claims against `destination`
+    /// that failed in a row: the failure breaker's streak.
     ///
     /// Only claims `run_id` admitted count, in admission order, so an earlier
     /// drain's history never trips a new one. A claim closed obsolete — the
     /// owner had already ended it — says nothing about this executor, so it
-    /// neither extends nor resets the streak. Read without creating the
-    /// feature schema, and without decoding the admissions that never held a
-    /// claim.
+    /// neither extends nor resets the streak; nor does a released claim, or a
+    /// failure that does not [trip the breaker](super::ClaimFailure::trips_breaker).
+    /// Read without creating the feature schema, and without decoding the
+    /// admissions that never held a claim.
     fn consecutive_failed_local_pull_settlements(
         &self,
         _destination: &PullDestination,
         _run_id: &str,
-    ) -> Result<usize, OrbitError> {
+    ) -> Result<PullFailureStreak, OrbitError> {
         Err(OrbitError::Store(
             "local pull persistence unavailable".into(),
         ))

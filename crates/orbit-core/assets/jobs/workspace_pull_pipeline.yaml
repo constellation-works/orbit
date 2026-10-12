@@ -53,7 +53,10 @@
 #
 # A breaker stops new requests after three consecutive claims this run
 # admitted settle as failures, so a systemic executor fault cannot block the
-# owner's backlog one fast-failing task per poll. It resets with a new drain.
+# owner's backlog one fast-failing task per poll. After
+# `breaker_cooldown_seconds` it half-opens and admits one probe claim: a
+# probe that succeeds closes it, one that fails reopens it with a longer wait.
+# A new drain starts with it closed [ORB-15639].
 #
 # Type-derived protocol skew fails the drain immediately with `protocol_skew`,
 # even while its window is open. Durable admission and settlement records stay
@@ -82,6 +85,9 @@ spec:
     poll_sleep_seconds: 30
     # Waited when the owner had nothing ready and nothing is in flight.
     idle_sleep_seconds: 60
+    # How long the failure breaker stays open before it admits one probe
+    # claim; each failed probe doubles it, at most eight times.
+    breaker_cooldown_seconds: 900
     # The owner this replica pulls from, verified and resolved by
     # `orbit run auto --pull` at submission.
     destination: {}
@@ -111,6 +117,7 @@ spec:
               max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
               poll_sleep_seconds: "{{ input.poll_sleep_seconds }}"
               idle_sleep_seconds: "{{ input.idle_sleep_seconds }}"
+              breaker_cooldown_seconds: "{{ input.breaker_cooldown_seconds }}"
 
           - id: idle_wait
             when: "{{ steps.refill.output.wait }} == true"

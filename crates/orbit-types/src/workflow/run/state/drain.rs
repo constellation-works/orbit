@@ -145,6 +145,59 @@ pub struct PullWindowClose {
     pub closed_at: DateTime<Utc>,
 }
 
+/// A pull drain's open failure breaker [ORB-15639]: the claims it admitted
+/// last settled as consecutive failures, so it requests no new work until
+/// `half_open_at`. From then it is half-open and admits one probe claim at a
+/// time; a probe that succeeds closes it, and one that fails opens it again
+/// with a longer wait. Absent while the breaker is closed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullBreaker {
+    /// The consecutive failures that opened it.
+    pub failures: u32,
+    /// Those failures' classes, newest first (`untyped` for a failure that
+    /// carried none, such as an owner's refused bind).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failure_classes: Vec<String>,
+    /// When the latest of them opened it.
+    pub opened_at: DateTime<Utc>,
+    /// When it half-opens to admit one probe claim.
+    pub half_open_at: DateTime<Utc>,
+}
+
+impl PullBreaker {
+    /// Whether it admits a probe claim at `now`.
+    #[must_use]
+    pub fn half_open(&self, now: DateTime<Utc>) -> bool {
+        now >= self.half_open_at
+    }
+
+    /// `open after 3 consecutive failed claims (candidate, candidate,
+    /// task_input) since 2026-10-11 16:53Z; half-opens at 2026-10-11 17:08Z to
+    /// admit one probe claim`, or `half-open since ...` once that time passed.
+    #[must_use]
+    pub fn describe(&self, now: DateTime<Utc>) -> String {
+        let classes = if self.failure_classes.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.failure_classes.join(", "))
+        };
+        let half_open_at = self.half_open_at.format("%Y-%m-%d %H:%M:%SZ");
+        let next = if self.half_open(now) {
+            format!(
+                "half-open since {half_open_at}: admits one probe claim once nothing this \
+                 drain claimed is unsettled"
+            )
+        } else {
+            format!("half-opens at {half_open_at} to admit one probe claim")
+        };
+        format!(
+            "open after {} consecutive failed claims{classes} since {}; {next}",
+            self.failures,
+            self.opened_at.format("%Y-%m-%d %H:%M:%SZ"),
+        )
+    }
+}
+
 /// A graceful cancel of a pull drain that is waiting for its launched leaves.
 ///
 /// The drain stops admitting at once and hands its unlaunched claims back to

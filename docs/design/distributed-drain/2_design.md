@@ -552,7 +552,10 @@ owns delivery:
   `ClaimMutation::Release` (a summary naming the drain and why, and a comment) is accepted from
   `claimed` or `running`: the owner revokes the claim, releases its reservation, returns the task
   to `backlog` with the reason as its status note, and adds the comment to the task. Only a
-  launched leaf that ended without its handoff settles as `Fail`; the breaker counts only those.
+  launched leaf that ended without its handoff settles as `Fail`; the breaker counts only those,
+  and not Orbit's refusal of an implementer's handoff. It half-opens after a cooldown to admit
+  one probe claim ([ORB-15639]; see the
+  [runbook](../../runbooks/distributed-drain.md)).
   A confirmed pre-spawn launch error records a typed `environment` release through the shared
   settlement recorder, cancelling the queued leaf before delivery. A failed cancellation is
   retried before the release is sent. This host failure suppresses the drain's remaining window.

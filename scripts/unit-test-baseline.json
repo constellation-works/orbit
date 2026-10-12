@@ -267,6 +267,8 @@
         "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::a_child_that_finishes_as_the_wait_expires_reports_its_own_outcome",
         "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::a_finished_ci_sweep_stores_child_summaries_and_no_resume_state",
         "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate",
+        "adapter/engine_host/v2_host/pull/drain/tests/breaker.rs::a_half_open_breaker_admits_one_probe_and_only_once_nothing_is_unsettled",
+        "adapter/engine_host/v2_host/pull/drain/tests/breaker.rs::an_open_breaker_half_opens_after_its_cooldown_and_a_failed_probe_doubles_it",
         "adapter/engine_host/v2_host/pull/tests/drain.rs::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
         "adapter/engine_host/v2_host/pull/tests/drain.rs::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
         "adapter/engine_host/v2_host/pull/tests/drain.rs::pull_admission_stop_mid_pass_ends_it_before_the_next_request",

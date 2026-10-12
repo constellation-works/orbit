@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    DEFERRED_SANDBOX_ARTIFACT, DeferralLane, DeferredSandboxArtifact, DeferredSandboxValidation,
-    HostValidationGates, deferral_handoff,
+    CONTRACT_REFUSAL_MARKER, DEFERRED_SANDBOX_ARTIFACT, DeferralLane, DeferredSandboxArtifact,
+    DeferredSandboxValidation, HostValidationGates, deferral_handoff,
 };
 use serde_json::Value;
 
@@ -73,7 +73,7 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
 ) -> Result<Option<DeferredSandboxValidation>, String> {
     let record = derive(host, input, output, lane).map_err(|reason| {
         format!(
-            "implementer output rejected before delivery: `deferred_sandbox_validation` \
+            "{CONTRACT_REFUSAL_MARKER}: `deferred_sandbox_validation` \
              {reason}. Hand off only `{{\"summary\": \"<path>\"}}` for a passing \
              affected-test gate whose sole gap is one sandbox's notices: Bubblewrap \
              `DEFERRED: bubblewrap unavailable:` notices on Linux, Seatbelt `SKIP: \
@@ -87,11 +87,10 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
     }
     let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
         return match record {
-            Some(_) => Err(
-                "implementer output rejected before delivery: a deferred sandbox validation \
-                 needs the step's `task_id` to keep it for the native replay"
-                    .to_string(),
-            ),
+            Some(_) => Err(format!(
+                "{CONTRACT_REFUSAL_MARKER}: a deferred sandbox validation needs the step's \
+                 `task_id` to keep it for the native replay"
+            )),
             None => Ok(None),
         };
     };

@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-15639, ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-10-10
 ---
 
@@ -846,15 +846,40 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   See [executor authentication recovery probes](../CONFIG.md#executor-authentication-recovery-probes)
   for the declaration and credential-route details. Missing launchers,
   capacity, refusal, crew and host exclusions retain their existing behavior.
-- After three consecutive claims settle as failures, the drain stops
-  requesting work (`circuit_open`) and only keeps settling. The breaker stays
-  open for the rest of that drain. `orbit run show <drain-run>` prints it as
-  `Requests held: circuit_open: …`, and `orbit run readiness` on the follower
-  prints `Pull drain requests held: circuit_open: …` (JSON
-  `pipeline_state.drain_last_pass.admission_refusal` and
-  `capacity.pull_drain_refusal`). Inspect the blocked tasks and their leaf
-  logs, fix the cause, re-backlog them deliberately, and start a new drain.
-  Released claims are not failures and never open the breaker.
+- **Failure breaker.** After three consecutive claims this drain admitted
+  settle as failures, its breaker opens: the drain stops requesting work
+  (`circuit_open`) and only keeps settling. Only failures that could be this
+  host's count. A released claim (a provider failure or hold, a red base, a
+  review hold for owed host evidence, a forge hold, a cancel) and Orbit's
+  refusal of an implementer's handoff (`implementer output rejected before
+  delivery`, such as a deferral naming a command outside the owner's gate
+  list) neither extend nor reset the streak. A refused handoff still blocks
+  its task for an operator to requeue.
+  - The breaker does not latch. After a cooldown, `breaker_cooldown_seconds`
+    in the drain's input (default 900, 15 minutes), it half-opens. It then
+    admits one probe claim, once nothing the drain claimed is unsettled;
+    while it waits the refusal reads `circuit_half_open`. A probe that hands
+    off ends the streak and closes the breaker. A probe that fails reopens it
+    with the cooldown doubled for each failure past three, at most eight
+    times the cooldown (two hours at the default). A probe released back to
+    the owner leaves the streak unchanged, and a later pass probes again.
+    To change the cooldown, override the `workspace_pull_pipeline` job's
+    `breaker_cooldown_seconds` default in the workspace catalog.
+  - `orbit run show <drain-run>` prints the breaker on a `Breaker:` line:
+    open or half-open, the failure count, the failure classes newest first,
+    and when it half-opens (JSON `pipeline_state.pull_breaker`: `failures`,
+    `failure_classes`, `opened_at`, `half_open_at`; absent while closed).
+    The refusal is the `Requests held: circuit_open: …` line, and
+    `orbit run readiness` on the follower prints
+    `Pull drain requests held: circuit_open: …` (JSON
+    `pipeline_state.drain_last_pass.admission_refusal` and
+    `capacity.pull_drain_refusal`). Each iteration's output carries
+    `consecutive_failures`, `breaker` and `breaker_state`
+    (`closed`, `open` or `half_open`).
+  - While it is open, inspect the blocked tasks and their leaf logs, fix the
+    cause, and re-backlog them deliberately. The breaker probes again
+    by itself. To skip the cooldown, start a new drain, which starts with the
+    breaker closed. A change to the drain's config does not reset the breaker.
 - The run outlives its window until every admission has settled, so a leaf
   that finishes late still hands off, and a later drain for the same owner
   carries anything an earlier drain left behind. A second `orbit run auto
@@ -1582,7 +1607,8 @@ long-lived processes.
 
 `orbit run show <drain-run>` exposes why a pull drain's last pass requested no claim although
 its window was open: the `Requests held:` line, from `admission_refusal` under
-`pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker),
+`pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker is open),
+`circuit_half_open` (it waits for the drain's claims to settle before one probe claim),
 `settlement_refused`, `no_runnable_crew`, `host_suppressed`, or the owner probe's refusal.
 The value is set afresh each pass. This host's resource throttle has its own `Throttled:` line,
 and degradation has its own warning. Follower readiness repeats the refusal as

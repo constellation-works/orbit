@@ -247,6 +247,16 @@ impl ClaimFailure {
     pub fn budgeted(&self) -> bool {
         self.class.budgeted() && !self.provider_limit
     }
+
+    /// Whether a failed claim with this failure counts toward its pull
+    /// drain's failure breaker [ORB-15639]: every one but Orbit's refusal of
+    /// the implementer's handoff ([`orbit_types::workflow::is_contract_refusal`]),
+    /// which blocks the task for an operator to requeue but says nothing
+    /// about the executing host.
+    #[must_use]
+    pub fn trips_breaker(&self) -> bool {
+        !orbit_types::workflow::is_contract_refusal(&self.reason)
+    }
 }
 
 /// The committed candidate a claimed leaf ended with: the branch it pushed,

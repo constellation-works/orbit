@@ -66,6 +66,13 @@
 //! runnable crew — is recorded on the drain's last pass as
 //! `admission_refusal`, so `orbit run show` and readiness name it [ORB-15637].
 //!
+//! The failure breaker opens after three claims in a row settle as failures
+//! and half-opens after `breaker_cooldown_seconds` to admit one probe claim
+//! ([`super::drain::settle_breaker`]) [ORB-15639]. Each pass reads it with one
+//! clock reading, records it in run state as `pull_breaker`, and asks it again
+//! before every request, after reconciliation, so a leaf the pass just
+//! settled as failed already counts.
+//!
 //! A graceful `orbit run cancel` puts the drain into its cancelling mode:
 //! each pass then requests nothing, releases every admission that never
 //! launched back to the owner's backlog, and waits for the launched leaves to
@@ -77,7 +84,7 @@
 //! pending requests: neither new work nor an earlier unanswered request may
 //! be admitted without knowing whether the drain is cancelling.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
@@ -86,13 +93,16 @@ use orbit_store::contracts::{
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
 };
 use orbit_types::workflow::{
-    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullCrewPreflight,
+    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullBreaker, PullCrewPreflight,
 };
 use serde_json::{Value, json};
 
 use super::super::cli_executor::resolve_cli_executor;
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, RefusedDelivery};
+use super::drain::{
+    BreakerGate, DEFAULT_BREAKER_COOLDOWN_SECONDS, PullDrain, RefusedDelivery, admits_request,
+    breaker_gate, settle_breaker,
+};
 use crate::OrbitRuntime;
 use crate::application::distributed::{
     OwnerAnswer, PullCrewWindow, RefusedPullSettlement, owner_binary_version,
@@ -141,6 +151,18 @@ pub(crate) fn pull_refill(
     let ceiling = u64_input(input, "max_active_leaf_runs", DEFAULT_MAX_ACTIVE_LEAF_RUNS);
     let poll = u64_input(input, "poll_sleep_seconds", DEFAULT_POLL_SLEEP_SECONDS);
     let idle = u64_input(input, "idle_sleep_seconds", DEFAULT_IDLE_SLEEP_SECONDS);
+    let cooldown = u64_input(
+        input,
+        "breaker_cooldown_seconds",
+        DEFAULT_BREAKER_COOLDOWN_SECONDS,
+    );
+    let cooldown = i64::try_from(cooldown)
+        .ok()
+        .and_then(chrono::Duration::try_seconds)
+        .unwrap_or(chrono::Duration::MAX);
+    // One clock reading for the whole pass: the breaker it checks before each
+    // request is the one it records.
+    let now = chrono::Utc::now();
 
     let transport = runtime.drain_owner_transport().cloned().ok_or_else(|| {
         failed(format!(
@@ -233,20 +255,37 @@ pub(crate) fn pull_refill(
     // since found unusable [ORB-13941]. Read by the refill after it has
     // reconciled, so a leaf this pass settles already counts.
     let crews: RefCell<Option<PullCrewWindow>> = RefCell::new(None);
-    // An already open breaker skips the probe; `refill` rechecks it after
-    // reconciling, since settling a newly failed leaf can open it mid-pass.
-    // A streak that cannot be read admits nothing: the drain reports it and
+    // An open breaker skips the probe, as does a half-open one still waiting
+    // for this drain's claims to settle; the refill asks it again before each
+    // request, since settling a newly failed leaf can open it mid-pass. A
+    // streak that cannot be read admits nothing: the drain reports it and
     // tries again next iteration.
-    let mut consecutive_failures = match drain.consecutive_failed_settlements(&destination, &run_id)
-    {
-        Ok(count) => Some(count),
+    let previous_breaker = pass_state
+        .as_ref()
+        .and_then(|state| state.pull_breaker.clone());
+    let mut streak = match drain.consecutive_failed_settlements(&destination, &run_id) {
+        Ok(streak) => Some(streak),
         Err(failure) => {
             error = Some(failure.to_string());
             None
         }
     };
-    let breaker_open =
-        consecutive_failures.is_some_and(|count| count >= CONSECUTIVE_FAILURE_BREAKER);
+    let breaker_holds = match streak.as_ref().map(|streak| {
+        breaker_gate(
+            settle_breaker(previous_breaker.as_ref(), streak, now, cooldown).as_ref(),
+            now,
+        )
+    }) {
+        None | Some(BreakerGate::Closed) => false,
+        Some(BreakerGate::Open) => true,
+        Some(BreakerGate::HalfOpen) => match runtime.pull_drain_admissions(&run_id) {
+            Ok(carried) => !carried.is_empty(),
+            Err(failure) => {
+                error.get_or_insert(failure.to_string());
+                true
+            }
+        },
+    };
     // A settlement the owner refused holds new requests until it is
     // accepted; this pass still delivers it once its backoff is due.
     let settlement_held = match refused_settlements(&drain, &destination) {
@@ -260,9 +299,9 @@ pub(crate) fn pull_refill(
         && window_open
         && host_shutdown.is_none()
         && resource.throttle.is_none()
-        && !breaker_open
+        && !breaker_holds
         && !settlement_held
-        && consecutive_failures.is_some();
+        && streak.is_some();
     // Whether `refill` ran, and so already reconciled this pass.
     let mut refilled = false;
     if admitting && let Err(failure) = runtime.recover_pull_auth_exclusions(&run_id) {
@@ -305,11 +344,32 @@ pub(crate) fn pull_refill(
                     }))
                 };
                 // A stop or cancel recorded mid-pass ends it before the next
-                // request; one that cannot be read ends it too.
+                // request; one that cannot be read ends it too. So does the
+                // breaker: open, or half-open once this pass took its probe
+                // or while this drain carries an unsettled claim.
+                let probed = Cell::new(false);
                 let still_admitting = || {
-                    Ok(runtime.read_run_state(&run_id)?.is_none_or(|state| {
-                        state.drain_admissions_stop.is_none() && state.drain_cancel.is_none()
-                    }))
+                    let stopped = runtime.read_run_state(&run_id)?.is_some_and(|state| {
+                        state.drain_admissions_stop.is_some() || state.drain_cancel.is_some()
+                    });
+                    if stopped {
+                        return Ok(false);
+                    }
+                    let streak = drain.consecutive_failed_settlements(&destination, &run_id)?;
+                    let gate = breaker_gate(
+                        settle_breaker(previous_breaker.as_ref(), &streak, now, cooldown).as_ref(),
+                        now,
+                    );
+                    let unsettled = if gate == BreakerGate::HalfOpen {
+                        runtime.pull_drain_admissions(&run_id)?.len()
+                    } else {
+                        0
+                    };
+                    let admits = admits_request(gate, probed.get(), unsettled);
+                    if admits && gate == BreakerGate::HalfOpen {
+                        probed.set(true);
+                    }
+                    Ok(admits)
                 };
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
                 let pass = drain.refill_pass(&destination, &template, &still_admitting, ceiling);
@@ -361,14 +421,41 @@ pub(crate) fn pull_refill(
     // Count after this pass's settlements, so a breaker that opened during it
     // is reported now rather than on the next poll.
     match drain.consecutive_failed_settlements(&destination, &run_id) {
-        Ok(count) => consecutive_failures = Some(count),
+        Ok(read) => streak = Some(read),
         Err(failure) => {
             error.get_or_insert(failure.to_string());
         }
     }
-    let consecutive_failures = consecutive_failures.unwrap_or(0);
-    let breaker_open = consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER;
-    admitting &= !breaker_open;
+    let consecutive_failures = streak.as_ref().map_or(0, |streak| streak.failures());
+    // A streak that could not be read leaves the breaker as recorded.
+    let breaker = match streak.as_ref() {
+        Some(streak) => settle_breaker(previous_breaker.as_ref(), streak, now, cooldown),
+        None => previous_breaker.clone(),
+    };
+    if breaker != previous_breaker
+        && let Err(failure) = record_breaker(runtime, &run_id, breaker.as_ref())
+    {
+        error.get_or_insert(failure.to_string());
+    }
+    let gate = breaker_gate(breaker.as_ref(), now);
+    // A half-open breaker that took no probe this pass names what it waits
+    // for: the claims this drain carries that have not settled.
+    let probe_waits_on = if gate == BreakerGate::HalfOpen && admitted == 0 {
+        match runtime.pull_drain_admissions(&run_id) {
+            Ok(carried) => carried.len(),
+            Err(failure) => {
+                error.get_or_insert(failure.to_string());
+                0
+            }
+        }
+    } else {
+        0
+    };
+    admitting &= match gate {
+        BreakerGate::Closed => true,
+        BreakerGate::Open => false,
+        BreakerGate::HalfOpen => admitted == 0 && probe_waits_on == 0,
+    };
     // The window as this pass left it, read again when the refill did not
     // run or stopped before building a request.
     let crews = match crews.into_inner() {
@@ -470,15 +557,7 @@ pub(crate) fn pull_refill(
                 )
             })
         })
-        .or_else(|| {
-            breaker_open.then(|| {
-                format!(
-                    "circuit_open: the last {consecutive_failures} claims this drain admitted all \
-                     settled as failures; inspect them and start a new drain once the cause is \
-                     fixed"
-                )
-            })
-        })
+        .or_else(|| breaker_refusal(breaker.as_ref(), gate, probe_waits_on, now))
         .or_else(|| runs_nothing.then_some(no_runnable_crew));
     let owner_answer = match idle_receipt.as_deref() {
         Some(receipt) => OwnerAnswer::Idle(receipt),
@@ -515,6 +594,8 @@ pub(crate) fn pull_refill(
         "settlement_refused": refused.len(),
         "crews": crews,
         "consecutive_failures": consecutive_failures,
+        "breaker": breaker,
+        "breaker_state": gate.as_str(),
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
         "last_pass_error": health.last_pass_error,
@@ -552,6 +633,50 @@ fn protocol_skew_failure(
             action: action.to_string(),
             message: format!("pull drain could not record pass health: {error}"),
         },
+    }
+}
+
+/// Record the drain's failure breaker as this pass left it; `None` closes it
+/// [ORB-15639].
+fn record_breaker(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    breaker: Option<&PullBreaker>,
+) -> Result<(), OrbitError> {
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.pull_breaker = breaker.cloned();
+            Ok(())
+        })
+        .map(|_| ())
+}
+
+/// Why the failure breaker holds new requests, if it does: open until it
+/// half-opens, or half-open while `waits_on` claims this drain carries have
+/// not settled.
+fn breaker_refusal(
+    breaker: Option<&PullBreaker>,
+    gate: BreakerGate,
+    waits_on: usize,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    let breaker = breaker?;
+    match gate {
+        BreakerGate::Closed => None,
+        BreakerGate::Open => Some(format!(
+            "circuit_open: the failure breaker is {}; inspect the failed claims and fix the \
+             cause meanwhile, or start a new drain to reset it",
+            breaker.describe(now)
+        )),
+        BreakerGate::HalfOpen => (waits_on > 0).then(|| {
+            format!(
+                "circuit_half_open: the failure breaker is {}; {waits_on} claim(s) this drain \
+                 carries have not settled yet",
+                breaker.describe(now)
+            )
+        }),
     }
 }
 

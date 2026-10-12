@@ -24,9 +24,16 @@ spec:
     a new drain. An unreadable or unwritable pass record fails visibly. `unsettled` counts admissions still
     holding a slot; the drain runs past its window until it is zero. There is
     no local fallback: a runtime without a federated owner route refuses.
-    After three consecutive claims this drain admitted settle as failures, it
-    stops requesting new work (`refusal: circuit_open`) and only keeps
-    settling; start a new drain once the cause is fixed. With `for_seconds`
+    After three consecutive claims this drain admitted settle as failures
+    (released claims and Orbit's refusals of an implementer's handoff do not
+    count), its breaker opens: it stops requesting new work
+    (`refusal: circuit_open`) and only keeps settling. After
+    `breaker_cooldown_seconds` (default 900) it half-opens and admits one probe
+    claim once nothing it claimed is unsettled (`refusal: circuit_half_open`
+    while it waits); a probe that succeeds closes it, and one that fails opens
+    it again with the wait doubled per failure, at most eight times. The
+    breaker is recorded in run state as `pull_breaker` and reported as
+    `breaker` and `breaker_state`. With `for_seconds`
     zero the drain is authorized for one admission pass, which the first pass
     not stopped or cancelled records in run state before it requests; later
     passes, retries and resumed runs only settle, and the drain is done once
@@ -55,6 +62,7 @@ spec:
       max_active_leaf_runs: {}
       poll_sleep_seconds: {}
       idle_sleep_seconds: {}
+      breaker_cooldown_seconds: {}
   output_schema_json:
     type: object
     required: [admitted, unsettled, done, wait, sleep_seconds]
@@ -68,6 +76,9 @@ spec:
       refusal: {}
       consecutive_failures:
         type: integer
+      breaker: {}
+      breaker_state:
+        type: string
       error: {}
       last_pass_error: {}
       consecutive_pass_failures:

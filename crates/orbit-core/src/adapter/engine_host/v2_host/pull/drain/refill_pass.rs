@@ -2,16 +2,12 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AdmissionReceipt, AdmissionRequest, PullDestination};
 
-use super::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, Reconciled, RefillPass};
+use super::{PullDrain, Reconciled, RefillPass};
 
 impl PullDrain<'_> {
     /// One bounded refill. Each new ID is made durable before the request goes
     /// on the wire. An idle response ends the whole pass, regardless of free
     /// slots. Reconciliation errors prevent all fresh admission.
-    ///
-    /// The failure breaker is checked after reconciliation, because settling
-    /// a leaf that has just failed can be what opens it: that pass must not
-    /// request replacements.
     ///
     /// The count of claims admitted survives an error that ends the pass
     /// later: those leaves are already running, and the caller's next wait
@@ -23,7 +19,10 @@ impl PullDrain<'_> {
     ///
     /// `admitting` is asked before each new request, so an operator stop or
     /// cancel recorded while the pass runs ends it before the next one
-    /// [ORB-14174]; an error from it ends the pass too.
+    /// [ORB-14174]; an error from it ends the pass too. It is first asked
+    /// after reconciliation, so the failure breaker it checks sees a leaf
+    /// this pass just settled as failed: that pass must not request
+    /// replacements [ORB-15639].
     pub(crate) fn refill_pass(
         &self,
         destination: &PullDestination,
@@ -91,11 +90,6 @@ impl PullDrain<'_> {
         let Some(mut next) = template()? else {
             return Ok(());
         };
-        if self.consecutive_failed_settlements(destination, &next.run_context.run_id)?
-            >= CONSECUTIVE_FAILURE_BREAKER
-        {
-            return Ok(());
-        }
         for slot in 0..ceiling {
             if !admitting()? {
                 break;

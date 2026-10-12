@@ -265,8 +265,9 @@ fn reject_malformed_implementer_findings(
         Some(defect) => (
             false,
             Some(format!(
-                "implementer output rejected before delivery: {defect}. Return `unfiled_findings` \
-                 as `[{{\"title\": ..., \"description\": ...}}]`."
+                "{}: {defect}. Return `unfiled_findings` \
+                 as `[{{\"title\": ..., \"description\": ...}}]`.",
+                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
             )),
         ),
         None => (success, message),
