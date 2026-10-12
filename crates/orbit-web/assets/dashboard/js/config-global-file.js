@@ -16,7 +16,7 @@
 // is inferred from a key name. Writes use the PUT and DELETE key routes with
 // `scope: "global"`, then the view re-reads the file.
 
-import { copyWithFeedback, el, getWorkspace, requestJson } from './common.js';
+import { captureWorkspaceVisit, copyWithFeedback, el, getWorkspace, requestJson } from './common.js';
 import { button, cliCommand, display, draftText, draftValue, valueField, valueTokens } from './config-effective.js';
 
 /// The `[machine]` identity `orbit init` writes; the machine card shows these
@@ -41,7 +41,8 @@ let filter = "all";
 let draft = null;
 let adding = null;
 let renaming = null;
-let pending = false;
+// The owning visit keeps an obsolete response from releasing a newer write.
+let pending = null;
 let status = null;
 let lastRender = null;
 
@@ -51,7 +52,7 @@ export function resetGlobalFile() {
   draft = null;
   adding = null;
   renaming = null;
-  pending = false;
+  pending = null;
   status = null;
 }
 
@@ -61,10 +62,9 @@ export function resetGlobalFile() {
 export function renderGlobalFile(body, payload, context) {
   lastRender = { body, payload, context };
   const model = buildModel(payload);
-  const workspace = getWorkspace();
-  if (draft && (!model.byKey.has(draft.key) || draft.workspace !== workspace)) draft = null;
-  if (adding && adding.workspace !== workspace) adding = null;
-  if (renaming && renaming.workspace !== workspace) renaming = null;
+  if (draft && (!model.byKey.has(draft.key) || !draft.visit.isCurrent())) draft = null;
+  if (adding && !adding.visit.isCurrent()) adding = null;
+  if (renaming && !renaming.visit.isCurrent()) renaming = null;
   const canEdit = context.canEdit;
   if (!canEdit) {
     draft = null;
@@ -261,7 +261,7 @@ function machineCard(model, canEdit) {
 
 function startRename(row) {
   if (pending) return;
-  renaming = { key: row.key, workspace: getWorkspace(), text: draftText(row), scope: "global", error: null };
+  renaming = { key: row.key, visit: captureWorkspaceVisit(), text: draftText(row), scope: "global", error: null };
   draft = null;
   adding = null;
   status = null;
@@ -270,14 +270,15 @@ function startRename(row) {
 }
 
 function renameForm(row) {
+  const session = renaming;
   const form = el("form", { class: "cgf-rename" });
   form.noValidate = true;
-  const field = valueField(row, renaming, { id: "cgf-rename-value", disabled: pending });
+  const field = valueField(row, session, { id: "cgf-rename-value", disabled: pending });
   const label = el("label", { class: "cfx-label", text: `New ${row.key}` });
   label.htmlFor = "cgf-rename-value";
-  const cli = el("code", { class: "cfx-cli mono cwf-cli", text: cliCommand(row, renaming) });
+  const cli = el("code", { class: "cfx-cli mono cwf-cli", text: cliCommand(row, session) });
   field.onInput(() => {
-    cli.textContent = cliCommand(row, renaming);
+    cli.textContent = cliCommand(row, session);
   });
   const save = el("button", { class: "cfx-btn primary", type: "submit", text: pending ? "Saving…" : "Rename" });
   save.disabled = pending;
@@ -294,7 +295,7 @@ function renameForm(row) {
   if (renaming.error) form.appendChild(el("p", { class: "cfx-notice error", role: "alert", text: renaming.error }));
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    saveKey(row, renaming, `Renamed this machine to ${renaming.text.trim()}.`);
+    saveKey(row, session, `Renamed this machine to ${session.text.trim()}.`);
   });
   return cancelOnEscape(form, () => {
     renaming = null;
@@ -482,7 +483,7 @@ function toggleEdit(info) {
     rerender();
     return;
   }
-  draft = { key: info.row.key, workspace: getWorkspace(), text: draftText(info.row), scope: "global", error: null };
+  draft = { key: info.row.key, visit: captureWorkspaceVisit(), text: draftText(info.row), scope: "global", error: null };
   adding = null;
   renaming = null;
   status = null;
@@ -508,14 +509,15 @@ function reachWarning(info, key) {
 
 function editForm(info) {
   const { row } = info;
+  const session = draft;
   const form = el("form", { class: "cwf-editor cgf-editor" });
   form.noValidate = true;
-  const field = valueField(row, draft, { id: "cgf-edit-value", disabled: pending });
+  const field = valueField(row, session, { id: "cgf-edit-value", disabled: pending });
   const label = el("label", { class: "cfx-label", text: `New global value for ${row.key}` });
   label.htmlFor = "cgf-edit-value";
-  const cli = el("code", { class: "cfx-cli mono cwf-cli", text: cliCommand(row, draft) });
+  const cli = el("code", { class: "cfx-cli mono cwf-cli", text: cliCommand(row, session) });
   field.onInput(() => {
-    cli.textContent = cliCommand(row, draft);
+    cli.textContent = cliCommand(row, session);
   });
   const save = el("button", { class: "cfx-btn primary", type: "submit", text: pending ? "Saving…" : "Save to global file" });
   save.disabled = pending;
@@ -524,7 +526,7 @@ function editForm(info) {
     rerender();
   }, "cfx-btn quiet");
   cancel.disabled = pending;
-  const remove = button("Remove from file", () => removeKey(row, draft), "cfx-btn quiet");
+  const remove = button("Remove from file", () => removeKey(row, session), "cfx-btn quiet");
   remove.disabled = pending;
   remove.setAttribute("aria-label", `Remove ${row.key} from the global file`);
   form.append(
@@ -536,7 +538,7 @@ function editForm(info) {
   if (draft.error) form.appendChild(el("p", { class: "cfx-notice error", role: "alert", text: draft.error }));
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    saveKey(row, draft, `Saved ${row.key} to the global file.`);
+    saveKey(row, session, `Saved ${row.key} to the global file.`);
   });
   return cancelOnEscape(form, () => {
     draft = null;
@@ -560,51 +562,58 @@ function cancelOnEscape(form, close) {
 }
 
 /// One write to the global file, then a re-read. The outcome lands only on
-/// the draft that issued it, and only in the workspace it was opened in.
+/// the draft that issued it, in the host/workspace visit it was opened in.
 async function write(session, request, done) {
-  if (pending || !lastRender) return;
+  if (pending || !lastRender || !session.visit.isCurrent()) return;
   const { context } = lastRender;
-  pending = true;
+  const { visit } = session;
+  const current = () => visit.isCurrent() && pending === visit;
+  pending = visit;
   session.error = null;
   rerender();
   try {
-    await request();
-    pending = false;
-    if (session.workspace !== getWorkspace()) return;
+    await request(visit);
+    if (!current()) return;
     if (draft === session) draft = null;
     if (adding === session) adding = null;
     if (renaming === session) renaming = null;
     status = { kind: "ok", text: done };
     await context.reload();
   } catch (error) {
-    pending = false;
-    if (session.workspace !== getWorkspace()) return;
+    if (!current()) return;
     session.error = error.message || String(error);
-    rerender();
-    // The Save button was disabled while the write was in flight, which drops
-    // focus; the refused value is what the operator corrects next.
-    const id = session === adding ? "cgf-add-value" : session === renaming ? "cgf-rename-value" : "cgf-edit-value";
-    document.getElementById(id)?.focus();
+  } finally {
+    if (current()) {
+      pending = null;
+      rerender();
+      // The refused value is what the operator corrects next; restore focus
+      // only after this operation has re-enabled its editor.
+      if (session.error) {
+        const id = session === adding ? "cgf-add-value" : session === renaming ? "cgf-rename-value" : "cgf-edit-value";
+        document.getElementById(id)?.focus();
+      }
+    }
   }
 }
 
 async function saveKey(row, session, done) {
+  if (pending || !session.visit.isCurrent()) return;
   const parsed = draftValue(row, session.text);
   if (parsed.error) {
     session.error = parsed.error;
     rerender();
     return;
   }
-  await write(session, () => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, "PUT", {
+  await write(session, (visit) => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, "PUT", {
     value: parsed.value,
     scope: "global",
-  }), done);
+  }, visit), done);
 }
 
 async function removeKey(row, session) {
   await write(
     session,
-    () => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=global`, "DELETE"),
+    (visit) => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=global`, "DELETE", undefined, visit),
     `Removed ${row.key} from the global file.`,
   );
 }
@@ -614,7 +623,7 @@ async function removeKey(row, session) {
 function startAdd(model) {
   if (pending || !model.candidates.length) return;
   const first = model.candidates[0].row;
-  adding = { key: first.key, workspace: getWorkspace(), text: draftText(first), scope: "global", error: null };
+  adding = { key: first.key, visit: captureWorkspaceVisit(), text: draftText(first), scope: "global", error: null };
   draft = null;
   renaming = null;
   status = null;
@@ -627,6 +636,7 @@ function addForm(model) {
   if (!candidate) return el("p", { class: "cfx-muted", text: "Every registered settable key is already set in the global file." });
   const { row } = candidate;
   adding.key = row.key;
+  const session = adding;
   const form = el("form", { class: "cwf-add" });
   form.noValidate = true;
   form.dataset.key = "cgf-add";
@@ -657,12 +667,12 @@ function addForm(model) {
   const keyLabel = el("label", { class: "cfx-label", text: "Key" });
   keyLabel.htmlFor = "cgf-add-key";
 
-  const field = valueField(row, adding, { id: "cgf-add-value", disabled: pending });
+  const field = valueField(row, session, { id: "cgf-add-value", disabled: pending });
   const valueLabel = el("label", { class: "cfx-label", text: field.label });
   valueLabel.htmlFor = "cgf-add-value";
-  const cli = el("code", { class: "cfx-cli mono cwf-cli", text: cliCommand(row, adding) });
+  const cli = el("code", { class: "cfx-cli mono cwf-cli", text: cliCommand(row, session) });
   field.onInput(() => {
-    cli.textContent = cliCommand(row, adding);
+    cli.textContent = cliCommand(row, session);
   });
   const submit = el("button", { class: "cfx-btn primary", type: "submit", text: pending ? "Adding…" : "Add to global file" });
   submit.disabled = pending;
@@ -686,7 +696,7 @@ function addForm(model) {
   if (adding.error) form.appendChild(el("p", { class: "cfx-notice error", role: "alert", text: adding.error }));
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    saveKey(row, adding, `Added ${row.key} to the global file.`);
+    saveKey(row, session, `Added ${row.key} to the global file.`);
   });
   return cancelOnEscape(form, () => {
     adding = null;
