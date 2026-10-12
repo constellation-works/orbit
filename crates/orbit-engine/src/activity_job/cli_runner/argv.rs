@@ -14,10 +14,9 @@ use super::spawn::linux_bwrap_mask;
 
 /// Build the argv we audit-log. When wrapped, the parent process the kernel
 /// sees is the trusted `sandbox-exec`, so we prepend
-/// `<trusted sandbox-exec> -f <profile_path>` to
-/// the child program. The profile path is the literal `<profile.sb>` because
-/// the real path is a tempfile created at spawn time and only meaningful to
-/// the kernel — the placeholder keeps the audit record stable across runs.
+/// `<trusted sandbox-exec> -p <profile>` to the child program. The compiled
+/// profile is passed inline at spawn time; a placeholder keeps its SBPL text
+/// out of the audit record.
 fn audit_argv_for_dispatch(
     program: &str,
     args: &[String],
@@ -27,8 +26,8 @@ fn audit_argv_for_dispatch(
         Some(sb) if sb.kind == ExecutorSandboxKind::MacosSandboxExec => {
             let mut out = Vec::with_capacity(args.len() + 4);
             out.push(sandbox_exec_program_for_audit().to_string());
-            out.push("-f".to_string());
-            out.push("<profile.sb>".to_string());
+            out.push("-p".to_string());
+            out.push("<profile>".to_string());
             out.push(program.to_string());
             out.extend(args.iter().cloned());
             out

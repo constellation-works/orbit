@@ -1947,7 +1947,6 @@ dependencies = [
  "orbit-common",
  "orbit-types",
  "regex",
- "sha2",
  "tempfile",
  "wait-timeout",
 ]
