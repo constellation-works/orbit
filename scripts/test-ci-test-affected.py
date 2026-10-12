@@ -5,8 +5,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -623,6 +626,127 @@ class NextestOutputTransportTests(unittest.TestCase):
         output = self.run_gate("#[test]\nfn executed() { assert_eq!(1 + 1, 2); }\n")
         self.assertEqual(self.notices(output), [], output)
         self.assertIn("1 test run: 1 passed", output)
+
+
+class ObservedPipeDrainTests(unittest.TestCase):
+    """A partial line must not stall the other captured pipe.
+
+    The child fills stdout without a newline, then writes one more byte. That
+    byte blocks until the reader consumes the pipe, which is when a blocking
+    line read is stuck on stdout. Only then does the child write more than a
+    pipe of stderr. Independent readers finish; the old shared readline loop
+    deadlocks. This deadline kills the process group if that deadlock returns.
+    """
+
+    DEADLINE_SECONDS = 10
+
+    def test_partial_stdout_and_stderr_past_pipe_capacity_preserve_status_and_streams(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        child = root / "child.py"
+        result_path = root / "result.json"
+        child.write_text(textwrap.dedent(r'''
+            import fcntl, os, sys
+
+            def pipe_capacity(fd):
+                try:
+                    size = fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
+                except (AttributeError, OSError):
+                    size = 0
+                if isinstance(size, int) and size > 0:
+                    return size
+                read_fd, write_fd = os.pipe()
+                try:
+                    os.set_blocking(write_fd, False)
+                    chunk = b"P" * 4096
+                    measured = 0
+                    while True:
+                        try:
+                            wrote = os.write(write_fd, chunk)
+                        except BlockingIOError:
+                            break
+                        if wrote <= 0:
+                            break
+                        measured += wrote
+                    return measured
+                finally:
+                    os.close(read_fd)
+                    os.close(write_fd)
+
+            def write_all(fd, data):
+                view = memoryview(data)
+                while view:
+                    wrote = os.write(fd, view)
+                    if wrote <= 0:
+                        raise SystemExit("pipe write stalled")
+                    view = view[wrote:]
+
+            stdout = sys.stdout.fileno()
+            stderr = sys.stderr.fileno()
+            stdout_cap = pipe_capacity(stdout)
+            marker = b"PARTIAL_STDOUT|"
+            pad = stdout_cap - len(marker)
+            if pad < 1:
+                raise SystemExit("stdout pipe is smaller than the partial-line marker")
+            # Exactly one pipe of bytes and no newline, so a line read cannot return yet.
+            write_all(stdout, marker + b"S" * pad)
+            # Unblocks only after that pipe is consumed.
+            write_all(stdout, b"X")
+            stderr_cap = pipe_capacity(stderr)
+            write_all(stderr, b"STDERR_MARK|" + b"E" * (stderr_cap + 4096) + b"STDERR_END")
+            write_all(stdout, (" DONE stdout_cap=%d stderr_cap=%d\n" % (stdout_cap, stderr_cap)).encode())
+            write_all(stderr, b"\n")
+            raise SystemExit(23)
+        ''').lstrip("\n"))
+        helper = root / "helper.py"
+        helper.write_text(textwrap.dedent(r'''
+            import importlib.util, json, os, sys
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location("ci_test_affected", sys.argv[1])
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            code, output = module.run_observed([sys.executable, "-u", sys.argv[2]], os.environ)
+            Path(sys.argv[3]).write_text(json.dumps({"exit_code": code, "output": output}))
+        ''').lstrip("\n"))
+        proc = subprocess.Popen(
+            [sys.executable, str(helper), str(SCRIPTS / "ci-test-affected.py"), str(child), str(result_path)],
+            start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            self.fail("run_observed blocked past its deadline on a partial stdout line "
+                      "while stderr held more than a pipe of data")
+        self.assertEqual(proc.returncode, 0, stderr.decode("utf-8", errors="replace"))
+        recorded = json.loads(result_path.read_text())
+        output = recorded["output"]
+        self.assertEqual(recorded["exit_code"], 23, output)
+        marker = "DONE stdout_cap="
+        self.assertIn(marker, output)
+        caps = output.split(marker, 1)[1].splitlines()[0]
+        stdout_cap = int(caps.split()[0])
+        stderr_cap = int(caps.split("stderr_cap=", 1)[1])
+        self.assertGreater(stdout_cap, 0)
+        self.assertGreater(stderr_cap, 0)
+        self.assertGreaterEqual(output.count("S"), stdout_cap - len("PARTIAL_STDOUT|"))
+        self.assertIn("PARTIAL_STDOUT|", output)
+        self.assertIn("X DONE", output)
+        self.assertIn("STDERR_MARK|", output)
+        self.assertIn("STDERR_END", output)
+        self.assertGreater(output.count("E"), stderr_cap)
+        relayed_out = stdout.decode("utf-8", errors="replace")
+        relayed_err = stderr.decode("utf-8", errors="replace")
+        self.assertIn("PARTIAL_STDOUT|", relayed_out)
+        self.assertIn("X DONE", relayed_out)
+        self.assertNotIn("STDERR_MARK|", relayed_out)
+        self.assertIn("STDERR_MARK|", relayed_err)
+        self.assertIn("STDERR_END", relayed_err)
+        self.assertNotIn("PARTIAL_STDOUT|", relayed_err)
 
 
 if __name__ == "__main__":

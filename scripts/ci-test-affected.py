@@ -33,11 +33,11 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
 import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import xml.etree.ElementTree
 
 
@@ -529,34 +529,53 @@ def run_observed(command, environment):
     """Run a command, relay both streams, and return its exit code and merged output.
 
     Doctest compile lines and the test harness result are on different streams.
-    Both are needed to attribute doctest time to a package.
+    Both are needed to attribute doctest time to a package. Each pipe has its
+    own reader. A blocking line read waits only for that pipe, so a partial
+    line cannot leave the other pipe unread while the child fills it. Lines
+    are appended whole, so one stream's bytes never split a timing line.
     """
     with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE) as process:
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        selector.register(process.stderr, selectors.EVENT_READ)
-        chunks = []
-        remaining = 2
-        try:
-            while remaining:
-                for key, _ in selector.select():
-                    raw = key.fileobj.readline()
+        lines = []
+        errors = []
+        started = []
+        lock = threading.Lock()
+
+        def drain(pipe, dest):
+            try:
+                while True:
+                    raw = pipe.readline()
                     if raw == b"":
-                        selector.unregister(key.fileobj)
-                        remaining -= 1
-                        continue
-                    chunks.append(raw)
-                    dest = sys.stdout.buffer if key.fileobj is process.stdout else sys.stderr.buffer
+                        return
+                    # Publish the line before relaying it. The relay write can
+                    # block on the consumer; holding the lock across it would
+                    # stop the other pipe from being drained.
+                    with lock:
+                        lines.append(raw)
                     dest.write(raw)
                     dest.flush()
-            return process.wait(), b"".join(chunks).decode("utf-8", errors="replace")
+            except BaseException as caught:
+                errors.append(caught)
+
+        threads = (
+            threading.Thread(target=drain, args=(process.stdout, sys.stdout.buffer)),
+            threading.Thread(target=drain, args=(process.stderr, sys.stderr.buffer)),
+        )
+        try:
+            for thread in threads:
+                thread.start()
+                started.append(thread)
+            for thread in started:
+                thread.join()
+            if errors:
+                raise errors[0]
+            return process.wait(), b"".join(lines).decode("utf-8", errors="replace")
         except BaseException:
             process.terminate()
             process.wait()
+            for thread in started:
+                thread.join()
             raise
-        finally:
-            selector.close()
 
 
 def main():
