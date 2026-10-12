@@ -6,406 +6,327 @@ last_validated: 2026-10-11
 status: Draft
 feature: auto-concurrency
 doc_role: design
-type: design
-summary: Proposed mechanism for automatic drain concurrency — a goodput objective, an offline estimator over run history, a per-host budget split across drains, congestion signals, an asymmetric controller acting through the existing worker-limit path, and a shadow-first rollout.
+summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, per-workspace-and-complexity resource profiles, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/application/job/run/worker_limit.rs", "crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-config/src/registry/settings/machine.rs"]
-related_features: [auto-concurrency, distributed-drain, automation-triggers, routines]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-config/src/registry/settings/machine.rs"]
+related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
 
 # Auto-concurrency — Design
 
-> **Status: Draft proposal, not implemented.** Sections that describe today's
-> code say so and cite it; everything else is the proposed design.
+> **Status: Draft proposal, not implemented.** §1 describes today's code and
+> cites it; everything after it is the proposed design.
 
-This doc covers the objective (§1), the data it can draw on (§2), where the
-limit lives (§3), the signals (§4), the controller (§5), the offline estimator
-(§6), surfaces and configuration (§7), and rollout (§8). Open directions are in
-[3_vision.md](./3_vision.md) and the standing rules in
+This doc covers what admission does today (§1) and the proposal:
+
+- sampling each task's resource use (§2);
+- profiles (§3) and the load forecast (§4);
+- the admission rule (§5) and pull drains (§6);
+- surfaces (§7) and rollout (§8).
+
+Open directions are in [3_vision.md](./3_vision.md), and the standing rules in
 [4_decisions.md](./4_decisions.md).
 
-## 1. The objective is goodput
+## 1. Today
 
-By Little's law, a drain holding `c` leaves that each take `T` to finish
-completes `c / T` leaves per unit time. Only some of them are worth having,
-so the objective multiplies by the fraction `p` that landed and stayed landed:
+**Ceiling.** Each drain carries `max_active_leaf_runs`. It defaults to 5,
+with a minimum of 1 and no maximum
+(`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`). An operator
+changes it live with `orbit run concurrency <run> --set N`,
+`orbit run extend --concurrency` or the `orbit_workflow_auto` resize action,
+all through `set_drain_worker_limit`
+(`crates/orbit-core/src/application/job/run/worker_limit.rs`). Lowering it
+only stops new admission; nothing is cancelled.
+
+**Occupancy is per workspace.** `occupancy()`
+(`crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs`) counts the
+workspace's live leaves, including explicit `orbit run ship` deliveries.
+Every occupancy query filters on `workspace_id`. No limit spans workspaces:
+two workspaces draining on one host each take their full ceiling.
+
+**Admission.** Each pass of `classify_workspace_auto_tasks`
+(`workspace_auto/classify.rs`) does three things:
+
+1. It computes free slots as the ceiling minus occupancy.
+2. It applies the resource gate.
+3. It walks the candidates in priority and age order through
+   `select_admissions` (`admission/auto_admission.rs`), which adds each
+   candidate to the wave unless it conflicts with a task already admitted.
+
+A pass that dispatched re-lists at once. An idle pass sleeps 30 s when work is
+waiting or the host is throttled, and 60 s otherwise. A pull drain instead
+requests one claim per free slot from the owner, and the owner chooses the
+task (`pull/refill.rs`, `pull/drain/refill_pass.rs`).
+
+**The reactive guard.** The resource throttle (`runtime/host_resource/`)
+samples host CPU, memory and disk every 5 s while admission is being
+consulted, and stops 300 s after the last consult.
+
+- **Hold.** It holds all admission once a resource stays at or above its high
+  mark (90%) for 10 s, and releases below the resume mark (85%).
+- **CPU-only pressure.** A local drain may still admit up to
+  `cpu_light_leaves` tasks marked CPU-light (`admission/cpu_light.rs`).
+- **Fail open.** Unknown readings never hold.
+- **Shared state.** Every drain on the host reads one shared state file,
+  `<global>/cache/host-resource-pressure.json`. It holds hysteresis state, not
+  a time series.
+
+**Per-task resource accounting.** On Linux, each detached worker runs in its
+own systemd user scope, `orbit-worker-<run_id>-<nonce>.scope`
+(`application/job/pipeline/worker/scope.rs`). `machine.worker_containment`
+defaults to true. Orbit reads the scope's `memory.events` and `pids.events`
+only to tell a limit breach from other failures. A worker can locate its own
+scope (`WorkerScopeCgroup::of_current_process`). Nothing records CPU or memory
+use per task. macOS has no scopes, so its workers run uncontained.
+
+**History.** Each host keeps one SQLite database, `~/.orbit/orbit.db`, shared
+by its workspaces. The `job_runs` table holds each run's start, end and host.
+The task id is in `input_json`, and complexity is in the task index. No CPU
+or memory history is kept, for the host or for any task.
+
+## 2. Sampling each task
+
+A worker samples **its own** scope, so attribution is exact and no central
+sampler is needed.
+
+- **What.** Every 5 s, a background thread in the worker reads its scope's
+  `cpu.stat` `usage_usec` and `memory.current`. CPU is measured in cores
+  (CPU time over wall time), memory in bytes.
+- **Granularity.** Samples are aggregated per minute since the worker
+  started: mean cores and maximum memory for that minute. Maximum, because a
+  rustc or linker peak that lasts a few seconds is what triggers the OOM
+  killer.
+- **Storage.** Each minute is appended to a new `run_resource_minutes` table
+  in `orbit.db`, keyed by workspace, run id and minute index, with the task
+  id. The newest minute is also how admission learns each running task's
+  current use (§4).
+- **One delivery, several runs.** A local delivery is a chain of runs:
+  `task_auto_pipeline`, then `task_gate_pipeline`, then `task_pr_pipeline`. A
+  pull delivery is one `task_claimed_pr_pipeline`. Each run samples itself.
+  A delivery's series is the per-minute sum over all runs of that task.
+  Minutes are counted from the moment the drain admitted it, which is the
+  admitted run's `created_at`.
+- **Exclusions.** Resumed or retried deliveries restart their clock part way
+  through, so they are kept out of profiles. They still count toward the
+  current load.
+- **Retention.** 30 days. The table is pruned with the other stores.
+- **No scope, no samples.** A worker without a scope records nothing: macOS,
+  containment disabled, or no user manager. That host stays on today's
+  admission (§5.4) until it has samples. macOS gets a process-tree sampler
+  later (§8).
+
+Workers also keep a host series, `host_resource_minutes`, holding host CPU
+and memory per wall-clock minute. Every worker offers a row for the current
+minute, and the first insert for that minute wins. Profiles do not need it.
+It is the ground truth for checking the forecast (§8).
+
+## 3. Profiles
+
+A **resource profile** describes one key, `(host, workspace, complexity)`,
+built from that key's most recent completed deliveries: the last 50, within
+30 days.
+
+For each minute `m` since admission, the profile holds:
+
+| Field | Meaning |
+|---|---|
+| `alive(m)` | fraction of deliveries still running at minute `m` |
+| `cpu(m)` | mean cores used at `m`, over the deliveries alive at `m` |
+| `mem(m)` | 90th-percentile memory at `m`, over the deliveries alive at `m` |
+
+CPU uses the mean and memory a high percentile because the costs differ. Too
+much CPU only slows everyone down. Too much memory kills a process.
+
+`alive` gives the duration distribution. The candidate's **horizon** `H` is
+the minute at which `alive` falls below 0.1, the 90th-percentile duration,
+capped at 120 minutes.
+
+Profiles are computed from the table when admission needs them and cached for
+the pass. A key with fewer than 10 deliveries falls back along this chain:
+
+1. `(host, workspace, any complexity)`;
+2. the heaviest profile on the host, so unknown work is assumed expensive;
+3. no profile at all, only on a host with no profiles: today's admission.
+
+## 4. The load forecast
+
+The forecast covers minutes `t = 0 … H` from now, for CPU and memory
+separately.
 
 ```
-G(c) = c · p(c) / T(c)
+F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / alive_i(a_i)
+         + Σ over reservations r of P_r(t) · alive_r(t)
 ```
 
-- **`T(c)`** is measured as **slowdown**: a leaf's duration divided by the
-  baseline duration of its complexity class in its workspace. The baseline
-  is measured at low occupancy. Without this normalization, the task mix
-  dominates the curve: a backlog of low-complexity chores looks like a
-  throughput gain at any concurrency.
-- **`p(c)`** counts a leaf as good when its task reached `done` through a
-  landed commit, and was not reverted or named as the source of a repair
-  task within the attribution window
-  ([3_vision.md §1](./3_vision.md#1-open-questions), question 2). Failed
-  leaves, released claims, no-landing outcomes and landing conflicts are not
-  good.
-- **Work units.** A good leaf contributes its class baseline in hours, so
-  `G` reads as baseline work-hours landed per wall-clock hour.
+- **Running deliveries.** A running delivery `i` has age `a_i` and profile
+  `P_i`. Its expected load at `a_i + t` is scaled by the chance it is still
+  running then, given it is running now. A delivery older than its profile's
+  last minute contributes its current measured use, held flat.
+- **Baseline `B`.** The host's measured load now, minus the sum of running
+  deliveries' measured use now. That leaves the load that isn't from tasks,
+  such as an IDE or a manual build, and it is held flat over the horizon.
+- **Host-wide.** The sum runs over live leaves of **every** workspace on the
+  host: the `job_runs` table without the workspace filter. Pinned drains,
+  explicit `orbit run ship` deliveries and before-landing reviews are all
+  included.
+- **Reservations.** An admission that has been decided but whose run does not
+  exist yet is a reservation (§5.2). It is counted from `t = 0`.
 
-Taking logarithms, `d ln G / d ln c = 1 + ε_p − ε_T`, where `ε` is the
-elasticity of each term with respect to `c`. Adding a slot raises goodput
-while `ε_T − ε_p < 1`. Put plainly: one more slot pays as long as it slows
-every leaf down by less than `1/c`, after allowing for any drop in landing
-rate. This is the marginal rule ("stop where the marginal completion rate
-stops improving") restated so it can be measured from per-leaf data.
+## 5. Admission
 
-A level is only informative when demand saturated it. In an interval where
-the ready backlog was shorter than the limit, throughput says nothing about
-what a higher limit would do. Both the estimator and the controller discard
-or discount such intervals.
+### 5.1 Gap fit
 
-## 2. What history already records
+`select_admissions` already walks candidates in priority order and builds the
+wave one task at a time. Gap fit adds one more check per candidate. The
+candidate, with profile `P_c` and horizon `H_c`, joins the wave only if, for
+every `t` in `0 … H_c`:
 
-This section describes today's store. Each host keeps one SQLite database,
-`~/.orbit/orbit.db`, shared by every workspace on it
-(`crates/orbit-config/src/persistence.rs`). Hosts do not share databases: a
-follower holds its own leaf runs, and the owner never sees their durations.
+```
+F_cpu(t) + P_c.cpu(t) · alive_c(t) ≤ admit_cpu_percent    × host cores
+F_mem(t) + P_c.mem(t) · alive_c(t) ≤ admit_memory_percent × host memory
+```
 
-| Need | Recorded today | Where |
-|---|---|---|
-| Leaf start, end, duration, host | yes: `started_at`, `finished_at`, `duration_ms`, `executed_on_json` (host id and name), `resolved_crew`, `crew_model` | `job_runs` (`orbit-store/src/driver/sqlite/migration/baseline.rs`, `migration/job_runs.rs`). Legacy `task_pr_pipeline` rows have no `executed_on`. |
-| Leaf → task | inside `input_json` only (`task_id` or `task_ids`) | `job_runs.input_json` |
-| Leaf → admitting drain | parent side only: the drain's `child_dispatches` pipeline state and `pipeline.child_dispatch` audit rows; for pull leaves, `local_pull_admissions` | `orbit gc runs` drops pipeline state |
-| Step durations | per step for successful runs; failed runs keep one job-level diagnostic step. Every run's `step.started` and `step.finished` events are in the v2 audit. | `job_run_steps`, `v2_audit_events` |
-| Validation command durations | no: `RequiredCommandRun` keeps only the timeout. The `validate` step's whole duration is the finest grain. | `orbit-engine/src/executor/automation/vcs/required_command.rs` |
-| Failure class | pull leaves only, in the claim settlement (`ClaimFailureClass`). Local leaves have an error code, not a class. | `contracts/task/coordination/settlement.rs` |
-| Task lifecycle | every status change with a timestamp. The `done` note names the PR and merged SHA. Landed commits are recorded per review attempt. | task `events.jsonl` (`orbit-types/src/task/artifacts.rs`), `review_landings` |
-| Revert or repair | `regression_from` relations, without a timestamp; no revert marker | `task_bundle_relations` |
-| Complexity | yes | `task_bundle_index` |
-| Configured concurrency | the submitted value in the drain's input; the latest resize on its state; earlier resizes only in `pipeline.run.workers.*` audit rows | `job_runs.input_json`, `job_run_states`, `audit_events` |
-| Backlog depth per pass | local drains: no, `drain_last_pass` is overwritten. Pull: the owner keeps every admission receipt, including idle polls, with `queue_depth`, and never compacts them. | `task_coordination_rows` (`contracts/task/coordination/admission.rs`) |
-| Host CPU, memory, disk history | no: only the current pressure state | `<global>/cache/host-resource-pressure.json` |
-| Tokens and cost | sparse: per-invocation rows cover a fraction of runs | `invocations`; `reliability_store.rs` notes a token-accounting mismatch with the run store |
-| Provider limits | latest reading only, plus `provider_limit` flags on settlements | `provider_limit_observations` |
+When a candidate is admitted, its profile is added to `F` before the next
+candidate is checked. One pass can therefore admit several tasks, each
+counting the ones before it. When a candidate does not fit, it is recorded
+with the minute and resource that failed, for example `cpu 94% at +6m`, and
+the walk continues: a smaller task may fit the gap.
 
-**Retention.** `orbit gc audit` and `orbit gc runs` default to 60 days. The
-first deletes audit rows; the second drops terminal runs' pipeline state but
-keeps run rows and steps (`crates/orbit-core/src/application/gc/store.rs`). The
-`store_gc` routine ships disabled, so in practice history reaches back to
-each host's first run: 2026-08-22 on the Mac, for example. The validation-step
-timings and resize audit rows the estimator wants are the prunable ones.
+Every existing gate still applies, and gap fit only removes candidates:
 
-What this means for the estimator (§6):
+- the drain's maximum concurrency;
+- conflicts between tasks admitted together;
+- the footprint guard;
+- provider limits and crew exclusions.
 
-- **Occupancy is reconstructible.** Leaf start and end times per host are
-  enough. The missing leaf → drain link does not matter, because the
-  estimator counts all leaves on the host.
-- **Saturation is approximate.** Pull hosts have the owner's queue-depth
-  series. Local drains need the backlog reconstructed from task status
-  history: a task was waiting at time `t` if it was in `backlog` with its
-  dependencies done.
-- **Outcomes need a join across hosts.** A follower's leaf durations are on
-  the follower and its landing is on the owner. The estimator reads both
-  through the federated task tools, keyed by task id.
-- **Reverts need git.** With no revert marker, "stayed landed" comes from
-  `regression_from` relations plus a scan of the base branch for revert
-  commits naming the landed SHA or PR.
+**The resource throttle stays the backstop.** When it holds, nothing is
+admitted, whatever the forecast says. This is what makes it safe to admit
+into a host that is busy now but forecast to be quiet when the task's load
+arrives. If the forecast is wrong, real pressure stops further admission.
 
-Phase 1 (§8) therefore also starts recording what is missing:
+Default thresholds are CPU 80% and memory 75%. Both sit below the throttle's
+90% high and 85% resume marks, so forecast admission and the throttle do not
+fight each other.
 
-- a bounded per-pass sample table in `<global>/orbit.db` holding host
-  occupancy, each drain's `queued` and `free_slots`, and the throttle state;
-- elapsed time on `RequiredCommandRun`;
-- a failure class for local leaves.
+### 5.2 Serializing drains on one host
 
-None of these changes admission.
+Two drains on one host must not fill the same gap. Each takes a host lock
+(an `IMMEDIATE` transaction on `orbit.db`) for this sequence:
 
-## 3. Where the limit lives
+1. Build the forecast.
+2. Decide the admissions.
+3. Write one `admission_reservations` row per admitted task, holding the task
+   id, profile key and time.
+4. Release the lock.
 
-### 3.1 Today
+A reservation leaves the forecast once its run exists in `job_runs`, or after
+five minutes if dispatch failed. The lock covers only computation over local
+tables, so it is held for milliseconds.
 
-Each drain carries its own ceiling, `max_active_leaf_runs`:
+### 5.3 Starvation
 
-- The ceiling defaults to 5, has a minimum of 1 and no maximum
-  (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`,
-  `crates/orbit-core/src/application/job/pipeline/worker/command.rs`).
-- An operator changes it live through `orbit run concurrency <run> --set N`,
-  `orbit run extend --concurrency` or the `orbit_workflow_auto` resize
-  action. All three go through `set_drain_worker_limit`
-  (`crates/orbit-core/src/application/job/run/worker_limit.rs`). It writes
-  `DrainWorkerLimit { max_active_leaf_runs, previous_max_active_leaf_runs,
-  revision, actor, reason, updated_at }` to the run's pipeline state
-  (`crates/orbit-types/src/workflow/run/state/drain.rs`) under a revision
-  compare-and-set. It also emits `pipeline.run.workers.requested` and
-  `pipeline.run.workers.completed` audit events. Only the latest change is
-  kept on state; the history lives in the audit events.
-- Lowering the ceiling only stops new admission. Running leaves are never
-  cancelled.
+A gap that small tasks keep filling can block a heavy task forever. When the
+first candidate in priority order has failed gap fit for longer than
+`head_max_wait_minutes` (30), the drain admits nothing else until that
+candidate fits. Smarter backfilling is an open question
+([3_vision.md §1](./3_vision.md#1-open-questions)).
 
-Occupancy is shared by the workspace, not by the drain. `occupancy()`
-(`crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs`) counts every
-live leaf of the workspace, including explicit `orbit run ship` deliveries and
-the leaves of a stopped coordinator (`inherited_leaf_runs`). Every occupancy
-query filters on `workspace_id`. **No host-wide limit exists**: N workspaces
-each draining at ceiling `c` can run N × c leaves on one host. The couplings
-across workspaces are:
+### 5.4 Without profiles
 
-- the resource throttle's shared pressure history
-  (`<global>/cache/host-resource-pressure.json`);
-- the repository's own cooperative build-slot script, which only covers
-  Make targets in checkouts that ship it
-  ([build-budget.md](../../runbooks/build-budget.md));
-- provider-limit readings, which remove crews but never change a ceiling.
+A host with no profiles admits exactly as today, under the throttle. Profile
+gaps for individual keys are covered by the fallback chain in §3, which
+assumes the worst, so the forecast never treats unknown work as free.
 
-The resource throttle (`crates/orbit-core/src/runtime/host_resource/`) holds
-admission when CPU, memory or disk stays above its high mark for 10 s. It
-releases below the resume mark, and fails open on unknown readings. Under
-CPU-only pressure a local drain may still start up to `cpu_light_leaves`
-CPU-light tasks (`crates/orbit-core/src/adapter/engine_host/v2_host/admission/cpu_light.rs`);
-a pull drain stops requesting entirely. The throttle is an on/off gate. It
-never changes a ceiling.
+## 6. Pull drains
 
-### 3.2 Proposed: a host budget and workspace caps
+A follower does not pick its task; the owner does. So the follower cannot run
+gap fit on a specific candidate. Instead:
 
-The controller tunes one number per host: the **host budget** `B`, a count of
-live leaves across every drain on the host. Each workspace may carry a
-**workspace cap** `K_w` that bounds its leaves across all hosts.
+1. The follower computes which complexities of that workspace fit under its
+   forecast.
+2. It sends them as `admissible_complexities` on its `orbit.task.pull`
+   request, and only requests when at least one fits.
+3. The owner's ready-queue selection skips tasks outside the list.
 
-- **Host budget.** `B` lives in the host's store (`<global>/orbit.db`, which
-  every workspace on the host already shares) with its bounds
-  `[min, max]` from machine-level configuration (§7). A host-wide occupancy
-  query, `occupancy()` without the workspace filter, gives the host's live
-  leaf count.
-- **Split across drains.** Every pass already records `queued`, the
-  admissible tasks it could not admit (`DrainAdmissionPass` in
-  `orbit-types/src/workflow/run/state/drain.rs`). Each pass, the budget is split across the host's live drains
-  by max-min fairness over demand: a drain's demand is its occupied slots
-  plus its admissible waiting tasks, bounded by its workspace cap. A drain
-  that wants less than an equal share gets what it wants, and the remainder
-  is split among the rest. A drain's effective ceiling is its share. The
-  allocation is recomputed per pass, so it moves as backlogs drain.
-- **Workspace cap.** `K_w` comes from contention on the workspace's base
-  branch, not from host resources. It is set by the operator at first. A
-  learned cap is phase 3 work (§8). For pull drains, it is enforced where the
-  workspace's admissions are ordered: the owner's `orbit.task.pull`, which
-  today has no per-workspace or per-follower cap.
-- **Admission check.** Local admission (`classify_workspace_auto_tasks`) and
-  pull allocation (`allocate` in `job_run_store/pull.rs`) both take
-  `min(drain share − drain occupied, B − host occupied)` free slots. The pull
-  path already re-checks its ceiling inside an `IMMEDIATE` transaction. The
-  host check joins it there, so two drains cannot both take the last slot.
-- **Floor of two.** At a ceiling of 1, admission switches off the footprint
-  guard (`FootprintGuard.enabled = max_active_leaf_runs > 1` in
-  `workspace_auto/classify.rs`) and admits tasks without a footprint. Auto
-  mode never crosses between 1 and 2; its minimum bound is at least 2. An
-  operator can still set 1 by hand.
+This changes the pull protocol. That is safe because the owner already
+refuses pulls from a different binary version. The follower adds a
+reservation for the claimed task as soon as the claim returns.
 
-## 4. Signals
-
-The controller reads two kinds of signal. **Congestion signals** are fast,
-available within a pass or two, and only ever cause a decrease. **Goodput
-signals** are slow, hours behind, and set the soft ceiling (§5.3).
-
-| Signal | Source today | Counts as congestion when |
-|---|---|---|
-| Resource throttle | `ResourceAdmission` from `runtime/host_resource/` | any resource is held, including CPU-only `LightOnly` |
-| Provider limit | crew window `provider_limit` exclusions (`application/distributed/settlement/runtime.rs`) | a crew is newly excluded, or the refusal is `no_runnable_crew` |
-| Environmental failure | `FailureClass` (`orbit-types/src/workflow/run/state/failure.rs`) | an `environment`, `transient` or `provider` settlement or leaf failure, or `host_suppressed` |
-| Step latency gradient | `validate` step durations in `job_run_steps` and the v2 audit (§2) | the short-window median of a heavy validation step exceeds its long-window baseline by more than the tolerance (default 40%) |
-| Landing conflict rate | `base_conflict` releases and rebase failures | the rate over the last window exceeds its baseline (feeds the workspace cap, §8) |
-
-The **latency gradient** is the closest thing a drain has to round-trip time.
-It is the ratio of a long-window baseline to a short-window median for the
-same step in the same workspace, per complexity class. It is the gradient
-limiter of Netflix's concurrency-limits library
-([3_vision.md §2](./3_vision.md#2-prior-work)), and it rises before CPU or
-memory cross their high marks. Only steps that do heavy local work, such as
-validation gates, are measured. Agent think time varies too much with the
-task to be a congestion signal.
-
-**Saturation evidence**, which permits an increase, is the conjunction of
-three facts for every pass in the interval:
-
-- `free_slots` was 0;
-- admissible tasks were still waiting;
-- no congestion signal fired.
-
-`classify_workspace_auto_tasks` already outputs `free_slots`, and every pass
-writes `queued` to `drain_last_pass`; a pull pass takes it from the owner's
-queue depth. `drain_last_pass` is overwritten each pass, which is fine for a
-controller that runs inside the pass, but leaves no history for the
-estimator (§2).
-
-An unknown reading is not a signal. The resource throttle fails open on
-unknown telemetry, and the controller does the same: an interval with
-unknown readings neither decreases nor counts as clean for an increase.
-
-## 5. Controller
-
-### 5.1 Where it runs
-
-There is no new daemon. The controller is a deterministic step evaluated
-during drain passes. A pass that finds the host's control interval elapsed
-takes a host-level lock in `<global>/orbit.db`, evaluates the interval's
-signals and writes the new budget, then releases the lock. Whichever drain
-passes first does the work. The resource monitor already keeps host-wide
-state the same way: one pressure history shared by every drain, updated
-under a lock by whichever process samples. A host with no
-live drain has no controller and needs none.
-
-### 5.2 The fast loop
-
-Each control interval (proposed default 10 minutes):
-
-1. **Decrease.** If any congestion signal fired and the previous decrease
-   has taken effect (host occupancy ≤ `B`), set
-   `B ← max(min, ⌊B · β⌋)` with `β = 0.75`, and start a cooldown. Because a
-   decrease cancels nothing, the congestion that triggered it persists until
-   enough leaves finish. Without the "has taken effect" condition, one
-   sustained pressure episode would cut `B` to the minimum.
-2. **Increase.** Otherwise, if the interval showed saturation evidence (§4)
-   and no cooldown is running, set `B ← min(max, S, B + 1)`. `S` is the
-   soft ceiling (§5.3). Two consecutive clean intervals are needed after any
-   decrease.
-3. **Hold** in every other case, including a supply-limited interval.
-
-The cooldown is half the host's median leaf duration over the last day, and
-at least one interval. A decrease is evaluated against conditions that
-existed before it, and an increase needs time to show its cost.
-
-### 5.3 The slow loop
-
-Every window of at least 12 settled leaves, and at most 6 hours, the
-controller updates its per-host goodput model: the offline estimator (§6)
-seeds it, and each window adds points. It sets the soft ceiling `S` to the
-smallest level whose estimated goodput is within the confidence band of the
-maximum. When two levels cannot be told apart, it prefers the lower one.
-`S` rises by one per day without contrary evidence, so a ceiling learned
-under worse conditions is retested.
-
-### 5.4 Actuation and pins
-
-The controller writes each drain's share through `set_drain_worker_limit`
-with actor `auto-concurrency` and a reason naming the signals behind it.
-This reuses the revision check, the `Workers:` line in `orbit run show`, and
-the `pipeline.run.workers.*` audit events. A `set_drain_worker_limit` from
-any other actor marks that drain **pinned**: the controller stops writing it
-for the rest of its window. The pinned drain's occupancy still counts
-against the host budget. `orbit run concurrency <run> --auto` hands it back.
-
-Every host-budget change is also appended to a host-level history table in
-`<global>/orbit.db`: time, old and new `B`, the rule that fired (decrease,
-increase, ceiling), and the signal snapshot. The drain state keeps only the
-latest change, and the evaluation in §8 needs the full series.
-
-## 6. Offline estimator
-
-Phase 1 is a read-only report over one host's history. It changes nothing.
-
-1. **Occupancy.** Reconstruct `c(t)`, the number of live leaf runs on the
-   host across all workspaces, from leaf start and end times. Use observed
-   occupancy, not the configured ceiling: it captures resizes, inherited
-   leaves and several drains at once without needing a resize history.
-2. **Per leaf.** Record `c̄`, the time-weighted mean occupancy over the
-   leaf's life, plus its slowdown, its outcome under §1, and its workspace,
-   class and Orbit version.
-3. **Saturation filter.** Keep leaves admitted while ready backlog was
-   waiting. For pull hosts, that comes from the owner's admission receipts
-   (`queue_depth`). For local drains, the backlog is reconstructed from task
-   status history (§2). Once the per-pass sample table exists, it replaces
-   both.
-4. **Fit.** Bin by `c̄`. Per bin, report the leaf count, median slowdown,
-   landed fraction and goodput, with bootstrap confidence intervals. Fit
-   the Universal Scalability Law
-   `G(N) = λN / (1 + σ(N−1) + κN(N−1))` per host. Its peak
-   `N* = √((1−σ)/κ)` is reported alongside the empirical argmax. The
-   contention term `σ` maps to serialized resources; the coherency term `κ`
-   maps to pairwise conflicts between concurrent leaves.
-5. **Recommend.** Report the smallest level within the confidence band of
-   the best goodput, and the evidence behind it. The estimator never
-   recommends a level above the highest well-sampled one. When goodput is
-   still rising at that level, it says **ceiling binding**: the data cannot
-   locate the optimum and the operator's maximum is the constraint.
-
-It stratifies by host and Orbit version, and prints sample counts beside
-every number. A bin with too few leaves (proposed: 20) is shown but not used.
+The follower checks one candidate per request, then re-forecasts. The quirk
+where a pass requests up to its submitted ceiling, not its live one
+(`pull/drain/refill_pass.rs`), stops mattering once each request depends on
+the forecast.
 
 ## 7. Surfaces and configuration
 
 | Surface | Proposed change |
 |---|---|
-| Machine config | `[workflow.auto_concurrency]` beside `[workflow.resource_throttle]` in `crates/orbit-config/src/registry/settings/machine.rs`: `enabled` (false), `min` (2), `max` (required), `decrease_factor` (0.75), `interval_seconds` (600), `latency_tolerance_percent` (40), `shadow` (true) |
-| Workspace config | optional `cap`, the workspace cap `K_w` |
-| `orbit run auto` | `--concurrency auto` uses the host bounds; `--concurrency auto:MIN-MAX` narrows them for this drain |
-| `orbit run concurrency` | `--auto` hands a pinned drain back to the controller; `--set N` pins, as today |
-| `orbit run show` | the `Workers:` line shows `auto (MIN..MAX)` and the last change's rule and signals; `drain_summary` gains an `auto_concurrency` block |
-| `orbit run readiness` | shows the host budget, each drain's share, and the estimator's recommendation |
-| Report | `orbit run concurrency --report [--since]` prints the §6 estimate as a table, or as JSON with `--json` |
-| Dashboard | later: host budget, occupancy and signals over time |
+| Machine config | `[workflow.auto_concurrency]` beside `[workflow.resource_throttle]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (80), `admit_memory_percent` (75), `profile_window` (50), `min_profile_deliveries` (10), `horizon_cap_minutes` (120), `head_max_wait_minutes` (30) |
+| `drain_last_pass` | an `admission_forecast` block: the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource, and whether the head is being protected |
+| `orbit run show` | an `Admission:` line, e.g. `forecast — skipped ORB-123 (cpu 94% at +6m)` |
+| `orbit run readiness` | the host's forecast peak, its headroom, and the profile source per waiting task |
+| `orbit run profiles` | the profiles per workspace and complexity: deliveries, horizon, peak CPU and memory, and when they occur. `--json` for the full series |
+| Dashboard | later: the forecast curve against measured load, with running tasks stacked |
+
+`max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
+first.
 
 ## 8. Rollout
 
-1. **Estimator report** (§6), plus the recording gaps from §2. The report
-   is read-only. It answers whether the history shows a knee at all, and
-   where. If goodput is still rising at today's ceilings
-   (dk-server-2 15, dk-server-1 5, Mac 4 at the time of writing), most of the
-   controller's value is in backing off under pressure, and that is the part
-   to build first.
-2. **Shadow mode.** The controller runs and records every decision in the
-   host history table, but does not actuate (`shadow = true`). After a week,
-   compare its decisions with the operator's resizes and with the
-   congestion that followed.
-3. **Actuation** on one host. dk-server-1 goes first: it is a follower with
-   the smallest blast radius. dk-server-2, the owner, follows once the
-   shadow record looks sound, and the Mac may stay advisory
-   ([3_vision.md §1](./3_vision.md#1-open-questions), question 8).
-4. **Learned workspace caps** from the landing-conflict rate, enforced at the
-   owner's `orbit.task.pull`.
+1. **Record.** Add per-task sampling and the host minute series. No change to
+   admission. Profiles need a few days of deliveries.
+2. **Profiles report.** `orbit run profiles`. It shows whether profiles are
+   stable enough to forecast with: how spread out each minute is, and how
+   spikes line up across deliveries.
+3. **Shadow.** `mode = shadow` computes forecasts and decisions every pass
+   and records them, but admits as today. A report compares each forecast at
+   +5, +10, +20 and +30 minutes with the measured host series, and the
+   shadow decisions with what admission actually did.
+4. **Enforce** on dk-server-1 first, a follower with the smallest blast
+   radius, then on dk-server-2.
+5. **macOS.** A sampler that sums CPU time and resident memory over the
+   worker's process tree, using `orbit-common/src/process/ancestry.rs`. Until
+   it exists, the Mac admits as today.
 
 ## 9. Concerns & Honest Limitations
 
-- **Slow, noisy feedback.** Leaves run for tens of minutes, so a host settles
-  only a few dozen a day. The fast loop steers on proxies. If they don't
-  track goodput, the controller is confidently wrong in a stable way. Shadow
-  mode exists to find out before it matters.
-- **Observational history.** Past concurrency was chosen by the operator,
-  usually during pushes with deep and often easy backlogs, and across binary
-  and settings changes. The saturation filter and the stratification reduce
-  this confounding but do not remove it. The estimator's output is a starting
-  point and a ceiling, never a setting.
-- **Non-stationarity.** The optimum moves with the binary, the task mix,
-  provider state and the other host's load. The slow loop chases it, but
-  never faster than one window.
-- **Provider quota is cross-host.** A host-local loop sees the other host's
-  provider use only as `provider_limit` exclusions, after the fact
-  ([3_vision.md §1](./3_vision.md#1-open-questions), question 4).
-- **Leaves are not equal.** The budget counts leaves, but a Markdown task
-  and a full Rust validation load a host very differently. The congestion
-  signals absorb this indirectly; the budget does not model it.
-- **Reviewing leaves.** A pull drain does not count claimed-PR leaves in
-  before-landing review against its ceiling, so a follower can hold up to
-  twice its ceiling in live leaves (`job_run_store/pull.rs`;
-  [distributed-drain runbook](../../runbooks/distributed-drain.md)). The host
-  budget must decide whether those count. They load the provider but rarely
-  the CPU.
-- **Pull fills slowly after an increase.** A pull pass requests at most its
-  *submitted* ceiling per pass, while allocation honours the *live* one
-  (`pull/drain/refill_pass.rs`). An increase above the submitted value takes
-  several passes to fill. The controller must not read that lag as missing
-  demand.
-- **Shared pressure history across differing thresholds.** The pressure
-  evaluator resets a resource's state when the evaluating workspace's
-  thresholds differ from the recorded ones
-  (`runtime/host_resource/pressure.rs`). Workspaces on one host with
-  different throttle settings may keep resetting each other's sustain
-  window, so the throttle never engages, and the controller loses its main
-  signal. This is inferred from the code, not observed. Uniform
-  machine-level thresholds avoid it.
-- **Inherited leaves.** Explicit `orbit run ship` deliveries occupy budget
-  that no drain admitted. The controller counts them, but cannot schedule
-  around them.
-- **Throughput is not the only goal.** More concurrency also means more
-  spend, more after-landing review debt and more agent-main churn. The
-  objective ignores the first two
-  ([3_vision.md §1](./3_vision.md#1-open-questions), question 3). The
-  operator's maximum is the lever for them.
+- **Averaging blurs spikes.** Tasks of one complexity differ in length, so the
+  validation build lands at different minutes. A per-minute average of
+  misaligned spikes is a lower, wider hump. The forecast then underestimates
+  peaks and overestimates how long moderate load lasts. The 90th percentile
+  for memory and the throttle backstop absorb part of this. Profiles aligned
+  to pipeline steps instead of minutes would fix it
+  ([3_vision.md §1](./3_vision.md#1-open-questions), question 1). The
+  profiles report in step 2 shows how bad it is before anything enforces.
+- **Complexity is a coarse label.** It is set at filing or by the task
+  pilot, and is sometimes wrong. A mislabelled task carries the wrong
+  profile.
+- **The baseline is assumed flat.** Load that isn't from tasks, such as a
+  manual build or an IDE indexing, can change during the horizon.
+- **Only CPU and memory.** Disk I/O and fsync stalls (the Mac), provider
+  rate limits and base-branch conflicts are not forecast. The disk throttle,
+  provider-limit exclusions and the conflict and footprint checks still
+  apply.
+- **Profiles are per host and need warm-up.** A new host, workspace or
+  complexity is admitted pessimistically, using the heaviest profile, until
+  it has 10 deliveries.
+- **Linux only at first.** macOS has no worker scopes. Without
+  `machine.worker_containment`, Linux records nothing either.
+- **Throughput is not measured.** The design fills headroom under the
+  thresholds. It does not check that more concurrency lands more work. When
+  the bottleneck is something else, such as conflicts or review, it fills
+  the host anyway, up to the operator's maximum.
+- **Starvation guard is crude.** The head-of-queue wait can idle a host for
+  up to 30 minutes while it waits for one heavy task to fit.
+- **Shared pressure state across differing thresholds.** The throttle's
+  pressure evaluator resets a resource's state when the evaluating
+  workspace's thresholds differ from the recorded ones
+  (`runtime/host_resource/pressure.rs`). Workspaces with different throttle
+  settings may keep resetting each other, and weaken the backstop. This is
+  inferred from the code, not observed. Machine-level thresholds avoid it.
+- **Thresholds are guesses.** 80% CPU and 75% memory are starting points.
+  The shadow report is where they get tuned.
 
 ## Task References
 

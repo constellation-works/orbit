@@ -7,9 +7,9 @@ status: Draft
 feature: auto-concurrency
 doc_role: decisions
 type: design
-summary: Proposed standing rules for automatic drain concurrency — rate by landed goodput, budget per host, back off fast and grow only on saturated demand, never exceed the operator's bounds, never cancel to shed load.
+summary: Proposed standing rules for predictive admission — measure what each task uses, forecast host-wide, keep the throttle as the backstop, assume unknown work is expensive, never exceed the operator's ceiling or cancel work.
 tags: [auto-concurrency, drain, capacity, decisions]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/runtime/host_resource/**"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
@@ -22,138 +22,148 @@ Nothing here is implemented yet. Every entry is a proposed Door 2 rule: it
 governs choices the implementation tasks have not made yet. Each is open to
 the operator's revision while the folder is `Draft`.
 
-## Rate concurrency by landed goodput, never by completions
+## Admit on forecast resource use, not on a throughput model
 
 **Recorded:** 2026-10 · [ORB-15757]
 
 ### Context
 
-The obvious throughput measure is finished leaves per hour. It rewards the
-wrong things: a leaf that fails fast, opens a PR that conflicts, or lands a
-change that is later reverted all count as completions. Raising concurrency
-tends to increase exactly those outcomes.
+The first draft of this design rated concurrency levels by landed work per
+hour, fitted over hours of history, and moved a per-host limit with a
+feedback loop. Signals that slow lag the host by hours. The operator chose
+instead to admit by what tasks are about to use, learned from how earlier
+tasks used CPU and memory over their lifetime.
 
 ### Decision
 
-Any measure that rates a concurrency level, whether offline, advisory or in
-the online loop, counts only work that landed and stayed landed, weighted by
-its complexity class's baseline duration
-([2_design.md §1](./2_design.md#1-the-objective-is-goodput)). Completion
-counts, PR counts and admission counts may be shown, but never optimized.
+Admission decisions rest on measured or forecast resource use within the
+next task's horizon. A model of throughput over hours may evaluate the
+feature ([3_vision.md §1](./3_vision.md#1-open-questions), question 6), but
+never drives admission.
 
 ### Consequences
 
-- Fast failures, landing conflicts and reverts lower the rating of the level
-  that produced them.
-- Cost: goodput is only known after landing and the revert window, hours
-  after admission. That makes it too slow for the fast loop, which has to
-  steer on congestion proxies that may not track it. It also needs revert
-  and repair attribution that Orbit does not persist in a queryable form
-  today.
+- Admission reacts within one pass to a new task, a finished one, or a change
+  in load.
+- Cost: bottlenecks that aren't CPU or memory are invisible to it. When
+  conflicts, review or provider quota limit throughput, admission still
+  fills the host up to the operator's maximum.
 
-## Concurrency budgets belong to the host; workspaces get caps, not tuners
+## Measure what each task uses, not what the host uses
 
 **Recorded:** 2026-10 · [ORB-15757]
 
 ### Context
 
-Concurrency is set per drain today, so the natural extension is one tuner
-per workspace on each host. But every drain on a host competes for the same
-CPU, memory, disk and provider quota. Two independent tuners each read the
-other's load as noise and keep correcting against each other.
+Profiles need each task's own CPU and memory. The alternative is to infer
+them from host totals, by regressing host load on the mix of tasks running.
+That needs no new sampling, but it confounds every task with every other one
+and with load that isn't from tasks.
 
 ### Decision
 
-The quantity the controller tunes is one budget per host, shared by every
-drain on it. A workspace contributes a cap, learned from contention on its
-own base branch (conflicts, rework). This cap is enforced where that
-workspace's admissions are ordered, the owner for pull drains. A drain's
-effective limit is its share of the host budget, bounded by its workspace
-cap. Any future per-something limit (per crew, per provider) is a cap on the
-host budget, not a second tuner.
+Resource profiles are built only from per-task measurements: the worker's
+own Linux scope, or its process tree where no scope exists. Host totals are
+used only for the baseline and to check the forecast.
 
 ### Consequences
 
-- One feedback loop per host. Its signals are host-wide, so they are not
-  confounded by the host's other drains.
-- Cost: drains on one host need a shared coordination point to split the
-  budget, which they do not have today, and an allocation rule. A bad
-  allocation lets a deep backlog in one workspace starve another.
+- Attribution is exact on Linux, and the baseline separates out load that
+  isn't from tasks.
+- Cost: a host without per-task measurement has no profiles. That covers
+  macOS until its process-tree sampler exists, and Linux with containment
+  off. Such a host admits as today.
 
-## Back off on any congestion signal; grow only on evidence of saturated demand
+## Forecast and admit host-wide, one decision at a time
 
 **Recorded:** 2026-10 · [ORB-15757]
 
 ### Context
 
-Feedback is slow and noisy. An increase that overloads the host costs every
-running leaf, and those leaves cannot be recovered. A level that is too low
-only costs some idle capacity. And when the ready backlog is shorter than the
-limit, raising the limit changes nothing. A loop that treats a quiet interval
-as permission to grow lets the limit drift to the maximum with no evidence.
+Every drain on a host shares the same CPU and memory. Separate forecasts per
+drain would each see the same gap and fill it twice.
 
 ### Decision
 
-The controller is asymmetric. It cuts the limit by a multiple on any single
-congestion signal. It raises it by at most one, and only after an interval in
-which every slot was filled, ready work was still waiting, and no congestion
-signal fired. When signals disagree, the conservative reading wins.
+The forecast counts every live task on the host, across workspaces.
+Admission decisions on a host are serialized under one lock, and decided but
+not yet running admissions count as reservations. Any future admission rule
+that uses host resources follows the same pattern.
 
 ### Consequences
 
-- The limit stays where the host was last seen to be comfortable, and
-  overload is short.
-- Cost: it settles below the true optimum when the signals are noisy or
-  oversensitive, and climbs back slowly after a transient such as a
-  provider outage. A level that was once cut can take hours to recover.
+- A gap is filled once, whichever drain gets there first.
+- Cost: drains on one host queue behind each other's decisions, and a
+  workspace with a deep backlog can take every gap before another workspace's
+  pass runs.
 
-## The operator's bounds are hard, and a manual resize wins
+## The resource throttle stays the backstop
 
 **Recorded:** 2026-10 · [ORB-15757]
 
 ### Context
 
-The current limits were set after incidents: dk-server-1 reached a load of
-85 on 15 cores under a full backlog (2026-09-27), and the Mac's disk filled
-with job-run build output (2026-09-28). An optimizer that explores above
-them can repeat those failures, and it does so while nobody is watching.
+Gap fit admits tasks into a host that is busy now, because the forecast says
+their load comes later. Forecasts are wrong some of the time.
 
 ### Decision
 
-Auto mode only moves the limit between the operator's minimum and maximum.
-It never explores above the maximum, even when its estimate says the optimum
-is there. A manual resize on a drain switches that drain to manual for the
-rest of its window. Every automatic change is recorded with its reason and
-the signals behind it.
+Forecast admission only ever removes candidates. It never overrides the
+resource throttle, whose hold stops all admission when real pressure
+arrives. Admit thresholds stay below the throttle's marks. No later
+admission mechanism replaces the throttle; it can only be tightened.
 
 ### Consequences
 
-- The worst automatic outcome is the operator's own maximum.
-- Cost: a maximum set too low hides the optimum from the controller. The
-  advisory report has to say when the ceiling binds, or nobody learns that
-  raising it would help.
+- A bad forecast costs at most the tasks admitted before real pressure
+  appears.
+- Cost: two sets of thresholds to configure. The throttle can block an
+  admission the forecast approved. Overload from a bad forecast lasts until
+  enough tasks finish, because nothing is cancelled.
 
-## Lowering the limit never cancels running work
+## Unknown work is assumed expensive
 
 **Recorded:** 2026-10 · [ORB-15757]
 
 ### Context
 
-Shedding load immediately would mean cancelling running leaves. A cancelled
-leaf loses its agent spend and its worktree state, and it may leave a claim
-to settle.
+A task whose workspace or complexity has too few deliveries has no profile of
+its own. Treating it as free would let it fill a gap it does not fit.
 
 ### Decision
 
-A lower limit only stops new admission until the number of active leaves
-falls below it. No controller action cancels, pauses or preempts a leaf.
+A task without a profile of its own gets a coarser one: first the
+workspace's profile for any complexity, then the heaviest profile on the
+host. Only a host with no profiles at all admits as today.
 
 ### Consequences
 
-- A decrease never destroys work.
-- Cost: overload persists until enough leaves finish, up to one leaf
-  duration. The resource throttle's admission hold is the only protection
-  during that time.
+- The forecast never undercounts work it knows nothing about.
+- Cost: a new workspace or complexity runs at low concurrency until it has
+  enough deliveries, even when its tasks are light.
+
+## The operator's ceiling is hard, and admission never cancels work
+
+**Recorded:** 2026-10 · [ORB-15757]
+
+### Context
+
+Ceilings were set after incidents: dk-server-1 reached a load of 85 on 15
+cores under a full backlog (2026-09-27), and the Mac's disk filled with
+job-run build output (2026-09-28). Cancelling a running task loses its agent
+spend and worktree state.
+
+### Decision
+
+`max_active_leaf_runs` stays the hard ceiling, checked before any forecast.
+No admission rule cancels, pauses or preempts a running task.
+
+### Consequences
+
+- The worst automatic outcome is the operator's own ceiling.
+- Cost: a ceiling set too low caps a host the forecast says has room. The
+  readiness view has to show when the ceiling, not the forecast, is what
+  binds.
 
 ## Task References
 
