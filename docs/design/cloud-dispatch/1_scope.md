@@ -2,15 +2,15 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-08
+last_validated: 2026-10-11
 ---
 
 # Scope: Cloud dispatch
 
 Status: proposal, not started. Phase 0 is a manual spike with no code, against `orbit` first.
 Open questions resolved 2026-09-23 (see the end of this doc).
-Bearing: the constellation rule that Orbit reads the durable artifact, never the agent's final
-message (root `AGENTS.md`, "Orbit Conventions"). The cloud session is untrusted remote
+Bearing: the workspace rule that gates read durable artifacts and task state, never the agent's
+final message (root `AGENTS.md`, "Gates"). The cloud session is untrusted remote
 execution; GitHub is the only record Orbit believes.
 Precedents: the distributed-drain split where a follower opens the PR and the owner re-reads
 everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing.rs`);
@@ -22,14 +22,16 @@ Every Orbit delivery runs an agent as a local subprocess in a local worktree
 (`cli_runner/orchestrator/dispatch.rs`, `run_cli_backend`). Throughput is bounded by the host:
 about ten concurrent agents on either the Mac or a Linux server before CPU, ports and
 worktrees contend, and larger codebases lower that ceiling. Claude Code cloud sessions run
-in Anthropic-managed VMs, keep running when the host sleeps, and bill against subscription
-usage and then usage credits. Orbit has no way to use them.
+in Anthropic-managed VMs and keep running when the host sleeps. During the 2026-09-23
+investigation, their billing used subscription usage followed by available usage credits; plan
+terms and promotions can change. Orbit has no way to use them.
 
 The obvious spelling, `claude -p --cloud "<task>"`, does not exist for this purpose. The CLI
 rejects `--cloud <description>` in non-interactive runs. With `-p`, `--cloud <session_id>`
 only queues a follow-up message into an existing session. Plain `claude --cloud "<task>"`
-does work, but only with a TTY (§1). There is also no documented API to read a cloud
-session's status.
+does work, but only with a TTY (§1). The 2026-09-23 spike did not find a documented status
+API for sessions created by this CLI path; status APIs for other Claude products are outside
+that finding.
 
 ## Goal
 
@@ -76,9 +78,10 @@ change before anything is checkpointed.
 
 Why this route:
 
-- **Credits.** Promotional cloud-session credits apply to sessions started this way. They
-  don't apply to routines or projects, which draw normal subscription usage instead. That
-  is what decided the choice.
+- **Billing at the time of the spike.** The 2026-09-23 investigation found that promotional
+  cloud-session credits applied to sessions started this way. Current promotional offers
+  and plan terms can change; verify them before deployment. The routine-fire API reference
+  says its sessions draw on Claude Code subscription usage.
 - **The description is a real prompt.** It is not wrapped as untrusted, so there is no saved
   routine prompt to keep in sync. Orbit puts the delivery rules at the top of the payload
   (§3).
@@ -108,21 +111,28 @@ routine's `/fire` endpoint:
 ```
 POST https://api.anthropic.com/v1/claude_code/routines/<trig_id>/fire
 Authorization: Bearer <routine token>
-anthropic-beta: experimental-cc-routine-2026-04-01
 anthropic-version: 2023-06-01
+Content-Type: application/json
 {"text": "<run-specific payload>"}
 → {"type":"routine_fire","claude_code_session_id":"session_…","claude_code_session_url":"https://claude.ai/code/session_…"}
 ```
 
 It has a documented JSON response and needs no login on the host. It costs:
 
-- **It is not credit-eligible.**
+- **At the time of the 2026-09-23 investigation, routine-triggered sessions were not
+  promotional-credit eligible.** Offers and plan terms change; verify before deployment.
 - **The fire text arrives as untrusted.** It comes wrapped in a `<routine-fire-payload>`
   block, so the routine needs a saved prompt that explicitly opts in (Appendix A).
-- **One routine per repository**, each with a daily run cap.
-- **Research-preview beta headers**, which change over time.
+- **One routine per repository** in this proposal. The current API documentation limits each
+  routine to 30 fires per hour and each account to 100 fires per hour; the endpoint returns
+  `429` with `Retry-After` when a limit is reached.
+- **Experimental API.** Its request and response shapes, rate limits, and token semantics
+  may change. The `anthropic-beta: experimental-cc-routine-2026-04-01` header is optional;
+  the endpoint accepts requests with or without it.
 
 Keep it as `dispatch = "routine"` for when the CLI login or the output format breaks.
+The current endpoint contract and limits are documented in
+[Anthropic's routine-fire API reference](https://platform.claude.com/docs/en/api/claude-code/routines-fire).
 
 **Rejected alternatives**
 
@@ -154,15 +164,13 @@ merge = "on-request"                     # or "after-review" once Phase 2 lands 
 [cloud.routine]                          # only for dispatch = "routine"
 fire_url = "https://api.anthropic.com/v1/claude_code/routines/trig_…/fire"
 token_file = "~/.orbit/secrets/cloud-routine-orbit.token"   # 0600, host-local
-beta_header = "experimental-cc-routine-2026-04-01"
 ```
 
 `orbit doctor` reports these failures:
 
 - `dispatch = "cli"` and `claude auth status` on the host reports `loggedIn: false`, or a
   non-claude.ai auth method;
-- `dispatch = "routine"` and the token file is missing or has loose permissions, or the beta
-  header is older than two versions.
+- `dispatch = "routine"` and the token file is missing or has loose permissions.
 
 Neither path has a dry-run endpoint, so doctor never creates a session to test.
 
@@ -458,13 +466,14 @@ two-variant action; §4.2 onward is unchanged.
 - **Opaque cost.** Orbit can't read per-session usage. Rely on `max_dispatches_per_day`,
   `max_in_flight` and claude.ai Settings → Usage, and record the session URL on every task
   so spend can be traced by hand.
-- **Preview API churn.** The beta header is config, and a `4xx` other than `429` blocks
-  rather than retries.
+- **Experimental API churn.** The endpoint's request and response shapes, rate limits, and
+  token semantics may change. A `4xx` other than `429` blocks rather than retries.
 - **Token leak (routine only).** Anyone holding the token can fire the routine with arbitrary text. The
   wrapper labels that text as untrusted, and the blast radius is a `claude/` branch plus a
   PR that still needs review. Store the token `0600` in `~/.orbit/secrets/`, and never put
   it in argv, events or logs.
-- **Silent stalls.** With no status API, a session idling on a question looks exactly like
+- **Silent stalls.** If there is no status API for sessions created by this CLI path, a
+  session idling on a question looks exactly like
   one that is still working. Routine sessions run without permission prompts. Phase 0
   establishes whether CLI-created sessions do too. Either way, the deadline plus nudge
   bounds the wait.

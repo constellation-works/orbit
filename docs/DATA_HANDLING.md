@@ -1,15 +1,15 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-10-08
+last_validated: 2026-10-11
 ---
 
 # Orbit Data Handling
 
-Orbit is local software. It runs on your machine, stores its state on your
-disk, and is operated by you. There is no Orbit-hosted service, no account, no
-telemetry, and no channel through which the Orbit project receives your code,
-tasks, prompts, or logs.
+Orbit is locally installed software. It stores its state on your disk and has
+no Orbit-hosted service, account, or automatic telemetry endpoint. Orbit does
+not send your code, tasks, prompts, or logs to the project unless you choose
+to share them, for example in an issue or pull request.
 
 This page is written for the person who has to answer a security or procurement
 questionnaire about Orbit. It states what Orbit stores, what it sends, and where
@@ -17,18 +17,18 @@ the compliance boundary actually sits.
 
 ## The one-paragraph answer
 
-Orbit does not process your data on your behalf. All Orbit state lives under
-`~/.orbit/` and `<repo>/.orbit/` on the host that runs it. `<repo>/.orbit/` is
-per-user checkout state (gitignored in full); it is not a repository artifact.
-The only network
-traffic Orbit initiates itself is to fetch its own releases from GitHub when you
-run `orbit update`. Everything else that leaves
-the machine — model traffic from agent CLIs, `git push`, pull requests, SSH —
-goes through tools and accounts you already control, under those providers'
-terms, not Orbit's. Because Orbit is neither a data processor (GDPR), a
-business associate (HIPAA), nor a service operator (SOC 2), those frameworks
-apply to *your* environment, and Orbit is one locally installed tool inside it —
-in the same category as `git` or an editor.
+All Orbit state lives under `~/.orbit/` and `<repo>/.orbit/` on the host that
+runs it. `<repo>/.orbit/` is per-user checkout state (gitignored in full); it
+is not a repository artifact. Orbit has no background network traffic. An
+explicit `orbit update` can fetch release metadata and binaries from GitHub;
+`orbit plugin add` can fetch a digest-pinned HTTPS archive with `curl` or clone
+a configured Git source. Agent CLIs, `git`, `gh`, and `ssh` are separate
+processes that may send data using accounts and services you configure.
+Whether an organization or provider acts as a controller or processor under
+GDPR, or as a HIPAA business associate, depends on the actual data, purposes,
+and services involved; this page does not make that legal determination. SOC 2
+is an attestation framework for service organizations, not a status that can
+be ruled in or out for locally installed software in general.
 
 ## What Orbit stores, and where
 
@@ -59,7 +59,10 @@ choose, or through federated MCP over SSH to hosts you configure.
 
 | Traffic | When | Destination | What is sent |
 | --- | --- | --- | --- |
-| Release check and binary download | Only when you run `orbit update` | `api.github.com` / `github.com/constellation-works/orbit/releases` | A GitHub API request for the latest release; no identifiers, no payload. |
+| Release check and binary download | Only when you run `orbit update` | `api.github.com` / `github.com/constellation-works/orbit/releases` | HTTPS requests for release metadata and selected assets. The `User-Agent` identifies the Orbit CLI version; task and repository content are not included. |
+| Plugin archive fetch | When `orbit plugin add` or `orbit plugin upgrade` uses an HTTPS archive source | The configured archive URL | The archive is fetched with `curl`; Orbit requires and checks a pinned SHA-256 digest before unpacking it. |
+| Git plugin source | When `orbit plugin add` or `orbit plugin upgrade` uses a `git+` source | The configured Git remote | Orbit runs Git to clone or fetch the requested source and ref. |
+| Task publication | When you explicitly publish tasks to a bound Git repository | The repository you chose | The selected task bundles and history are pushed through Git. |
 
 Every Orbit crew dispatches through a provider CLI. Selecting an HTTP-only
 provider such as `openai_compat` fails structurally before making a request.
@@ -129,16 +132,18 @@ Redact anything sensitive before attaching logs or run bundles to an issue.
 
 ## Where the compliance boundary sits
 
-| Framework | Does it apply to Orbit? | What it applies to instead |
+| Framework or question | What this page establishes | What still needs assessment |
 | --- | --- | --- |
-| **GDPR** | No. Orbit is neither a controller nor a processor of your users' data; the project never receives it. | Your organisation, for the personal data in the repositories and tasks you point Orbit at, and the providers your agent CLIs send prompts to. Their DPAs cover that traffic. |
-| **HIPAA** | No. Orbit is not a business associate; no PHI is transmitted to or held by the project. | Your environment. If PHI can appear in a repository or a task, ensure the agent providers you enable will sign a BAA, and treat `~/.orbit/` and `<repo>/.orbit/` as PHI-bearing storage on that host. |
-| **SOC 2** | Not applicable. There is no Orbit-operated service to audit. | Your own SOC 2 scope, in which Orbit is a locally installed developer tool subject to your endpoint, access, and change-management controls. |
+| **[GDPR](https://eur-lex.europa.eu/eli/reg/2016/679/oj)** | Orbit has no hosted service or automatic project telemetry; task and repository data are processed locally and may be sent by configured tools. | Determine the parties' roles from the actual data, purposes, and provider services. Review provider terms and any required data-processing agreements. |
+| **[HIPAA](https://www.hhs.gov/hipaa/for-professionals/privacy/guidance/business-associates/index.html)** | The project does not receive PHI automatically. Local Orbit state may contain task or repository content, and configured tools may transmit it. | Business-associate status depends on whether a party performs covered functions involving PHI on behalf of a covered entity or another business associate. Assess the actual services and agreements. |
+| **[SOC 2](https://www.aicpa-cima.com/resources/landing/system-and-organization-controls-soc-suite-of-services)** | Orbit has no Orbit-operated hosted service described on this page. | Assess whether a service organization in the data flow needs a SOC 2 report and whether Orbit's local installation falls within your organization's endpoint, access, and change-management controls. |
 
-If a questionnaire insists on a SOC 2 report or a signed DPA from "the vendor",
-the accurate answer is that there is no vendor-operated service and no vendor
-data flow; point the reviewer at this page and at
-[SECURITY.md](../SECURITY.md).
+If a questionnaire asks for a SOC 2 report or DPA from "the vendor," explain
+that Orbit is locally installed and has no Orbit-operated hosted service or
+automatic project telemetry, then assess the other configured services in the
+data flow separately. This page describes Orbit's current behavior; it is not
+a legal or compliance determination. See [SECURITY.md](../SECURITY.md) for
+project security reporting.
 
 ## Practical guidance for regulated environments
 
