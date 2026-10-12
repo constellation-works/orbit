@@ -3,7 +3,7 @@ summary: "Glossary — Host Registry"
 type: design
 title: "Glossary — Host Registry"
 owner: codex
-last_updated: 2026-10-07
+last_updated: 2026-10-12
 last_validated: 2026-10-12
 status: Accepted
 feature: host-registry
@@ -26,7 +26,7 @@ related_artifacts: [ORB-14448, ORB-14449]
 | Host file | `~/.orbit/hosts.toml`, written by `orbit host`. It holds operator-registered remote hosts (name, ssh, machine_id, task_prefix) and nothing that can change on the host. Federated serve, pull drains and replica worktree GC read it. It replaces `mcp-destinations.toml`, which is read only while it is the sole file and is migrated by the first `orbit host` mutation. See [host-commands](../specs/host-commands.md). |
 | Host facts | What a host's discovery envelope says about itself: `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint`. Read live by `orbit host` and `orbit doctor`; never persisted. |
 | Skew | A registered host's `binary_version` or `protocol_fingerprint` differs from this machine's. `orbit host list` flags it; `orbit doctor` fails on it for a host this machine pulls from. |
-| Host name | The operator's name for a host. For the local host it is `machine.name`; for a remote it is the entry's `name`, which defaults to the remote's own `machine.name`. `orbit host show|rename|remove` resolve it case-insensitively, or by exact `machine_id`. |
+| Host name | The operator's name for a host. For the local host it is `machine.name`; for a remote it is the entry's `name`, which defaults to the remote's own `machine.name`. `orbit host show\|rename\|remove` resolve it case-insensitively, or by exact `machine_id`. |
 | Prefix table | Per-process map from task prefix to host, built from the local `machine.task_prefix` and the host file. It is the key for task-id routing. See [host-routing](../specs/host-routing.md). |
 | Id-routed tool | A task tool whose target is one task id and whose `workspace` is optional: `orbit.task.show`, `update`, `reject`, `delete`, `artifact.get`, `artifact.put`, `review_reset`, `reconcile_review`. Called without a selector, it goes to the host the id's prefix names. The list is static, and a surface test refuses an unlisted match. See [host-routing](../specs/host-routing.md#routed-calls). |
 | `--host` | Names a host, by name or `machine_id`, for `--workspace` on routable task commands (`show`, `update`, `artifact put\|get`, `review-reset`, `reconcile-review …`) and `orbit tool run`, and for `--pull` on `orbit run auto`. Resolves to the selector that host lists. Host-local commands reject it with an `ssh <target> orbit …` hint. See [host-routing](../specs/host-routing.md#--host). |

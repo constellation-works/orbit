@@ -250,8 +250,15 @@ The view is Settings › Hosts (`#config/hosts`).
 - Keyboard and focus behave as in [user-interface 2_design §6](../../user-interface/2_design.md#6-top-level-navigation).
 - Opening the view and its Reload button probe every host, and an add shows the new host
   as its identity probe found it. The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
-  fields, so the view never probes in the background. A row marked not probed has not been
+  fields, so identity discovery is not repeated in the background. A row marked not probed has not been
   asked since the view opened.
+- While the view is open, each refresh separately reads host resources and each workspace's
+  drain capacity through `/api/on/<host>/host/resources` and
+  `/api/on/<host>/workflows/auto/readiness`. The serving host is answered locally. The Health
+  column shows load, memory, disk, drain state and the throttle verdict; Show switches the
+  dashboard to that host. Unreachable or unprobed hosts are not asked for health readings,
+  and a failed reading is shown without suppressing other hosts. These readings remain view
+  state and do not change the host file.
 
 ### Freshness
 
@@ -332,7 +339,8 @@ unrelated to this file.
 
 ## Non-goals
 
-- No presence heartbeat, background probe, cached health or last-seen state.
+- No presence heartbeat, cached health or last-seen state in the host file. The dashboard's
+  live health readings are separate from registry membership and identity discovery.
 - No placement, failover, leases or leader election, and no choosing between hosts.
 - No database tables. The legacy fleet-registry tables stay unread.
 - No discovery: nothing scans SSH config, the tailnet or mDNS.
