@@ -41,13 +41,22 @@ impl StubSsh {
         let script = dir.path().join("ssh");
         fs::write(&script, include_str!("stub_ssh.py")).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        let config = json!({"log": dir.path().join("calls.jsonl"), "hosts": hosts});
+        let config = json!({
+            "log": dir.path().join("calls.jsonl"),
+            "release": dir.path().join("release"),
+            "hosts": hosts,
+        });
         fs::write(dir.path().join("ssh.json"), config.to_string()).unwrap();
         Self { dir }
     }
 
     fn bin(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// Lets every held exit host's ssh run on to its exit.
+    fn release(&self) {
+        fs::write(self.dir.path().join("release"), "").unwrap();
     }
 
     fn calls(&self) -> Vec<Value> {
@@ -585,7 +594,7 @@ fn forward_failures_are_typed_and_bounded() {
             );
             let stub = StubSsh::new(json!({
                 "hostb-ssh": {"attach": port(&b_server), "spawn": null},
-                "dead-ssh": {"exit": 255, "delay": 1.5},
+                "dead-ssh": {"exit": 255, "hold": true},
                 "imposter-ssh": {"attach": port(&b_server), "spawn": null},
                 "old-ssh": {"attach": old, "spawn": null},
             }));
@@ -625,12 +634,13 @@ fn forward_failures_are_typed_and_bounded() {
                 Duration::from_secs(10),
                 || !stub.calls().is_empty(),
             );
-            let local = Instant::now();
+            // The dead host's ssh is held, so its request is still in flight here.
             json_ok(a_server.get(&format!("/api/tasks{WS}")));
             assert!(
-                local.elapsed() < Duration::from_secs(1),
-                "a slow host does not stall local requests"
+                !dead.is_finished(),
+                "the dead host's request was still in flight when the local request succeeded"
             );
+            stub.release();
             let dead = error_code(dead.join().unwrap(), 502, "unreachable_destination");
             assert!(started.elapsed() < Duration::from_secs(20), "bounded");
             assert!(

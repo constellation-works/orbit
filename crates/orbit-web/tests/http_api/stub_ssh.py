@@ -4,10 +4,12 @@
 `ssh.json` beside this file configures it:
 
     {"log": "<path>",
+     "release": "<path>",
      "hosts": {"<ssh target>": {"attach": <port or null>,
                                 "spawn": <port or null>,
                                 "exit": <status or null>,
                                 "delay": <seconds>,
+                                "hold": <bool>,
                                 "bind_delay": <seconds>}}}
 
 Every invocation first appends one JSON line to `log`: its pid, its mode
@@ -15,7 +17,9 @@ Every invocation first appends one JSON line to `log`: its pid, its mode
 host), the host, the remote command and the full argv. Then:
 
 - an unknown host exits 255, as ssh does when it cannot connect;
-- `exit` sleeps `delay` seconds and exits with that status, never binding;
+- `exit` sleeps `delay` seconds and exits with that status, never binding.
+  With `hold` it first blocks until the `release` file exists, so a test
+  decides when that ssh finishes;
 - otherwise it sleeps `bind_delay` seconds (authentication), then binds the
   `-L` listener. When the port is taken it exits 255 at once, as ssh does
   with `ExitOnForwardFailure=yes`. Once bound it runs `-o LocalCommand`
@@ -62,6 +66,8 @@ def main():
         sys.stderr.write(f"stub ssh: unknown host {host}\n")
         sys.exit(255)
     if host_config.get("exit") is not None:
+        if host_config.get("hold"):
+            wait_for(Path(config["release"]))
         time.sleep(host_config.get("delay", 0))
         sys.exit(host_config["exit"])
     time.sleep(host_config.get("bind_delay", 0))
@@ -94,6 +100,11 @@ def watchdog():
             time.sleep(0.2)
 
     threading.Thread(target=watch, daemon=True).start()
+
+
+def wait_for(path):
+    while not path.exists():
+        time.sleep(0.02)
 
 
 def options(argv):
