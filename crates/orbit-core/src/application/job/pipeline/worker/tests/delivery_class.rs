@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::worker::delivery_class::{RESOURCE_CLASS_KEY, work_class};
+use crate::application::job::pipeline::worker::delivery_class::work_class;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::runtime::host_resource::delivery::RESOURCE_CLASS_KEY;
 
 fn tags(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| value.to_string()).collect()

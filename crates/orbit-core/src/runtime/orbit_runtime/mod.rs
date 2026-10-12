@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use super::host_resource::HostResourceMonitor;
+use super::host_resource::forecast::HostLoadProbe;
 use super::host_resource::profile::ResourceProfileCache;
 use super::host_signal::HostSignalProbe;
 use super::task_pr_forge::TaskPrForge;
@@ -67,6 +68,9 @@ pub struct OrbitRuntime {
     /// The host's resource profiles, shared by clones and kept across
     /// admission passes until a delivery finishes.
     resource_profiles: Arc<ResourceProfileCache>,
+    /// The host's measured load for the forecast baseline. It keeps only the
+    /// previous CPU tick reading that utilization is measured against.
+    host_load: Arc<HostLoadProbe>,
     pub event_log: event_bus::EventLog,
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
     /// this runtime opened (empty `applied` when the layout was already

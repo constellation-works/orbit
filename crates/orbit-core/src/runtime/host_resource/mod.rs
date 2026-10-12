@@ -1,5 +1,7 @@
-//! Cheap host observations, shared pressure history and the resource profiles
-//! learned from delivery samples. No admission side effects.
+//! Cheap host observations, shared pressure history, the resource profiles
+//! learned from delivery samples, and the host load forecast admitters decide
+//! against. Only the forecast's admission lock writes: the reservations its
+//! caller decides.
 
 use chrono::{DateTime, Utc};
 use orbit_config::ResourceThrottleSettings;
@@ -8,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub(crate) mod delivery;
+pub mod forecast;
 mod monitor;
 mod platform;
 mod pressure;

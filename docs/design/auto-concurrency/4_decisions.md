@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Decisions
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Draft
 feature: auto-concurrency
 doc_role: decisions
@@ -18,9 +18,10 @@ related_artifacts: [ORB-15757]
 
 Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
 
-Nothing here is implemented yet. Every entry is a proposed Door 2 rule: it
-governs choices the implementation tasks have not made yet. Each is open to
-the operator's revision while the folder is `Draft`.
+Every entry is a proposed Door 2 rule: it governs choices the implementation
+tasks make. Each is open to the operator's revision while the folder is
+`Draft`. Per-task measurement, and the host-wide forecast with its serialized
+reservations, are implemented; nothing admits on the forecast yet.
 
 ## Admit on forecast resource use, not on a throughput model
 

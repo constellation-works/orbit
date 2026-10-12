@@ -189,9 +189,10 @@ fn an_existing_store_gains_the_provider_column_additively() {
         DROP TABLE run_resource_minutes;
         DROP TABLE host_resource_minutes;
         ALTER TABLE job_run_steps DROP COLUMN lock_wait_ms;
+        DROP TABLE admission_reservations;
         CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
         DELETE FROM schema_meta WHERE key IN ('migration.v0042', 'migration.v0043', 'migration.v0044',
-            'migration.v0045', 'migration.v0046');
+            'migration.v0045', 'migration.v0046', 'migration.v0047');
         INSERT INTO invocations (ts, job_run_id, activity_id, agent, input_tokens, output_tokens)
         VALUES (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), 'run', 'act', 'grok', 40, 2);",
     )

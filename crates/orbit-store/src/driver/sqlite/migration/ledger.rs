@@ -456,12 +456,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_job_run_step_lock_wait,
     },
+    // Admissions decided under the host admission lock whose runs may not
+    // exist yet, so every drain's forecast counts them. A new table only, as
+    // v44.
+    Migration {
+        version: 47,
+        name: "admission_reservations",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_admission_reservations,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 46;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 47;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

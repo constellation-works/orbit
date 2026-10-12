@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Overview
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Draft
 feature: auto-concurrency
 doc_role: overview
@@ -16,9 +16,10 @@ related_artifacts: [ORB-15757]
 
 # Auto-concurrency — Overview
 
-> **Status: Draft proposal, not implemented.** Nothing in this folder exists
-> in code yet. It records the design for review before implementation tasks
-> are filed.
+> **Status: Draft proposal, partly implemented.** Recording, profiles, the
+> load forecast and the host admission lock exist in code
+> ([2_design.md](./2_design.md) §2–§4 and §5.2); nothing admits on the
+> forecast yet.
 
 A drain's concurrency today is a number the operator picks.
 **Auto-concurrency** admits tasks by predicted host load instead, up to that

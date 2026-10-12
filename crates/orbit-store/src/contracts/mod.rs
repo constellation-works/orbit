@@ -1,3 +1,4 @@
+mod admission_load;
 mod audit;
 mod compat;
 mod friction;
@@ -14,6 +15,7 @@ mod task;
 mod traits;
 mod v2_audit;
 
+pub use admission_load::*;
 pub use audit::*;
 pub use compat::*;
 pub use friction::*;
