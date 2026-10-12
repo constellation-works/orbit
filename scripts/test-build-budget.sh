@@ -514,7 +514,8 @@ CARGO_BUILD_JOBS=6 ORBIT_CARGO_JOBS=7 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-overrid
 grep -Fq 'jobs=7' "$TMP/override/events" || fail "ORBIT_CARGO_JOBS did not take precedence"
 
 for setting in 'ORBIT_BUILD_SLOTS=0' 'ORBIT_BUILD_SLOTS=banana' \
-  'ORBIT_CARGO_JOBS=0' 'ORBIT_CARGO_JOBS=4.5' 'ORBIT_BUILD_BUDGET=maybe'; do
+  'ORBIT_CARGO_JOBS=0' 'ORBIT_CARGO_JOBS=4.5' 'ORBIT_BUILD_BUDGET=maybe' \
+  'ORBIT_BUILD_LOW_PRIORITY=maybe'; do
   set +e
   env "$setting" "$WRAPPER" -- true >/dev/null 2>"$TMP/invalid.err"
   status=$?
@@ -582,6 +583,58 @@ ORBIT_BUILD_BUDGET=0 ORBIT_CARGO_JOBS=8 \
   "$WRAPPER" -- "$TMP/helper.py" "$TMP/bypass" bypass sleep 0.01
 grep -Fq 'jobs=8' "$TMP/bypass/events" || fail "bypass lost Cargo job setting"
 grep -Fq 'slot=None' "$TMP/bypass/events" || fail "bypass unexpectedly acquired a slot"
+
+# Wrapped build children run at lower CPU and IO priority than the caller [ORB-15798].
+# The probe prints the child's niceness, then on Linux its IO class from ionice -p.
+PRIORITY_PROBE='python3 -c "import os; print(os.getpriority(os.PRIO_PROCESS, 0))"'
+if [[ "$(uname -s)" == Linux ]]; then
+  PRIORITY_PROBE+='; ionice -p $$'
+fi
+
+# run_priority_case NAME [VAR=value ...] runs the probe through the wrapper with its own budget.
+run_priority_case() {
+  local case_name="$1"
+  shift
+  env -i HOME="$TMP/probe-home" PATH="$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-priority-$case_name" \
+    ORBIT_BUILD_SLOTS=1 ${1+"$@"} "$WRAPPER" -- sh -c "$PRIORITY_PROBE" \
+    >"$TMP/priority-$case_name.out" || fail "$case_name: wrapper failed"
+}
+
+# assert_lowered_priority NAME checks niceness of at least 10 and, on Linux, an idle or best-effort 7 IO class.
+assert_lowered_priority() {
+  local output="$TMP/priority-$1.out"
+  local niceness io_class
+  niceness="$(sed -n 1p "$output")"
+  [[ "$niceness" =~ ^[0-9]+$ && "$niceness" -ge 10 ]] \
+    || fail "$1: wrapped child niceness was '$niceness', expected at least 10"
+  if [[ "$(uname -s)" == Linux ]]; then
+    io_class="$(sed -n 2p "$output")"
+    [[ "$io_class" == "best-effort: prio 7" || "$io_class" == idle ]] \
+      || fail "$1: wrapped child IO class was '$io_class', expected idle or best-effort prio 7"
+  fi
+}
+
+# The unwrapped probe reports the caller's own priority, which the opt-out must reproduce.
+env -i HOME="$TMP/probe-home" PATH="$PATH" sh -c "$PRIORITY_PROBE" >"$TMP/priority-direct.out"
+run_priority_case admitted
+assert_lowered_priority admitted
+run_priority_case bypass ORBIT_BUILD_BUDGET=0
+assert_lowered_priority bypass
+run_priority_case opt-out-admitted ORBIT_BUILD_LOW_PRIORITY=0
+cmp -s "$TMP/priority-direct.out" "$TMP/priority-opt-out-admitted.out" \
+  || fail "opt-out admitted command did not restore the caller's priority"
+run_priority_case opt-out-bypass ORBIT_BUILD_BUDGET=0 ORBIT_BUILD_LOW_PRIORITY=0
+cmp -s "$TMP/priority-direct.out" "$TMP/priority-opt-out-bypass.out" \
+  || fail "opt-out bypass command did not restore the caller's priority"
+
+# A caller already nicer than the child floor keeps its level; the wrapper never lowers it.
+NICE_PROBE='import os; print(os.getpriority(os.PRIO_PROCESS, 0))'
+env -i HOME="$TMP/probe-home" PATH="$PATH" nice -n 15 python3 -c "$NICE_PROBE" >"$TMP/priority-nicer-direct.out"
+env -i HOME="$TMP/probe-home" PATH="$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-priority-nicer" \
+  ORBIT_BUILD_SLOTS=1 nice -n 15 "$WRAPPER" -- python3 -c "$NICE_PROBE" \
+  >"$TMP/priority-nicer-wrapped.out" || fail "nicer caller: wrapper failed"
+cmp -s "$TMP/priority-nicer-direct.out" "$TMP/priority-nicer-wrapped.out" \
+  || fail "wrapper lowered a caller already nicer than the child floor"
 
 cat >"$TMP/fake-app" <<'SH'
 #!/usr/bin/env bash
