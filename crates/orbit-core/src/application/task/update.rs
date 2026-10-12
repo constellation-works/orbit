@@ -248,11 +248,14 @@ impl OrbitRuntime {
         )
     }
 
+    /// Apply an activity update on the coordination owner. Claimed workers
+    /// must use the engine host's owner route; replica runtimes cannot write locally.
     pub fn update_task_from_activity(
         &self,
         id: &str,
         update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         let TaskActivityUpdate {
             status,
             expected_status,

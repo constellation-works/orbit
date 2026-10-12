@@ -7,6 +7,84 @@ use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT};
 
 #[test]
+fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
+    if !super::dispatch_admission::isolated(
+        "task_update::activity_updates_refuse_replica_writes_and_preserve_owner_updates",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let owner = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = owner
+        .add_task(TaskAddParams {
+            title: "Activity coordination fence".into(),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        })
+        .unwrap();
+    let before = owner.get_task(&task.id).unwrap();
+    let history = owner.get_task_history(&task.id).unwrap();
+    let comments = owner.get_task_comments(&task.id).unwrap();
+    let replica = owner
+        .clone()
+        .with_coordination_write_owner(Some("owner-machine".into()));
+    let ordinary_refusal = replica
+        .update_task_with_identity(&task.id, TaskUpdateParams::default(), None, None)
+        .expect_err("ordinary task writes must refuse the replica");
+    let update = orbit_engine::TaskActivityUpdate {
+        status: TaskStatus::Review,
+        expected_status: TaskStatus::InProgress,
+        execution_summary: Some("Activity summary".into()),
+        comment: Some("Activity comment".into()),
+        note: Some("Activity transition".into()),
+        agent: None,
+        model: Some("codex".into()),
+        calling_run_id: None,
+    };
+    for result in [
+        replica.update_task_from_activity(&task.id, update.clone()),
+        orbit_engine::RuntimeHost::update_task_from_activity(&replica, &task.id, update.clone()),
+    ] {
+        let error = result.expect_err("activity updates must refuse the replica");
+        let OrbitError::CapabilityRefused(reason) = &error else {
+            panic!("expected the replica capability refusal, got {error:?}");
+        };
+        assert!(
+            reason.contains("owner-machine"),
+            "refusal must name the owner"
+        );
+        assert_eq!(error.to_string(), ordinary_refusal.to_string());
+    }
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    assert_eq!(persisted.get_task(&task.id).unwrap(), before);
+    assert_eq!(persisted.get_task_history(&task.id).unwrap(), history);
+    assert_eq!(persisted.get_task_comments(&task.id).unwrap(), comments);
+
+    orbit_engine::RuntimeHost::update_task_from_activity(&owner, &task.id, update)
+        .expect("the owner host can apply the same activity update");
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let updated = persisted.get_task(&task.id).unwrap();
+    assert_eq!(updated.status, TaskStatus::Review);
+    assert_eq!(updated.execution_summary, "Activity summary");
+    assert_eq!(
+        persisted.get_task_comments(&task.id).unwrap().len(),
+        comments.len() + 1
+    );
+    assert!(
+        persisted
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|event| event.to_status == Some(TaskStatus::Review)
+                && event.note.as_deref() == Some("Activity transition"))
+    );
+}
+
+#[test]
 fn guarded_start_and_activity_notes_redact_before_persistence() {
     if !super::dispatch_admission::isolated(
         "task_update::guarded_start_and_activity_notes_redact_before_persistence",
