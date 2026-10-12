@@ -2,7 +2,7 @@
 
 use tempfile::tempdir;
 
-use super::{roots, write_config};
+use crate::tests::{roots, write_config};
 use crate::{ConfigSnapshot, ResolvedConfig};
 
 #[test]
