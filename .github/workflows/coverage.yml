@@ -140,8 +140,7 @@ jobs:
       # [ORB-13655] Run through nextest with the ci job's target set, so each
       # test gets its own process and the `.config/nextest.toml` test groups
       # apply. Under libtest, a binary's tests shared one process: a sibling's
-      # fork could hold a freshly written executable open (ETXTBSY), and the
-      # `web_serve_*` tests raced each other for a `free_port()` port.
+      # fork could hold a freshly written executable open (ETXTBSY).
       - name: Collect workspace coverage
         run: |
           cargo llvm-cov nextest --workspace --locked --no-report \

@@ -16,7 +16,7 @@ const LINE_LIMIT: usize = 16 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) enum Announcement {
     Dashboard,
-    // The tool integration binary only starts dashboard fixtures.
+    // The process and tool integration binaries only start dashboard fixtures.
     #[allow(dead_code)]
     Mcp,
 }
