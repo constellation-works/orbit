@@ -16,6 +16,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::OwnedChild;
 use super::output_capture::BoundedOutputCapture;
 #[cfg(unix)]
 use super::pipe::set_nonblocking;
@@ -158,39 +159,45 @@ fn run_with_completion(
 
 #[cfg(unix)]
 fn supervise(
-    mut child: Child,
+    child: Child,
     deadline: Duration,
     output_limit: usize,
     require_eof: bool,
 ) -> Result<CapturedOutput, OrbitError> {
-    let leader = child.id();
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    if let Err(error) = prepare_pipes(stdout.as_ref(), stderr.as_ref()) {
-        let _ = terminate(&mut child, leader);
-        return Err(OrbitError::Execution(error.to_string()));
-    }
+    let mut child = OwnedChild::from_spawned(child);
+    let mut stdout = child.child_mut().stdout.take();
+    let mut stderr = child.child_mut().stderr.take();
+    #[cfg(test)]
+    inject_supervision_failure(SupervisionFailure::PreparePipes, child.pid())?;
+    prepare_pipes(stdout.as_ref(), stderr.as_ref())
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
 
     let started = Instant::now();
     let mut out = BoundedOutputCapture::new(output_limit);
     let mut err = BoundedOutputCapture::new(output_limit);
     let mut status = None;
     loop {
+        #[cfg(test)]
+        inject_supervision_failure(SupervisionFailure::PipeRead, child.pid())?;
         let out_turn = drain_pipe(stdout.as_mut(), &mut out)?;
         let err_turn = drain_pipe(stderr.as_mut(), &mut err)?;
         if status.is_none() {
+            #[cfg(test)]
+            inject_supervision_failure(SupervisionFailure::Wait, child.pid())?;
             status = child
+                .child_mut()
                 .try_wait()
                 .map_err(|error| OrbitError::Execution(error.to_string()))?;
         }
         if let Some(status) = status.filter(|_| !require_eof || (out_turn.eof && err_turn.eof)) {
             // The leader is reaped. Signal the group so a descendant that
             // inherited it and is still holding a pipe is torn down with it.
-            signal_owned_group(leader, kill_signal());
+            let _ = child.signal_group(kill_signal());
             let drain_end =
                 Instant::now() + DRAIN_AFTER_EXIT.min(deadline.saturating_sub(started.elapsed()));
             drain_until(stdout.as_mut(), &mut out, out_turn.eof, drain_end)?;
             drain_until(stderr.as_mut(), &mut err, err_turn.eof, drain_end)?;
+            child.mark_reaped();
             return Ok(CapturedOutput {
                 status,
                 stdout: out.into_bytes(),
@@ -201,9 +208,11 @@ fn supervise(
             // The output is discarded; dropping the pipes on return unblocks
             // any writer the group signal missed.
             if status.is_some() {
-                signal_owned_group(leader, kill_signal());
+                let _ = child.signal_group(kill_signal());
             } else {
-                terminate(&mut child, leader)?;
+                child
+                    .terminate(TERM_GRACE)
+                    .map_err(|error| OrbitError::Execution(error.to_string()))?;
             }
             return Err(process_timeout(deadline));
         }
@@ -218,20 +227,22 @@ fn supervise(
 
 #[cfg(not(unix))]
 fn supervise(
-    mut child: Child,
+    child: Child,
     deadline: Duration,
     output_limit: usize,
     _require_eof: bool,
 ) -> Result<CapturedOutput, OrbitError> {
-    let leader = child.id();
-    let stdout = spawn_reader(child.stdout.take(), output_limit);
-    let stderr = spawn_reader(child.stderr.take(), output_limit);
+    let mut child = OwnedChild::from_spawned(child);
+    let stdout = spawn_reader(child.child_mut().stdout.take(), output_limit);
+    let stderr = spawn_reader(child.child_mut().stderr.take(), output_limit);
     let started = Instant::now();
     loop {
         if let Some(status) = child
+            .child_mut()
             .try_wait()
             .map_err(|error| OrbitError::Execution(error.to_string()))?
         {
+            child.mark_reaped();
             return Ok(CapturedOutput {
                 status,
                 stdout: finish_reader(stdout)?,
@@ -239,7 +250,9 @@ fn supervise(
             });
         }
         if started.elapsed() >= deadline {
-            terminate(&mut child, leader)?;
+            child
+                .terminate(TERM_GRACE)
+                .map_err(|error| OrbitError::Execution(error.to_string()))?;
             let _ = finish_reader(stdout);
             let _ = finish_reader(stderr);
             return Err(process_timeout(deadline));
@@ -404,38 +417,6 @@ fn read_available(pipe: &mut impl Read, buf: &mut BoundedOutputCapture) -> io::R
     }
 }
 
-fn terminate(child: &mut Child, leader: u32) -> Result<(), OrbitError> {
-    signal_owned_group(leader, term_signal());
-    let grace_end = Instant::now() + TERM_GRACE;
-    let mut reaped = false;
-    while Instant::now() < grace_end {
-        if child
-            .try_wait()
-            .map_err(|error| OrbitError::Execution(error.to_string()))?
-            .is_some()
-        {
-            reaped = true;
-            break;
-        }
-        thread::sleep(POLL_INTERVAL);
-    }
-    signal_owned_group(leader, kill_signal());
-    if !reaped {
-        match child
-            .try_wait()
-            .map_err(|error| OrbitError::Execution(error.to_string()))?
-        {
-            Some(_) => {}
-            None => {
-                // The leader may have exited between the poll and this kill.
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(unix)]
 pub(crate) fn isolate_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -469,56 +450,69 @@ fn prepare_pipes(
 }
 
 #[cfg(unix)]
-fn term_signal() -> i32 {
-    libc::SIGTERM
-}
-
-#[cfg(unix)]
 fn kill_signal() -> i32 {
     libc::SIGKILL
 }
 
-#[cfg(not(unix))]
-fn term_signal() -> i32 {
-    15
+// Per-thread fault injection exercises the public bounded-run boundary without
+// exhausting host descriptors or corrupting a process-wide wait disposition.
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SupervisionFailure {
+    PreparePipes,
+    PipeRead,
+    Wait,
 }
 
-#[cfg(not(unix))]
-fn kill_signal() -> i32 {
-    9
-}
+#[cfg(all(test, unix))]
+type FailureInjection = (SupervisionFailure, Box<dyn FnOnce(u32)>);
 
-/// Signal `leader`'s process group, never the caller's group.
-///
-/// The child was spawned with `process_group(0)`, so its pgid equals its pid.
-/// After the leader has exited, `killpg` of that pgid still reaches descendants
-/// that kept the group. A reused pid that is no longer that group leader is
-/// left alone.
-#[cfg(unix)]
-fn signal_owned_group(leader: u32, signal: i32) {
-    let Some(leader) = i32::try_from(leader).ok().filter(|pid| *pid > 1) else {
-        return;
+#[cfg(all(test, unix))]
+thread_local! {
+    static FAILURE: std::cell::RefCell<Option<FailureInjection>> = const {
+        std::cell::RefCell::new(None)
     };
-    // Safety: `getpgrp`, `getpgid`, and `killpg` only query or signal process
-    // groups. They do not dereference caller memory.
-    let own = unsafe { libc::getpgrp() };
-    if leader == own {
-        return;
-    }
-    let current = unsafe { libc::getpgid(leader) };
-    if current > 1 && current != leader {
-        return;
-    }
-    unsafe {
-        libc::killpg(leader, signal);
-    }
 }
 
-#[cfg(not(unix))]
-fn signal_owned_group(_leader: u32, _signal: i32) {}
+#[cfg(all(test, unix))]
+pub(super) fn with_supervision_failure<T>(
+    point: SupervisionFailure,
+    on_failure: impl FnOnce(u32) + 'static,
+    run: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<FailureInjection>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FAILURE.with(|failure| *failure.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(FAILURE.replace(Some((point, Box::new(on_failure)))));
+    let result = run();
+    assert!(
+        FAILURE.with_borrow(Option::is_none),
+        "did not reach {point:?}"
+    );
+    result
+}
 
-/// SIGKILL what remains of the process group `leader` was spawned to lead by
-/// [`isolate_process_group`]; the caller still reaps `leader` itself.
-pub(crate) fn kill_owned_group(leader: u32) {
-    signal_owned_group(leader, kill_signal());
+#[cfg(all(test, unix))]
+fn inject_supervision_failure(point: SupervisionFailure, pid: u32) -> Result<(), OrbitError> {
+    let injection = FAILURE.with(|failure| {
+        let mut failure = failure.borrow_mut();
+        if failure
+            .as_ref()
+            .is_some_and(|(expected, _)| *expected == point)
+        {
+            failure.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, on_failure)) = injection {
+        on_failure(pid);
+        return Err(OrbitError::Execution(format!(
+            "injected bounded supervision failure: {point:?}"
+        )));
+    }
+    Ok(())
 }

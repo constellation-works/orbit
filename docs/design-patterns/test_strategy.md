@@ -57,6 +57,8 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `crates/orbit-common/src/process/tests/bounded.rs::bounded_supervision_errors_kill_the_group_and_reap_the_leader` (criterion 2, fault injection). A per-thread seam injects pipe-setup, pipe-read and wait errors through the public `run_bounded` boundary, after placing an independently waitable peer in the child's group. The test verifies the leader is reaped and the peer is killed; descriptor exhaustion or global wait-state corruption would otherwise be needed to reach those errors. The crate-root `process_group_liveness` tests cover owned-handle drop, unwinding, explicit cleanup, TERM escalation and signal guards without injection.
+
 - `crates/orbit-common/src/process/tests/identity.rs::partial_linux_group_scans_cannot_certify_death_and_vanished_pids_do_not_delay_cleanup` (criterion 2, I/O fault injection). The production scan accepts directory entries and a stat reader so the table can force entry errors, unreadable and malformed stat records, and ENOENT between enumeration and reading. It proves an observed zombie cannot certify group death when a potentially live PID cannot be inspected, preserving cleanup's SIGKILL escalation, while vanished PIDs do not prevent zombie-only success. Live-member and unavailable-directory controls cover conclusive activity and the existing signal fallback. The public probe cannot force these partial `/proc` failures economically without host permission changes or nondeterministic races; the crate-root process-group test covers a real Linux zombie through that public probe.
 
 - The [launchd enable tests](../../crates/orbit-core/src/application/routines/clock/tests/enable.rs) (criterion 2,

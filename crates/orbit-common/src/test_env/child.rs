@@ -107,10 +107,12 @@ pub fn run_child_test_within(
         .stdout(create(&stdout_path))
         .stderr(create(&stderr_path));
     crate::process::bounded::isolate_process_group(command);
-    let mut child = command
-        .spawn()
-        .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}"));
-    let watchdog = orphan_watchdog::OrphanWatchdog::arm(child.id());
+    let mut child = crate::process::OwnedChild::from_spawned(
+        command
+            .spawn()
+            .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}")),
+    );
+    let watchdog = orphan_watchdog::OrphanWatchdog::arm(child.pid());
     let started = std::time::Instant::now();
     let output_len = || {
         [&stdout_path, &stderr_path]
@@ -120,7 +122,7 @@ pub fn run_child_test_within(
     };
     let (mut printed, mut last_output) = (0, started);
     let status = loop {
-        match child.try_wait() {
+        match child.child_mut().try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => {}
             Err(error) => panic!("wait for child test `{test_name}`: {error}"),
@@ -137,11 +139,7 @@ pub fn run_child_test_within(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
-    crate::process::bounded::kill_owned_group(child.id());
-    if status.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    child.kill_and_reap();
     if let Some(watchdog) = watchdog {
         watchdog.disarm();
     }
