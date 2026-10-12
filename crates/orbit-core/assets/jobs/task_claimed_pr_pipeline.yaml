@@ -236,6 +236,7 @@ spec:
       recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
+        step_id: sync_base
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"

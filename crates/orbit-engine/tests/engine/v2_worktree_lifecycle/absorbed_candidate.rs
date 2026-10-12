@@ -64,6 +64,114 @@ impl AbsorbedRun {
 }
 
 #[test]
+fn an_identical_landed_patch_settles_before_candidate_validation() {
+    isolated_in(
+        module_path!(),
+        "an_identical_landed_patch_settles_before_candidate_validation",
+        || {
+            let prepared = PreparedRebase::with_commits(
+                "jrun-empty-rebase",
+                &[("README.md", "target\n")],
+                &[
+                    ("base-only.md", "base advance\n"),
+                    ("README.md", "target\n"),
+                ],
+            );
+            let host = &prepared.host;
+            stub_pipeline_steps(host, &prepared);
+            assert_ne!(prepared.candidate, prepared.target);
+            assert_eq!(prepared.prepared["commits_ahead"], 1);
+
+            let run = execute(host, &prepared, &pipeline(git_rebase_step()));
+
+            assert!(run.result.is_err(), "absorption settles the failed step");
+            assert_eq!(prepared.head(), prepared.target);
+            assert_eq!(git(&prepared.checkout.path, &["status", "--porcelain"]), "");
+            assert_eq!(run.recovery_attempts(), Vec::<bool>::new());
+            assert!(!run.events.iter().any(|event| matches!(
+                event,
+                V2AuditEventKind::StepStarted { step_id } if step_id == "candidate_validate"
+            )));
+            assert_eq!(host.stub_calls_of("deliver"), Vec::<Value>::new());
+            assert_eq!(host.stub_calls_of("decide"), Vec::<Value>::new());
+            assert_eq!(host.stub_calls_of("handoff"), Vec::<Value>::new());
+            assert_eq!(
+                run.final_recovery(),
+                vec![("settled".to_string(), Some("complete_no_diff".to_string()))]
+            );
+            let checkpoint = certified(host);
+            assert_eq!(checkpoint["head_sha_before"], prepared.candidate);
+            assert_eq!(checkpoint["absorbed"]["covering_commit"], prepared.target);
+            let applications = host.final_recovery_applications.lock().unwrap();
+            let [application] = applications.as_slice() else {
+                panic!("expected one no-diff settlement, got {applications:#?}");
+            };
+            assert!(matches!(
+                &application.decision,
+                FinalRecoveryDecision::CompleteNoDiff { evidence_commit, .. }
+                    if evidence_commit == &prepared.target
+            ));
+            // A retry reuses and verifies the certificate, rather than
+            // reclassifying the empty branch or proceeding to validation.
+            let mut input = prepared.common.clone();
+            for (key, value) in prepared.prepared.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            input["step_id"] = json!("sync_base");
+            let retry = action(host, "git_rebase", &input).unwrap_err().to_string();
+            assert!(retry.contains("[candidate_absorbed]"), "{retry}");
+            assert_eq!(host.checkpoints().len(), 1);
+        },
+    );
+}
+
+#[test]
+fn a_rebase_retaining_candidate_commits_still_runs_validation() {
+    isolated_in(
+        module_path!(),
+        "a_rebase_retaining_candidate_commits_still_runs_validation",
+        || {
+            let prepared = PreparedRebase::with_commits(
+                "jrun-retained-rebase",
+                &[
+                    ("README.md", "target\n"),
+                    ("candidate-only.md", "new change\n"),
+                ],
+                &[
+                    ("base-only.md", "base advance\n"),
+                    ("README.md", "target\n"),
+                ],
+            );
+            let host = &prepared.host;
+            stub_pipeline_steps(host, &prepared);
+
+            let run = execute(host, &prepared, &pipeline(git_rebase_step()));
+
+            assert!(run.result.as_ref().unwrap().success);
+            assert_eq!(
+                git(
+                    &prepared.checkout.path,
+                    &["rev-list", "--count", &format!("{}..HEAD", prepared.target)]
+                ),
+                "1"
+            );
+            assert_eq!(
+                std::fs::read_to_string(prepared.checkout.path.join("candidate-only.md")).unwrap(),
+                "new change\n"
+            );
+            assert!(host.checkpoints().is_empty());
+            assert!(run.events.iter().any(|event| matches!(
+                event,
+                V2AuditEventKind::StepFinished { step_id, outcome, .. }
+                    if step_id == "candidate_validate" && outcome == "success"
+            )));
+            assert_eq!(host.stub_calls_of("deliver").len(), 1);
+            assert!(run.final_recovery().is_empty());
+        },
+    );
+}
+
+#[test]
 fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
     isolated_in(
         module_path!(),
@@ -546,11 +654,21 @@ fn stub_pipeline_steps(host: &LifecycleHost, prepared: &PreparedRebase) {
     }
 }
 
-/// `worktree → prepare_branch → sync_base → deliver`, with `sync_base`
+/// `worktree → prepare_branch → sync_base → candidate_validate → deliver`, with `sync_base`
 /// recovered by `pr_conflict_recovery`, `decide` as final recovery and
 /// `handoff` as the failure activity.
 fn pipeline(sync_base: Value) -> JobV2 {
     let stub = |id: &str| json!({ "id": id, "spec": { "type": "deterministic", "action": id, "config": {} } });
+    let validate = json!({
+        "id": "candidate_validate",
+        "spec": { "type": "deterministic", "action": "candidate_validate", "config": {} },
+        "default_input": {
+            "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+            "completed_task_ids": "{{ input.task_ids }}",
+            "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+            "base_sha": "{{ steps.sync_base.output.base_sha }}",
+        },
+    });
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Job",
@@ -558,7 +676,7 @@ fn pipeline(sync_base: Value) -> JobV2 {
         "spec": {
             "state": "enabled",
             "kind": "workflow",
-            "steps": [stub("worktree"), stub("prepare_branch"), sync_base, stub("deliver")],
+            "steps": [stub("worktree"), stub("prepare_branch"), sync_base, validate, stub("deliver")],
         },
     });
     let mut job = orbit_engine::activity_job::load_job_asset(&asset.to_string())
@@ -580,6 +698,7 @@ fn git_rebase_step() -> Value {
         "id": "sync_base",
         "spec": { "type": "deterministic", "action": "git_rebase", "config": {} },
         "default_input": {
+            "step_id": "sync_base",
             "job_run_id": "{{ steps.worktree.output.job_run_id }}",
             "completed_task_ids": "{{ input.task_ids }}",
             "workspace_path": "{{ steps.worktree.output.workspace_path }}",
