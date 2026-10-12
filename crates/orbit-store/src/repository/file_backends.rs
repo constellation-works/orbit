@@ -193,6 +193,14 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
     }
 
+    fn task_ids_with_tag(
+        &self,
+        tag: &str,
+        task_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::task_ids_with_tag(self, tag, task_ids))
+    }
+
     fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
         self.in_boundary(|| TaskV2Store::registered_task(self, id))
     }

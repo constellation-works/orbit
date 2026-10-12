@@ -131,6 +131,7 @@ impl OrbitRuntime {
         );
         Ok(Self {
             host_resources,
+            resource_profiles: Default::default(),
             context,
             write_free: false,
             workspace_binding: binding.map(Arc::new),
@@ -191,6 +192,7 @@ impl OrbitRuntime {
         );
         Ok(Self {
             host_resources,
+            resource_profiles: Default::default(),
             context,
             write_free: false,
             workspace_binding: Some(Arc::new(binding)),

@@ -15,9 +15,10 @@ related_artifacts: [ORB-15757]
 
 # Auto-concurrency — Design
 
-> **Status: Draft proposal; rollout step 1 (Record, §2) is implemented.** §1
-> describes today's code and cites it. §2 describes the recording that ships;
-> everything after it is the proposed design.
+> **Status: Draft proposal; rollout steps 1 (Record, §2) and 2 (Profiles
+> report, §3) are implemented.** §1 describes today's code and cites it. §2
+> describes the recording that ships and §3 the profiles `orbit run profiles`
+> reports; everything after it is the proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -196,7 +197,9 @@ falls back to `change`.
 
 The class is read from the task's tags at admission and stored with the
 delivery's samples, so a later tag edit does not move history between
-profiles.
+profiles. A template's base class is not stored: it comes from whether the
+newest delivery's task in the profile's window carries `no-diff-expected` in
+the host's task index.
 
 ### 3.2 No-diff work must not build
 
@@ -209,8 +212,10 @@ cost to learn. Its profile makes the defect visible.
 profile whose tasks are no-diff, that shows build-like load: more than one
 core sustained for two minutes. It names the deliveries behind the flag.
 Until [ORB-15764] and [ORB-15765] land, every claimed review will be flagged
-(§1). Templates that build by design, such as `qa-sweep`, are exempt from the
-flag. The
+(§1). Templates that build by design are exempt from the flag through one
+declaration, `auto_task_builds_by_design` (`qa-sweep` and `qa-full-sweep`,
+in `orbit-types/src/workflow/auto_task/definition.rs`), which the CPU-light
+rule shares. The
 existing CPU-light admission rule (`is_cpu_light` in
 `admission/cpu_light.rs`) trusts no-diff-expected only together with an
 auto-task tag. Its note: "an operator's claim about the diff, not about the
@@ -237,15 +242,39 @@ much CPU only slows everyone down. Too much memory kills a process.
 the minute at which `alive` falls below 0.1, the 90th-percentile duration,
 capped at 120 minutes.
 
-Profiles are computed from the table when admission needs them and cached for
-the pass. A key with fewer than 10 deliveries falls back along this chain,
-stopping at the first key that has enough:
+Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
+`cache.rs`) and read through `OrbitRuntime::resource_profiles` and
+`resource_profile_for`:
+
+- **Delivery.** The runs of one task sharing one `delivery_admitted_at`. Its
+  series sums their minutes, each placed at its whole minutes since that
+  admission, and it is alive until its last run's `finished_at`. A delivery
+  with a resumed run, a live run, or a run whose `job_runs` row is gone is
+  left out.
+- **Spread.** Each minute also keeps the standard deviation of CPU and memory
+  over the deliveries alive then. A profile's spread is the summed deviation
+  over the summed mean before the horizon, for CPU and memory: near 0 means
+  the deliveries agree, near 1 or above that one minute's mean says little.
+- **Heaviest** means the most expected core-minutes before the horizon,
+  `Σ cpu(m)·alive(m)`, then the highest memory peak.
+- **Caching.** Profiles change only when a delivery finishes, so they are
+  cached in memory across passes and runtime clones, not just for the pass.
+  Each read runs a cheap freshness probe, the newest `finished_at` and count
+  of finished sampled runs, and rebuilds when it or the
+  `[machine.auto_concurrency]` bounds change. Pruning changes the count too.
+  Only profiles are cached: the forecast's live inputs (running deliveries,
+  reservations, baseline) are read fresh every pass.
+
+A key with fewer than 10 deliveries falls back along this chain, stopping at
+the first key that has enough. Each lookup reports which step answered:
 
 1. drop complexity: `(host, workspace, class)`;
 2. for a template, its base class: `no-diff` or `change` in the same
    workspace;
-3. the heaviest profile of the same class on the host;
+3. the heaviest profile of the same class on the host (for a template, of
+   its base class);
 4. the heaviest profile on the host, so unknown work is assumed expensive;
+   when every profile is sparse, the heaviest sparse one;
 5. no profile at all, only on a host with no profiles: today's admission.
 
 The chain never crosses from `no-diff` to `change` until step 4. A new review
@@ -368,7 +397,7 @@ the forecast.
 | `drain_last_pass` | an `admission_forecast` block: the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource, and whether the head is being protected |
 | `orbit run show` | an `Admission:` line, e.g. `forecast — skipped ORB-123 (cpu 94% at +6m)` |
 | `orbit run readiness` | the host's forecast peak, its headroom, and the profile source per waiting task |
-| `orbit run profiles` | the profiles per workspace, work class and complexity: deliveries, horizon, peak CPU and memory, and when they occur. Flags no-diff profiles with build-like load (§3.2). `--json` for the full series |
+| `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
 | Dashboard | later: the forecast curve against measured load, with running tasks stacked |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced

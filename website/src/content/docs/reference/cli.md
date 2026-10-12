@@ -125,6 +125,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit run logs [run_id]` | Raw stdout and stderr captured for a run. `--follow` streams until the run ends. |
 | `orbit run events [run_id]` | Audit events recorded for a run. |
 | `orbit run trace [run_id]` | Parent/child tree of a run's audit events. |
+| `orbit run profiles` | This host's delivery resource profiles, one row per workspace, work class and complexity (`auto-task:<template>` profiles have none): completed deliveries, horizon, peak CPU and memory with the minute each occurs, and how much deliveries spread around them. Flags no-diff work that used more than 1 core for 2 minutes and names those deliveries; templates that build by design, such as `qa-sweep`, are exempt. `--json` adds the full per-minute series. |
 | `orbit run settlements` | On an owner, the failure and release settlements that claimed leaves on follower hosts sent it, newest first, with each one's evidence class. Those leaves never appear in the owner's `run history`. `--since <time\|duration>`, `--json`, `--no-reconcile`. |
 
 ### Maintenance

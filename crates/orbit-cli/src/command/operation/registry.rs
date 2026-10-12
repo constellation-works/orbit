@@ -166,6 +166,12 @@ impl Commands {
                         Some("auto_readiness"),
                         RuntimeNeed::ReadOnly,
                     ),
+                    RunSubcommand::Profiles(_) => (
+                        "profiles",
+                        Some("host"),
+                        Some("resource_profiles"),
+                        RuntimeNeed::ReadOnly,
+                    ),
                     RunSubcommand::History(args) => (
                         "history",
                         Some("job_run"),

@@ -50,7 +50,8 @@ pub use auto_task::{
     AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSchedule, AutoTaskSkipRecord,
     AutoTaskTemplate, DedupePolicy, InactivePluginWarning, MAX_AUTO_TASK_INTERVAL_MINUTES,
     SWEEP_CURSOR_ARTIFACT, SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord,
-    SweepCursorSelector, auto_task_tag, files_regression_findings, is_valid_auto_task_name,
+    SweepCursorSelector, auto_task_builds_by_design, auto_task_tag, files_regression_findings,
+    is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,

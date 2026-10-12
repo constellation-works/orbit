@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use super::host_resource::HostResourceMonitor;
+use super::host_resource::profile::ResourceProfileCache;
 use super::host_signal::HostSignalProbe;
 use super::task_pr_forge::TaskPrForge;
 use super::workspace::binding::WorkspaceRuntimeBinding;
@@ -63,6 +64,9 @@ pub struct OrbitRuntime {
     /// decision. `gh` by default; tests inject a fake.
     task_pr_forge: Arc<dyn TaskPrForge>,
     host_resources: Arc<HostResourceMonitor>,
+    /// The host's resource profiles, shared by clones and kept across
+    /// admission passes until a delivery finishes.
+    resource_profiles: Arc<ResourceProfileCache>,
     pub event_log: event_bus::EventLog,
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
     /// this runtime opened (empty `applied` when the layout was already

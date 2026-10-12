@@ -51,6 +51,43 @@ pub struct HostResourceMinute {
     pub recorded_by_run_id: Option<String>,
 }
 
+/// One minute of a delivery run's load, as [`RunResourceMinute`] stores it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResourceMinuteLoad {
+    pub minute_started_at: DateTime<Utc>,
+    pub cpu_cores: f64,
+    pub memory_bytes: u64,
+}
+
+/// One sampled run of a delivery, with its lifecycle from `job_runs`, for
+/// building profiles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveryRunResources {
+    pub workspace_id: String,
+    pub run_id: String,
+    /// `None` when the run's `job_runs` row is gone.
+    pub job_id: Option<String>,
+    pub task_id: String,
+    pub work_class: String,
+    pub complexity: Option<String>,
+    /// Any of the run's minutes was marked resumed.
+    pub resumed: bool,
+    /// The delivery's admission time, shared by every run of one delivery.
+    pub delivery_admitted_at: DateTime<Utc>,
+    /// When the run finished; `None` while it is live or its row is gone.
+    pub finished_at: Option<DateTime<Utc>>,
+    /// The run's minutes, oldest first.
+    pub minutes: Vec<ResourceMinuteLoad>,
+}
+
+/// A cheap probe of the sampled runs that have finished: it changes whenever
+/// one more finishes, or retention prunes one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeliveryRunsFreshness {
+    pub newest_finished_at: Option<DateTime<Utc>>,
+    pub finished_runs: u64,
+}
+
 /// The two per-minute tables retention prunes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceMinutesTable {
@@ -85,6 +122,16 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Vec<RunResourceMinute>, OrbitError>;
+
+    /// Every sampled run of a delivery admitted at or after `since`, across
+    /// every workspace on the host, with its minutes and `job_runs` lifecycle.
+    fn delivery_run_resources(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DeliveryRunResources>, OrbitError>;
+
+    /// The finished sampled runs on the host, as a cache freshness probe.
+    fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError>;
 
     /// Host minutes at or after `since`, oldest first.
     fn host_resource_minutes(

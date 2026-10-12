@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
-use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, ResourceThrottle};
+use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, ResourceThrottle, auto_task_builds_by_design};
 use serde_json::{Value, json};
 
 /// Readiness reason for a CPU-light leaf held only because every reserved
@@ -24,20 +24,14 @@ use serde_json::{Value, json};
 pub(in crate::adapter::engine_host::v2_host) const CPU_LIGHT_BUDGET_FULL: &str =
     "cpu_light_budget_full";
 
-/// Auto-task templates whose brief builds or runs the product [ORB-15766].
-///
-/// These tasks carry `no-diff-expected` because they do not commit changes,
-/// but their brief instructs the worker to build or run the software. They
-/// are cargo/build-heavy and must not be admitted from the CPU-light budget
-/// while the host is under CPU pressure.
-const BUILD_HEAVY_AUTO_TASKS: &[&str] = &["qa-sweep", "qa-full-sweep"];
-
 /// A leaf that adds almost no CPU: an auto-task tagged `no-diff-expected`
 /// whose brief does no build work [ORB-15766].
 ///
 /// Both tags are required. `no-diff-expected` alone is an operator's claim
 /// about the diff, not about the work; automated provenance alone says
-/// nothing about cost. Auto-tasks that build or run the product are excluded.
+/// nothing about cost. Auto-tasks that build or run the product
+/// ([`auto_task_builds_by_design`]) are excluded: they must not be admitted
+/// from the CPU-light budget while the host is under CPU pressure.
 pub(in crate::adapter::engine_host::v2_host) fn is_cpu_light(task: &Task) -> bool {
     let has_no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
     if !has_no_diff {
@@ -51,11 +45,7 @@ pub(in crate::adapter::engine_host::v2_host) fn is_cpu_light(task: &Task) -> boo
         return false;
     }
     let is_build_heavy = task.tags.iter().any(|tag| {
-        if let Some(name) = tag.strip_prefix(AUTO_TASK_TAG_PREFIX) {
-            BUILD_HEAVY_AUTO_TASKS.contains(&name)
-        } else {
-            BUILD_HEAVY_AUTO_TASKS.contains(&tag.as_str())
-        }
+        auto_task_builds_by_design(tag.strip_prefix(AUTO_TASK_TAG_PREFIX).unwrap_or(tag))
     });
     !is_build_heavy
 }

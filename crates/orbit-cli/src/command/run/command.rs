@@ -12,6 +12,7 @@ use super::extend::RunExtendArgs;
 use super::history::RunHistoryArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
+use super::profiles::RunProfilesArgs;
 use super::readiness::ReadinessCommand;
 use super::settlements::RunSettlementsArgs;
 use super::ship;
@@ -43,6 +44,7 @@ Maintenance:
   orbit run cancel <run_id>
   orbit run concurrency <run_id> --set 7
   orbit run extend <run_id> --for 2h [--concurrency <N>]
+  orbit run profiles [--json]
 ";
 
 #[derive(Args)]
@@ -78,6 +80,7 @@ Maintenance:
   concurrency  Change how many tasks a running drain keeps in flight
   extend       Lengthen a running drain's window, and optionally retune it
   readiness    Explain why backlog tasks are waiting in auto-drain
+  profiles     Show what each kind of delivery costs on this host, minute by minute
 
 Options:
 {options}
@@ -111,6 +114,8 @@ pub enum RunSubcommand {
     TaskPilot(task_pilot::TaskPilotCommand),
     /// Explain why backlog tasks can or cannot start in auto-drain
     Readiness(ReadinessCommand),
+    /// Show what each kind of delivery costs on this host, minute by minute
+    Profiles(RunProfilesArgs),
     /// Show recent job runs filtered by job, task, state or time
     History(RunHistoryArgs),
     /// Show structured state and step summary for a job run
@@ -146,6 +151,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::ShipSweep(command) => command.execute_without_runtime(None),
             RunSubcommand::TaskPilot(command) => command.execute(runtime),
             RunSubcommand::Readiness(command) => command.execute(runtime),
+            RunSubcommand::Profiles(command) => command.execute(runtime),
             RunSubcommand::History(command) => command.execute(runtime),
             RunSubcommand::Show(command) => command.execute(runtime),
             RunSubcommand::Logs(command) => command.execute(runtime),

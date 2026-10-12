@@ -321,6 +321,7 @@ pub(crate) fn build_context_from_roots(
             workflow_base_branch,
             workflow_auto_ship,
             runtime_config.resource_throttle.clone(),
+            runtime_config.auto_concurrency.clone(),
             workflow_required_validation_commands,
             runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,

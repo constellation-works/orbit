@@ -1,0 +1,38 @@
+Show what each kind of delivery costs on this host, minute by minute
+
+Usage: orbit run profiles [OPTIONS]
+
+Options:
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Lists one resource profile per workspace, work class and complexity, learned from the CPU and memory each delivery's workers recorded. A delivery is the chain of runs for one task, counted from its admission; resumed or retried deliveries are left out. Each profile covers the key's last `machine.auto_concurrency.profile_window` completed deliveries from the last 30 days. `auto-task:<template>` profiles have no complexity.
+
+HORIZON is the minute at which fewer than one in ten deliveries is still running, capped at `horizon_cap_minutes`. PEAK_CPU is the highest mean cores before it and PEAK_MEM the highest 90th-percentile memory, each with the minute it occurs. SPREAD says how far deliveries disagree with that average (per-minute standard deviation over mean, for CPU and memory): near 0 is a profile stable enough to forecast with, near or above 1 one that is not. DELIVERIES marks a key with fewer than `min_profile_deliveries` as sparse; a lookup for it falls back to a wider profile.
+
+BUILD_FLAG marks no-diff profiles, and templates whose tasks are `no-diff-expected`, where a delivery used more than 1 core for 2 minutes in a row: work that should make no diff is building. The deliveries behind each flag are named below the table. Templates that build by design, such as qa-sweep, are never flagged.
+
+`--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.
+
+Examples:
+  orbit run profiles
+  orbit run profiles --json

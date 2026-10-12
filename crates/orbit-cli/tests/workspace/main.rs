@@ -44,6 +44,7 @@ mod init_workspace_seed;
 mod replica_routines;
 mod routine_root;
 mod routine_state_seed;
+mod run_profiles;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod scratch_gc;
 mod ship_sweep_root;

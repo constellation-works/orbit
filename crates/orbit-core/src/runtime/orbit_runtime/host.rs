@@ -3,7 +3,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_types::task::NO_DIFF_EXPECTED_TAG;
+
 use super::OrbitRuntime;
+use crate::runtime::host_resource::profile::{
+    ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
+};
 use crate::runtime::host_resource::{
     HostResourceMonitor, HostResourceProbe, HostResourceStatus, ResourceAdmission,
 };
@@ -76,6 +83,26 @@ impl OrbitRuntime {
     /// running work is never touched. Unknown telemetry fails open.
     pub fn resource_admission(&self) -> ResourceAdmission {
         self.host_resources.admission(&self.host_resource_paths())
+    }
+
+    /// Every resource profile on this host, across its workspaces. Built from
+    /// the stored delivery minutes and kept, across calls and clones, until a
+    /// sampled run finishes or the `[machine.auto_concurrency]` bounds change.
+    pub fn resource_profiles(&self) -> Result<Arc<ProfileSet>, OrbitError> {
+        let store = self.sqlite_store()?;
+        let tasks = self.stores().tasks();
+        self.resource_profiles.profiles(
+            &store,
+            &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
+            ProfileBounds::from(self.context.settings().auto_concurrency()),
+            Utc::now(),
+        )
+    }
+
+    /// The profile describing one delivery, and the fallback step that found
+    /// it.
+    pub fn resource_profile_for(&self, lookup: &ProfileLookup) -> Result<ProfileMatch, OrbitError> {
+        Ok(self.resource_profiles()?.lookup(lookup))
     }
 
     fn host_resource_paths(&self) -> Vec<PathBuf> {

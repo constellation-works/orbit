@@ -12,6 +12,7 @@ pub mod job;
 pub mod legacy_logs;
 mod lock_holders;
 mod logs;
+mod profiles;
 mod readiness;
 mod security_summary;
 mod settlements;
