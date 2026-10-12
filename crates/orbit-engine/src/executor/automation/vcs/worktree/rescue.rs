@@ -14,6 +14,7 @@
 //! untracked path Git does not ignore, as one tree over `HEAD`. Ignored
 //! output is rebuildable and is not part of it, as for a clean removal.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -64,6 +65,17 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
             git_output_with_env(worktree, &["add", "--all", "--", "."], scratch)?;
             git_output_with_env(worktree, &["write-tree"], scratch)
         })?;
+        // Only paths changed in the real index need this check: an ordinary
+        // unstaged edit differs from the index but has no unique staged state.
+        // A single-tree recovery cannot preserve two versions of a staged
+        // path, even when another working edit makes the snapshot nonempty.
+        let staged = index_changed_paths(worktree, &head)?;
+        if !staged.is_empty() && !staged.is_disjoint(&index_changed_paths(worktree, &tree)?) {
+            return Err(OrbitError::Execution(
+                "staged paths differ from the working candidate; a single-tree recovery cannot preserve both versions"
+                    .to_string(),
+            ));
+        }
         if tree == head_tree {
             return Err(OrbitError::Execution(
                 "Git reports changes no tree snapshot captures (submodule content or index-only state)"
@@ -86,6 +98,39 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
         Ok(CandidateSnapshot { head, tree })
     })();
     snapshot.map_err(|error| format!("candidate snapshot refused: {error}"))
+}
+
+/// Paths whose real index entries differ from a tree. NUL-delimited bytes
+/// preserve arbitrary Git path names, and disabling renames checks both ends.
+fn index_changed_paths(worktree: &Path, tree: &str) -> Result<BTreeSet<Vec<u8>>, OrbitError> {
+    let diff = git_run_bytes(
+        worktree,
+        &[
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            tree,
+            "--",
+        ],
+        None,
+    )?;
+    if !diff.success || diff.timed_out {
+        return Err(OrbitError::Execution(format!(
+            "cannot compare staged paths: git diff exited {:?}: {}",
+            diff.exit_code,
+            diff.stderr.trim()
+        )));
+    }
+    Ok(diff
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect())
 }
 
 /// A ref on `origin` that already holds exactly this candidate: the run's
