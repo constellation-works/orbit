@@ -229,7 +229,10 @@ returns.
   Prefer `--stop`, which ends nothing. The OS clock sweep retries any
   settlement still recorded on the follower (for example after the owner was
   unreachable) once no drain or leaf worker is left to; `orbit run auto --stop`
-  flushes it by hand, with or without an active drain.
+  flushes it by hand, with or without an active drain. If the drain and its
+  leaves died together (a host OOM took the user manager and the clock), the
+  follower's `orbit run history` or `orbit run show` interrupts the dead runs
+  and settles their claims with the owner; no cancel is needed.
 - An unreachable or refusing owner is reported in each iteration's output.
   Protocol skew ends the drain failed immediately with `protocol_skew`; its
   durable settlements remain available to leaf workers and the settle-only

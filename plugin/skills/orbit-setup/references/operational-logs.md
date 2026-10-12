@@ -184,6 +184,16 @@ also sets `OOMPolicy=continue`: the kernel kills the largest process in the run
 rather than systemd stopping the whole scope, so the worker survives to record
 the cause.
 
+Every Linux worker, contained or not, also starts with an `oom_score_adj` of
+at least 500, and everything it spawns inherits it. On a host-wide OOM the
+kernel therefore kills a worker process before the user manager
+(`user@.service` runs at 100), the drain that launched it, or the dashboard.
+Without it, a host whose largest process was already killed can lose the user
+`systemd` itself, and every worker scope with it (2026-10-12). Scope units
+accept no `OOMScoreAdjust=`, so the worker sets the value on itself before
+`systemd-run` execs it; check a live worker with
+`cat /proc/<worker_pid>/oom_score_adj`.
+
 `machine.worker_cpu_quota` caps a run's CPU so a stress loop or runaway test
 loop in one leaf cannot take every core and starve the other leaves and the
 drain's admission control (2026-10-10 load average 89.7 on 32 cores). It is
@@ -214,6 +224,15 @@ itself; if the worker process died instead, its launcher records it when it is
 still watching the child. A run whose launcher had already exited can still
 end as `interrupted` / `process_not_found`; then correlate with the kernel log
 (`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
+
+When a drain and its leaves die together (the user manager was killed), no
+cancel is needed. `orbit run history` or `orbit run show` on the follower
+marks each run whose worker is gone `interrupted`. It also settles the pull
+claims those runs left with the owner: a dead leaf's recorded failure, and the
+release of a claim its drain admitted but never launched. Only claims that no
+live drain pulls for and whose leaf is no longer running are settled, so
+these reads contact no owner while a drain or leaf is alive. Pass
+`--no-reconcile` to read the stored records without either step.
 
 By default, containment falls back to the old behaviour, with one warning per
 Orbit process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline

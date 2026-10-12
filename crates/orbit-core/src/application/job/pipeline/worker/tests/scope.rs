@@ -223,6 +223,78 @@ fn admitted_credentials_reach_the_scoped_worker_environment_and_stay_off_argv() 
     );
 }
 
+/// Platform-kernel behaviour: whichever way a worker launches, the kernel
+/// ranks it ahead of the user manager (`oom_score_adj` 100) as an OOM victim.
+/// On 2026-10-12 a host OOM killed the user `systemd` instead, and every
+/// worker scope and the drain died with it [ORB-15783]. Scope units reject
+/// `OOMScoreAdjust=`, so the value must already be on the process
+/// `systemd-run --scope` execs into the worker; a stand-in `systemd-run` that
+/// execs its argument vector the same way stands in for the user manager.
+#[cfg(target_os = "linux")]
+#[test]
+fn every_worker_launch_outranks_the_user_manager_as_an_oom_victim() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::super::scope::{WORKER_OOM_SCORE_ADJ, contain_worker_command_with_availability};
+
+    let tools = tempfile::tempdir().expect("stand-in tools");
+    let systemd_run = tools.path().join("systemd-run");
+    std::fs::write(
+        &systemd_run,
+        "#!/bin/sh\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
+    )
+    .expect("stand-in systemd-run");
+    std::fs::set_permissions(&systemd_run, std::fs::Permissions::from_mode(0o755))
+        .expect("executable stand-in");
+    let path = format!("{}:/usr/bin:/bin", tools.path().display());
+    let inherited: i32 = std::fs::read_to_string("/proc/self/oom_score_adj")
+        .expect("own oom_score_adj")
+        .trim()
+        .parse()
+        .expect("numeric oom_score_adj");
+    let expected = inherited.max(WORKER_OOM_SCORE_ADJ);
+    let limits =
+        WorkerLimits::from_settings(&settings(MemoryLimit::Infinity, MemoryLimit::Infinity))
+            .expect("enabled containment yields limits");
+    for (launch, limits, availability) in [
+        ("scoped", Some(&limits), Ok(())),
+        (
+            "scope unavailable",
+            Some(&limits),
+            Err("no user bus".to_string()),
+        ),
+        ("containment disabled", None, Ok(())),
+    ] {
+        let mut base = Command::new("sh");
+        base.args(["-c", "cat /proc/self/oom_score_adj"])
+            .env("PATH", &path);
+        let mut command = contain_worker_command_with_availability(
+            base,
+            "run-1",
+            limits,
+            false,
+            Some(availability),
+            true,
+            &std::sync::Once::new(),
+        )
+        .expect("non-strict launch never refuses");
+        if launch == "scoped" {
+            assert_eq!(command.get_program(), "systemd-run", "{launch}");
+        }
+        let output = command.output().expect("launch worker");
+        assert!(output.status.success(), "{launch}: {output:?}");
+        let launched: i32 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .expect("worker reports its oom_score_adj");
+        assert_eq!(launched, expected, "{launch}");
+        assert!(
+            launched > 100,
+            "{launch} worker must outrank systemd's user manager (OOMScoreAdjust=100)"
+        );
+    }
+}
+
 fn command_args(command: &Command) -> Vec<&str> {
     command
         .get_args()

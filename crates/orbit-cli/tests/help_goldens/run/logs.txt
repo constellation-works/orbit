@@ -20,7 +20,7 @@ Options:
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
 
       --no-reconcile
-          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted and releases its task reservations
+          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted, releases its task reservations, and settles with their owner the pull claims an ended drain or leaf left
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)

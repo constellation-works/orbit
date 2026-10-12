@@ -16,6 +16,16 @@
 //! reads the scope's `memory.events` / `pids.events` counters to tell a
 //! resource-limit failure apart from any other one.
 //!
+//! Every Linux worker, contained or not, also starts with an
+//! `oom_score_adj` of at least [`WORKER_OOM_SCORE_ADJ`], inherited by
+//! everything it spawns. The user manager runs at 100 (systemd's
+//! `user@.service`) with almost no memory of its own, so a host-wide OOM whose
+//! worst offender was already killed otherwise picks it next: on 2026-10-12 the
+//! kernel killed the user `systemd`, and every worker scope went with it.
+//! Scope units take no `OOMScoreAdjust=` (it is an exec setting systemd only
+//! applies to processes it forks), so the launched process sets the value on
+//! itself before `systemd-run` execs, and the worker keeps it.
+//!
 //! `machine.worker_cpu_quota` (percent of one core, off at 0) adds `CPUQuota=`
 //! so one leaf cannot take every core. systemd applies it only where the user
 //! manager delegates the cpu controller; elsewhere the property is accepted
@@ -51,6 +61,10 @@ pub(crate) const WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE: &str = "worker_conta
 const SCOPE_UNIT_PREFIX: &str = "orbit-worker-";
 const SCOPE_UNIT_SUFFIX: &str = ".scope";
 const SYSTEMD_RUN: &str = "systemd-run";
+/// The kernel OOM preference every worker launches with, well above the
+/// user manager's 100 and the default 0 of the drain or service that launched
+/// it, so a worker process is always killed before them.
+pub(crate) const WORKER_OOM_SCORE_ADJ: i32 = 500;
 /// Inherited by a coordinator's child workers so one CLI invocation keeps its
 /// containment policy for every leaf it admits.
 pub(crate) const STRICT_WORKER_CONTAINMENT_ENV: &str = "ORBIT_WORKER_CONTAINMENT_STRICT";
@@ -137,14 +151,10 @@ pub(crate) fn contain_worker_command_with_availability(
         if systemd_expected {
             warn_uncontained("machine.worker_containment is false", warned);
         }
-        return Ok(base);
+        return Ok(prefer_as_oom_victim(base));
     };
-    match availability.unwrap_or_else(user_scope_availability) {
-        Ok(()) => Ok(scoped_worker_command(
-            &base,
-            &scope_unit_name(run_id),
-            limits,
-        )),
+    let command = match availability.unwrap_or_else(user_scope_availability) {
+        Ok(()) => scoped_worker_command(&base, &scope_unit_name(run_id), limits),
         Err(reason) => {
             if strict {
                 return Err(orbit_common::OrbitError::WorkerContainmentUnavailable { reason });
@@ -152,9 +162,47 @@ pub(crate) fn contain_worker_command_with_availability(
             if systemd_expected {
                 warn_uncontained(&reason, warned);
             }
-            Ok(base)
+            base
         }
+    };
+    Ok(prefer_as_oom_victim(command))
+}
+
+/// Raise the launched process's `oom_score_adj` to [`WORKER_OOM_SCORE_ADJ`]
+/// before it execs, never lowering a higher inherited value. Best-effort: a
+/// process that cannot write its own score still launches.
+#[cfg(target_os = "linux")]
+fn prefer_as_oom_victim(mut command: Command) -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let inherited = std::fs::read_to_string("/proc/self/oom_score_adj")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(0);
+    // Formatted here: the child between fork and exec may only make
+    // async-signal-safe calls, so it writes these bytes and allocates nothing.
+    let value = inherited.max(WORKER_OOM_SCORE_ADJ).to_string().into_bytes();
+    // SAFETY: the hook only calls open, write and close, which are
+    // async-signal-safe, on memory captured before the fork.
+    unsafe {
+        command.pre_exec(move || {
+            let fd = libc::open(
+                c"/proc/self/oom_score_adj".as_ptr(),
+                libc::O_WRONLY | libc::O_CLOEXEC,
+            );
+            if fd >= 0 {
+                let _ = libc::write(fd, value.as_ptr().cast(), value.len());
+                libc::close(fd);
+            }
+            Ok(())
+        });
     }
+    command
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prefer_as_oom_victim(command: Command) -> Command {
+    command
 }
 
 fn warn_uncontained(reason: &str, warned: &Once) {

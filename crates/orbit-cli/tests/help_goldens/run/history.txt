@@ -27,7 +27,7 @@ Options:
           [default: 50]
 
       --no-reconcile
-          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted and releases its task reservations
+          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted, releases its task reservations, and settles with their owner the pull claims an ended drain or leaf left
 
       --incidents
           Show one row per incident: fold runs that failed only because a child failed into the run that failed on its own
