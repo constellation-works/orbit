@@ -117,6 +117,11 @@ fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
                 !rescue_store.exists(),
                 "a carried candidate needs no rescue patch"
             );
+            assert_eq!(
+                git(&fixture.repo, &["for-each-ref", "refs/orbit/rescue/"]),
+                "",
+                "a carried candidate needs no rescue base ref"
+            );
 
             // With nothing on `origin`, GC writes a patch, proves it, and only
             // then removes the worktree; the patch rebuilds the candidate.
@@ -285,6 +290,145 @@ fn a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside() {
                 b"edited\n\x00\xff binary tail\n"
             );
             assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+            assert_eq!(
+                git(&fixture.repo, &["for-each-ref", "refs/orbit/rescue/"]),
+                "",
+                "a refused store must not pin a base"
+            );
+        },
+    );
+}
+
+#[test]
+fn unpublished_head_content_recovers_after_branch_deletion_and_object_expiry() {
+    isolated_in(
+        module_path!(),
+        "unpublished_head_content_recovers_after_branch_deletion_and_object_expiry",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let dirty = DirtyCheckout::new(&host, "unpublished", TaskStatus::Done);
+            let path = &dirty.checkout.path;
+            // A commit that exists only on the run branch. The later working
+            // edits stay unstaged, so the rescue patch does not repeat this file.
+            fs::write(path.join("local-only.txt"), "only on the run branch\n").unwrap();
+            git(path, &["add", "local-only.txt"]);
+            git(path, &["commit", "-m", "unpublished local file"]);
+            let head = git(path, &["rev-parse", "HEAD"]);
+            let published = git(
+                &fixture.repo,
+                &["rev-list", "agent-main", "origin/agent-main"],
+            );
+            assert!(
+                !published.lines().any(|line| line == head),
+                "fixture HEAD must be unpublished:\n{published}"
+            );
+
+            let report = dirty.sweep(&host);
+            assert_eq!(report["action"], "removed", "{report}");
+            assert_eq!(report["recovery"]["source"], "rescue_patch", "{report}");
+            assert_eq!(report["recovery"]["commit"], head, "{report}");
+            assert!(!path.exists());
+            assert!(
+                !git_ok(
+                    &fixture.repo,
+                    &[
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{}", dirty.checkout.branch),
+                    ],
+                ),
+                "run branch still exists"
+            );
+            let patch = PathBuf::from(report["recovery"]["location"].as_str().unwrap());
+            let patch_bytes = fs::read(&patch).unwrap();
+            assert!(
+                !patch_bytes
+                    .windows(b"local-only.txt".len())
+                    .any(|window| window == b"local-only.txt"),
+                "unchanged unpublished file must not be stored in the patch"
+            );
+            let header = String::from_utf8_lossy(&patch_bytes);
+            let base_ref = header
+                .lines()
+                .find_map(|line| line.strip_prefix("Base-Ref: "))
+                .expect("patch names its base ref")
+                .to_string();
+            assert!(
+                base_ref.starts_with("refs/orbit/rescue/worktree-gc/"),
+                "{base_ref}"
+            );
+            assert_eq!(
+                git(
+                    &fixture.repo,
+                    &["rev-parse", &format!("{base_ref}^{{commit}}")]
+                ),
+                head
+            );
+
+            // The branch and its reflog are gone. The rescue ref is the root.
+            expire_unreachable_objects(&fixture.repo);
+            assert!(
+                git_ok(&fixture.repo, &["cat-file", "-e", &head]),
+                "patch base was pruned"
+            );
+            let reachable = git(&fixture.repo, &["rev-list", "--all"]);
+            assert!(
+                reachable.lines().any(|line| line == head),
+                "patch base is not reachable:\n{reachable}"
+            );
+
+            let restored = fixture.root.path().join("restored");
+            git(
+                &fixture.repo,
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    path_str(&restored),
+                    &base_ref,
+                ],
+            );
+            git(&restored, &["apply", path_str(&patch)]);
+            assert_eq!(
+                fs::read_to_string(restored.join("local-only.txt")).unwrap(),
+                "only on the run branch\n"
+            );
+            assert_eq!(
+                fs::read(restored.join("README.md")).unwrap(),
+                b"edited\n\x00\xff binary tail\n"
+            );
+            assert_eq!(
+                fs::read_to_string(restored.join("src/new.rs")).unwrap(),
+                "fn candidate() {}\n"
+            );
+
+            // The pin lasts as long as the patch. Once the file is gone, a
+            // deleting sweep drops the ref and expiry can remove the commit.
+            git(
+                &fixture.repo,
+                &["worktree", "remove", "--force", path_str(&restored)],
+            );
+            fs::remove_file(&patch).unwrap();
+            action(
+                &host,
+                "worktree_gc",
+                &json!({"target_run_id": dirty.run_id}),
+            )
+            .unwrap();
+            assert!(
+                !git_ok(
+                    &fixture.repo,
+                    &["show-ref", "--verify", "--quiet", &base_ref],
+                ),
+                "rescue base ref outlived its patch"
+            );
+            expire_unreachable_objects(&fixture.repo);
+            assert!(
+                !git_ok(&fixture.repo, &["cat-file", "-e", &head]),
+                "released patch base is still in the object store"
+            );
         },
     );
 }
@@ -383,6 +527,29 @@ fn a_live_or_too_recent_dirty_worktree_is_never_removed() {
             assert!(!fixture.repo.join(".orbit/state/rescue").exists());
         },
     );
+}
+
+fn expire_unreachable_objects(repo: &Path) {
+    git(
+        repo,
+        &[
+            "reflog",
+            "expire",
+            "--expire=now",
+            "--expire-unreachable=now",
+            "--all",
+        ],
+    );
+    git(repo, &["gc", "--prune=now"]);
+}
+
+fn git_ok(current_dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .status()
+        .unwrap()
+        .success()
 }
 
 fn git_bytes(current_dir: &Path, args: &[&str]) -> Vec<u8> {

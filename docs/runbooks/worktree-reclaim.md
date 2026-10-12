@@ -3,7 +3,7 @@ type: runbook
 summary: Reclaim declared rebuildable outputs from kept terminal run worktrees.
 tags: [disk, worktree, gc]
 paths: ["crates/orbit-engine/src/executor/automation/vcs/worktree/", "crates/orbit-core/src/application/gc/"]
-last_validated: 2026-10-11
+last_validated: 2026-10-12
 ---
 
 # Reclaim kept worktree output
@@ -88,15 +88,24 @@ edits. GC checks these recovery sources in order:
    snapshot.
 3. `rescue_patch`: a patch against the worktree's `HEAD`, written to
    `.orbit/state/rescue/worktree-gc/<run>-<tree>.patch` under the owning
-   checkout. GC then checks that the patch rebuilds the exact snapshot tree
-   before it removes anything. A patch is at most 16 MiB, and the store holds
-   at most 256 MiB. GC never prunes the store. Apply or delete old patches
-   there; while it is full, dirty worktrees are kept. A store path with a
-   symlinked or non-directory component is refused.
+   checkout. GC checks that the patch rebuilds the exact snapshot tree, then
+   points `refs/orbit/rescue/worktree-gc/<run>-<tree>` at that HEAD in the
+   owning repository, and only then removes the worktree and run branch. The
+   ref is what keeps an unpublished HEAD — and files that commit added but the
+   patch does not repeat — reachable after the branch is gone and Git expires
+   reflogs. The patch header names the ref. Check it out and run
+   `git apply` on the patch. A patch is at most 16 MiB, and the store holds
+   at most 256 MiB. GC never deletes patch files. Apply or delete old patches
+   there; while the store is full, dirty worktrees are kept. A deleting sweep
+   drops a base ref whose patch file is gone, after which ordinary Git expiry
+   can remove those objects. A store path with a symlinked or non-directory
+   component is refused, and GC keeps any existing base refs rather than
+   deciding from a redirected directory.
 
 The report's `recovery` names the `source`, its `location` (the ref or patch
-file), and the `commit` (the ref's commit, or the commit the patch applies to:
-`git apply <patch>` on a checkout of it). GC reclaims declared output, then takes
+file), and the `commit` (the ref's commit, or the commit the patch applies to).
+For a patch, check out the `Base-Ref` named in the file — it points at the
+recorded commit — and run `git apply` on the patch. GC reclaims declared output, then takes
 the snapshot again. If anything changed, it keeps the worktree. Otherwise it
 removes the worktree with `git worktree remove --force`. Ignored files go with
 it, as with a clean removal. A candidate GC cannot capture exactly (a nested

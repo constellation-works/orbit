@@ -27,8 +27,10 @@ is never a candidate. A worktree with uncommitted changes is kept
 `worktree_gc_pipeline`. That pipeline removes a settled run's dirty worktree
 once the candidate is recoverable: a carry ref or published branch on `origin`
 holding exactly it, or a patch it writes to
-`.orbit/state/rescue/worktree-gc/` and verifies first. `recovery` in the
-report names which one. Kept terminal worktrees report `retained_bytes`, and
+`.orbit/state/rescue/worktree-gc/` and verifies first. The patch's base commit
+is pinned at `refs/orbit/rescue/worktree-gc/<run>-<tree>` until a deleting
+sweep sees that the patch file is gone. `recovery` in the
+report names which source. Kept terminal worktrees report `retained_bytes`, and
 `orbit run show <gc-run>` lists them with their reasons. Details:
 `docs/runbooks/worktree-reclaim.md` in the Orbit repository. Run the report a
 few times before automating it, then enable the `worktree-gc` routine for
