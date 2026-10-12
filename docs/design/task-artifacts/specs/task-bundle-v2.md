@@ -336,8 +336,11 @@ registered, settled envelope, then select from the index: SQL answers the
 status, priority, job-run, tag and continuation predicates, newest-first
 ordering (task ID ascending for ties), the limit and the total, so only the
 selected envelopes leave the parse cache and only the selected bundles load.
-Predicates the index does not project (search, type, parent, external
-references) narrow the indexed candidates in memory before the limit. Exact
+A parent predicate narrows the selection through the indexed `child_of`
+relation rows, but the freshness scan does not compare relations, so each
+selected envelope still confirms it. That predicate and those the index does
+not project (search, type, external references) narrow the indexed candidates
+in memory before the limit. Exact
 totals count metadata matches; they do not certify off-page body, event, or
 artifact integrity. A selected bundle with envelope, body, or event-log damage fails
 the request and is never replaced with another row. Listing and search

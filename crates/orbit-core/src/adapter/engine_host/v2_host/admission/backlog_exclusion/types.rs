@@ -145,9 +145,11 @@ pub(in crate::adapter::engine_host::v2_host) type BacklogTaskConflict = TaskLock
 /// dispatch and its read-only diagnostic.  Keeping the lock filter here
 /// prevents the diagnostic from becoming a second scheduler.
 pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
-    /// Every task in the workspace, at any status (parent-chain walks and the
-    /// group-conflict roll-up read tasks at any status, which a status-filtered
-    /// map would silently shorten), as envelope metadata: the body documents
+    /// Every open task in the workspace and the closed tasks the snapshot's
+    /// tree rules reach — ancestors for the group-conflict roll-up,
+    /// descendants of an epic root that declares no context — plus whatever
+    /// [`BacklogSnapshot::include_tasks`] added, as envelope metadata (see
+    /// `population::admission_population`): the body documents
     /// (`description`, `acceptance_criteria`, `plan`, `execution_summary`) are
     /// empty, and nothing in admission, exclusion or readiness reads them.
     /// This is the one materialized copy; the other fields refer into it by ID

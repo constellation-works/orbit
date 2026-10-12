@@ -23,6 +23,7 @@ mod audit_cli;
 mod auto_task_lifecycle_cli;
 mod auto_task_settings_cli;
 mod claimed_delivery_recovery;
+mod config_show_task_reads;
 mod context_selector_external_root;
 mod context_selector_worktree;
 mod crew_effort_admission;

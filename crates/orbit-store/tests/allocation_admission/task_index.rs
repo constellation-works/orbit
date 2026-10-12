@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use orbit_store::compose::{WorkspaceTaskBackends, workspace_observational_backends};
-use orbit_store::contracts::TaskDocumentUpdateParams;
+use orbit_store::contracts::{TaskDocumentUpdateParams, TaskListFilter};
 use serde_json::Value;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
@@ -236,5 +236,141 @@ fn a_listing_skips_envelope_stamps_while_another_writer_holds_the_registry() {
         recorded_stamps(&sql),
         1,
         "the next scan records the stamp the contended one skipped"
+    );
+}
+
+/// Counts `task.yaml` parses: the store opens one span per envelope read.
+struct EnvelopeReads(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl<S: tracing::Subscriber> Layer<S> for EnvelopeReads {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if attrs.metadata().name() == "task_envelope_read" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// One selection on a fresh store handle, as a new process makes it: the
+/// envelope reads it paid for and how long it took.
+fn cold_selection(root: &Path, filter: &TaskListFilter) -> (usize, usize, Duration) {
+    let owner = Coordinated::open(root);
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let subscriber = Registry::default().with(EnvelopeReads(std::sync::Arc::clone(&reads)));
+    let (selected, elapsed) = tracing::subscriber::with_default(subscriber, || {
+        let started = Instant::now();
+        let selected = owner
+            .backends
+            .task
+            .task
+            .task_candidates(filter, usize::MAX)
+            .unwrap()
+            .items
+            .len();
+        (selected, started.elapsed())
+    });
+    (
+        selected,
+        reads.load(std::sync::atomic::Ordering::Relaxed),
+        elapsed,
+    )
+}
+
+/// Readiness and the backlog snapshot select every open task. On a
+/// workspace whose history is mostly closed work, that selection must cost
+/// reads of the open tasks, not of the whole history: the generated index
+/// answers the status predicate, and the freshness scan accepts recorded
+/// envelope stamps without parsing.
+#[test]
+#[allow(clippy::print_stderr)]
+fn open_task_selection_reads_only_open_envelopes() {
+    const CLOSED: usize = 2000;
+    const OPEN: usize = 20;
+    const CHILDREN: usize = 5;
+    if !isolated("task_index::open_task_selection_reads_only_open_envelopes") {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let owner = Coordinated::open(root.path());
+    let open = (0..OPEN)
+        .map(|index| {
+            owner.create_task_with_status(
+                &format!("Open {index}"),
+                &["src/lib.rs"],
+                TaskStatus::Backlog,
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    for index in 0..CLOSED {
+        // A few closed tasks are children of an open one: the subtree an
+        // epic root's inheritance check walks.
+        let parent = (index < CHILDREN).then(|| open[0].id.clone());
+        owner.create_task_with_status(
+            &format!("Closed {index}"),
+            &["src/lib.rs"],
+            TaskStatus::Done,
+            parent,
+        );
+    }
+    // One listing in any process records the envelope stamps every later
+    // process accepts without parsing.
+    assert_eq!(
+        owner.backends.task.task.list_tasks().unwrap().len(),
+        OPEN + CLOSED
+    );
+    drop(owner);
+
+    let open_filter = TaskListFilter {
+        statuses: Some(
+            TaskStatus::ALL
+                .into_iter()
+                .filter(|status| !status.is_terminal())
+                .collect(),
+        ),
+        ..TaskListFilter::default()
+    };
+    let (selected, reads, _) = cold_selection(root.path(), &open_filter);
+    assert_eq!(selected, OPEN);
+    assert!(
+        (OPEN..=100).contains(&reads),
+        "the open selection must read the open envelopes and at most 100: read {reads}"
+    );
+    let (children, child_reads, _) = cold_selection(
+        root.path(),
+        &TaskListFilter {
+            parent_id: Some(open[0].id.clone()),
+            ..TaskListFilter::default()
+        },
+    );
+    assert_eq!(children, CHILDREN);
+    assert!(
+        child_reads <= CHILDREN,
+        "a parent's children are selected from the relation index: read {child_reads}"
+    );
+    // The unfiltered listing readiness used to make reads every envelope:
+    // a control that the counter sees each parse.
+    let (all, baseline_reads, _) = cold_selection(root.path(), &TaskListFilter::default());
+    assert_eq!(all, OPEN + CLOSED);
+    assert!(baseline_reads >= OPEN + CLOSED, "read {baseline_reads}");
+
+    // Timing evidence, not an assertion: the best of three cold runs each.
+    let best = |filter: &TaskListFilter| {
+        (0..3)
+            .map(|_| cold_selection(root.path(), filter).2)
+            .min()
+            .unwrap()
+    };
+    let baseline = best(&TaskListFilter::default());
+    let selection = best(&open_filter);
+    eprintln!(
+        "open-task selection over {CLOSED} closed + {OPEN} open tasks: \
+         baseline (every task) {baseline:?}, open statuses {selection:?}, \
+         {:.1}x faster",
+        baseline.as_secs_f64() / selection.as_secs_f64().max(f64::EPSILON)
     );
 }

@@ -108,6 +108,14 @@ fn read_envelope_for_id(
     bundle_dir: &Path,
     expected_task_id: &str,
 ) -> Result<TaskEnvelopeV2, OrbitError> {
+    // One span per `task.yaml` parse, whichever read asked for it: what a
+    // selection's cost is counted in.
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_bundle",
+        "task_envelope_read",
+        task_id = expected_task_id,
+    )
+    .entered();
     let envelope_path = bundle_dir.join(TASK_ENVELOPE_FILE_NAME);
     if !envelope_path.is_file() {
         return Err(OrbitError::not_found(

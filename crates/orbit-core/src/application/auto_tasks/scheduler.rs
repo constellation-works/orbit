@@ -1,7 +1,7 @@
 //! Core task lifecycle adapter and scheduler JSON projection.
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAddParams;
+use crate::application::task::{TaskAddParams, TaskListFilter};
 use chrono::{DateTime, Utc};
 use orbit_automation::auto_tasks::scheduler::{AutoTaskDispatch, ChangeProbe, InactivePluginSkip};
 pub use orbit_automation::auto_tasks::scheduler::{
@@ -224,7 +224,28 @@ pub(crate) fn open_auto_task_instances(
     runtime: &OrbitRuntime,
     name: &str,
 ) -> Result<Vec<String>, OrbitError> {
-    let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(name)])?;
+    let tag = auto_task_tag(name);
+    // The generated index answers status and tag together, so a definition's
+    // closed mints, which accumulate with every batch, cost no read. A worker
+    // reads through its owner, and an index that cannot serve lists instead.
+    if runtime.worker_invocation().is_none()
+        && let Some(open) = runtime.task_candidate_keys(
+            &TaskListFilter {
+                tags: vec![tag.clone()],
+                statuses: Some(
+                    TaskStatus::ALL
+                        .into_iter()
+                        .filter(|status| is_open_instance_status(*status))
+                        .collect(),
+                ),
+                ..TaskListFilter::default()
+            },
+            usize::MAX,
+        )?
+    {
+        return Ok(open.items.into_iter().map(|key| key.id).collect());
+    }
+    let tasks = runtime.list_tasks_by_tags(&[tag])?;
     Ok(open_auto_task_instances_from_tasks(&tasks)
         .map(|task| task.id.clone())
         .collect())
@@ -236,14 +257,19 @@ pub(crate) fn open_auto_task_instances(
 pub fn open_auto_task_instances_from_tasks<'a>(
     tasks: impl IntoIterator<Item = &'a Task>,
 ) -> impl Iterator<Item = &'a Task> {
-    // `someday` is an explicit "not now" park, not an active instance
-    // [ORB-12148]: it must not block every later mint of this auto-task.
-    tasks.into_iter().filter(|task| {
-        !matches!(
-            task.status,
-            TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected | TaskStatus::Someday
-        )
-    })
+    tasks
+        .into_iter()
+        .filter(|task| is_open_instance_status(task.status))
+}
+
+/// Whether a mint in `status` is still an open instance. `someday` is an
+/// explicit "not now" park, not an active instance [ORB-12148]: it must not
+/// block every later mint of this auto-task.
+fn is_open_instance_status(status: TaskStatus) -> bool {
+    !matches!(
+        status,
+        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected | TaskStatus::Someday
+    )
 }
 
 pub fn run_auto_task_scheduler_at(

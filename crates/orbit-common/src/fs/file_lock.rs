@@ -736,6 +736,14 @@ fn acquire_file_lock(
             Ok(()) => {
                 drop(queued);
                 record_lock_wait(lock_path, requested);
+                // Re-entrant nested sections never reach here, so these
+                // events count the acquisitions a caller actually paid for.
+                crate::tracing::trace!(
+                    target: "orbit.common.fs.file_lock",
+                    lock_path = %lock_path.display(),
+                    mode = if exclusive { "exclusive" } else { "shared" },
+                    "advisory file lock acquired",
+                );
                 let shared_record = if exclusive {
                     write_file_lock_holder(&lock_file, label);
                     None

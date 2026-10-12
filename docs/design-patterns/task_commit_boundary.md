@@ -54,6 +54,12 @@ first, so it never sees a half-applied transition and still waits for an exclusi
 queued writer may wait for the few reads it enters meanwhile. A re-entrant acquisition never
 reaches either lock.
 
+A pass that makes many task reads (a search, the config view's review section) enters one shared
+section around all of them with `TaskStoreBackend::in_read_section`. Its nested reads re-enter
+that section, so the pass queues, takes the locks and writes its holder record once instead of
+once per read. Inside it, a pass must not wait on another thread's task reads or request an
+admission: either would wait behind the shared lock the pass itself holds.
+
 **One durable commit decision.** A journal row in the host store database:
 
 | Step | What happens | What a crash here means |

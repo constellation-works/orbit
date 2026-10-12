@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_types::task::Task;
 
-const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
+pub(super) const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical
 /// first, then corrective or expiring work, then priority, expiry, age, and

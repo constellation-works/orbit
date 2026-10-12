@@ -68,6 +68,9 @@ pub struct TaskIndexFilter {
     pub priority: Option<TaskPriority>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
+    /// Tasks carrying a `child_of` relation to this task, from the indexed
+    /// relation rows.
+    pub parent_id: Option<String>,
     /// Continue the canonical created-descending, ID-ascending scan.
     pub scan_before: Option<(DateTime<Utc>, String)>,
     /// Registered tasks to leave out: the freshness scan skips a bundle a
