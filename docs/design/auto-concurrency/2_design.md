@@ -22,9 +22,10 @@ related_artifacts: [ORB-15757, ORB-15774]
 > the starvation guard (§5.3).** §1 describes today's code and cites it,
 > with `mode = off` still the default. §2 describes the recording that
 > ships, §3 the profiles `orbit run profiles` reports, §4 and §5 the
-> forecast and local admission, §6 pull admission, and the `drain_last_pass`
-> row of §7 the record a local pass writes. The other surfaces of §7 and
-> the shadow report of §8 are the proposed design.
+> forecast and local admission, §6 pull admission, and the `drain_last_pass`,
+> `orbit run show` and `orbit run readiness` rows of §7 the record and
+> diagnostics a local pass exposes. The dashboard of §7 and the shadow
+> report of §8 are the proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -529,8 +530,8 @@ Limitations:
 |---|---|
 | Machine config | Global-only `[machine.auto_concurrency]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because Linux throttle CPU is load-based and can exceed 100%. |
 | `drain_last_pass` | Implemented for local drains (§5.1): an `admission_forecast` block with the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource and their profile source, and whether the head is being protected |
-| `orbit run show` | an `Admission:` line, e.g. `forecast — skipped ORB-123 (cpu 94% at +6m)` |
-| `orbit run readiness` | the host's forecast peak, its headroom, and the profile source per waiting task |
+| `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard. No line without a recorded block; JSON preserves `pipeline_state.drain_last_pass.admission_forecast`. |
+| `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, and each judged candidate's profile source and wait. JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast`; without a recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
 | Dashboard | later: the forecast curve against measured load, with running tasks stacked |
 

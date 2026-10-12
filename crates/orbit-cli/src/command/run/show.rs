@@ -291,6 +291,15 @@ pub(crate) fn run_show_payload(
         .as_ref()
         .and_then(|state| state.drain_last_pass.as_ref())
     {
+        if let Some(forecast) = &pass.admission_forecast {
+            let forecast = json!(forecast);
+            if let Some(line) = super::admission_forecast::admission_line(&forecast, |id| {
+                runtime.get_task(id).ok().map(|task| task.title)
+            }) {
+                header.push('\n');
+                header.push_str(&line);
+            }
+        }
         if let Some(error) = &pass.last_pass_error {
             header.push_str(&format!(
                 "\n{} consecutive_failures={} last_pass_error={error}",

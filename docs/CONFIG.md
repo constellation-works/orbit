@@ -113,6 +113,31 @@ head_max_wait_minutes = 30
 | `machine.auto_concurrency.horizon_cap_minutes` | `120` minutes | Maximum forecast horizon for a candidate. |
 | `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits. |
 
+**Observing admission.** `orbit run show <drain>` renders an `Admission:`
+line from `pipeline_state.drain_last_pass.admission_forecast`: skipped
+candidate titles, the failing resource, percentage and minute, and a protected
+queue head's starvation guard. Shadow decisions are labelled as hypothetical;
+they do not hold admissions. With no block (off mode or an older drain), no
+line appears. JSON preserves the complete recorded block, including the
+profile source (`exact`, `without_complexity`, `base_class`,
+`heaviest_of_class`, `heaviest_on_host`, or `none`).
+
+`orbit run readiness` shows the same last-pass snapshot, CPU and memory peaks,
+and headroom in percentage points below the **current** configured admission
+limits. JSON adds `capacity.admission_forecast`, with the recorded fields,
+`task_titles`, and `headroom` (`cpu_percent`, `memory_percent`,
+`admit_cpu_percent`, `admit_memory_percent`). An unknown host capacity has
+unknown headroom; negative headroom means the peak exceeds the limit.
+Each candidate the pass judged carries `tasks[].admission_forecast`, including
+its profile source, mode, forecast time, and `decision` (`admitted` or
+`skipped`); skipped candidates also carry the recorded resource, minute,
+percentage and detail. An enforce skip from a live, open drain reports
+`gap_fit` when no current hold takes precedence. A finished drain
+shows its historical decisions without changing current eligibility. A shadow skip explains what would wait without changing
+eligibility. These are recorded observations, not a fresh fit or a reservation:
+`forecast_at` dates them, and the next pass or changed configuration can change
+the answer. Without a recorded forecast, the readiness response is unchanged.
+
 CPU utilization is bounded at 100% and is not compared with the resource
 throttle's CPU percentage. The auto-concurrency memory forecast and the
 resource throttle's memory percentage both measure non-reclaimable memory.

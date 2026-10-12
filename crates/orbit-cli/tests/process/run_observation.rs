@@ -33,6 +33,7 @@ use orbit_core::OrbitRuntime;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+mod admission_forecast;
 mod auth_exclusions;
 mod build_budget;
 mod capacity_backoff;
