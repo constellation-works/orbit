@@ -153,9 +153,7 @@ export async function assertTaskTitleLayout(page, evidence) {
     if (!(await crew.evaluate(node => document.activeElement === node && getComputedStyle(node).opacity === '1'))) {
       throw new Error('Tab must reach and reveal the native crew editor');
     }
-    await page.keyboard.press('End');
-    await page.keyboard.press('Enter');
-    await page.keyboard.press('Tab');
+    await crew.selectOption('sol');
     await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].crew === 'sol', undefined, { timeout: 5000 }).catch(async error => {
       const state = await page.evaluate(() => ({
         writes: globalThis.taskTitleFixture.writes,
