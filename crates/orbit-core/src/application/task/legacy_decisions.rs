@@ -20,19 +20,22 @@
 //! before it upgraded, predates the boundary; text written through this
 //! binary follows it. A store with no recorded boundary (one only opened
 //! read-only since) falls back to the day typed decisions shipped, which can
-//! only refuse a legacy decision, never admit new text.
+//! only refuse a legacy decision, never admit new text. A boundary file an
+//! interrupted write left incomplete counts from its modification time, and
+//! the next writable open records that instant in it.
 //!
 //! Retire this module 30 days after the typed field shipped (from
 //! 2026-10-12), once no live task holds a pre-typed decision.
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::io::write_new_private_text;
+use orbit_common::fs::io::{atomic_write_text, write_new_private_text};
 use orbit_store::maintenance::task_registry::task_registry_path;
 use orbit_types::task::{PilotAdmissionVerdict, TaskComment, TaskHistoryEntry};
 use serde_json::Value;
@@ -58,29 +61,97 @@ fn boundary_path(global_root: &Path) -> PathBuf {
 /// Record the store's typed-decisions boundary as now, unless one is already
 /// recorded. Every writable open calls this before it can write a record, so
 /// the first open by this binary fixes the boundary and later opens keep it.
+///
+/// The boundary is published whole, so a concurrent open finds either no file
+/// or a complete one. A file left empty or cut short by an earlier binary,
+/// which created it before writing, is repaired to its modification time: when
+/// that write last touched it, never a later instant that would admit text
+/// written since.
 pub(crate) fn record_typed_decisions_boundary(global_root: &Path) -> Result<(), OrbitError> {
     let path = boundary_path(global_root);
-    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
-    match write_new_private_text(&path, &format!("{now}\n")) {
-        Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(OrbitError::io_with_context(
+    let failed = |error: io::Error| {
+        OrbitError::io_with_context(
             &error,
             format!(
                 "record typed decisions boundary '{}': {error}",
                 path.display()
             ),
-        )),
-        _ => Ok(()),
+        )
+    };
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
+    match write_new_private_text(&path, &format!("{now}\n")) {
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        result => return result.map_err(failed),
     }
+    let RecordedBoundary::Incomplete(modified) = read_boundary(&path).map_err(failed)? else {
+        return Ok(());
+    };
+    tracing::warn!(
+        target: "orbit.core.typed_decisions",
+        path = %path.display(),
+        boundary = %modified,
+        "repairing an incomplete typed decisions boundary from its modification time"
+    );
+    let repaired = modified.to_rfc3339_opts(SecondsFormat::Nanos, true);
+    atomic_write_text(&path, &format!("{repaired}\n")).map_err(failed)
+}
+
+/// What a store's boundary file holds.
+enum RecordedBoundary {
+    /// No file: no writable open by this binary has recorded one.
+    Absent,
+    Recorded(DateTime<Utc>),
+    /// Not an RFC 3339 instant, at the file's modification time.
+    Incomplete(DateTime<Utc>),
+}
+
+/// Read the boundary file, taking an incomplete one's modification time from
+/// the same open file, so a repair racing this read yields the same instant.
+fn read_boundary(path: &Path) -> io::Result<RecordedBoundary> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(RecordedBoundary::Absent),
+        Err(error) => return Err(error),
+    };
+    let modified = file.metadata()?.modified()?;
+    let mut recorded = Vec::new();
+    file.read_to_end(&mut recorded)?;
+    Ok(std::str::from_utf8(&recorded)
+        .ok()
+        .and_then(|recorded| recorded.trim().parse().ok())
+        .map_or_else(
+            || RecordedBoundary::Incomplete(modified.into()),
+            RecordedBoundary::Recorded,
+        ))
 }
 
 impl OrbitRuntime {
     /// When this store began recording decisions as typed fields. A text-form
     /// pilot override or drain hold written from then on is not a decision.
     pub(crate) fn typed_decisions_since(&self) -> DateTime<Utc> {
-        std::fs::read_to_string(boundary_path(&self.global_root()))
-            .ok()
-            .and_then(|recorded| recorded.trim().parse().ok())
-            .unwrap_or_else(typed_decisions_shipped)
+        let path = boundary_path(&self.global_root());
+        match read_boundary(&path) {
+            Ok(RecordedBoundary::Absent) => typed_decisions_shipped(),
+            Ok(RecordedBoundary::Recorded(since)) => since,
+            Ok(RecordedBoundary::Incomplete(modified)) => {
+                tracing::warn!(
+                    target: "orbit.core.typed_decisions",
+                    path = %path.display(),
+                    boundary = %modified,
+                    "typed decisions boundary is incomplete; using its modification time until a writable open repairs it"
+                );
+                modified
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.core.typed_decisions",
+                    path = %path.display(),
+                    %error,
+                    "typed decisions boundary is unreadable; using the day typed decisions shipped"
+                );
+                typed_decisions_shipped()
+            }
+        }
     }
 }
 

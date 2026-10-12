@@ -30,21 +30,34 @@ pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Res
     staged.commit()
 }
 
-/// Create `path` with private permissions and write `content` to it, failing
-/// with [`io::ErrorKind::AlreadyExists`] when it is already there.
+/// Publish `content` at `path` with private permissions, failing with
+/// [`io::ErrorKind::AlreadyExists`] when it is already there.
 ///
-/// The exclusive create is the point: a caller that must not overwrite an
-/// existing file gets that guarantee from the kernel rather than from a
-/// `path.exists()` check something can win a race against. On Unix the file is
-/// `0o600` whatever the ambient umask is, and parent directories this call
-/// creates are `0o700`.
+/// The no-overwrite is the point: a caller that must not replace an existing
+/// file gets that guarantee from the kernel rather than from a `path.exists()`
+/// check something can win a race against. The content is staged in a private
+/// sibling and synced before a hard link names it at `path`, so `path` never
+/// holds less than all of `content`: a concurrent caller that gets
+/// `AlreadyExists` reads the complete file, and an interrupted call leaves at
+/// most a stray staging sibling. On Unix the file is `0o600` whatever the
+/// ambient umask is, and parent directories this call creates are `0o700`.
 pub fn write_new_private_text(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         create_private_dir_all(parent)?;
     }
-    let mut file = create_new_private_file(path)?;
+    let target = validated_atomic_target(path)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other("validated atomic target is missing its parent"))?;
+    let temp_path = temp_path_for(&target);
+    let mut file = create_new_private_file(&temp_path)?;
+    // Unlinks the staging name on every return, published or not.
+    let _staging = TempFileCleanup::new(temp_path.clone());
     file.write_all(content.as_bytes())?;
-    sync_file(&file)
+    sync_file(&file)?;
+    drop(file);
+    fs::hard_link(&temp_path, &target)?;
+    sync_parent_dir(&File::open(parent)?)
 }
 
 /// Create or replace the marker file `path`, holding `content`, and sync only

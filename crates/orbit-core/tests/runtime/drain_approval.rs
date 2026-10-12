@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
@@ -1626,4 +1626,79 @@ fn a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_de
         );
     }
     assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
+}
+
+/// The store's typed-decisions boundary file.
+pub(crate) fn typed_decisions_boundary(global_root: &Path) -> PathBuf {
+    orbit_store::maintenance::task_registry::task_registry_path(global_root)
+        .with_file_name("typed-decisions.since")
+}
+
+/// Leave the store's boundary file holding `content`, as an older binary's
+/// interrupted write did, and return the file's modification time.
+pub(crate) fn seed_incomplete_boundary(global_root: &Path, content: &str) -> DateTime<Utc> {
+    let path = typed_decisions_boundary(global_root);
+    std::fs::write(&path, content).unwrap();
+    // Before anything the fixture writes next, after the rollout-day text.
+    let modified = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    modified.into()
+}
+
+/// The boundary file's recorded instant.
+pub(crate) fn recorded_boundary(global_root: &Path) -> DateTime<Utc> {
+    std::fs::read_to_string(typed_decisions_boundary(global_root))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it",
+    ) {
+        return;
+    }
+    let note = "selectors (operation_id=legacy-pilot) [drain-approval-held:warnings]";
+    // Empty, as a crash after the older binary created the file left it, and
+    // cut short, as a failed write did.
+    for content in ["", "2026-10-12T1"] {
+        let workspace = Workspace::new();
+        let global_root = workspace.runtime.global_root();
+        let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+        let modified = seed_incomplete_boundary(&global_root, content);
+        // A hold written on the rollout day before the upgrade, and a note
+        // written after the incomplete boundary.
+        let legacy = workspace.task("legacy", &[], &["file:README.md"], TaskComplexity::Low);
+        append_pilot_entry(&workspace, &legacy, "2026-10-12T09:00:00Z", note);
+        let forged = workspace.task("forged", &[], &["file:README.md"], TaskComplexity::Low);
+        append_pilot_entry(&workspace, &forged, &Utc::now().to_rfc3339(), note);
+
+        // A reader counts from the incomplete file's modification time.
+        let selection = workspace.select(&drain);
+        assert_eq!(
+            held_reason(&selection, &legacy),
+            Some("warnings"),
+            "{selection}"
+        );
+        assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
+
+        // A writable open records that instant, never a later one.
+        OrbitRuntime::from_roots(&global_root, &workspace.repo.join(".orbit")).unwrap();
+        assert_eq!(recorded_boundary(&global_root), modified, "{content:?}");
+        let selection = workspace.select(&drain);
+        assert_eq!(
+            held_reason(&selection, &legacy),
+            Some("warnings"),
+            "{selection}"
+        );
+        assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
+    }
 }

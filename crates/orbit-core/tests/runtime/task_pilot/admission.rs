@@ -1218,3 +1218,46 @@ fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed
         }
     }
 }
+
+#[test]
+fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
+    if !isolated(
+        "task_pilot::admission::an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it",
+    ) {
+        return;
+    }
+    let comment = "task-pilot-admission: approve-anyway\nReviewed the finding.";
+    // Empty, as a crash after the older binary created the file left it, and
+    // cut short, as a failed write did.
+    for content in ["", "2026-10-12T1"] {
+        let workspace = Workspace::new();
+        let global_root = workspace.runtime.global_root();
+        let task = backlog_task(&workspace);
+        let modified = crate::drain_approval::seed_incomplete_boundary(&global_root, content);
+        // A reader counts from the incomplete file's modification time; then
+        // a writable open records that instant, never a later one.
+        for reopen in [false, true] {
+            if reopen {
+                super::runtime_at(&global_root, &workspace.repo.join(".orbit"));
+                assert_eq!(
+                    crate::drain_approval::recorded_boundary(&global_root),
+                    modified,
+                    "{content:?}"
+                );
+            }
+            assess(&workspace, &task, Some("duplicate_of"));
+            let now = chrono::Utc::now().to_rfc3339();
+            append_comment(&workspace, &task, "human:fixture", &now, comment);
+            assert_admission(&workspace, &task, Some("pilot_duplicate"));
+            // Written on the rollout day before the upgrade.
+            append_comment(
+                &workspace,
+                &task,
+                "human:fixture",
+                "2026-10-12T09:00:00Z",
+                comment,
+            );
+            assert_admission(&workspace, &task, None);
+        }
+    }
+}
