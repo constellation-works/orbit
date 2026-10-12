@@ -752,7 +752,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                 orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "claude")
                     .expect("compile the effective recovery sandbox");
             if orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch") {
-                let (child, _profile_file) =
+                let child =
                     orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
                         profile_text: &profile_text,
                         program: "/bin/sh",

@@ -169,8 +169,6 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     };
     let SpawnedChild {
         mut child,
-        // The temp profile must outlive the child — drop it after wait.
-        _profile_temp,
         // Linux mount descriptors also outlive the child. Dropping a cloned
         // SQLite DB descriptor earlier can release the host's lease locks.
         _linux_mount_plan,

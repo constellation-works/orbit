@@ -15,7 +15,6 @@ use orbit_exec::{
     sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
-use tempfile::NamedTempFile;
 
 use super::super::dispatcher::ResolvedSandbox;
 
@@ -224,12 +223,6 @@ impl SpawnError {
 #[derive(Debug)]
 pub(crate) struct SpawnedChild {
     pub(crate) child: Child,
-    /// Sandbox profile tempfile, if any. Held until the supervisor returns
-    /// so the kernel can keep reading the SBPL profile while the child runs.
-    /// Shared: identical compiled profiles reuse one process-wide tempfile
-    /// (see `orbit_exec::spawn_under_macos_sandbox`), so this may outlive
-    /// this particular spawn.
-    pub(crate) _profile_temp: Option<Arc<NamedTempFile>>,
     /// Linux mount-source descriptors retained until the provider exits.
     ///
     /// Closing a duplicate SQLite database descriptor can release this
@@ -337,7 +330,6 @@ fn spawn_linux_bwrap(
     .map_err(|error| SpawnError::transient(error.to_string()))?;
     Ok(SpawnedChild {
         child,
-        _profile_temp: None,
         _linux_mount_plan: Some(plan),
     })
 }
@@ -445,7 +437,6 @@ fn spawn_bare(
     let child = child_result.map_err(|err| SpawnError::from_spawn_io(program, &err))?;
     Ok(SpawnedChild {
         child,
-        _profile_temp: None,
         _linux_mount_plan: None,
     })
 }
@@ -493,7 +484,7 @@ fn spawn_macos_sandboxed(
         cwd,
         Path::new(DEFAULT_MACOS_CA_CERTIFICATE),
     )?;
-    let (child, profile_temp) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program,
         args,
@@ -507,7 +498,6 @@ fn spawn_macos_sandboxed(
     .map_err(|err| SpawnError::transient(err.to_string()))?;
     Ok(SpawnedChild {
         child,
-        _profile_temp: Some(profile_temp),
         _linux_mount_plan: None,
     })
 }

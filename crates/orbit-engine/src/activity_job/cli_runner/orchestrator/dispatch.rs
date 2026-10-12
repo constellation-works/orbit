@@ -269,7 +269,7 @@ pub(crate) fn run_cli_backend_for_step(
     }
 
     // The audit argv reflects what actually runs. Under sandbox-exec the
-    // parent is `<trusted sandbox-exec> -f <profile.sb> <program> <args...>`;
+    // parent is `<trusted sandbox-exec> -p <profile> <program> <args...>`;
     // under bare exec it's `<program> <args...>`. The redactor still scrubs
     // the child's program name + args so secrets in argv stay redacted.
     let redaction = argv_redactor();
