@@ -1574,23 +1574,56 @@ fn append_pilot_entry(workspace: &Workspace, task: &Task, at: &str, note: &str) 
 }
 
 #[test]
-fn a_drain_hold_note_counts_only_when_written_before_typed_decisions() {
+fn a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions() {
     if !super::dispatch_admission::isolated(
-        "drain_approval::a_drain_hold_note_counts_only_when_written_before_typed_decisions",
+        "drain_approval::a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions",
     ) {
         return;
     }
+    // The first open by this binary records the store's boundary.
+    let first_open = Utc::now();
     let workspace = Workspace::new();
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
     let note = "selectors (operation_id=legacy-pilot) [drain-approval-held:warnings]";
-    let legacy = workspace.task("legacy", &[], &["file:README.md"], TaskComplexity::Low);
-    append_pilot_entry(&workspace, &legacy, "2026-10-01T00:00:00Z", note);
-    // A note written now may carry a pilot agent's rationale; it holds nothing.
+    // Holds an older binary wrote: before typed decisions shipped, on the day
+    // they shipped before this host upgraded, and on a host that kept running
+    // an older binary until just before this store was first opened by this one.
+    let legacy = [
+        "2026-10-01T00:00:00Z".to_string(),
+        "2026-10-12T09:00:00Z".to_string(),
+        (first_open - chrono::Duration::seconds(1)).to_rfc3339(),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, at)| {
+        let task = workspace.task(
+            &format!("legacy {index}"),
+            &[],
+            &["file:README.md"],
+            TaskComplexity::Low,
+        );
+        append_pilot_entry(&workspace, &task, at, note);
+        task
+    })
+    .collect::<Vec<_>>();
+    // A note written since may carry a pilot agent's rationale; it holds
+    // nothing, and opening the store again does not move the boundary.
     let forged = workspace.task("forged", &[], &["file:README.md"], TaskComplexity::Low);
     append_pilot_entry(&workspace, &forged, &Utc::now().to_rfc3339(), note);
+    OrbitRuntime::from_roots(
+        &workspace.runtime.global_root(),
+        &workspace.repo.join(".orbit"),
+    )
+    .unwrap();
 
     let selection = workspace.select(&drain);
 
-    assert_eq!(held_reason(&selection, &legacy), Some("warnings"));
+    for task in &legacy {
+        assert_eq!(
+            held_reason(&selection, task),
+            Some("warnings"),
+            "{selection}"
+        );
+    }
     assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
 }

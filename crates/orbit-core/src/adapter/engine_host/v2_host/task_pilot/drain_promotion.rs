@@ -67,15 +67,18 @@ pub(in crate::adapter::engine_host::v2_host) fn approved_by_drain(
 }
 
 /// The pilot classification a drain hold recorded on a `task_pilot_applied`
-/// history entry. Its note is never read for one: the pilot agent's rationale
-/// is part of it.
-pub(in crate::adapter::engine_host::v2_host) fn held_classification(
-    entry: &TaskHistoryEntry,
-) -> Option<&str> {
+/// history entry. Its note is read for one only when `runtime`'s store
+/// predates typed decisions: the pilot agent's rationale is part of it.
+pub(in crate::adapter::engine_host::v2_host) fn held_classification<'a>(
+    runtime: &OrbitRuntime,
+    entry: &'a TaskHistoryEntry,
+) -> Option<&'a str> {
     match &entry.decision {
         Some(TaskDecision::DrainApprovalHeld { classification }) => Some(classification),
         Some(_) => None,
-        None => legacy_decisions::drain_held_classification(entry),
+        None => {
+            legacy_decisions::drain_held_classification(entry, &|| runtime.typed_decisions_since())
+        }
     }
 }
 

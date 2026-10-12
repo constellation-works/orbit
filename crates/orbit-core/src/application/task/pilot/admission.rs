@@ -448,7 +448,8 @@ impl OrbitRuntime {
             // An override written as a comment before typed decisions, after
             // this receipt. Operator validation additionally requires its
             // trusted resolution event.
-            legacy_override |= legacy_decisions::pilot_override_comment(comment);
+            legacy_override |=
+                legacy_decisions::pilot_override_comment(comment, &|| self.typed_decisions_since());
             if comment.by != "task-pilot" {
                 continue;
             }
