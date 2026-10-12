@@ -10,27 +10,78 @@
 //! - an operator resolution event without a typed decision is read from its
 //!   JSON note. Only the trusted operator update path writes those events;
 //! - a `task-pilot-admission:` comment header and a `[drain-approval-held:`
-//!   history-note marker count only when written before typed decisions
-//!   shipped. Their text is open to writers the decision must not trust (any
-//!   comment author; a pilot agent's rationale).
+//!   history-note marker count only when written before this store's typed
+//!   decisions boundary. Their text is open to writers the decision must not
+//!   trust (any comment author; a pilot agent's rationale).
+//!
+//! The boundary is per store: the first writable open of a store by a binary
+//! that writes typed decisions records when that happened, beside the task
+//! registry, and never moves it. Text an older binary wrote, on that host or
+//! before it upgraded, predates the boundary; text written through this
+//! binary follows it. A store with no recorded boundary (one only opened
+//! read-only since) falls back to the day typed decisions shipped, which can
+//! only refuse a legacy decision, never admit new text.
 //!
 //! Retire this module 30 days after the typed field shipped (from
 //! 2026-10-12), once no live task holds a pre-typed decision.
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
-use chrono::{DateTime, Utc};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_common::OrbitError;
+use orbit_common::fs::io::write_new_private_text;
+use orbit_store::maintenance::task_registry::task_registry_path;
 use orbit_types::task::{PilotAdmissionVerdict, TaskComment, TaskHistoryEntry};
 use serde_json::Value;
 
 use super::blocked_recovery::FinalRecoveryRecord;
 use super::final_recovery::FinalRecoveryOutcome;
 use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
+use crate::OrbitRuntime;
 
-/// When typed decisions shipped (2026-10-12T00:00:00Z). A text-form pilot
-/// override or drain hold written from then on is not a decision.
-fn typed_decisions_since() -> DateTime<Utc> {
+/// The store's boundary, beside its task registry: an RFC 3339 instant.
+const BOUNDARY_FILE: &str = "typed-decisions.since";
+
+/// When typed decisions shipped (2026-10-12T00:00:00Z): the boundary of a
+/// store that has none recorded.
+fn typed_decisions_shipped() -> DateTime<Utc> {
     DateTime::from_timestamp(1_791_763_200, 0).unwrap_or(DateTime::<Utc>::MIN_UTC)
+}
+
+fn boundary_path(global_root: &Path) -> PathBuf {
+    task_registry_path(global_root).with_file_name(BOUNDARY_FILE)
+}
+
+/// Record the store's typed-decisions boundary as now, unless one is already
+/// recorded. Every writable open calls this before it can write a record, so
+/// the first open by this binary fixes the boundary and later opens keep it.
+pub(crate) fn record_typed_decisions_boundary(global_root: &Path) -> Result<(), OrbitError> {
+    let path = boundary_path(global_root);
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
+    match write_new_private_text(&path, &format!("{now}\n")) {
+        Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(OrbitError::io_with_context(
+            &error,
+            format!(
+                "record typed decisions boundary '{}': {error}",
+                path.display()
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
+impl OrbitRuntime {
+    /// When this store began recording decisions as typed fields. A text-form
+    /// pilot override or drain hold written from then on is not a decision.
+    pub(crate) fn typed_decisions_since(&self) -> DateTime<Utc> {
+        std::fs::read_to_string(boundary_path(&self.global_root()))
+            .ok()
+            .and_then(|recorded| recorded.trim().parse().ok())
+            .unwrap_or_else(typed_decisions_shipped)
+    }
 }
 
 const FINAL_RECOVERY_PREFIX: &str = "final_recovery run_id=";
@@ -104,13 +155,17 @@ pub(crate) fn final_recovery_outcome(
 }
 
 /// A legacy operator `approve-anyway` or `clear` comment: its first line names
-/// the verdict, an operator wrote it, and it predates typed decisions.
-pub(crate) fn pilot_override_comment(comment: &TaskComment) -> bool {
-    comment.at < typed_decisions_since()
-        && !comment.by.trim().is_empty()
+/// the verdict, an operator wrote it, and it predates `typed_since`, the
+/// store's boundary (read only for a comment that otherwise qualifies).
+pub(crate) fn pilot_override_comment(
+    comment: &TaskComment,
+    typed_since: &dyn Fn() -> DateTime<Utc>,
+) -> bool {
+    !comment.by.trim().is_empty()
         && !is_automation_actor(&comment.by)
         && PilotAdmissionVerdict::from_header(comment.message.lines().next().unwrap_or_default())
             .is_some_and(PilotAdmissionVerdict::overrides_findings)
+        && comment.at < typed_since()
 }
 
 /// A legacy operator resolution event's JSON note: the pilot receipt it
@@ -133,15 +188,15 @@ pub(crate) fn pilot_resolution_note(entry: &TaskHistoryEntry) -> Option<(String,
 }
 
 /// The classification a legacy drain hold recorded in a `task_pilot_applied`
-/// history note, when the note predates typed decisions.
-pub(crate) fn drain_held_classification(entry: &TaskHistoryEntry) -> Option<&str> {
-    if entry.at >= typed_decisions_since() {
-        return None;
-    }
+/// history note, when the note predates `typed_since`, the store's boundary
+/// (read only for a note that carries the marker).
+pub(crate) fn drain_held_classification<'a>(
+    entry: &'a TaskHistoryEntry,
+    typed_since: &dyn Fn() -> DateTime<Utc>,
+) -> Option<&'a str> {
     let (_, marker) = entry.note.as_deref()?.split_once(DRAIN_HELD_PREFIX)?;
-    marker
-        .split_once(']')
-        .map(|(classification, _)| classification)
+    let (classification, _) = marker.split_once(']')?;
+    (entry.at < typed_since()).then_some(classification)
 }
 
 /// The `key=value` token in a comment header.

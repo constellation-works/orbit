@@ -1146,9 +1146,9 @@ fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, messag
 }
 
 #[test]
-fn an_override_comment_decides_only_when_written_before_typed_decisions() {
+fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions() {
     if !isolated(
-        "task_pilot::admission::an_override_comment_decides_only_when_written_before_typed_decisions",
+        "task_pilot::admission::an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions",
     ) {
         return;
     }
@@ -1160,23 +1160,33 @@ fn an_override_comment_decides_only_when_written_before_typed_decisions() {
             ("duplicate_of", "pilot_duplicate"),
             ("already_landed", "pilot_already_landed"),
         ] {
+            // The first open by this binary records the store's boundary.
+            let first_open = chrono::Utc::now();
             let workspace = Workspace::new();
             let task = backlog_task(&workspace);
             let comment = format!("task-pilot-admission: {decision}\nReviewed the finding.");
-            assess(&workspace, &task, Some(field));
-            // Comment text written now is open to any author; it decides nothing.
-            let now = chrono::Utc::now().to_rfc3339();
-            append_comment(&workspace, &task, "human:fixture", &now, &comment);
-            assert_admission(&workspace, &task, Some(reason));
-            // The same comment from before typed decisions is still honoured.
-            append_comment(
-                &workspace,
-                &task,
-                "human:fixture",
-                "2026-10-01T00:00:00Z",
-                &comment,
-            );
-            assert_admission(&workspace, &task, None);
+            // Overrides an older binary wrote: before typed decisions shipped,
+            // on the day they shipped before this host upgraded, and on a host
+            // that kept running an older binary until just before this store
+            // was first opened by this one.
+            for legacy_at in [
+                "2026-10-01T00:00:00Z".to_string(),
+                "2026-10-12T09:00:00Z".to_string(),
+                (first_open - chrono::Duration::seconds(1)).to_rfc3339(),
+            ] {
+                assess(&workspace, &task, Some(field));
+                // Comment text written since is open to any author; it decides
+                // nothing, and opening the store again does not move the boundary.
+                let now = chrono::Utc::now().to_rfc3339();
+                append_comment(&workspace, &task, "human:fixture", &now, &comment);
+                super::runtime_at(
+                    &workspace.runtime.global_root(),
+                    &workspace.repo.join(".orbit"),
+                );
+                assert_admission(&workspace, &task, Some(reason));
+                append_comment(&workspace, &task, "human:fixture", &legacy_at, &comment);
+                assert_admission(&workspace, &task, None);
+            }
 
             // A decision made now is the typed one the trusted path records;
             // an override needs no explanation below its header.

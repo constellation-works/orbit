@@ -173,7 +173,7 @@ fn approval_snapshot(
             .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT);
         if let Some(classification) = latest
             .filter(|entry| entry.event == "task_pilot_applied")
-            .and_then(held_classification)
+            .and_then(|entry| held_classification(runtime, entry))
         {
             snapshot.held.push(held(classification, None));
             continue;

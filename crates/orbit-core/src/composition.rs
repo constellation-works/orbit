@@ -11,6 +11,7 @@ use orbit_store::Store;
 pub use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
+use crate::application::task::legacy_decisions::record_typed_decisions_boundary;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
@@ -318,6 +319,23 @@ fn build_runtime(
     } else {
         prepare_resolved_config(global_root, shared_root)?
     };
+    if !write_free && !read_only {
+        // Before this runtime can write a task record, so text-form decisions
+        // an older binary wrote stay legacy and text written from now on does
+        // not.
+        if let Err(error) = record_typed_decisions_boundary(global_root) {
+            if error.is_readonly_or_access_failure() {
+                tracing::warn!(
+                    target: "orbit.core.bootstrap",
+                    root = %global_root.display(),
+                    error = %error,
+                    "skipped incidental typed decisions boundary persistence"
+                );
+            } else {
+                return Err(error);
+            }
+        }
+    }
     let runtime = if write_free {
         OrbitRuntime::build_from_resolved_config_write_free(
             global_root,

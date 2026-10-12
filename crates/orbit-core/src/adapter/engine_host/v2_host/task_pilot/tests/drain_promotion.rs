@@ -499,7 +499,10 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         NO_AUTO_APPROVE_TAG
     );
     let entry = pilot_entry(runtime, &held.id);
-    assert_eq!(held_classification(&entry), Some(NO_AUTO_APPROVE_TAG));
+    assert_eq!(
+        held_classification(runtime, &entry),
+        Some(NO_AUTO_APPROVE_TAG)
+    );
     let note = entry.note.as_deref().expect("pilot history note");
     assert!(
         note.contains(forged),
@@ -534,7 +537,7 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         "{entry:?}"
     );
     assert_eq!(
-        held_classification(&entry),
+        held_classification(runtime, &entry),
         None,
         "a marker in an agent-written note has no effect: {entry:?}"
     );

@@ -240,10 +240,17 @@ prose never grants tools.
 The same trusted path releases a `pilot_duplicate` or `pilot_already_landed`
 hold with `clear` or `approve-anyway`, recorded as a typed decision on a
 `pilot_admission_decided` history event. Two text forms from before typed
-decisions are still honoured when written before 2026-10-12: an operator
-comment carrying that header alone, and an auto drain's approval hold recorded
-as a `[drain-approval-held:<classification>]` marker in the pilot's history
-note. The same text written later is not a decision.
+decisions are still honoured: an operator comment carrying that header alone,
+and an auto drain's approval hold recorded as a
+`[drain-approval-held:<classification>]` marker in the pilot's history note.
+Each counts only when written before its Orbit store's typed-decisions
+boundary, which the first writable open by a binary that records typed
+decisions writes once to `tasks/typed-decisions.since` in the Orbit root. Text
+an older binary wrote before that host upgraded therefore keeps its effect, and
+the same text written later is not a decision. Do not delete that file:
+the next open would record a later boundary and honour text written in
+between. Until a writable open records it, text written from 2026-10-12 on
+is not a decision.
 
 Applied task-pilot `blocked_by` findings that name an unfinished task in the
 same workspace add a dependency in the assessment's atomic write. Proposed,
