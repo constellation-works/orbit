@@ -17,6 +17,8 @@
 //!
 //! A feature schema widens like the store schema: a newer binary whose newer
 //! feature migrations are all additive or data-only joins live older ones.
+//! The task registry ledger does too, and a participant that predates it
+//! counts as knowing none of its migrations.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 orbit_common::isolate_test_process!();
@@ -46,6 +48,11 @@ fn identity(version: u32, writer_floor: u32) -> CompatibilityIdentity {
         store_schema: LedgerCompatibility {
             version,
             writer_floor,
+            reader_floor: 0,
+        },
+        task_registry: LedgerCompatibility {
+            version: 1,
+            writer_floor: 0,
             reader_floor: 0,
         },
         workspace_layout: LedgerCompatibility {
@@ -83,7 +90,9 @@ fn compat(root: &Path) -> Value {
     serde_json::from_str(&raw).expect("compat json")
 }
 
-fn assert_envelope(root: &Path, store: Value, writer_min_layout: Option<u32>) {
+/// Every identity here holds the task registry and workspace layout ledgers
+/// at version 1, so both share `writer_min_v1`.
+fn assert_envelope(root: &Path, store: Value, writer_min_v1: Option<u32>) {
     let record = compat(root);
     let lock = std::fs::read_to_string(root.join(".generation.lock")).expect("generation lock");
     let recorded = lock
@@ -96,12 +105,19 @@ fn assert_envelope(root: &Path, store: Value, writer_min_layout: Option<u32>) {
         record["envelope"],
         json!({
             "store_schema": store,
+            "task_registry": {
+                "min_version": 1,
+                "max_version": 1,
+                "max_reader_floor": 0,
+                "max_writer_floor": 0,
+                "writer_min_version": writer_min_v1,
+            },
             "workspace_layout": {
                 "min_version": 1,
                 "max_version": 1,
                 "max_reader_floor": 0,
                 "max_writer_floor": 0,
-                "writer_min_version": writer_min_layout,
+                "writer_min_version": writer_min_v1,
             },
             "features": {}
         })
@@ -324,6 +340,68 @@ fn a_data_only_feature_migration_joins_beside_an_older_live_participant() {
     )
     .expect("an automation 4 binary that declares its floor joins beside automation 5");
     drop((older, command, drain));
+}
+
+/// A binary from before the task registry ledger records the registry neither
+/// in its identity nor in the envelope. Admission reads both as knowing no
+/// registry migration: a newcomer whose registry migrations are all additive
+/// joins beside it, and one carrying a registry migration older writers cannot
+/// keep is refused, as the registry's `user_version` fence refuses it at open.
+#[test]
+fn a_registry_ledger_a_live_participant_lacks_fails_closed() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let mut recorded = serde_json::to_value(identity(10, 0)).expect("identity");
+    recorded
+        .as_object_mut()
+        .expect("identity")
+        .remove("task_registry");
+    let pre_ledger: CompatibilityIdentity =
+        serde_json::from_value(recorded).expect("a pre-ledger identity still parses");
+    let drain = join(
+        root,
+        &digest(10),
+        &pre_ledger,
+        ParticipantRole::Drain,
+        Access::Write,
+    )
+    .expect("the pre-ledger drain holds the authority");
+    let mut record = compat(root);
+    record["envelope"]
+        .as_object_mut()
+        .expect("envelope")
+        .remove("task_registry");
+    std::fs::write(
+        root.join(".generation-compat.json"),
+        serde_json::to_string(&record).expect("record"),
+    )
+    .expect("rewrite the envelope as the pre-ledger binary");
+
+    let mut fenced = identity(10, 0);
+    fenced.task_registry = LedgerCompatibility {
+        version: 2,
+        writer_floor: 2,
+        reader_floor: 0,
+    };
+    let refused = refusal(join(
+        root,
+        &digest(12),
+        &fenced,
+        ParticipantRole::Command,
+        Access::Write,
+    ));
+    assert!(refused.contains("task registry"), "{refused}");
+    assert!(refused.contains("live writer at version 0"), "{refused}");
+
+    let additive = join(
+        root,
+        &digest(11),
+        &identity(10, 0),
+        ParticipantRole::Command,
+        Access::Write,
+    )
+    .expect("an all-additive registry ledger joins beside the pre-ledger drain");
+    drop((additive, drain));
 }
 
 fn join_within(

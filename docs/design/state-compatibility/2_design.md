@@ -160,11 +160,12 @@ binary, and the apply path are otherwise unchanged.
   binary. The runtime's state handles remain read-only. A newer read-only store
   or unwritable database still refuses the audit write; the CLI warns without
   failing a read-only tool result.
-- **Task-registry compatibility is separate.** The global task registry keeps
-  its own `PRAGMA user_version` reader floor (see
-  [upgrades runbook](../../runbooks/upgrades.md)); this contract does not
-  change it yet. The registry, the feature ledgers and tables created on first
-  use are planned to move onto ledgers of this kind; see
+- **The task registry fences binaries from before its ledger.** The global
+  task registry runs this contract on its own ledger (§8). Binaries from
+  before that ledger read only its `PRAGMA user_version`, so they cannot be
+  held read-only: the first registry migration that is not `Additive` refuses
+  them outright, as the layout does. The feature ledgers and the recovery
+  authority are still planned to move onto ledgers of this kind; see
   [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
 
 ## 7 Frozen store migration bodies
@@ -194,6 +195,55 @@ a change to an existing prefix needs an explanation and must not silently
 re-bless a changed shipped shape. Legacy recreation and actor backfill fixtures
 also run through the public store-open boundary, because an empty schema dump
 cannot prove data compatibility.
+
+## 8 The task registry ledger
+
+`tasks/index.sqlite` is a separate SQLite file, so it has a registry of its own
+(`driver/sqlite/task_registry/ledger.rs`), run by the store's ledger engine.
+The engine takes a `LedgeredDatabase` naming the state component (`task
+registry`), and writes the same `schema_meta` ledger rows and
+`migration.compat` record into that file. Its entries follow the rules of §1
+and §7: append-only, frozen bodies, and a per-prefix schema golden
+(`task_registry/tests/registry_schema.golden`). Two engine options exist for
+this database:
+
+- Registry migrations run with foreign-key enforcement off. SQLite ignores
+  `PRAGMA foreign_keys` inside a transaction, and the baseline's pre-v4
+  rewrite rebuilds `workspace_bindings`, the parent of every other registry
+  table; with enforcement on, the drop would cascade into the children.
+- After each entry, in the same transaction, the engine writes the
+  `user_version` fence for binaries from before the ledger: 5 while every
+  applied entry is `Additive`, 7 from the first one that is not. Never 6,
+  which those binaries may recover.
+
+Registry v1, `registry_baseline`, is a frozen copy of the pre-ledger v5
+setup, the `task_action_keys` table and the `task_envelope_stamps` cache,
+which binaries before the ledger created on first record. A registry with no
+ledger adopts it on its first writable open by running v1, which is
+idempotent over every shipped shape: `user_version` up to 5, including the
+path-coupled bindings before v4 and the allocator before v5, and the
+recognized v6. The pre-v5 rewrites and the v6 recognition now live only in
+that body; the recognition ignores the ledger's own `schema_meta` table,
+which the engine creates in the same transaction, and still mirrors envelope
+stamps a marked v6 may or may not carry. An unrecognized shape refuses
+before anything is written. Seeding the allocator is data, not shape: every
+writable open that finds no `local` allocator row seeds it after the ledger
+has run.
+
+A registry whose ledger is newer than the binary is decided from its record,
+as in §3: additive-newer stays writable; read-compatible-newer opens with
+`query_only` on the writer connection and no read pool, so the registry
+reports itself read-only and its callers skip writes; breaking-newer is
+refused. A registry opened for observation never adopts the ledger: without a
+ledger it is readable at `user_version` 5 with action keys, and envelope stamp
+reads then check that the table exists. Once adopted, readers rely on v1.
+
+Upgrade admission carries the registry ledger as `task_registry` in the
+compiled `CompatibilityIdentity`, compared like the store schema. An identity
+or envelope recorded by a binary from before this ledger lacks it; it reads
+as version 0 with no floors, a binary that knows no registry migration. That
+fails closed: any registry migration with a writer or reader floor refuses
+it, matching the `user_version` fence.
 
 ## Task References
 

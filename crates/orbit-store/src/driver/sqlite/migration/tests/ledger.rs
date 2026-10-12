@@ -896,7 +896,32 @@ fn resource_minute_tables_keep_an_older_binary_writing() {
 // historical prefixes without widening production visibility (criterion 3).
 #[test]
 fn store_schema_prefix_goldens() {
-    const TEST: &str = "driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens";
+    check_schema_prefix_goldens(
+        "driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens",
+        &ledger::STORE_DATABASE,
+        ledger::MIGRATIONS,
+        "src/driver/sqlite/migration/tests/store_schema.golden",
+    );
+}
+
+// The same safety invariant for the task registry's own ledger, a separate
+// SQLite file with a separate registry (criterion 3).
+#[test]
+fn task_registry_schema_prefix_goldens() {
+    check_schema_prefix_goldens(
+        "driver::sqlite::migration::tests::ledger::task_registry_schema_prefix_goldens",
+        &crate::driver::sqlite::task_registry::ledger::REGISTRY_DATABASE,
+        crate::driver::sqlite::task_registry::ledger::MIGRATIONS,
+        "src/driver/sqlite/task_registry/tests/registry_schema.golden",
+    );
+}
+
+fn check_schema_prefix_goldens(
+    test: &str,
+    database: &ledger::LedgeredDatabase,
+    migrations: &[Migration],
+    golden: &str,
+) {
     const CHILD_ENV: &str = "ORBIT_STORE_SCHEMA_GOLDEN_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {
         let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
@@ -906,14 +931,14 @@ fn store_schema_prefix_goldens() {
             command.env_remove(key);
         });
         command
-            .args(["--exact", TEST, "--nocapture"])
+            .args(["--exact", test, "--nocapture"])
             .env(CHILD_ENV, "1")
             .env("HOME", root.path())
             .env("USERPROFILE", root.path())
             .current_dir(root.path());
-        let output = orbit_common::test_env::run_child_test(&mut command, TEST, root.path());
+        let output = orbit_common::test_env::run_child_test(&mut command, test, root.path());
         orbit_common::test_env::assert_child_test_passed(
-            TEST,
+            test,
             output.status,
             output.stdout,
             output.stderr,
@@ -925,9 +950,10 @@ fn store_schema_prefix_goldens() {
     let mut actual = String::new();
     // Build each prefix independently: its compatibility record and schema
     // are exactly those of a binary whose registry ended at this version.
-    for end in 1..=ledger::MIGRATIONS.len() {
+    for end in 1..=migrations.len() {
         let conn = Connection::open_in_memory().expect("schema fixture");
-        ledger::run_migrations(&conn, &ledger::MIGRATIONS[..end]).expect("apply ledger prefix");
+        ledger::run_database_migrations(&conn, database, &migrations[..end], None)
+            .expect("apply ledger prefix");
         let mut stmt = conn
             .prepare(
                 "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name, tbl_name",
@@ -953,7 +979,7 @@ fn store_schema_prefix_goldens() {
                 serde_json::to_string(&(kind, name, table, sql)).expect("serialize schema row")
             })
             .collect();
-        let migration = &ledger::MIGRATIONS[end - 1];
+        let migration = &migrations[end - 1];
         actual.push_str(&format!("v{} {}\n", migration.version, migration.name));
         // Lossless deltas keep all cumulative dumps reviewable: replaying
         // these removals/additions reconstructs the full dump at every N.
@@ -966,15 +992,15 @@ fn store_schema_prefix_goldens() {
         actual.push('\n');
         previous = current;
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/driver/sqlite/migration/tests/store_schema.golden");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(golden);
     if std::env::var_os("ORBIT_UPDATE_STORE_SCHEMA_GOLDENS").is_some() {
         std::fs::write(&path, &actual).expect("write schema golden");
     }
     let expected = std::fs::read_to_string(&path).expect("read schema golden");
     assert_eq!(
         actual, expected,
-        "shipped store schema changed; append a migration instead of editing a shipped body; \
-         regenerate intentional additions with make goldens UPDATE=1"
+        "shipped {} schema changed; append a migration instead of editing a shipped body; \
+         regenerate intentional additions with make goldens UPDATE=1",
+        database.noun
     );
 }

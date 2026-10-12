@@ -5,11 +5,12 @@ use std::collections::BTreeMap;
 use orbit_common::fs::generation::{CompatibilityIdentity, FeatureFloor};
 
 use crate::driver::sqlite::migration::FeatureMigration;
-use crate::driver::sqlite::{automation, job_run_store, migration, review};
+use crate::driver::sqlite::{automation, job_run_store, migration, review, task_registry};
 
 /// What upgrade admission compares against the live participants: the store
-/// schema and workspace layout ledgers, and every feature schema this binary
-/// migrates the host store to with its newest breaking migration.
+/// schema, task registry and workspace layout ledgers, and every feature
+/// schema this binary migrates the host store to with its newest breaking
+/// migration.
 pub fn compiled_compatibility() -> CompatibilityIdentity {
     let registries = [
         (automation::FEATURE, automation::MIGRATIONS),
@@ -27,6 +28,7 @@ pub fn compiled_compatibility() -> CompatibilityIdentity {
     }
     CompatibilityIdentity {
         store_schema: migration::schema_compatibility(),
+        task_registry: task_registry::registry_compatibility(),
         workspace_layout: crate::workflow::layout::layout_compatibility(),
         features,
         feature_floors,

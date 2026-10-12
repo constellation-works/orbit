@@ -172,19 +172,9 @@ fn completed_write_during_freshness_probe_keeps_selection_indexed() {
     assert!(reads.iter().all(|event| event["level"] != "WARN"));
 }
 
-/// Envelope stamps the registry holds for `PARTITION_ID`; none before the
-/// first is recorded, when the table does not exist yet.
+/// Envelope stamps the registry holds for `PARTITION_ID`. The registry
+/// baseline creates the table, so it exists before the first record.
 fn recorded_stamps(sql: &rusqlite::Connection) -> i64 {
-    let exists: bool = sql
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'task_envelope_stamps')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    if !exists {
-        return 0;
-    }
     sql.query_row(
         "SELECT COUNT(*) FROM task_envelope_stamps WHERE workspace_id = ?1",
         [PARTITION_ID],

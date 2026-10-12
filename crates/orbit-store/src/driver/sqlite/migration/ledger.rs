@@ -26,6 +26,12 @@
 //!   adopt the ledger transparently: the v1 baseline is the same
 //!   idempotent schema code, so running it on an existing database is a
 //!   no-op that then records version 1.
+//!
+//! The engine is not specific to the store database. Each SQLite file that
+//! keeps authority describes itself with a [`LedgeredDatabase`] and owns a
+//! registry of its own: the store ([`STORE_DATABASE`], [`MIGRATIONS`]) and the
+//! task registry (`task_registry::ledger`). Each file carries its own
+//! `schema_meta` ledger rows and `migration.compat` record.
 
 use std::path::Path;
 
@@ -36,6 +42,34 @@ use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 use crate::contracts::{
     CompatibilityRecord, CompatibilityRefusal, ForwardCompatibleOpen, MigrationCompatibility,
     StateComponent, evaluate_newer_state,
+};
+
+/// One SQLite database file that evolves through its own migration registry.
+pub(crate) struct LedgeredDatabase {
+    /// Which versioned state its compatibility decisions are about.
+    pub(crate) component: StateComponent,
+    /// How diagnostics name the database ("store database").
+    pub(crate) noun: &'static str,
+    /// Run each migration with foreign-key enforcement off. SQLite ignores
+    /// `PRAGMA foreign_keys` inside a transaction, so a body that rebuilds a
+    /// parent table (create, copy, drop, rename) cannot turn it off itself,
+    /// and with enforcement on the drop would cascade into the children.
+    pub(crate) foreign_keys_off: bool,
+    /// Written inside each migration's transaction after its ledger row and
+    /// compatibility record, from the registry and the version just applied.
+    pub(crate) stamp: Option<LedgerStamp>,
+}
+
+/// A database-specific marker a [`LedgeredDatabase`] keeps in step with its
+/// ledger, such as the task registry's `user_version` fence.
+pub(crate) type LedgerStamp = fn(&Connection, &[Migration], u32) -> Result<(), OrbitError>;
+
+/// The store database (`orbit.db`) and its [`MIGRATIONS`].
+pub(crate) const STORE_DATABASE: LedgeredDatabase = LedgeredDatabase {
+    component: StateComponent::StoreSchema,
+    noun: "store database",
+    foreign_keys_off: false,
+    stamp: None,
 };
 
 /// One entry in the migration registry.
@@ -498,7 +532,7 @@ pub(crate) fn run_migrations(
     conn: &Connection,
     migrations: &[Migration],
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_migrations_inner(conn, migrations, None)
+    run_database_migrations(conn, &STORE_DATABASE, migrations, None)
 }
 
 pub(crate) fn run_migrations_at_path(
@@ -506,11 +540,14 @@ pub(crate) fn run_migrations_at_path(
     migrations: &[Migration],
     path: &Path,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_migrations_inner(conn, migrations, Some(path))
+    run_database_migrations(conn, &STORE_DATABASE, migrations, Some(path))
 }
 
-fn run_migrations_inner(
+/// [`run_migrations`] for any ledgered database. `path`, when known, names
+/// the file in a contention error.
+pub(crate) fn run_database_migrations(
     conn: &Connection,
+    database: &LedgeredDatabase,
     migrations: &[Migration],
     path: Option<&Path>,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
@@ -518,9 +555,9 @@ fn run_migrations_inner(
     let current = current_schema_version(conn)?;
     let supported = migrations.last().map(|m| m.version).unwrap_or(0);
     if current > supported {
-        return evaluate_newer_database(conn, current, supported).map(Some);
+        return evaluate_newer_database(conn, database, current, supported).map(Some);
     }
-    // A current store needs no write transaction. Return before the
+    // A current database needs no write transaction. Return before the
     // idempotent CREATE TABLE so read-only mounts remain genuinely readable.
     if current == supported {
         return Ok(None);
@@ -530,7 +567,7 @@ fn run_migrations_inner(
     // re-reads the ledger under BEGIN IMMEDIATE and skips anything another
     // opener already committed while this connection waited.
     for migration in migrations.iter().filter(|m| m.version > current) {
-        if let Some(forward) = apply_one(conn, migrations, migration, supported, path)? {
+        if let Some(forward) = apply_one(conn, database, migrations, migration, supported, path)? {
             // Another opener advanced the database past this binary while we
             // were applying; the rest of the registry is moot and the caller
             // must hold the connection read-only.
@@ -543,41 +580,38 @@ fn run_migrations_inner(
 
 /// Decide a database recorded newer than this binary supports. Reads only
 /// the compatibility record a newer binary left behind; never writes.
-fn evaluate_newer_database(
+pub(crate) fn evaluate_newer_database(
     conn: &Connection,
+    database: &LedgeredDatabase,
     current: u32,
     supported: u32,
 ) -> Result<ForwardCompatibleOpen, OrbitError> {
     let record = match read_compat_record(conn) {
-        Ok(record) => evaluate_newer_state(
-            StateComponent::StoreSchema,
-            current,
-            supported,
-            record,
-            true,
-        ),
+        Ok(record) => evaluate_newer_state(database.component, current, supported, record, true),
         Err(refusal) => Err(refusal),
     };
     match record {
         Ok(forward) if forward.writable => {
             orbit_common::tracing::info!(
                 target: "orbit.store.sqlite",
+                database = database.noun,
                 schema_version = current,
                 supported_version = supported,
-                "opening a newer store database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
+                "opening a newer database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
             );
             Ok(forward)
         }
         Ok(forward) => {
             orbit_common::tracing::warn!(
                 target: "orbit.store.sqlite",
+                database = database.noun,
                 schema_version = current,
                 supported_version = supported,
-                "opening a newer store database read-only; this binary applies no schema migration to it",
+                "opening a newer database read-only; this binary applies no schema migration to it",
             );
             Ok(forward)
         }
-        Err(refusal) => Err(newer_than_supported(current, supported, &refusal)),
+        Err(refusal) => Err(newer_than_supported(database, current, supported, &refusal)),
     }
 }
 
@@ -676,11 +710,18 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
 /// instead (or raised as a refusal).
 fn apply_one(
     conn: &Connection,
+    database: &LedgeredDatabase,
     migrations: &[Migration],
     migration: &Migration,
     supported: u32,
     path: Option<&Path>,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
+    // Declared before the transaction so it is restored after the
+    // transaction commits or rolls back.
+    let _foreign_keys = database
+        .foreign_keys_off
+        .then(|| ForeignKeysOff::new(conn))
+        .transpose()?;
     // BEGIN IMMEDIATE takes the reserved lock before any read so a WAL
     // snapshot cannot be pinned under DEFERRED while another opener
     // commits. `new_unchecked` is the `&Connection` form of
@@ -695,7 +736,7 @@ fn apply_one(
         // Another opener advanced the database past this binary while we
         // waited for the write lock. Re-decide from its record rather than
         // continuing to apply migrations to a newer database.
-        return evaluate_newer_database(&tx, current, supported).map(Some);
+        return evaluate_newer_database(&tx, database, current, supported).map(Some);
     }
     if current >= migration.version {
         return Ok(None);
@@ -734,15 +775,19 @@ fn apply_one(
         )
     })?;
     write_compat_record(&tx, migrations, migration.version)?;
+    if let Some(stamp) = database.stamp {
+        stamp(&tx, migrations, migration.version)?;
+    }
 
     tx.commit()
         .map_err(|error| commit_migration_error(migration, error))?;
 
     orbit_common::tracing::info!(
         target: "orbit.store.sqlite",
+        database = database.noun,
         version = migration.version,
         name = migration.name,
-        "applied store schema migration",
+        "applied schema migration",
     );
     Ok(None)
 }
@@ -778,14 +823,47 @@ fn migration_begin_error(
 }
 
 fn newer_than_supported(
+    database: &LedgeredDatabase,
     current: u32,
     supported: u32,
     refusal: &CompatibilityRefusal,
 ) -> OrbitError {
+    let noun = database.noun;
     OrbitError::Migration(format!(
-        "store database schema version {current} is newer than the newest version this \
+        "{noun} schema version {current} is newer than the newest version this \
         orbit binary supports ({supported}); {refusal}; upgrade orbit to open this database"
     ))
+}
+
+/// Foreign-key enforcement turned off on one connection until dropped.
+struct ForeignKeysOff<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> ForeignKeysOff<'a> {
+    fn new(conn: &'a Connection) -> Result<Self, OrbitError> {
+        conn.pragma_update(None, "foreign_keys", "OFF")
+            .map_err(|error| {
+                sqlite_error(
+                    StorageLayer::Migration,
+                    &error,
+                    format!("failed to turn off foreign keys for a migration: {error}"),
+                )
+            })?;
+        Ok(Self { conn })
+    }
+}
+
+impl Drop for ForeignKeysOff<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.conn.pragma_update(None, "foreign_keys", "ON") {
+            orbit_common::tracing::warn!(
+                target: "orbit.store.sqlite",
+                error = %error,
+                "could not turn foreign keys back on after a migration",
+            );
+        }
+    }
 }
 
 pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {

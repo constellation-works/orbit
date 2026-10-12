@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Verify (or, with --update, regenerate) checked-in CLI/MCP, CI log, sandbox
-# profile, and store-ledger schema goldens without running the full workspace
+# profile, and SQLite ledger schema goldens without running the full workspace
 # test suite.
 #
 # Covers:
@@ -14,7 +14,8 @@ set -euo pipefail
 #   - crates/orbit-exec/tests/sandbox_profile_goldens/ (compiled SBPL on every
 #     platform, Bubblewrap/Landlock on Linux)
 #   - crates/orbit-core/tests/sandbox_profile_goldens/ (resolved Linux sandbox)
-#   - store-ledger sqlite_schema prefixes under orbit-store migration/tests/
+#   - store-ledger and task-registry-ledger sqlite_schema prefixes under
+#     orbit-store migration/tests/ and task_registry/tests/
 #
 # Regeneration env vars (also printed by the failing tests):
 #   ORBIT_UPDATE_STORE_SCHEMA_GOLDENS=1
@@ -65,4 +66,5 @@ cargo="${CARGO:-cargo}"
 "$cargo" test -p orbit-core --test sandbox_profile_goldens
 
 "$cargo" test -p orbit-store --lib \
-  driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens -- --exact
+  driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens -- --exact \
+  driver::sqlite::migration::tests::ledger::task_registry_schema_prefix_goldens

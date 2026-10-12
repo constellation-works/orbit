@@ -320,6 +320,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
                 writer_floor: 1,
                 reader_floor: 1,
             },
+            task_registry: LedgerCompatibility::default(),
             workspace_layout: LedgerCompatibility {
                 version: 1,
                 writer_floor: 1,

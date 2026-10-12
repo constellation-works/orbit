@@ -627,7 +627,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                 ["test", "-p", "orbit-core", "--test", "sandbox_profile_goldens"],
                 ["test", "-p", "orbit-store", "--lib",
                  "driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens",
-                 "--", "--exact"],
+                 "--", "--exact",
+                 "driver::sqlite::migration::tests::ledger::task_registry_schema_prefix_goldens"],
             ],
         )
 

@@ -114,8 +114,8 @@ Admission follows `compatibility-generation-v2`: it asks whether the binaries'
 Each binary is compiled with a **compatibility identity**, which `orbit update
 --contract` reports:
 
-- the store schema and the workspace layout ledgers, each as the newest version the
-  binary migrates to plus two floors — the newest migration an older binary cannot
+- the store schema, task registry and workspace layout ledgers, each as the newest
+  version the binary migrates to plus two floors — the newest migration an older binary cannot
   keep **writing** through, and the newest one it cannot **read** (see
   [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace)
   for how migrations are classified);
@@ -287,7 +287,7 @@ are not handed over; they finish on the image they started with.
 `orbit update --contract --json` reports protocol support without opening state:
 
 ```json
-{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":43,"writer_floor":38,"reader_floor":38},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
+{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":43,"writer_floor":38,"reader_floor":38},"task_registry":{"version":1,"writer_floor":0,"reader_floor":0},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
 ```
 
 `contract` stays `executable-generation-v1` because every v2 binary still honours it
@@ -670,36 +670,65 @@ it may still read it; see
 [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
 Both files are Orbit-owned state: read them for diagnosis, never edit them.
 
-The host task registry has a separate reader-compatibility marker:
-`PRAGMA user_version` in `~/.orbit/tasks/index.sqlite` (or the configured global
-root). Its v5 task/allocator format also supports the additive `task_action_keys`
-table. The repaired executable ensures that table when opening a writable v5
-registry, without raising the reader-compatibility floor. A complete v5 registry
-can still open read-only; missing additive storage requires a writable open.
+### The task registry ledger
 
-A v5 registry may also carry `task_envelope_stamps`, a derived cache created the
-first time a task listing records which `task.yaml` files it has already checked
-against the index. It does not change the registry version; an older binary
-ignores it, and a reader trusts a stamp only while the file and its index row
-still match, so a stale or missing stamp costs one re-parse. `orbit task reindex`
-rebuilds the index rows and leaves stamps to be re-recorded on the next listing.
+The host task registry, `~/.orbit/tasks/index.sqlite` (or the configured global
+root), is a separate SQLite file with a ledger of its own, run by the same engine
+as the store schema: its own `schema_meta` ledger rows and `migration.compat`
+record, and an append-only registry (`ledger.rs`) in
+`crates/orbit-store/src/driver/sqlite/task_registry/`. A writable open
+applies pending registry migrations; a newer registry is decided from its record
+exactly like the store — additive-newer stays writable, read-compatible-newer opens
+read-only (the writer connection is held `query_only`), and breaking-newer is
+refused, naming the migration this binary lacks.
+
+Registry v1, `registry_baseline`, is the pre-ledger v5 format together with the
+`task_action_keys` table and the `task_envelope_stamps` cache (which records which
+`task.yaml` files already match the index; a stale or missing stamp costs one
+re-parse, and `orbit task reindex` leaves stamps to the next listing). Before the
+ledger, the registry was versioned only by `PRAGMA user_version` 5 plus additive
+setup on every writable open, and envelope stamps were created the first time a
+listing recorded one. A registry at `user_version` 5 or below, or a recognized v6
+(see below), **adopts** the ledger on its first writable open: v1 is idempotent over
+every shipped shape, keeps every row, and is recorded in the same transaction. A
+registry still without a ledger stays readable read-only when it is at version 5
+with action keys; missing action keys need one writable open first.
+
+`user_version` stays as a fence for binaries from before the ledger, which read
+nothing else (they accept version 5 with the action-keys column):
+
+- it stays **5** while every registry migration is additive, so those binaries keep
+  reading and writing an adopted registry;
+- the first registry migration that is not additive sets it to **7**, so those
+  binaries refuse the registry outright — they cannot read the record, so even a
+  read-compatible change locks them out rather than holding them read-only. It is
+  never set to 6, which they may recover.
+
+Ledger-aware binaries ignore `user_version` once a registry has a ledger. Upgrade
+admission compares the registry ledger like the store schema (`task_registry` in
+`orbit update --contract`); a process recorded by a binary from before the ledger
+counts as knowing no registry migration, so a newcomer that carries a non-additive
+registry migration is refused beside it. `orbit migrate` reports workspace layout and
+store-schema migrations only, not the task registry.
 
 ### Recover a task registry marked version 6
 
-A previous build marked this additive table as registry v6, causing v5 readers
-to fail even on ordinary workspace/task access. A build containing the repair
+A previous build marked the additive action-keys table as registry v6, causing v5
+readers to fail even on ordinary workspace/task access. A build containing the repair
 recognizes the shipped compatible v6 columns, keys, indexes, and allocation
-constraints, then restores the v5 marker in a transaction. Existing task data,
-allocator state, and permanent action reservations remain intact. Repeated or
-concurrent recovery is safe. Unknown schema versions or unrecognized v6 shapes
-remain refused; recovery never means discarding tables or task data.
+constraints, then restores the v5 marker in a transaction. In a ledger-aware build
+this recovery is part of adoption: the recognized v6 adopts the ledger through
+registry v1, which sets the marker back to 5. Existing task data, allocator state,
+and permanent action reservations remain intact. Repeated or concurrent recovery is
+safe. Unknown schema versions or unrecognized v6 shapes remain refused; recovery
+never means discarding tables or task data.
 
 Executable upgrade and database recovery are separate steps. An already-installed
 old executable does not learn a future migration. Install a build containing this
 repair through its owning install channel, then invoke **that exact executable**
 to open the registry. No manual SQL or registry reset is needed. `orbit migrate`
 reports workspace layout and store-schema migrations; its dry-run report is not
-an inventory of task-registry additive setup.
+an inventory of task-registry migrations.
 
 For mixed macOS installations, inspect the paths before rollout:
 
