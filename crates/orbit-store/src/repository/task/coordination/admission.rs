@@ -125,11 +125,7 @@ impl TaskCommitBoundary {
     }
 
     pub(crate) fn refuse_unscoped_claim_write(&self, task_id: &str) -> Result<(), OrbitError> {
-        if let Some(claim) = self
-            .execution_claims()?
-            .into_iter()
-            .find(|claim| claim.task_id == task_id && claim.phase.protects_footprint())
-        {
+        if let Some(claim) = self.protecting_claim_for_task(task_id)? {
             return Err(OrbitError::InvalidInput(format!(
                 "active execution claim requires a claim-scoped mutation (task {}, run {})",
                 claim.task_id, claim.run_context.run_id
@@ -178,6 +174,28 @@ impl TaskCommitBoundary {
         })
     }
 
+    /// One claim by its indexed identity, after settling any pending commit.
+    fn execution_claim(&self, claim_id: &str) -> Result<Option<ExecutionClaim>, OrbitError> {
+        self.coordination_row(CLAIM_KIND, claim_id)?
+            .map(|row| decode(&row.payload_json))
+            .transpose()
+    }
+
+    /// Narrow in SQL before decoding; keep the exact task and phase checks
+    /// because a payload may mention the task in another field as well.
+    pub(super) fn protecting_claim_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ExecutionClaim>, OrbitError> {
+        for row in self.coordination_rows_mentioning(CLAIM_KIND, task_id)? {
+            let claim: ExecutionClaim = decode(&row.payload_json)?;
+            if claim.task_id == task_id && claim.phase.protects_footprint() {
+                return Ok(Some(claim));
+            }
+        }
+        Ok(None)
+    }
+
     /// Reconciliation does not reapply old binary or ship compatibility checks.
     /// The caller must authenticate and authorize the identity on every call.
     ///
@@ -198,10 +216,7 @@ impl TaskCommitBoundary {
                 StoredReceipt::Full { receipt } => {
                     let current_claim = match &receipt.claim {
                         None => None,
-                        Some(original) => self
-                            .execution_claims()?
-                            .into_iter()
-                            .find(|claim| claim.claim_id == original.claim_id),
+                        Some(original) => self.execution_claim(&original.claim_id)?,
                     };
                     Ok(AdmissionLookup::Found {
                         receipt,

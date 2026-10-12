@@ -123,6 +123,44 @@ impl Store {
         })
     }
 
+    /// Rows of `kind` with the optional payload of `related_kind` at the
+    /// same identity. The left join reads the whole set in one statement and
+    /// probes the related rows through the coordination primary key.
+    pub(crate) fn task_coordination_rows_with_related_payload(
+        &self,
+        workspace_id: &str,
+        kind: &str,
+        related_kind: &str,
+    ) -> Result<Vec<(TaskCoordinationRow, Option<String>)>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT r.kind, r.row_id, r.payload_json, related.payload_json
+                     FROM task_coordination_rows r
+                     LEFT JOIN task_coordination_rows related
+                       ON related.workspace_id = r.workspace_id
+                         AND related.kind = ?3 AND related.row_id = r.row_id
+                     WHERE r.workspace_id = ?1 AND r.kind = ?2
+                     ORDER BY r.row_id ASC",
+                )
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let rows = stmt
+                .query_map(params![workspace_id, kind, related_kind], |row| {
+                    Ok((
+                        TaskCoordinationRow {
+                            kind: row.get(0)?,
+                            row_id: row.get(1)?,
+                            payload_json: row.get(2)?,
+                        },
+                        row.get(3)?,
+                    ))
+                })
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+    }
+
     /// Coordination rows of one kind whose id starts with `prefix`, by an
     /// index-bounded range over the `(workspace_id, kind, row_id)` key.
     /// `prefix` must end in `:` so the exclusive upper bound is its `;`.

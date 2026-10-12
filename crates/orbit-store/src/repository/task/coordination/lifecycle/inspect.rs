@@ -36,11 +36,11 @@ impl TaskCommitBoundary {
     /// pending commit.
     pub(in super::super) fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
         self.store
-            .task_coordination_rows(&self.workspace_id, CLAIM)?
-            .iter()
-            .map(|r| {
-                let claim = decode(&r.payload_json)?;
-                self.claim_state(claim)
+            .task_coordination_rows_with_related_payload(&self.workspace_id, CLAIM, STATE)?
+            .into_iter()
+            .map(|(row, state)| {
+                let claim = decode(&row.payload_json)?;
+                claim_state_from_payload(claim, state.as_deref())
             })
             .collect()
     }
@@ -49,37 +49,49 @@ impl TaskCommitBoundary {
         let existing =
             self.store
                 .task_coordination_row(&self.workspace_id, STATE, &claim.claim_id)?;
-        let mut state = match existing {
-            Some(row) => decode_state(&row.payload_json)?,
-            None => {
-                let created = chrono::DateTime::parse_from_rfc3339(&claim.reservation_expires_at)
-                    .map_err(|e| OrbitError::Store(e.to_string()))?
-                    - chrono::Duration::seconds(
-                        super::super::admission::ADMISSION_RESERVATION_TTL_SECONDS.into(),
-                    );
-                ClaimInspection {
-                    claim: claim.clone(),
-                    bound_run: None,
-                    created_at: created.to_rfc3339(),
-                    updated_at: created.to_rfc3339(),
-                    last_event: "claimed".into(),
-                    age_seconds: None,
-                    unresolved_merge_intent: None,
-                    landing_invalidated: false,
-                    release: None,
-                    preserved_candidate: None,
-                    settlement: None,
-                }
-            }
-        };
-        state.claim = claim;
-        state.age_seconds = chrono::DateTime::parse_from_rfc3339(&state.created_at)
-            .ok()
-            .map(|created| {
-                (Utc::now() - created.with_timezone(&Utc))
-                    .num_seconds()
-                    .max(0)
-            });
-        Ok(state)
+        claim_state_from_payload(
+            claim,
+            existing.as_ref().map(|row| row.payload_json.as_str()),
+        )
     }
+}
+
+/// Both the batched inspection and a single-claim read reconstruct legacy
+/// claims without a lifecycle row and refresh the authoritative claim payload.
+fn claim_state_from_payload(
+    claim: ExecutionClaim,
+    payload: Option<&str>,
+) -> Result<ClaimInspection, OrbitError> {
+    let mut state = match payload {
+        Some(payload) => decode_state(payload)?,
+        None => {
+            let created = chrono::DateTime::parse_from_rfc3339(&claim.reservation_expires_at)
+                .map_err(|e| OrbitError::Store(e.to_string()))?
+                - chrono::Duration::seconds(
+                    super::super::admission::ADMISSION_RESERVATION_TTL_SECONDS.into(),
+                );
+            ClaimInspection {
+                claim: claim.clone(),
+                bound_run: None,
+                created_at: created.to_rfc3339(),
+                updated_at: created.to_rfc3339(),
+                last_event: "claimed".into(),
+                age_seconds: None,
+                unresolved_merge_intent: None,
+                landing_invalidated: false,
+                release: None,
+                preserved_candidate: None,
+                settlement: None,
+            }
+        }
+    };
+    state.claim = claim;
+    state.age_seconds = chrono::DateTime::parse_from_rfc3339(&state.created_at)
+        .ok()
+        .map(|created| {
+            (Utc::now() - created.with_timezone(&Utc))
+                .num_seconds()
+                .max(0)
+        });
+    Ok(state)
 }
