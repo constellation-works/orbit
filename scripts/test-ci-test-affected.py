@@ -83,7 +83,7 @@ class AffectedTestGateTests(unittest.TestCase):
             (crate / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nversion = "0.1.0"\n')
             (crate / "src/lib.rs").write_text("// fixture\n")
             packages.append(dict(id=name, name=name, manifest_path=str(crate / "Cargo.toml"),
-                                 targets=[dict(kind=["lib"], doctest=True)],
+                                 targets=[dict(name=name.replace("-", "_"), kind=["lib"], doctest=True)],
                                  dependencies=[dict(name=target, kind=kind, rename=rename,
                                                     path=str(self.root / "crates" / target))
                                                for target, kind, rename in edges]))
@@ -123,10 +123,18 @@ elif arguments == ["nextest", "--version"]:
 elif "--doc" in arguments:
     if os.environ.get("GUARD_TEST_TIMINGS"):
         selected = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"]
-        emit_timings([{"name": name, "duration": 0.05} for name in selected if name in ("orbit-core", "orbit-cli")])
-        for name, seconds in (("orbit-core", "0.02"), ("orbit-cli", "0.03")):
-            if name in selected:
-                print(f"   Doc-tests {name}", flush=True)
+        metadata = json.load(open(os.environ["GUARD_TEST_METADATA"]))
+        seconds_for = {"orbit-core": "0.02", "orbit-cli": "0.03", "orbit_tools": "0.04"}
+        if os.environ.get("GUARD_TEST_DOC_NO_REPORT"):
+            print("    Finished `test` profile in 0.09s", flush=True)
+        else:
+            emit_timings([{"name": name, "duration": 0.05} for name in selected if name in seconds_for])
+        for package in metadata["packages"]:
+            name = package["name"]
+            if name in selected and name in seconds_for:
+                seconds = seconds_for[name]
+                target = next(target for target in package["targets"] if target["doctest"])
+                print(f"   Doc-tests {target['name']}", flush=True)
                 print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in %ss" % seconds, flush=True)
     sys.exit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
 else:
@@ -310,7 +318,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         metadata = json.loads(self.metadata.read_text())
         for package in metadata["packages"]:
             if package["name"] == "orbit-cli":
-                package["targets"] = [dict(kind=["bin"], doctest=False)]
+                package["targets"] = [dict(name="orbit-cli", kind=["bin"], doctest=False)]
         self.metadata.write_text(json.dumps(metadata))
         (self.root / "crates/orbit-cli/src/lib.rs").write_text("// bin-only fixture change\n")
         result = self.gate(GUARD_TEST_DOC_EXIT="19")
@@ -404,6 +412,33 @@ os.execvp(sys.argv[2], sys.argv[2:])
         self.assertEqual((fallback["compile_ms"], fallback["test_ms"]), (1000, 50))
         self.assertTrue(all(entry["test_ms"] is None for entry in fallback["package_timings"]))
         self.assertEqual(sum(entry["compile_ms"] for entry in fallback["package_timings"]), fallback["compile_ms"])
+
+    def test_doctest_target_names_resolve_to_package_rows(self):
+        metadata = json.loads(self.metadata.read_text())
+        for package in metadata["packages"]:
+            if package["name"] == "orbit-cli":
+                package["targets"][0]["name"] = "custom_documentation"
+                manifest = Path(package["manifest_path"])
+                manifest.write_text(manifest.read_text() + '\n[lib]\nname = "custom_documentation"\n')
+            elif package["name"] == "orbit-tools":
+                # Underscores in package names are valid; replacing them with
+                # hyphens would assign this duration to a different identity.
+                package["name"] = "orbit_tools"
+        self.metadata.write_text(json.dumps(metadata))
+        selected = ["orbit-cli", "orbit-core", "orbit_tools"]
+        for no_report in ("", "1"):
+            with self.subTest(doctest_compile_report=not bool(no_report)):
+                result, summary = self.summarized(
+                    ORBIT_VALIDATION_SELECTION=json.dumps(dict(packages=selected)),
+                    GUARD_TEST_TIMINGS="1", GUARD_TEST_TIMING_DIR=str(self.root / "target/cargo-timings"),
+                    GUARD_TEST_DOC_NO_REPORT=no_report)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                assert_phase_sums(self, summary)
+                self.assertEqual(summary["package_timings"], [
+                    dict(package="orbit-cli", compile_ms=130 if no_report else 150, test_ms=40),
+                    dict(package="orbit-core", compile_ms=330 if no_report else 350, test_ms=50),
+                    dict(package="orbit_tools", compile_ms=130 if no_report else 150, test_ms=50),
+                ])
 
     def test_summary_records_what_a_deferral_handoff_derives_from(self):
         # [ORB-15516] Orbit derives an implementer's deferred-sandbox record
