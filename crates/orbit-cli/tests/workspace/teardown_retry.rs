@@ -325,3 +325,65 @@ fn retry_finishes_after_deletion_before_bindings_are_saved() {
         }
     }
 }
+
+#[test]
+fn teardown_does_not_follow_a_symlinked_discovery_dir_out_of_the_checkout() {
+    if isolated_child(
+        "teardown_retry::teardown_does_not_follow_a_symlinked_discovery_dir_out_of_the_checkout",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // The registration fixture planted an owned link in a real discovery dir.
+    fs::remove_file(&fixture.owned_link).expect("remove fixture link before redirecting");
+    fs::remove_dir(fixture.owned_link.parent().expect("skills parent"))
+        .expect("empty skills directory");
+    fs::remove_dir(fixture.repo.join(".agents")).expect("empty discovery directory");
+    let outside = fixture._temp.path().join("outside");
+    let outside_agents = outside.join("agents");
+    let outside_claude_skills = outside.join("claude-skills");
+    let unrelated = outside.join("catalog/my-skill");
+    fs::create_dir_all(&unrelated).expect("outside catalog skill");
+    let owned_target = fixture.orbit_dir.join("skills/orbit");
+    for skills in [outside_agents.join("skills"), outside_claude_skills.clone()] {
+        fs::create_dir_all(&skills).expect("outside discovery directory");
+        std::os::unix::fs::symlink(&owned_target, skills.join("orbit"))
+            .expect("owned-looking outside link");
+        std::os::unix::fs::symlink(&unrelated, skills.join("my-skill"))
+            .expect("unrelated outside link");
+    }
+    let repo_agents = fixture.repo.join(".agents");
+    let repo_claude_skills = fixture.repo.join(".claude/skills");
+    fs::create_dir_all(repo_claude_skills.parent().unwrap()).expect("claude directory");
+    std::os::unix::fs::symlink(&outside_agents, &repo_agents).expect("redirect agents");
+    std::os::unix::fs::symlink(&outside_claude_skills, &repo_claude_skills)
+        .expect("redirect claude skills");
+    fixture.teardown("retry").success();
+    assert!(
+        !fixture.orbit_dir.exists(),
+        "teardown must still delete .orbit/"
+    );
+    for skills in [outside_agents.join("skills"), outside_claude_skills.clone()] {
+        for (name, target) in [("orbit", &owned_target), ("my-skill", &unrelated)] {
+            let link = skills.join(name);
+            assert!(
+                fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "teardown must not delete through a redirected discovery dir"
+            );
+            assert_eq!(fs::read_link(link).unwrap(), *target);
+        }
+    }
+    assert_eq!(
+        fs::read_link(repo_agents).unwrap(),
+        outside_agents,
+        "a redirected discovery dir must survive"
+    );
+    assert_eq!(
+        fs::read_link(repo_claude_skills).unwrap(),
+        outside_claude_skills,
+        "a redirected discovery dir must survive"
+    );
+}

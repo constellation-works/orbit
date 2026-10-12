@@ -236,3 +236,38 @@ fn workspace() -> TestWorkspace {
     template.description = "A record whose rendered row must stay on one line.".into();
     TestWorkspace::new("table-rendering-test", template)
 }
+
+#[test]
+fn non_tty_sink_has_zero_width_and_no_color_however_loudly_the_env_claims_otherwise() {
+    use assert_cmd::cargo::cargo_bin_cmd;
+    use orbit_common::test_env;
+
+    let workspace = workspace();
+    workspace.add_task(LONG_TITLE);
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("COLUMNS", "200")
+        .env("CLICOLOR_FORCE", "1")
+        .env_remove("ORBIT_FORMAT")
+        .args(["task", "list", "--format", "table"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains('\x1b'),
+        "a redirected stream is never styled, even with CLICOLOR_FORCE set"
+    );
+    assert!(
+        stdout.contains(LONG_TITLE),
+        "a redirected stream is never width-adapted, even with COLUMNS set: {stdout}"
+    );
+    assert_record_lines(&output, 1, true, "non-TTY table");
+}

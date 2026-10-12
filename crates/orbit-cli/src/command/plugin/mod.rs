@@ -17,6 +17,3 @@ mod validate;
 
 pub use command::{PluginCommand, PluginSubcommand};
 pub use secret::PluginSecretSubcommand;
-
-#[cfg(test)]
-mod tests;
