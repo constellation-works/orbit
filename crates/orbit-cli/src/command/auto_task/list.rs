@@ -1,5 +1,6 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::auto_tasks::AutoTaskSkip;
 use serde_json::Value;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -22,47 +23,27 @@ pub struct AutoTaskListArgs {
 
 impl Execute for AutoTaskListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        // A definition a plugin seeded never fires while that plugin is off
-        // in this workspace or on the host, so it is hidden unless asked for.
-        let mut listed = runtime.auto_task_listing(self.include_inactive_plugins)?;
-        // For one release the deprecated `operation.review_policy =
-        // "after-landing"` still enables an unconfigured `delivery-code-review`,
-        // so filters and states read the effective value [ORB-13992].
+        let mut rows = runtime
+            .auto_task_listing_state(self.include_inactive_plugins, chrono::Utc::now())?
+            .rows;
         if self.enabled {
-            listed.retain(|l| runtime.auto_task_enabled(&l.definition));
+            rows.retain(|row| row.effective_enabled);
         }
         if self.disabled {
-            listed.retain(|l| !runtime.auto_task_enabled(&l.definition));
+            rows.retain(|row| !row.effective_enabled);
         }
 
-        // Two ways a listed definition never fires, both reported here so the
-        // list never silently implies it is scheduled: its plugin is off (only
-        // listed on request), or it is a delivery definition whose resolved
-        // owner is another machine and can never be admitted on this host
-        // [ORB-12867]. The file stays exactly where it is either way.
-        let skips: Vec<Option<String>> = listed
+        let records: Vec<Value> = rows
             .iter()
-            .map(|l| {
-                l.skipped_reason.clone().or_else(|| {
-                    orbit_core::application::automation::delivery_ownership_refusal(
-                        runtime,
-                        &l.definition,
-                    )
-                    .map(|unadmittable| unadmittable.reason())
-                })
-            })
-            .collect();
-        let records: Vec<Value> = listed
-            .iter()
-            .zip(&skips)
-            .map(|(l, skipped)| {
-                let mut record = definition_to_json(&l.definition);
-                record["skipped_reason"] = match skipped {
+            .map(|row| {
+                let mut record = definition_to_json(&row.listed.definition);
+                record["skipped_reason"] = match &row.skipped_reason {
                     Some(reason) => Value::String(reason.clone()),
                     None => Value::Null,
                 };
-                record["plugin_inactive"] = Value::Bool(l.inactive_plugin.is_some());
-                record["effective_enabled"] = Value::Bool(runtime.auto_task_enabled(&l.definition));
+                record["plugin_inactive"] =
+                    Value::Bool(row.skip == Some(AutoTaskSkip::PluginInactive));
+                record["effective_enabled"] = Value::Bool(row.effective_enabled);
                 record
             })
             .collect();
@@ -75,16 +56,13 @@ impl Execute for AutoTaskListArgs {
             Column::new("TITLE"),
         ])
         .empty_message("no auto-task definitions");
-        for (l, skipped) in listed.iter().zip(&skips) {
-            let definition = &l.definition;
-            let state = if l.inactive_plugin.is_some() {
-                "inactive"
-            } else if skipped.is_some() {
-                "skipped"
-            } else if runtime.auto_task_enabled(definition) {
-                "enabled"
-            } else {
-                "disabled"
+        for row in &rows {
+            let definition = &row.listed.definition;
+            let state = match row.skip {
+                Some(AutoTaskSkip::PluginInactive) => "inactive",
+                Some(AutoTaskSkip::NotOwnedHere) => "skipped",
+                None if row.effective_enabled => "enabled",
+                None => "disabled",
             };
             table.add_row(vec![
                 definition.name.clone(),
@@ -93,14 +71,16 @@ impl Execute for AutoTaskListArgs {
                 definition.template.title.clone(),
             ]);
         }
-        for (l, skipped) in listed.iter().zip(&skips) {
-            if let Some(reason) = skipped {
-                let label = if l.inactive_plugin.is_some() {
-                    "inactive"
-                } else {
-                    "skipped"
+        for row in &rows {
+            if let Some(reason) = &row.skipped_reason {
+                let label = match row.skip {
+                    Some(AutoTaskSkip::PluginInactive) => "inactive",
+                    _ => "skipped",
                 };
-                eprintln!("{label} [{}]: {reason}", l.definition.name);
+                table = table.trailing_notice(format!(
+                    "{label} [{}]: {reason}",
+                    row.listed.definition.name
+                ));
             }
         }
         Ok(Payload::list(records, table).into())

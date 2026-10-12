@@ -21,6 +21,7 @@ mod task_workspace;
 
 mod audit_cli;
 mod auto_task_lifecycle_cli;
+mod auto_task_listing_cli;
 mod auto_task_settings_cli;
 mod claimed_delivery_recovery;
 mod config_show_task_reads;

@@ -135,8 +135,17 @@ fork that differs only in settings back under management.
 
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
-`show` first; mint only when creating that task is intended. Over MCP:
-`orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`, and
+`show` first; mint only when creating that task is intended.
+
+`list` and the dashboard read one state per definition. `skipped` means an
+enabled delivery definition another machine owns, so this host never admits
+work for it. Its reason is printed on stderr and carried as `skipped_reason`
+by the MCP listing and the dashboard API, where its next evaluation reads
+`unavailable`. `enabled` and `disabled` follow the effective value, so a
+`delivery-code-review` that the deprecated `after-landing` policy enables
+lists as enabled.
+
+Over MCP: `orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`, and
 `orbit_auto_task_mint`; `orbit_auto_task_update` with `enabled` is the
 kill-switch. Adding `expected_enabled` (the observed state) makes it a checked,
 atomic toggle that is refused when the definition no longer matches; that form

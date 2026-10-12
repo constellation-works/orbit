@@ -52,7 +52,8 @@ pub enum ScheduleDisplayState {
     Waiting,
     /// The scheduler has never recorded a cursor for this definition.
     NeverObserved,
-    /// Source or trigger state cannot be shown as a next evaluation.
+    /// Source or trigger state cannot be shown as a next evaluation, or this
+    /// host can never admit the delivery work it would evaluate.
     Unavailable,
 }
 
