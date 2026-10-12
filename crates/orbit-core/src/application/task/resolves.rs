@@ -4,8 +4,9 @@
 //! of a task that is already done (a comment, an artifact, a PR sync) must not
 //! resolve them again: a human may have reopened one because the fix was
 //! incomplete. The exception is a target whose side effect is pending or
-//! failed. Final recovery records pending targets with its decision so a crash
-//! before the post-lock effects leaves durable retry work. Failures are recorded
+//! failed. Final recovery and desktop completion record pending targets with
+//! their decision so a crash or failed read before the post-lock effects leaves
+//! durable retry work. Failures are recorded
 //! as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] history entries. Later writes to the
 //! done task retry unfinished targets until a
 //! [`RESOLVES_SIDE_EFFECT_RECOVERED_EVENT`] entry settles them.
@@ -131,7 +132,7 @@ impl OrbitRuntime {
             }
         }
         if !history.is_empty()
-            && let Err(error) = self.append_resolves_history(&task.id, history)
+            && let Err(error) = self.append_system_history(&task.id, history)
         {
             tracing::warn!(
                 task_id = %task.id,
@@ -203,7 +204,8 @@ impl OrbitRuntime {
             .collect()
     }
 
-    fn append_resolves_history(
+    /// Append system-authored side-effect bookkeeping to a task's history.
+    pub(super) fn append_system_history(
         &self,
         task_id: &str,
         history: Vec<TaskHistoryEntry>,
@@ -312,8 +314,8 @@ fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeSet<String> {
     pending
 }
 
-/// Retry work persisted with a final-recovery transition into done, before
-/// releasing its task lock or reading the task for the side effects.
+/// Retry work persisted with a final-recovery or desktop transition into done,
+/// before releasing its task lock or reading the task for the side effects.
 pub(super) fn pending_resolves_history(task: &Task) -> Vec<TaskHistoryEntry> {
     resolves_targets(task)
         .collect::<BTreeSet<_>>()

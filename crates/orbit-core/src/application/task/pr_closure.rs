@@ -39,22 +39,24 @@ use crate::runtime::task_pr_forge::ForgePullRequest;
 impl OrbitRuntime {
     /// Close `task`'s open Orbit-authored PRs when this write moved it from
     /// `previous` into done, rejected or archived. `note` is the transition's
-    /// status note: the landing on done, the reason otherwise.
+    /// status note: the landing on done, the reason otherwise. Returns false
+    /// when a forge error left the pass unfinished, so a caller that records
+    /// the pass can retry it.
     pub(crate) fn close_task_prs_after_transition(
         &self,
         previous: TaskStatus,
         task: &Task,
         note: Option<&str>,
-    ) {
+    ) -> bool {
         // A done task's landing PR was kept open on purpose, and the done
         // transition already closed the rest, so leaving done (an archive)
         // has nothing left to close.
         if previous == task.status || previous == TaskStatus::Done || !task.status.is_terminal() {
-            return;
+            return true;
         }
         let settings = self.context.settings().pr_settings();
         if !settings.close_on_terminal {
-            return;
+            return true;
         }
         // Orbit records every PR it opens on the task, and every follower PR it
         // accepts on the claim. A task with neither never had an Orbit PR, so it
@@ -65,7 +67,7 @@ impl OrbitRuntime {
             .iter()
             .any(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM);
         if !recorded && follower_prs.is_empty() {
-            return;
+            return true;
         }
 
         let repo_root = self.context.paths().repo_root.clone();
@@ -74,7 +76,7 @@ impl OrbitRuntime {
             Ok(open) => open,
             Err(error) => {
                 self.warn_pr_closure(&task.id, None, &error);
-                return;
+                return false;
             }
         };
         let candidates = open
@@ -82,9 +84,10 @@ impl OrbitRuntime {
             .filter(|pr| names_task(pr, &task.id))
             .collect::<Vec<_>>();
         if candidates.is_empty() {
-            return;
+            return true;
         }
 
+        let mut settled = true;
         let authors = if settings.delivery_authors.is_empty() {
             match forge.authenticated_login(&repo_root) {
                 Ok(login) => vec![login.to_ascii_lowercase()],
@@ -92,6 +95,7 @@ impl OrbitRuntime {
                 // be proven Orbit's; the rest stay open.
                 Err(error) => {
                     self.warn_pr_closure(&task.id, None, &error);
+                    settled = false;
                     Vec::new()
                 }
             }
@@ -125,9 +129,13 @@ impl OrbitRuntime {
                         pr_number: pr.number,
                     });
                 }
-                Err(error) => self.warn_pr_closure(&task.id, Some(pr.number), &error),
+                Err(error) => {
+                    self.warn_pr_closure(&task.id, Some(pr.number), &error);
+                    settled = false;
+                }
             }
         }
+        settled
     }
 
     /// Delivery PR numbers of the follower handoffs this owner accepted for

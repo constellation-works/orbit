@@ -694,6 +694,9 @@ pub struct DesktopTaskMutationParams {
     pub crew_source: Option<Option<String>>,
     pub comment: Option<String>,
     pub status: Option<TaskStatus>,
+    /// History committed with the receipt, before it: work the application
+    /// must finish after the write even if its first attempt never runs.
+    pub append_history: Vec<TaskHistoryEntry>,
 }
 
 /// One coherent desktop task read under the ordinary shared bundle read lock.
