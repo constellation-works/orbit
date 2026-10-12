@@ -6074,7 +6074,7 @@ fn workspace_tool_calls_observe_a_config_toml_edit_made_during_the_session() {
 }
 
 /// How many workspace runtimes the server reported opening, from the tracing
-/// target `crates/orbit-cli/src/command/mcp/server.rs` emits once per open.
+/// target `crates/orbit-cli/src/command/mcp/server/host.rs` emits once per open.
 fn runtime_opens(log_path: &Path) -> usize {
     let log = std::fs::read_to_string(log_path).expect("read the server log");
     log.lines()
