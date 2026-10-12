@@ -128,6 +128,13 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     {
         lines.push(throttle.hold_reason());
     }
+    let forecast = &capacity["admission_forecast"];
+    if let Some(line) = super::admission_forecast::admission_line(forecast, |id| {
+        forecast["task_titles"][id].as_str().map(str::to_string)
+    }) {
+        lines.push(line);
+        lines.extend(super::admission_forecast::peak_lines(forecast));
+    }
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
     if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
         lines.push(budget);
@@ -185,8 +192,26 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .as_str()
                 .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
                 .unwrap_or_default();
+            let observation = &task["admission_forecast"];
+            let profile = observation["profile_source"]
+                .as_str()
+                .map(|source| format!(" profile-source={source} (last admission pass)"))
+                .unwrap_or_default();
+            let forecast_wait = if observation["decision"] == "skipped" {
+                let shadow = if observation["mode"] == "shadow" {
+                    "shadow would wait"
+                } else {
+                    "forecast wait"
+                };
+                format!(
+                    "; {shadow}: {}",
+                    super::admission_forecast::skip_detail(observation)
+                )
+            } else {
+                String::new()
+            };
             lines.push(format!(
-                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{claimed}{host}",
+                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{claimed}{host}{profile}{forecast_wait}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }

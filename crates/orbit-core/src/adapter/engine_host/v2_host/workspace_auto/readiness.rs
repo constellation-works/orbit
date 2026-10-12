@@ -300,7 +300,7 @@ pub fn explain_workspace_auto_readiness(
         ids
     };
 
-    let tasks = selected_ids
+    let mut tasks = selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
         .map(|task| {
@@ -567,6 +567,78 @@ pub fn explain_workspace_auto_readiness(
         })
         .collect::<Vec<_>>();
 
+    // Observations come from the drain's recorded pass, not a new forecast:
+    // readiness never takes the admission lock or writes reservations. Keep
+    // shadow decisions separate from actual eligibility, and retain any live
+    // non-forecast hold that now takes precedence over the last pass.
+    let admission_forecast = status_state
+        .as_ref()
+        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|pass| pass.admission_forecast.as_ref());
+    let forecast_view = admission_forecast.map(|forecast| {
+        let settings = runtime.context.settings().auto_concurrency();
+        let mut view = json!(forecast);
+        view["headroom"] = json!({
+            "cpu_percent": forecast.cpu_peak.as_ref().and_then(|peak| peak.percent)
+                .map(|peak| f64::from(settings.admit_cpu_percent) - peak),
+            "memory_percent": forecast.memory_peak.as_ref().and_then(|peak| peak.percent)
+                .map(|peak| f64::from(settings.admit_memory_percent) - peak),
+            "admit_cpu_percent": settings.admit_cpu_percent,
+            "admit_memory_percent": settings.admit_memory_percent,
+        });
+        let mut titles = BTreeMap::new();
+        for id in forecast
+            .admitted
+            .iter()
+            .map(|task| &task.task_id)
+            .chain(forecast.skipped.iter().map(|task| &task.task_id))
+            .chain(forecast.head.iter().map(|head| &head.task_id))
+        {
+            if let Some(task) = snapshot.task_lookup.get(id) {
+                titles.insert(id.clone(), task.title.clone());
+            }
+        }
+        view["task_titles"] = json!(titles);
+        for task in &mut tasks {
+            let Some(id) = task["task_id"].as_str() else {
+                continue;
+            };
+            let skipped = forecast
+                .skipped
+                .iter()
+                .find(|candidate| candidate.task_id == id);
+            let source = skipped
+                .map(|candidate| &candidate.profile_source)
+                .or_else(|| {
+                    forecast
+                        .admitted
+                        .iter()
+                        .find(|candidate| candidate.task_id == id)
+                        .map(|candidate| &candidate.profile_source)
+                });
+            let Some(source) = source else { continue };
+            let mut observation = skipped.map_or_else(|| json!({}), |skip| json!(skip));
+            observation["mode"] = json!(forecast.mode);
+            observation["forecast_at"] = json!(forecast.forecast_at);
+            observation["profile_source"] = json!(source);
+            observation["decision"] = json!(if skipped.is_some() {
+                "skipped"
+            } else {
+                "admitted"
+            });
+            task["admission_forecast"] = observation;
+            if forecast.mode == "enforce"
+                && drain_phase == "draining"
+                && skipped.is_some()
+                && task["reason"] == "ready"
+            {
+                task["eligible"] = json!(false);
+                task["reason"] = json!("gap_fit");
+            }
+        }
+        view
+    });
+
     // `total` describes the current view: the full backlog for the default
     // bounded listing, or the number of explicitly selected tasks.
     let total = if task_ids.is_empty() {
@@ -605,7 +677,7 @@ pub fn explain_workspace_auto_readiness(
         tracing::warn!("readiness shows no provider limits: {error}");
     }
 
-    Ok(json!({
+    let mut payload = json!({
         "snapshot": {
             "read_only": true,
             "limitations": "Snapshot only: eligibility can change immediately and does not guarantee a task will start. No stale-run reconciliation, reservation, task mutation, or run submission was performed.",
@@ -679,7 +751,12 @@ pub fn explain_workspace_auto_readiness(
         "provider_limits": provider_limits.readings,
         "total": total,
         "tasks": tasks,
-    }))
+    });
+    // No block means the older/off response shape remains unchanged.
+    if let Some(forecast) = forecast_view {
+        payload["capacity"]["admission_forecast"] = forecast;
+    }
+    Ok(payload)
 }
 
 impl OrbitRuntime {

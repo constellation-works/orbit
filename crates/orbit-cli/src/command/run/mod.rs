@@ -1,3 +1,4 @@
+mod admission_forecast;
 pub mod agent;
 pub mod auto;
 mod cancel;
