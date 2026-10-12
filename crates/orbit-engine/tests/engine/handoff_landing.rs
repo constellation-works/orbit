@@ -81,7 +81,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
         "main",
         HandoffDelivery::LocalCandidate,
         "workspace",
-        "local",
+        orbit_engine::BaseSyncMode::Local,
     )
     .unwrap();
     LandingHost {

@@ -20,7 +20,7 @@ use super::super::baseline::{
 };
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::flaky::rerun_failed_tests;
-use super::super::git::normalize_base_branch;
+use super::super::git::{BaseSyncMode, normalize_base_branch};
 use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
 use super::input::{refused, required_workspace};
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
@@ -594,7 +594,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     }
     if let Some(check) = check.as_ref().filter(|_| red) {
         let hold = BaselineRedHold {
-            base_ref: claimed_base_ref(context, input),
+            base_ref: claimed_base_ref(context, input)?,
             base_sha: check.base_sha.clone(),
             command: run.command.clone(),
             run_id: context.run_id.clone(),
@@ -618,13 +618,13 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
 }
 
 /// The base ref this claim synchronized onto, as the owner names it.
-fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> String {
+fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> Result<String, OrbitError> {
     let branch = normalize_base_branch(&context.base_branch)
         .unwrap_or_else(|_| context.base_branch.trim().to_string());
-    match claimed_base_sync(context, input).as_deref() {
-        Ok("remote") => format!("origin/{branch}"),
-        _ => branch,
-    }
+    Ok(match claimed_base_sync(context, input)? {
+        BaseSyncMode::Remote => format!("origin/{branch}"),
+        BaseSyncMode::Local => branch,
+    })
 }
 
 /// The decision a validation step records when the workspace requires no
@@ -635,3 +635,7 @@ pub(in crate::executor::automation::vcs) const SKIPPED_NO_REQUIRED_COMMANDS: &st
 /// Why that decision ran nothing, in the step's own output.
 pub(in crate::executor::automation::vcs) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
      (`workflow.required_validation_commands` is empty); no check ran";
+
+#[cfg(test)]
+#[path = "tests/validation.rs"]
+mod tests;

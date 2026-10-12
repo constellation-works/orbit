@@ -450,7 +450,7 @@ pub struct ClaimedKnownRed<'a> {
     pub base_branch: &'a str,
     /// `remote` to read that branch as `origin/<base_branch>` after a fetch,
     /// `local` for this checkout's own branch.
-    pub base_sync: &'a str,
+    pub base_sync: BaseSyncMode,
     /// The base the leaf compared with: the handed-off candidate's base.
     pub base_sha: &'a str,
     /// The owner-required command the log reports.
@@ -608,15 +608,10 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
 fn on_owner_base(
     workspace_path: &Path,
     base_branch: &str,
-    base_sync: &str,
+    base_sync: BaseSyncMode,
     base_sha: &str,
 ) -> Result<(), String> {
-    let sync = match base_sync {
-        "remote" => BaseSyncMode::Remote,
-        "local" => BaseSyncMode::Local,
-        other => return Err(format!("base sync '{other}' names no owner base")),
-    };
-    let tip = resolve_worktree_start_point(workspace_path, base_branch, sync)
+    let tip = resolve_worktree_start_point(workspace_path, base_branch, base_sync)
         .map_err(|error| format!("this owner could not read its base '{base_branch}': {error}"))?;
     match git_command_success(
         workspace_path,

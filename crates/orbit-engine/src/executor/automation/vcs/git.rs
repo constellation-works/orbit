@@ -316,28 +316,53 @@ pub(crate) fn git_request(current_dir: &Path, args: &[&str], timeout_ms: u64) ->
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::executor::automation) enum BaseSyncMode {
+/// How a run resolves its configured base branch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BaseSyncMode {
+    /// Read the checkout's local branch.
     Local,
+    /// Fetch and read the remote-tracking branch.
+    #[default]
     Remote,
+}
+
+impl std::str::FromStr for BaseSyncMode {
+    type Err = OrbitError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "" | "remote" => Ok(Self::Remote),
+            "local" => Ok(Self::Local),
+            other => Err(OrbitError::InvalidInput(format!(
+                "input.base_sync must be 'local' or 'remote', got '{other}'"
+            ))),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BaseSyncMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl BaseSyncMode {
+    /// Parse the job input's base sync mode. Missing, non-string and empty
+    /// values use remote sync, matching the delivery input contract.
+    pub fn from_input(input: &Value) -> Result<Self, OrbitError> {
+        input
+            .get("base_sync")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .parse()
+    }
 }
 
 pub(in crate::executor::automation) fn base_sync_mode_from_input(
     input: &Value,
 ) -> Result<BaseSyncMode, OrbitError> {
-    match input
-        .as_object()
-        .and_then(|map| map.get("base_sync"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        None | Some("remote") => Ok(BaseSyncMode::Remote),
-        Some("local") => Ok(BaseSyncMode::Local),
-        Some(other) => Err(OrbitError::InvalidInput(format!(
-            "input.base_sync must be 'local' or 'remote', got '{other}'"
-        ))),
-    }
+    BaseSyncMode::from_input(input)
 }
 
 pub(crate) fn git_output_paths(

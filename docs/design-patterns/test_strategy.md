@@ -139,6 +139,8 @@ Cargo links each top-level `crates/<crate>/tests/<name>.rs` file and each `crate
 - Shell fixtures must not poll markers by forking `sleep` in `while`/`until` loops. Use a FIFO/pipe handshake or an in-process wait with a deadline. `make ci-fast` scans Rust strings in test paths, including scripts assembled across literals. A necessary bounded exception belongs in `test-shell-waits-allowlist.json` in the scripts directory with its path, exact loop header and a reason; unused exceptions fail the guard.
 - A refusal fixture asserts the exact authorization cause, such as the refusal kind and the tool, grant or ceiling it names. A bare failure lets a bootstrap or sandbox error pass as the policy refusal.
 
+- `orbit-engine`'s `claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes` (criterion 1, combinatorial pure ref selection) covers explicit modes, defaulting and claim ship-mode fallback together. The public claim action rejects invalid sync input during observation, before the red-base hold path, so it cannot expose the helper's former silent error-to-local fallback.
+
 ## Retiring a unit test
 
 You may delete a unit test when one of these holds:

@@ -11,7 +11,7 @@ use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost, StepRecoveryAdmiss
 use crate::executor::automation::vcs::absorbed::{
     ABSORBING_STEP, AbsorbedReason, covering_commit, task_scope_digest,
 };
-use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
+use crate::executor::automation::vcs::git::{BaseSyncMode, GitBytesOutcome, git_run_bytes};
 
 use super::boundary_guard::is_host_owned_path;
 use super::fingerprint::{
@@ -883,13 +883,12 @@ fn recovery_conflicting_paths(input: &Value) -> Option<Vec<String>> {
 
 fn completion_recovery_base_ref(prepared: &Value) -> Option<String> {
     let base = prepared.get("base")?.as_str()?;
-    match prepared.get("base_sync").and_then(Value::as_str) {
-        Some("local") => Some(base.to_string()),
-        Some("remote") | None => Some(format!(
+    match BaseSyncMode::from_input(prepared).ok()? {
+        BaseSyncMode::Local => Some(base.to_string()),
+        BaseSyncMode::Remote => Some(format!(
             "refs/remotes/origin/{}",
             base.strip_prefix("origin/").unwrap_or(base)
         )),
-        Some(_) => None,
     }
 }
 
