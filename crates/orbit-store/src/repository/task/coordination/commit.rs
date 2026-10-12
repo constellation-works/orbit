@@ -471,7 +471,7 @@ impl TaskCommitBoundary {
 }
 
 /// A hook run at the start of a commit's apply step, inside its admission
-/// section, so a test can hold that section for a known time.
+/// section, so a test can hold it until a concurrent reader proves contention.
 #[cfg(test)]
 pub(crate) mod slow_apply {
     use std::cell::RefCell;
