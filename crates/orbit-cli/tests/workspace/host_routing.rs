@@ -635,6 +635,129 @@ fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() 
     );
 }
 
+/// The backtick-quoted commands a refusal message offers, in order.
+fn hinted_commands(message: &str) -> Vec<String> {
+    message
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+#[test]
+fn routed_task_update_refusals_offer_a_command_that_works() {
+    let routed = Routed::new();
+    let id = routed.remote_task.as_str();
+    let bravo_before = routed.comments_on_bravo(id);
+    routed.take_remote_argv();
+    let ssh_argv = |hint: &str| {
+        let words = posix_shell_split(hint);
+        assert_eq!(&words[..2], &["ssh", "bravo"], "{hint}");
+        posix_shell_split(&words[2..].join(" "))
+    };
+
+    // `--artifact` is not an `orbit.task.update` field; the routed command is
+    // `orbit task artifact put`, one per artifact path.
+    let (code, message) = routed.refused(&[
+        "task",
+        "update",
+        id,
+        "--artifact",
+        "notes.md=a=b",
+        "--artifact",
+        "dir/two words.md=x",
+        "--json",
+    ]);
+    assert_eq!(code, "invalid_input", "{message}");
+    let puts = hinted_commands(&message)
+        .iter()
+        // The placeholder is for the caller to fill in; make it one shell word.
+        .map(|hint| posix_shell_split(&hint.replace("<source-file>", "SRC")))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        puts,
+        vec![
+            vec![
+                "orbit", "task", "artifact", "put", id, "SRC", "--path", "notes.md"
+            ],
+            vec![
+                "orbit",
+                "task",
+                "artifact",
+                "put",
+                id,
+                "SRC",
+                "--path",
+                "dir/two words.md"
+            ],
+        ],
+        "each artifact gets its routed put: {message}"
+    );
+
+    // `--approve` is a human lifecycle action on the owning host.
+    let (code, message) = routed.refused(&["task", "update", id, "--approve", "--json"]);
+    assert_eq!(code, "invalid_input", "{message}");
+    let hints = hinted_commands(&message);
+    assert_eq!(hints.len(), 1, "{message}");
+    assert_eq!(
+        ssh_argv(&hints[0]),
+        ["orbit", "task", "update", id, "--approve"],
+        "{message}"
+    );
+    let (_, message) = routed.refused(&[
+        "task",
+        "update",
+        id,
+        "--approve",
+        "--note",
+        "ok by me",
+        "--json",
+    ]);
+    assert_eq!(
+        ssh_argv(&hinted_commands(&message)[0]),
+        [
+            "orbit",
+            "task",
+            "update",
+            id,
+            "--approve",
+            "--note",
+            "ok by me"
+        ],
+        "the note survives both shells: {message}"
+    );
+
+    // `--force` and `--discard-candidate` keep the ssh remedy.
+    for flag in [
+        vec!["--status", "backlog", "--force"],
+        vec!["--discard-candidate"],
+    ] {
+        let mut args = vec!["task", "update", id];
+        args.extend(&flag);
+        args.push("--json");
+        let (code, message) = routed.refused(&args);
+        assert_eq!(code, "invalid_input", "{args:?}: {message}");
+        let hints = hinted_commands(&message);
+        assert_eq!(hints.len(), 1, "{message}");
+        assert_eq!(
+            ssh_argv(&hints[0]),
+            ["orbit", "task", "update", id, "…"],
+            "{message}"
+        );
+    }
+
+    assert!(
+        routed.take_remote_argv().is_empty(),
+        "refused updates never contact the owning host"
+    );
+    assert_eq!(
+        routed.comments_on_bravo(id),
+        bravo_before,
+        "refused updates write nothing on the owning host"
+    );
+}
+
 #[test]
 fn host_flag_resolves_to_the_selector_that_host_lists() {
     let routed = Routed::new();

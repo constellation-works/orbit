@@ -348,27 +348,14 @@ impl TaskUpdateArgs {
     /// The `orbit.task.update` input for a write delivered to the host that
     /// holds the task [ORB-14449].
     ///
-    /// Flags with no tool field are refused rather than dropped: `--force` is
-    /// a human override on that host, and `--approve`, `--artifact` and
-    /// `--discard-candidate` are not tool writes.
+    /// Flags with no tool field are refused rather than dropped, each with the
+    /// remedy that fits it: `--artifact` has its own routed command
+    /// (`orbit task artifact put`), `--approve` is a human lifecycle action for
+    /// the owning host, and `--force` and `--discard-candidate` run there too.
     pub(crate) fn remote_tool_input(&self, host_ssh: &str) -> Result<Value, OrbitError> {
-        let unsupported = [
-            ("--force", self.force),
-            ("--approve", self.approve),
-            ("--artifact", !self.artifacts.is_empty()),
-            ("--discard-candidate", self.discard_candidate),
-        ]
-        .into_iter()
-        .filter_map(|(flag, set)| set.then_some(flag))
-        .collect::<Vec<_>>();
-        if !unsupported.is_empty() {
-            return Err(OrbitError::InvalidInput(format!(
-                "{} cannot be routed to the host that holds task {}; run it there: `ssh {host_ssh} \
-                 orbit task update {} …`",
-                unsupported.join(", "),
-                self.id,
-                self.id
-            )));
+        let refusals = self.unroutable_flag_refusals(host_ssh);
+        if !refusals.is_empty() {
+            return Err(OrbitError::InvalidInput(refusals.join("; ")));
         }
         let mut input = Map::new();
         input.insert("id".into(), json!(self.id));
@@ -433,6 +420,59 @@ impl TaskUpdateArgs {
             input.insert("model".into(), json!(model));
         }
         Ok(Value::Object(input))
+    }
+    /// One refusal sentence per routed-unsupported flag group, in flag order.
+    fn unroutable_flag_refusals(&self, host_ssh: &str) -> Vec<String> {
+        let id = &self.id;
+        let mut refusals = Vec::new();
+        if !self.artifacts.is_empty() {
+            let puts = self
+                .artifacts
+                .iter()
+                .map(|raw| {
+                    let path = raw.split_once('=').map_or(raw.as_str(), |(path, _)| path);
+                    format!(
+                        "`orbit task artifact put {id} <source-file> --path {}`",
+                        orbit_common::process::shell::quote_posix_arg(path.trim())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            refusals.push(format!(
+                "--artifact cannot be routed to the host that holds task {id}; store the artifact \
+                 with the command that routes, writing its content to a file first: {puts}"
+            ));
+        }
+        if self.approve {
+            let mut remote = format!("orbit task update {id} --approve");
+            if let Some(note) = &self.note {
+                // SSH hands the remote shell one string: quote the note for it,
+                // then the whole command for the local shell.
+                let note = orbit_common::process::shell::quote_posix_arg(note);
+                remote = orbit_common::process::shell::quote_posix_arg(&format!(
+                    "{remote} --note {note}"
+                ));
+            }
+            refusals.push(format!(
+                "--approve cannot be routed to the host that holds task {id}: approval is a human \
+                 lifecycle action that runs on the owning host: `ssh {host_ssh} {remote}`"
+            ));
+        }
+        let ssh_only = [
+            ("--force", self.force),
+            ("--discard-candidate", self.discard_candidate),
+        ]
+        .into_iter()
+        .filter_map(|(flag, set)| set.then_some(flag))
+        .collect::<Vec<_>>();
+        if !ssh_only.is_empty() {
+            refusals.push(format!(
+                "{} cannot be routed to the host that holds task {id}; run it there: `ssh {host_ssh} \
+                 orbit task update {id} …`",
+                ssh_only.join(", ")
+            ));
+        }
+        refusals
     }
 }
 
