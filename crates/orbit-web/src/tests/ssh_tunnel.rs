@@ -490,3 +490,85 @@ fn serve_flood(listener: TcpListener, accepted: Arc<AtomicUsize>) {
         }
     }
 }
+
+/// One finite loopback peer that answers a single request with `response` and
+/// then ends. It accepts exactly one connection and has no loop, so the thread
+/// finishes deterministically once the probe has read.
+fn one_shot_peer(response: &'static [u8]) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind one-shot peer");
+    let port = listener.local_addr().expect("one-shot peer port").port();
+    let handle = thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(response);
+    });
+    (port, handle)
+}
+
+#[test]
+fn probes_verify_status_code_over_finite_peer() {
+    // Each row is one response: whether `/healthz` is healthy, and the body
+    // `http_get_ok_body` returns for it. A non-200 status is refused even when
+    // its reason phrase contains "200", and malformed status lines are refused.
+    let cases: &[(&[u8], bool, Option<&str>)] = &[
+        (
+            b"HTTP/1.1 503 upstream expected 200 but failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+            true,
+            Some("hello"),
+        ),
+        (
+            b"HTTP/1.1 200\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbare",
+            true,
+            Some("bare"),
+        ),
+        (
+            b"HTTP/1.1 not_a_number OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+        (
+            b"HTTP/1.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+        (
+            b"HTTP/2.0 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            false,
+            None,
+        ),
+    ];
+
+    for &(response, expected_health, expected_body) in cases {
+        let (port, handle) = one_shot_peer(response);
+        let limit = ProbeLimit {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancel: None,
+        };
+        assert_eq!(
+            healthz_ok(port, limit),
+            expected_health,
+            "healthz_ok verdict for response: {:?}",
+            String::from_utf8_lossy(response)
+        );
+        handle.join().expect("peer join");
+
+        let (port, handle) = one_shot_peer(response);
+        assert_eq!(
+            connect::http_get_ok_body(port, "/api/routines").as_deref(),
+            expected_body,
+            "http_get_ok_body body for response: {:?}",
+            String::from_utf8_lossy(response)
+        );
+        handle.join().expect("peer join");
+    }
+}

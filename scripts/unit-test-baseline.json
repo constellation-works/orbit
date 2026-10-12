@@ -1014,7 +1014,8 @@
         "tests/ssh_tunnel.rs::cancel_during_a_paced_status_reaps_the_ssh_child",
         "tests/ssh_tunnel.rs::delayed_forward_bind_attaches_without_a_second_ssh",
         "tests/ssh_tunnel.rs::oversized_status_line_is_refused_without_draining_the_flood",
-        "tests/ssh_tunnel.rs::paced_status_fragments_cannot_outlive_the_readiness_budget"
+        "tests/ssh_tunnel.rs::paced_status_fragments_cannot_outlive_the_readiness_budget",
+        "tests/ssh_tunnel.rs::probes_verify_status_code_over_finite_peer"
       ]
     }
   },
