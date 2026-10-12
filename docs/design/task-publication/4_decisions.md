@@ -2,7 +2,7 @@
 title: Task Publication — Decisions
 owner: codex
 last_updated: 2026-08-30
-last_validated: 2026-10-06
+last_validated: 2026-10-12
 status: Accepted
 feature: task-publication
 doc_role: decisions

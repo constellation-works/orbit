@@ -2,7 +2,7 @@
 title: State Compatibility — Decisions
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-06
+last_validated: 2026-10-12
 status: Draft
 feature: state-compatibility
 doc_role: decisions

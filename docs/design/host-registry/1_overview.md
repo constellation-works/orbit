@@ -3,8 +3,8 @@ summary: "Host Registry — Overview"
 type: design
 title: "Host Registry — Overview"
 owner: codex
-last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Accepted
 feature: host-registry
 doc_role: overview
@@ -18,7 +18,7 @@ related_artifacts: [ORB-11009, ORB-14448, ORB-14449, ORB-14451]
 
 The live host-registry feature is a machine-local identity and workspace catalog. It tells an Orbit process who the accepting machine is, which logical workspaces this installation knows, and which local checkout may be opened for each workspace.
 
-It is not a fleet router. The operator registers remote hosts with `orbit host add` into a CLI-owned host file that stores only identity the host cannot change, and `orbit host list|show` read everything else live from each host ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Task ids route to the host their prefix names, and `--host` names a host for `--workspace` and `--pull` ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). The dashboard's Settings › Hosts view over the same operations is specified but not yet implemented ([ORB-14451]). There is still no presence, placement, lease, workspace-link or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
+It is not a fleet router. The operator registers remote hosts with `orbit host add`; the CLI-owned host file stores the operator's name and SSH target plus each host's stable `machine_id` and `task_prefix`. By default, `orbit host list|show` use live probes for changing details such as reachability, version, protocol and workspaces ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Task ids route to the host their prefix names, and `--host` names a host for `--workspace` and `--pull` ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). The dashboard's Settings › Hosts view exposes the same operations and is implemented ([specs/host-commands.md#dashboard](./specs/host-commands.md#dashboard), [ORB-14451]). There is still no presence, placement, lease, workspace-link or registry-cache workflow. The implemented federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); it consumes registered hosts for MCP routing but remains a distinct serving mode, separate from this catalog.
 
 ## Ownership
 
