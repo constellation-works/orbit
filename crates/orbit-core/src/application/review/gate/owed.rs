@@ -22,14 +22,20 @@
 //! verdict are the held certificate's, and the arrived evidence passes it.
 //!
 //! [ORB-15630] A claimed before-landing review on a host of a known OS other
-//! than Linux, such as macOS, never holds for Linux CodeQL. Its candidate is
-//! already published: the pull request's hosted CI runs CodeQL on it, and
-//! the owner's landing decision reads that run. Admission and settlement record the requirement
-//! as owner-owed instead ([`split_owner_owed`], [`Judgement::defer_to_owner`]):
-//! the reviewer neither attempts nor names it, a CodeQL record it left
-//! short of a pass is excluded in its favour, and the certificate names it in
-//! `owner_owed_evidence`. A failed CodeQL record still blocks. A before-PR
-//! review keeps the hold: nothing hosted runs before the pull request opens.
+//! than Linux, such as macOS, need not hold for Linux CodeQL the pull
+//! request's hosted CI runs. [ORB-15677] Only a rule that names that hosted
+//! check (`hosted_check`) is the owner's: its candidate is already
+//! published, the pull request's hosted CI runs the rule's exact command on
+//! it, and the owner's landing waits for that check to pass. Admission and
+//! settlement record such a requirement as owner-owed instead
+//! ([`split_owner_owed`], [`Judgement::defer_to_owner`]): the reviewer
+//! neither attempts nor names it, a CodeQL record it left short of a pass is
+//! excluded in its favour, and the certificate names it in
+//! `owner_owed_evidence`. A Linux CodeQL rule without a hosted check — a
+//! custom query, or a workspace with no hosted CodeQL — and any Linux CodeQL
+//! the reviewer names that no such rule covers keep the hold, as does a
+//! before-PR review, since nothing hosted runs before the pull request
+//! opens. A failed CodeQL record still blocks.
 
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{CandidateIdentity, committed_paths};
@@ -82,7 +88,8 @@ pub(super) fn defers_linux_codeql(runtime: &OrbitRuntime, context: &GateContext)
 }
 
 /// Split `owed` into what holds the review and what the owner owes instead:
-/// with `defers`, every Linux CodeQL requirement is the owner's.
+/// with `defers`, every Linux CodeQL requirement whose rule names the pull
+/// request's hosted check that runs it is the owner's.
 pub(super) fn split_owner_owed(
     owed: Vec<ReviewEvidenceRequirement>,
     defers: bool,
@@ -94,7 +101,7 @@ pub(super) fn split_owner_owed(
         return (owed, Vec::new());
     }
     owed.into_iter()
-        .partition(|required| !linux_codeql(required))
+        .partition(|required| !(linux_codeql(required) && required.hosted_check.is_some()))
 }
 
 /// A CodeQL requirement that runs on Linux, or on no named OS.
@@ -231,43 +238,46 @@ impl Judgement {
 }
 
 impl Judgement {
-    /// [ORB-15630] Record `owner_owed` — and any Linux CodeQL the reviewer
-    /// named itself — as owed to the owner and the pull request's hosted CI
-    /// when `defers`. Each requirement leaves the named evidence; a record of
-    /// the check that did not fail is excluded in its favour, and a missing
-    /// one is added excluded, so the certificate says why it never ran. A
-    /// failed record stays and keeps blocking.
+    /// [ORB-15630] Record `owner_owed` as owed to the owner and the pull
+    /// request's hosted CI when `defers`. Linux CodeQL the reviewer named for
+    /// the same command leaves the named evidence; any other it named stays
+    /// and holds [ORB-15677]. A record of a deferred check that did not fail
+    /// is excluded in its favour, and a missing one is added excluded, so the
+    /// certificate says why it never ran. A failed record stays and keeps
+    /// blocking, and a record of a check still pending is never excluded.
     pub(super) fn defer_to_owner(
         &mut self,
         owner_owed: &[ReviewEvidenceRequirement],
         defers: bool,
     ) {
-        if !defers {
+        if !defers || owner_owed.is_empty() {
             return;
         }
-        let mut deferred = owner_owed.to_vec();
-        for named in self
-            .external_evidence
-            .extract_if(.., |named| linux_codeql(named))
-        {
-            if !deferred.iter().any(|owed| owed.kind == named.kind) {
-                deferred.push(named);
-            }
-        }
-        for required in &deferred {
+        self.external_evidence.retain(|named| {
+            !(linux_codeql(named)
+                && owner_owed
+                    .iter()
+                    .any(|owed| owed.command.trim() == named.command.trim()))
+        });
+        for required in owner_owed {
             let note = format!(
-                "owed to the owner and the pull request's hosted CI (`CodeQL / Analyze (rust)`): \
-                 `{}` runs on Linux, not on this review's host, and does not hold a \
-                 before-landing review",
+                "owed to the owner and the pull request's hosted check `{}`: `{}` runs on \
+                 Linux, not on this review's host, and does not hold a before-landing review",
+                required.hosted_check.as_deref().unwrap_or_default(),
                 required.name
             );
             let mut recorded = false;
             for record in &mut self.validation {
                 // Another invocation of the same CodeQL program is the same
-                // check; a shared runner such as `make` is not.
+                // check; a shared runner such as `make` is not, and neither is
+                // the command of a check that still holds the review.
                 let same = record.command.trim() == required.command.trim()
                     || (program(&required.command).contains("codeql")
-                        && program(&record.command) == program(&required.command));
+                        && program(&record.command) == program(&required.command)
+                        && !self
+                            .external_evidence
+                            .iter()
+                            .any(|pending| pending.command.trim() == record.command.trim()));
                 if !same || record.role == ValidationRole::ExpectedFailure {
                     continue;
                 }
@@ -296,8 +306,8 @@ impl Judgement {
                 });
             }
         }
-        self.host_decided |= !deferred.is_empty();
-        self.owner_owed = deferred;
+        self.host_decided = true;
+        self.owner_owed = owner_owed.to_vec();
     }
 }
 

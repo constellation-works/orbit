@@ -400,10 +400,18 @@ blocks on an `incomplete` verdict whose only gap this is, nor ships a pass the
 host could not have run. A Linux follower, or a candidate that changes no
 matching path, owes nothing
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
-A before-landing review is the exception: its pull request is already open, so
-the requirement is owed to the owner and the pull request's hosted CI
-(`owner_owed_evidence`) and does not hold the review
-([runbook](review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)).
+A before-landing review is the exception only when the rule names the pull
+request's hosted check that runs its exact command, with
+`hosted_check = "CodeQL / Analyze (rust)"`. The requirement is then owed to the
+owner and that check (`owner_owed_evidence`) and does not hold the review; the
+owner's landing merges only after the check passed
+([runbook](review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)). The hosted
+`Analyze (rust)` job in `.github/workflows/codeql.yml` runs the default query
+suite, not `rust-security-extended.qls`, so declaring it for the rule above is
+the operator's judgement that the hosted run is equivalent enough. Leave
+`hosted_check` unset for a custom query (`queries/company-policy.ql`) or a
+workspace without hosted CodeQL: the requirement then holds the before-landing
+review for the owner's Linux run, as it holds a before-PR review.
 
 ### Owner fulfilment
 

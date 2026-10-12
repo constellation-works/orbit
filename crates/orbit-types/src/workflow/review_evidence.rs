@@ -39,6 +39,12 @@ pub struct ReviewEvidenceRequirement {
     /// when set, only evidence from that OS satisfies the requirement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<EvidenceHostOs>,
+    /// [ORB-15677] The pull request's hosted check that runs this exact
+    /// command, from the host-evidence rule that declared it. Only such a
+    /// requirement can be owed to the owner instead of holding a review, and
+    /// the owner's landing waits for that check to pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_check: Option<String>,
 }
 
 /// A hold pins the reviewed tree and task meaning; evidence never grants a pass.
@@ -97,6 +103,12 @@ pub struct HostEvidenceRule {
     pub os: EvidenceHostOs,
     pub command: String,
     pub artifact: String,
+    /// [ORB-15677] A `codeql` rule only: the name of the pull request's
+    /// hosted check that runs exactly `command` on every candidate, as the
+    /// forge reports it (`CodeQL / Analyze (rust)`). Without it no hosted run
+    /// stands in for the rule, so a review that cannot run it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_check: Option<String>,
 }
 
 impl HostEvidenceRule {
@@ -138,6 +150,7 @@ impl HostEvidenceRule {
             command: self.command.clone(),
             artifact: self.artifact.clone(),
             os: Some(self.os),
+            hosted_check: self.hosted_check.clone(),
         }
     }
 }

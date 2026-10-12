@@ -45,6 +45,10 @@ pub struct HandoffLandingContext {
     pub unresolved_merge_intent: Option<String>,
     /// The owner checkout the landing runs against. Never a follower path.
     pub workspace_path: std::path::PathBuf,
+    /// [ORB-15677] The pull request's hosted checks the accepted review
+    /// owed to the owner instead of running them. The landing merges only
+    /// once each has passed on the pinned head.
+    pub owed_hosted_checks: Vec<String>,
 }
 
 /// One durable step of a landing attempt, recorded by the owner store.

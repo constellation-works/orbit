@@ -155,15 +155,35 @@ that step's results instead [ORB-15630]:
    before `landing_push`, and a failure there is the review's reject.
 
 On a claim host of a known OS other than Linux (macOS), a before-landing
-review never holds for Linux CodeQL. The published pull request's hosted CI
-(`CodeQL / Analyze (rust)`) runs it, and the owner's landing decision reads
-that run. A `[[review.host_evidence]]` CodeQL rule's Linux requirement is
-listed as `owner_owed_evidence` in the manifest, the admission output and the
-certificate, not as `owed_external_evidence`. The same applies when the
-reviewer names Linux CodeQL in `external_evidence` itself. Any CodeQL record
-that did not fail becomes `excluded` and `not_run`, with a note naming the
-owner and hosted CI. A failed CodeQL record still blocks. A before-PR review
-keeps the hold, since no hosted CI runs before the pull request opens.
+review does not hold for a Linux CodeQL check whose `[[review.host_evidence]]`
+rule names the pull request's hosted check that runs it (`hosted_check`, such
+as `CodeQL / Analyze (rust)`) [ORB-15677]. That requirement is listed as
+`owner_owed_evidence` in the manifest, the admission output and the
+certificate, not as `owed_external_evidence`. Linux CodeQL the reviewer names
+in `external_evidence` with the same command leaves the named evidence. Any
+record of the check that did not fail becomes `excluded` and `not_run`, with a
+note naming the owner and the hosted check. A failed CodeQL record still
+blocks, and a record of a check that still holds the review is never excluded.
+
+The owner enforces what it is owed in two places:
+
+- Handoff acceptance refuses a certificate (`review_certificate_mismatch`)
+  whose `owner_owed_evidence` names a check that its captured rules do not
+  declare as a Linux `codeql` rule with that same command, artifact and
+  `hosted_check`, or that is not a before-landing review.
+- `handoff_land` merges the pull request only once every owed hosted check
+  reports a pass on the pinned head, matched by its own name or as
+  `<workflow> / <job>`. It waits while a check is absent or running, within
+  `max_wait_seconds`, and stops the landing when one failed, whatever branch
+  protection requires. The candidate stays in review. A local candidate owed
+  a hosted check stops too.
+
+Any other Linux CodeQL keeps the hold, as it does on a before-PR review: a
+rule without `hosted_check` (a custom query, or a workspace with no hosted
+CodeQL), and Linux CodeQL the reviewer names that no such rule covers. The
+owner fulfils it on Linux ([CodeQL runbook](codeql-local.md#owner-fulfilment))
+before the held candidate lands. A before-PR review always keeps the hold,
+since no hosted CI runs before the pull request opens.
 
 ```bash
 orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \

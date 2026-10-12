@@ -183,6 +183,7 @@ fn host_evidence_satisfies_only_the_os_its_requirement_names() {
         command: "cargo test -p orbit-exec --test sandbox".into(),
         artifact: "evidence/sandbox.json".into(),
         os: Some(os),
+        hosted_check: None,
     };
     let evidence = |os| ReviewExternalEvidence {
         schema_version: 1,

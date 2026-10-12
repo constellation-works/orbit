@@ -309,8 +309,9 @@ fn admit(
             reviewer_json(&crew, &source)
         }
     };
-    // [ORB-15630] Linux CodeQL a macOS host cannot run is owed to the owner
-    // and the pull request's hosted CI, not held by this before-landing
+    // [ORB-15630] Linux CodeQL a macOS host cannot run, whose rule names the
+    // pull request's hosted check that runs it [ORB-15677], is owed to the
+    // owner and that check, not held by this before-landing
     // review; the host's own runs of the owner's gates decide those checks.
     let (owed_external_evidence, owner_owed_evidence) = split_owner_owed(
         owed_evidence(runtime, context, &candidate.commits)?,

@@ -37,6 +37,23 @@ pub(super) fn codeql_rule(paths: &str) -> String {
     )
 }
 
+/// The pull request's hosted check a [`hosted_codeql_rule`] declares runs
+/// its command.
+pub(super) const HOSTED_CHECK: &str = "CodeQL / Analyze (rust)";
+
+/// [`codeql_rule`] declaring that [`HOSTED_CHECK`] runs its exact command.
+pub(super) fn hosted_codeql_rule(paths: &str) -> String {
+    format!("{}hosted_check = \"{HOSTED_CHECK}\"\n", codeql_rule(paths))
+}
+
+/// The requirement a [`hosted_codeql_rule`] owes.
+pub(super) fn hosted_owed() -> ReviewEvidenceRequirement {
+    ReviewEvidenceRequirement {
+        hosted_check: Some(HOSTED_CHECK.into()),
+        ..owed()
+    }
+}
+
 /// The requirement the rule owes.
 pub(super) fn owed() -> ReviewEvidenceRequirement {
     ReviewEvidenceRequirement {
@@ -45,6 +62,7 @@ pub(super) fn owed() -> ReviewEvidenceRequirement {
         command: CODEQL.into(),
         artifact: ARTIFACT.into(),
         os: Some(EvidenceHostOs::Linux),
+        hosted_check: None,
     }
 }
 
@@ -282,6 +300,7 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
             command: SANDBOX.into(),
             artifact: SANDBOX_ARTIFACT.into(),
             os: Some(EvidenceHostOs::Linux),
+            hosted_check: None,
         },
         ReviewEvidenceRequirement {
             kind: ReviewEvidenceKind::HostedCi,
@@ -289,6 +308,7 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
             command: CI.into(),
             artifact: CI_ARTIFACT.into(),
             os: None,
+            hosted_check: None,
         },
     ];
     let mut validation = vec![ci_fast()];
@@ -322,13 +342,14 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
 
 /// A claimed before-landing review must release its lane with an evidence
 /// hold just like a before-PR review, without approving an unverified head.
-/// [ORB-15630] The Linux CodeQL run the Mac reviewer named is the owner's
-/// and the pull request's hosted CI's, so only the hosted job holds it.
+/// [ORB-15677] The owner's workspace declares no hosted check for Linux
+/// CodeQL, so the run the Mac reviewer named holds the review beside the
+/// hosted job instead of becoming the owner's.
 #[test]
-fn a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql() {
+fn a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check() {
     if !isolated(
         module_path!(),
-        "a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql",
+        "a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check",
     ) {
         return;
     }
@@ -343,6 +364,7 @@ fn a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql() {
         command: CI.into(),
         artifact: CI_ARTIFACT.into(),
         os: None,
+        hosted_check: None,
     };
     let mut reviewer_report = report(
         &admitted,
@@ -364,9 +386,13 @@ fn a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql() {
     );
     let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
         .expect("named evidence remains an owner-side follow-up");
-    assert_eq!(hold.requirements, vec![hosted]);
+    assert_eq!(hold.requirements, vec![owed(), hosted]);
     let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
-    assert_eq!(certificate.owner_owed_evidence, vec![owed()]);
+    assert!(
+        certificate.owner_owed_evidence.is_empty(),
+        "no hosted run stands in for an undeclared check: {:?}",
+        certificate.owner_owed_evidence
+    );
     let codeql = certificate
         .validation
         .iter()
@@ -374,7 +400,7 @@ fn a_mac_before_landing_review_holds_named_hosted_evidence_and_defers_codeql() {
         .expect("the CodeQL record stays on the certificate");
     assert_eq!(
         (codeql.role, codeql.outcome),
-        (ValidationRole::Excluded, ValidationOutcome::NotRun)
+        (ValidationRole::Required, ValidationOutcome::NotRun)
     );
     leaf.leaf_holds(&hold);
     leaf.pair.pass(&leaf.drain);
@@ -405,6 +431,7 @@ fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
         command: CI.into(),
         artifact: CI_ARTIFACT.into(),
         os: None,
+        hosted_check: None,
     }];
     leaf.put_report(&reviewer_report);
     let refused = leaf

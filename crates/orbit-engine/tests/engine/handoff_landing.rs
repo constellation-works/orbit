@@ -6,7 +6,8 @@
 //! intent; a candidate that cannot fast-forward lands nothing and records none
 //! [ORB-13894]. PR reconciliation resolves external uncertainty before stopping
 //! a mismatched delivery, so subsequent attempts see the settled state. A stop
-//! on a conflicting or stale base is marked repairable [ORB-14261].
+//! on a conflicting or stale base is marked repairable [ORB-14261]. A hosted
+//! check the review owed the owner gates the merge [ORB-15677].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -92,6 +93,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
             candidate,
             unresolved_merge_intent: None,
             workspace_path: repo.to_path_buf(),
+            owed_hosted_checks: Vec::new(),
         },
         steps: Mutex::default(),
         intents: Mutex::default(),
@@ -99,11 +101,20 @@ fn owner_checkout(repo: &Path) -> LandingHost {
 }
 
 fn land(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
+    land_with(host, json!({}))
+}
+
+/// [`land`] with `extra` merged into the step input.
+fn land_with(host: &impl RuntimeHost, extra: Value) -> Result<Value, OrbitError> {
+    let mut input = json!({"handoff_id": "handoff-1", "task_id": TASK_ID, "run_id": RUN_ID});
+    if let (Some(input), Value::Object(extra)) = (input.as_object_mut(), extra) {
+        input.extend(extra);
+    }
     execute_deterministic_action(
         host,
         "handoff_land",
         &json!({}),
-        &json!({"handoff_id": "handoff-1", "task_id": TASK_ID, "run_id": RUN_ID}),
+        &input,
         false,
         &HashMap::new(),
         None,
@@ -294,11 +305,27 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
     }
 }
 
-/// A pull request the provider reports open with a fixed merge state.
+/// A pull request the provider reports open with a fixed merge state and
+/// status rollup. It answers only status reads; any other operation is
+/// recorded and refused, so a test sees whether the landing tried to merge.
 struct OpenPullRequestHost {
     context: HandoffLandingContext,
     steps: Mutex<Vec<HandoffLandingStep>>,
     merge_state: &'static str,
+    rollup: Value,
+    sent: Mutex<Vec<String>>,
+}
+
+impl OpenPullRequestHost {
+    fn new(context: HandoffLandingContext, merge_state: &'static str, rollup: Value) -> Self {
+        Self {
+            context,
+            steps: Mutex::default(),
+            merge_state,
+            rollup,
+            sent: Mutex::default(),
+        }
+    }
 }
 
 impl RuntimeHost for OpenPullRequestHost {
@@ -319,7 +346,12 @@ impl RuntimeHost for OpenPullRequestHost {
         operation: &str,
         _input: Value,
     ) -> Result<Value, OrbitError> {
-        assert_eq!(operation, "pr.status", "a stopped landing sends no merge");
+        if operation != "pr.status" {
+            self.sent.lock().unwrap().push(operation.to_string());
+            return Err(OrbitError::Execution(format!(
+                "fixture sends no {operation}"
+            )));
+        }
         let candidate = &self.context.candidate;
         Ok(json!({"pull_request": {
             "state": "OPEN",
@@ -327,6 +359,8 @@ impl RuntimeHost for OpenPullRequestHost {
             "baseRefName": candidate.base_branch,
             "headRefOid": candidate.candidate.commit,
             "mergeStateStatus": self.merge_state,
+            "reviewDecision": "",
+            "statusCheckRollup": self.rollup,
         }}))
     }
 }
@@ -339,11 +373,7 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-        let host = OpenPullRequestHost {
-            context,
-            steps: Mutex::default(),
-            merge_state,
-        };
+        let host = OpenPullRequestHost::new(context, merge_state, json!([]));
 
         land(&host).expect_err("an unmergeable pull request stops the landing");
 
@@ -352,7 +382,92 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
             vec![HandoffLandingStep::Stop { repairable }],
             "merge state {merge_state}"
         );
+        assert!(
+            host.sent.lock().unwrap().is_empty(),
+            "a stopped landing sends no merge"
+        );
     }
+}
+
+/// [ORB-15677] A check the before-landing review owed the pull request's
+/// hosted CI gates the merge itself, even where branch protection does not
+/// require it: the landing merges only once that check passed on the pinned
+/// head, stops when it failed, and never merges while it is absent or still
+/// running. A local candidate, which no hosted CI runs, never lands with one.
+#[test]
+fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
+    const OWED: &str = "CodeQL / Analyze (rust)";
+    let check = |conclusion: Option<&str>| {
+        json!({
+            "__typename": "CheckRun",
+            "name": "Analyze (rust)",
+            "workflowName": "CodeQL",
+            "status": if conclusion.is_some() { "COMPLETED" } else { "IN_PROGRESS" },
+            "conclusion": conclusion.unwrap_or_default(),
+        })
+    };
+    let other = json!({"__typename": "CheckRun", "name": "fast", "workflowName": "CI",
+                       "status": "COMPLETED", "conclusion": "SUCCESS"});
+    for (case, rollup, merges, stop_reason) in [
+        ("passed", json!([other, check(Some("SUCCESS"))]), true, None),
+        (
+            "failed",
+            json!([other, check(Some("FAILURE"))]),
+            false,
+            Some("failed"),
+        ),
+        (
+            "running",
+            json!([other, check(None)]),
+            false,
+            Some("not yet passed"),
+        ),
+        ("absent", json!([other]), false, Some("not yet passed")),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut context = owner_checkout(sandbox.path()).context;
+        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        context.owed_hosted_checks = vec![OWED.into()];
+        let host = OpenPullRequestHost::new(context, "CLEAN", rollup);
+
+        let error = land_with(&host, json!({"max_wait_seconds": 0}))
+            .expect_err("the fixture never reports a merge");
+
+        let sent = host.sent.lock().unwrap().clone();
+        assert_eq!(!sent.is_empty(), merges, "{case}: {sent:?} {error}");
+        let steps = host.steps.lock().unwrap().clone();
+        match stop_reason {
+            None => assert!(steps.is_empty(), "{case}: {steps:?}"),
+            Some(reason) => {
+                assert_eq!(
+                    steps,
+                    vec![HandoffLandingStep::Stop { repairable: false }],
+                    "{case}"
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains(OWED) && message.contains(reason),
+                    "{case}: {message}"
+                );
+            }
+        }
+    }
+
+    let sandbox = tempdir().unwrap();
+    let mut host = owner_checkout(sandbox.path());
+    host.context.owed_hosted_checks = vec![OWED.into()];
+    let tip = git(&host.repo, &["rev-parse", "main"]);
+    let error = land(&host).expect_err("no hosted CI runs a local candidate");
+    assert!(error.to_string().contains(OWED), "{error}");
+    assert_eq!(
+        *host.steps.lock().unwrap(),
+        vec![HandoffLandingStep::Stop { repairable: false }]
+    );
+    assert_eq!(
+        git(&host.repo, &["rev-parse", "main"]),
+        tip,
+        "nothing landed"
+    );
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {

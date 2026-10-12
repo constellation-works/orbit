@@ -22,6 +22,19 @@ impl OrbitRuntime {
     ) -> Result<HandoffLandingContext, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(handoff_id)?;
+        // [ORB-15677] The hosted checks the accepted review owed the owner,
+        // read from the certificate the handoff pinned and acceptance judged.
+        let owed_hosted_checks = self
+            .admission_boundary()?
+            .accepted_review_certificate(&accepted.handoff.claim_id)?
+            .map(|certificate| {
+                certificate
+                    .owner_owed_evidence
+                    .into_iter()
+                    .filter_map(|owed| owed.hosted_check)
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(HandoffLandingContext {
             handoff_id: accepted.handoff_id,
             task_id: accepted.handoff.task_id,
@@ -29,6 +42,7 @@ impl OrbitRuntime {
             candidate: accepted.handoff.candidate,
             unresolved_merge_intent: claim.unresolved_merge_intent,
             workspace_path: self.paths().repo_root.clone(),
+            owed_hosted_checks,
         })
     }
 
