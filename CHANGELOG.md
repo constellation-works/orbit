@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.3 — 2026-10-12
+
+### Highlights
+
+- **Settings and Incidents redesign**: Settings shows every key's effective value, where it comes from and its built-in default, across the Effective, Workspace and Global views. Health › Incidents groups failures by a deterministic cause, with class tiles and a 24-hour timeline per incident. ([ORB-15430])
+- **Faster dashboard polling**: polls reuse memoized scoreboard and diagnostics results, diagnostics payloads are bounded, JSON responses are compressed, and routine status no longer fetches from the remote, so typical polls drop from seconds to milliseconds. ([ORB-15529])
+- **Faster on Apple silicon**: binary digests use hardware SHA-2 and the CPU baseline is shared, so each `orbit` process starts sooner and `orbit run readiness` drops from about 1.2 s to under 0.1 s. ([ORB-15531])
+- **Sturdier distributed claims**: a failed claimed leaf keeps its uncommitted candidate, and Orbit builds the deferred-sandbox record itself. The owner captures its validation gates into the claim, and tests that also fail on the base, or pass when rerun alone, no longer block a candidate. ([ORB-15511])
+- **Review-finding verification**: the `finding_verification_pipeline` job confirms or rejects review-filed bugs with file-and-line evidence. The opt-in `review.verify_findings` setting, off by default and toggleable in Settings, makes promotion and admission wait for a confirmed verdict. ([ORB-15662])
+- **System crew retired**: system work (auto-task templates, the task pilot and recoveries) draws its crew from the complexity pools. `workflow.system_crew` and `crew: system` still load for one release with a deprecation warning → remove them. ([ORB-15663])
+
 ## 0.28.2 — 2026-10-11
 
 ### Highlights
