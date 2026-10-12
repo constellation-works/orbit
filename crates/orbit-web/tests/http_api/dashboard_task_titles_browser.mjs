@@ -14,28 +14,38 @@ export async function assertTaskTitleLayout(page, evidence) {
     setWorkspace('one');
     await globalThis.showTaskPaginationEvidence();
     setActiveTab('tasks', { refresh: false });
+    // `archived` is off the filter and off the lifecycle table, so moving to it
+    // is a forced change that takes the row out of the list.
+    const transitionsFor = status => ['backlog', 'in-progress']
+      .filter(target => target !== status)
+      .map(target => ({ status: target, required_field: null }));
     const tasks = [
       { id: 'TITLE-1', title: titleTexts[0] },
       { id: 'TITLE-2', title: titleTexts[1], os_requirement: { any_of: ['macos'] }, readiness: { preparing: true, gaps: [] } },
       { id: 'TITLE-3', title: titleTexts[2] },
       { id: 'TITLE-4', title: titleTexts[3] },
-    ].map(task => ({ ...task, status: 'backlog', priority: 'medium', status_transitions: [{ status: 'in-progress', required_field: null }] }));
+    ].map(task => ({ ...task, status: 'backlog', priority: 'medium', status_transitions: transitionsFor('backlog') }));
     const context = {
       getTasks: () => tasks,
       getActiveStatuses: () => new Set(['backlog', 'in-progress']),
-      statusOrder: ['backlog', 'in-progress'],
+      statusOrder: ['backlog', 'in-progress', 'archived'],
       replaceTask: updated => Object.assign(tasks.find(task => task.id === updated.id), updated),
     };
     const crews = { default_crew: 'opus', crews: [{ name: 'sol' }, { name: 'opus' }] };
-    globalThis.taskTitleFixture = { priorFetch: globalThis.fetch, writes: [], tasks, render: () => renderTasks(tasks, context) };
+    globalThis.taskTitleFixture = { priorFetch: globalThis.fetch, writes: [], tasks, failStatus: false, render: () => renderTasks(tasks, context) };
     const json = payload => new Response(JSON.stringify(payload), { status: 200 });
     globalThis.fetch = async (url, options) => {
       const request = new URL(url, window.location.href);
       if (options?.method === 'PATCH' && /\/tasks\/TITLE-/.test(request.pathname)) {
         const update = JSON.parse(options.body);
         globalThis.taskTitleFixture.writes.push(update);
+        if (update.status && globalThis.taskTitleFixture.failStatus) {
+          return new Response(JSON.stringify({ error: 'status store unavailable' }), { status: 500 });
+        }
         const task = tasks.find(task => request.pathname.endsWith('/' + task.id));
-        Object.assign(task, update);
+        const { force, ...fields } = update;
+        Object.assign(task, fields);
+        if (fields.status) task.status_transitions = transitionsFor(fields.status);
         return json(task);
       }
       // The dashboard's 30s poll can land mid-test: it reads these rows back
@@ -176,6 +186,7 @@ export async function assertTaskTitleLayout(page, evidence) {
     if (!writes.some(write => write.status === 'in-progress') || !writes.some(write => write.crew === 'sol')) {
       throw new Error(`Keyboard edits must reach the task mutation boundary: ${JSON.stringify(writes)}`);
     }
+    await assertStatusChangeFoldsDetail(page, evidence);
     // The edits' Undo feedback expires with a redraw in this fixture's
     // context; let it land here rather than in a later scenario.
     await page.waitForFunction(() => !document.querySelector('#tasks-body .mutation-feedback'), undefined, { timeout: 15000 });
@@ -183,4 +194,95 @@ export async function assertTaskTitleLayout(page, evidence) {
   } finally {
     await page.evaluate(() => { globalThis.fetch = globalThis.taskTitleFixture.priorFetch; delete globalThis.taskTitleFixture; });
   }
+}
+
+// Status lives in the expanded detail and rows group by status, so a status
+// change from the detail folds it in. Its feedback and undo follow the row (or a
+// notice when the new status is filtered out); a refused change keeps the detail
+// open with its feedback; a refresh that changes status leaves rows as they are.
+async function assertStatusChangeFoldsDetail(page, evidence) {
+  const fail = async reason => {
+    const state = await page.evaluate(() => ({
+      hash: window.location.hash,
+      writes: globalThis.taskTitleFixture.writes,
+      tasks: globalThis.taskTitleFixture.tasks.map(({ id, status }) => ({ id, status })),
+      body: document.getElementById('tasks-body').innerText,
+    }));
+    throw new Error(`${reason}: ${JSON.stringify(state)}`);
+  };
+  const row = id => page.locator(`#tasks-body .row[data-key="task-${id}"]`);
+  const detail = id => page.locator(`#tasks-body [data-key="detail-${id}"]`);
+  const note = id => row(id).locator('.task-status-note');
+  const notice = id => page.locator(`#tasks-body [data-key="status-notice-${id}"]`);
+  const openParam = () => page.evaluate(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('open'));
+  const expanded = async id => (await row(id).locator('.title').getAttribute('aria-expanded')) === 'true';
+  const statusOf = id => page.evaluate(id => globalThis.taskTitleFixture.tasks.find(task => task.id === id).status, id);
+  const waitFor = (predicate, arg, reason) => page.waitForFunction(predicate, arg, { timeout: 5000 }).catch(() => fail(reason));
+  // A row toggle animates through a view transition; capture after it ends.
+  const screenshot = async name => {
+    await page.waitForFunction(() => !document.getAnimations().some(animation => animation.effect?.pseudoElement?.startsWith('::view-transition')), undefined, { timeout: 5000 }).catch(() => {});
+    await page.screenshot({ path: path.join(evidence, name) });
+  };
+  const open = async id => {
+    await row(id).locator('.title').click();
+    await detail(id).locator('.task-status-select').waitFor({ state: 'visible' });
+    if (await openParam() !== id) await fail(`Opening ${id} must name it in the open= URL parameter`);
+  };
+
+  // The keyboard edit above moved TITLE-1 to in-progress from its open detail.
+  await row('TITLE-1').locator('.task-status-note').waitFor({ state: 'visible' });
+  if (await detail('TITLE-1').count() !== 0 || await expanded('TITLE-1')) await fail('A saved status change must fold the detail in');
+  if (await openParam() !== null) await fail('A folded detail must leave the open= URL parameter');
+  if (!(await note('TITLE-1').innerText()).includes('status saved')) await fail('The collapsed row must carry the saved feedback');
+  await screenshot('task-status-folded.png');
+
+  // Undo is a status change too: it runs from the collapsed row and keeps it folded.
+  await note('TITLE-1').getByRole('button', { name: 'undo' }).click();
+  await waitFor(() => globalThis.taskTitleFixture.tasks[0].status === 'backlog', undefined, 'Undo on the folded row must restore the prior status');
+  await waitFor(() => /status saved/.test(document.querySelector('[data-key="task-TITLE-1"] .task-status-note')?.textContent || ''), undefined, 'The undo must report on the folded row');
+  if (await detail('TITLE-1').count() !== 0 || await expanded('TITLE-1')) await fail('Undo must not reopen the folded row');
+
+  // A failed write and a declined forced change both keep the detail open with their feedback.
+  await open('TITLE-3');
+  await page.evaluate(() => { globalThis.taskTitleFixture.failStatus = true; });
+  await detail('TITLE-3').locator('.task-status-select').selectOption('in-progress');
+  await waitFor(() => /status update failed/.test(document.querySelector('[data-key="detail-TITLE-3"] .mutation-feedback.error')?.textContent || ''), undefined, 'A failed status change must show its error in the open detail');
+  await page.evaluate(() => { globalThis.taskTitleFixture.failStatus = false; });
+  if (!(await expanded('TITLE-3')) || await openParam() !== 'TITLE-3') await fail('A failed status change must leave the row open');
+  page.once('dialog', dialog => dialog.dismiss());
+  await detail('TITLE-3').locator('.task-status-select').selectOption('archived');
+  await waitFor(() => /status update cancelled/.test(document.querySelector('[data-key="detail-TITLE-3"] .mutation-feedback.error')?.textContent || ''), undefined, 'A declined forced change must show its refusal in the open detail');
+  if (!(await expanded('TITLE-3')) || await openParam() !== 'TITLE-3' || await statusOf('TITLE-3') !== 'backlog') {
+    await fail('A declined forced change must write nothing and leave the row open');
+  }
+
+  // A status change from elsewhere, seen on refresh, moves rows without opening or folding them.
+  await page.evaluate(() => {
+    for (const task of globalThis.taskTitleFixture.tasks.filter(task => task.id === 'TITLE-3' || task.id === 'TITLE-2')) task.status = 'in-progress';
+    globalThis.taskTitleFixture.render();
+  });
+  if (!(await expanded('TITLE-3')) || await detail('TITLE-3').count() !== 1 || await openParam() !== 'TITLE-3') await fail('A refreshed status must leave an open row open');
+  if (await expanded('TITLE-2') || await note('TITLE-2').count() !== 0) await fail('A refreshed status must leave a closed row closed, without status feedback');
+  await page.evaluate(() => {
+    for (const task of globalThis.taskTitleFixture.tasks.filter(task => task.id === 'TITLE-3' || task.id === 'TITLE-2')) task.status = 'backlog';
+    globalThis.taskTitleFixture.render();
+  });
+  await row('TITLE-3').locator('.title').click();
+  await detail('TITLE-3').waitFor({ state: 'detached', timeout: 5000 }).catch(() => fail('A row must close by hand'));
+  if (await note('TITLE-3').count() !== 0) await fail('Closing a row by hand must not carry a refused change onto it');
+
+  // A forced move out of the filter folds the detail too; the row leaves the
+  // list, so the feedback and its undo stay reachable in a notice above it.
+  await open('TITLE-4');
+  page.once('dialog', dialog => dialog.accept());
+  await detail('TITLE-4').locator('.task-status-select').selectOption('archived');
+  await notice('TITLE-4').waitFor({ state: 'visible', timeout: 5000 }).catch(() => fail('A change that filters the row out must leave a notice'));
+  if (await row('TITLE-4').count() !== 0 || await openParam() !== null) await fail('A row moved out of the filter must leave the list and the open= URL parameter');
+  const noticeText = await notice('TITLE-4').innerText();
+  if (!noticeText.includes('archived') || !noticeText.includes('status forced')) await fail('The notice must name the new status and the forced change');
+  await screenshot('task-status-notice.png');
+  await notice('TITLE-4').getByRole('button', { name: 'undo' }).click();
+  await waitFor(() => globalThis.taskTitleFixture.tasks[3].status === 'backlog', undefined, 'Undo from the notice must restore the prior status');
+  await row('TITLE-4').locator('.task-status-note').waitFor({ state: 'visible', timeout: 5000 }).catch(() => fail('The undone row must return folded, with its feedback'));
+  if (await notice('TITLE-4').count() !== 0 || await expanded('TITLE-4')) await fail('An undone row must return folded and retire its notice');
 }
