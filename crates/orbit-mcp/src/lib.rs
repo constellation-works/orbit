@@ -18,6 +18,7 @@ mod error;
 pub mod federated;
 mod internal_drain;
 mod listener;
+mod presentation_definition;
 mod remote;
 mod stdio_session;
 

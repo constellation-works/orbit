@@ -3,16 +3,17 @@
 
 use std::sync::Arc;
 
+use crate::presentation_definition::{
+    PRESENTATION_DEFINITIONS, PresentationKind, presentation_definition,
+};
 use orbit_common::OrbitError;
-use orbit_types::tool::McpToolDefinition;
+use orbit_types::tool::{McpPresentationRead, McpToolDefinition};
 use rmcp::model::{Meta, Resource, ResourceContents, Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
 pub(super) const RESOURCE_URI: &str = "ui://orbit/control-center/v1/index.html";
 pub(super) const LEGACY_RESOURCE_URI: &str = "ui://orbit/task-panel/v1/index.html";
 const MIME: &str = "text/html;profile=mcp-app";
-pub(super) const OPEN: &str = "orbit_ui_open";
-pub(super) const INSPECT: &str = "orbit_ui_inspect";
 pub(super) const TASK_FIELDS: [&str; 6] = [
     "id",
     "title",
@@ -23,23 +24,30 @@ pub(super) const TASK_FIELDS: [&str; 6] = [
 ];
 
 pub(super) fn is_presentation(name: &str) -> bool {
-    matches!(name, OPEN | INSPECT | "orbit.ui.open" | "orbit.ui.inspect")
+    presentation_definition(name).is_some()
 }
 
 pub(super) fn available(definitions: &[McpToolDefinition]) -> bool {
-    definitions.iter().any(|definition| {
-        definition.schema.name == "orbit.task.show"
-            && definition
-                .annotations
-                .is_some_and(|hints| hints.read_only == Some(true))
+    reader(definitions, McpPresentationRead::Task).is_some()
+}
+
+/// Select a host-declared presentation reader with its required read-only hint.
+pub(super) fn reader(
+    definitions: &[McpToolDefinition],
+    role: McpPresentationRead,
+) -> Option<&McpToolDefinition> {
+    definitions.iter().find(|definition| {
+        definition.rules.presentation_read == Some(role)
+            && (role != McpPresentationRead::Task
+                || definition
+                    .annotations
+                    .is_some_and(|hints| hints.read_only == Some(true)))
     })
 }
 
 pub(super) fn tools(federated: bool) -> Vec<Tool> {
-    [ (OPEN, "Open Orbit control center", "global"),
-      (INSPECT, "Inspect Orbit task or run", "thread") ]
-        .into_iter()
-        .map(|(name, title, entrypoint)| {
+    PRESENTATION_DEFINITIONS.iter()
+        .map(|definition| {
             let selector = if federated {
                 "Copy the opaque selector from orbit_workspace_list. A bare workspace ID is refused."
             } else {
@@ -53,18 +61,18 @@ pub(super) fn tools(federated: bool) -> Vec<Tool> {
                     "kind": {"type":"string", "enum":["task","run"], "default":"task"}
                 }
             });
-            if name == INSPECT {
+            if definition.kind == PresentationKind::Inspect {
                 schema["required"] = json!(["workspace", "id"]);
             } else {
                 schema["dependentRequired"] = json!({ "id": ["workspace"], "kind": ["workspace", "id"] });
             }
-            Tool::new(name, "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
+            Tool::new(definition.name, "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
                 Arc::new(schema.as_object().cloned().unwrap_or_default()))
-                .with_title(title)
+                .with_title(definition.title)
                 .with_annotations(ToolAnnotations::new().read_only(true).destructive(false).idempotent(true).open_world(false))
                 .with_meta(Meta(json!({
                     "ui": { "resourceUri": RESOURCE_URI },
-                    "openai/ui": { "entrypoints": [{ "type": entrypoint }] }
+                    "openai/ui": { "entrypoints": [{ "type": definition.entrypoint }] }
                 }).as_object().cloned().unwrap_or_default()))
         })
         .collect()
@@ -117,7 +125,10 @@ pub(super) struct Selection {
 }
 
 /// Core still validates selector ownership, task identity and authority.
-pub(super) fn selection(name: &str, input: &Value) -> Result<Option<Selection>, OrbitError> {
+pub(super) fn selection(
+    kind: PresentationKind,
+    input: &Value,
+) -> Result<Option<Selection>, OrbitError> {
     let arguments = input.as_object().ok_or_else(|| {
         OrbitError::InvalidInput("presentation arguments must be an object".into())
     })?;
@@ -129,7 +140,7 @@ pub(super) fn selection(name: &str, input: &Value) -> Result<Option<Selection>, 
             "presentation accepts only workspace, id and kind".into(),
         ));
     }
-    let opener = matches!(name, OPEN | "orbit.ui.open");
+    let opener = kind == PresentationKind::Open;
     if opener && arguments.is_empty() {
         return Ok(None);
     }
