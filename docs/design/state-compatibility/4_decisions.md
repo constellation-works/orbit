@@ -343,8 +343,20 @@ would refuse or misread:
   which a reindex refills, is one, so this plan leaves it alone. A derived table
   inside a ledgered file still does, because its shape is part of that file's
   schema; the envelope stamps are one. The recovery authority's
-  `authority.db` (`orbit-core`) holds authority and creates its tables on open
-  with `CREATE TABLE IF NOT EXISTS`, so it falls under this rule as well.
+  `authority.db` (`orbit-core`) holds authority and now uses the shared engine
+  through `orbit-store::maintenance::migration`, with its own additive v1
+  ledger in `runtime/recovery_authority/schema.rs`. The frozen baseline
+  creates all five shipped tables, including the former first-use worker
+  bindings, without reshaping any pre-ledger table. Its `schema_meta` ledger
+  and `migration.compat` record stay in the protected file; root validation,
+  permissions and sandbox denies are unchanged. Newer additive schemas remain
+  writable, read-compatible schemas open query-only, and incompatible or
+  unclassified newer schemas are refused. Opens retain WAL sidecars even when
+  query-only or refused, so sandboxed workers can still read without a host
+  connection. Read-only worker lookups check newer
+  compatibility without migrating, and still read optional pre-ledger tables.
+  Pre-ledger binaries do not read the record and have no version fence: future
+  migrations must continue preserving their table contracts while supported.
 
 ### Plan
 

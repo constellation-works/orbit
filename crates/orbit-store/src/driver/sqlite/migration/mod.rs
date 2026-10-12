@@ -69,10 +69,10 @@ use introspect::table_has_column;
 pub use feature::{
     AppliedFeatureMigration, FeatureMigration, FeatureSchemaStatus, PendingFeatureMigration,
 };
-pub use ledger::{AppliedMigration, SUPPORTED_SCHEMA_VERSION};
-pub(crate) use ledger::{
-    LedgeredDatabase, Migration, applied_migrations, current_schema_version,
-    evaluate_newer_database, run_database_migrations,
+pub(crate) use ledger::applied_migrations;
+pub use ledger::{
+    AppliedMigration, LedgerStamp, LedgeredDatabase, Migration, SUPPORTED_SCHEMA_VERSION,
+    current_schema_version, evaluate_newer_database, run_database_migrations,
 };
 
 /// Bring the store database up to the newest supported schema version,

@@ -29,8 +29,9 @@
 //!
 //! The engine is not specific to the store database. Each SQLite file that
 //! keeps authority describes itself with a [`LedgeredDatabase`] and owns a
-//! registry of its own: the store ([`STORE_DATABASE`], [`MIGRATIONS`]) and the
-//! task registry (`task_registry::ledger`). Each file carries its own
+//! registry of its own: the store ([`STORE_DATABASE`], [`MIGRATIONS`]), the
+//! task registry (`task_registry::ledger`), and the recovery authority in
+//! `orbit-core`. Each file carries its own
 //! `schema_meta` ledger rows and `migration.compat` record.
 
 use std::path::Path;
@@ -45,24 +46,24 @@ use crate::contracts::{
 };
 
 /// One SQLite database file that evolves through its own migration registry.
-pub(crate) struct LedgeredDatabase {
+pub struct LedgeredDatabase {
     /// Which versioned state its compatibility decisions are about.
-    pub(crate) component: StateComponent,
+    pub component: StateComponent,
     /// How diagnostics name the database ("store database").
-    pub(crate) noun: &'static str,
+    pub noun: &'static str,
     /// Run each migration with foreign-key enforcement off. SQLite ignores
     /// `PRAGMA foreign_keys` inside a transaction, so a body that rebuilds a
     /// parent table (create, copy, drop, rename) cannot turn it off itself,
     /// and with enforcement on the drop would cascade into the children.
-    pub(crate) foreign_keys_off: bool,
+    pub foreign_keys_off: bool,
     /// Written inside each migration's transaction after its ledger row and
     /// compatibility record, from the registry and the version just applied.
-    pub(crate) stamp: Option<LedgerStamp>,
+    pub stamp: Option<LedgerStamp>,
 }
 
 /// A database-specific marker a [`LedgeredDatabase`] keeps in step with its
 /// ledger, such as the task registry's `user_version` fence.
-pub(crate) type LedgerStamp = fn(&Connection, &[Migration], u32) -> Result<(), OrbitError>;
+pub type LedgerStamp = fn(&Connection, &[Migration], u32) -> Result<(), OrbitError>;
 
 /// The store database (`orbit.db`) and its [`MIGRATIONS`].
 pub(crate) const STORE_DATABASE: LedgeredDatabase = LedgeredDatabase {
@@ -73,13 +74,16 @@ pub(crate) const STORE_DATABASE: LedgeredDatabase = LedgeredDatabase {
 };
 
 /// One entry in the migration registry.
-pub(crate) struct Migration {
-    pub(crate) version: u32,
-    pub(crate) name: &'static str,
+pub struct Migration {
+    /// Positive schema version, strictly increasing within the registry.
+    pub version: u32,
+    /// Stable name recorded beside this version in the ledger.
+    pub name: &'static str,
     /// What this migration means for a binary that does not have it. See
     /// [`MigrationCompatibility`]; declare `Breaking` when in doubt.
-    pub(crate) compat: MigrationCompatibility,
-    pub(crate) apply: fn(&Connection) -> Result<(), OrbitError>,
+    pub compat: MigrationCompatibility,
+    /// Frozen migration body, run inside the engine's transaction.
+    pub apply: fn(&Connection) -> Result<(), OrbitError>,
 }
 
 /// Stable ordered registry of store-database migrations. Append-only:
@@ -543,9 +547,14 @@ pub(crate) fn run_migrations_at_path(
     run_database_migrations(conn, &STORE_DATABASE, migrations, Some(path))
 }
 
-/// [`run_migrations`] for any ledgered database. `path`, when known, names
-/// the file in a contention error.
-pub(crate) fn run_database_migrations(
+/// Apply a database's ordered registry through its own transactional ledger.
+/// `path`, when known, names the file in a contention error.
+///
+/// Returns `None` for a current or migrated database. For a newer database,
+/// returns its compatibility decision without migrating: the caller must hold
+/// the connection read-only unless [`ForwardCompatibleOpen::writable`] is true.
+/// An incompatible or unclassified newer schema is refused before any write.
+pub fn run_database_migrations(
     conn: &Connection,
     database: &LedgeredDatabase,
     migrations: &[Migration],
@@ -580,7 +589,7 @@ pub(crate) fn run_database_migrations(
 
 /// Decide a database recorded newer than this binary supports. Reads only
 /// the compatibility record a newer binary left behind; never writes.
-pub(crate) fn evaluate_newer_database(
+pub fn evaluate_newer_database(
     conn: &Connection,
     database: &LedgeredDatabase,
     current: u32,
@@ -662,7 +671,7 @@ fn write_compat_record(
 
 /// Current schema version recorded in the ledger; 0 when no versioned
 /// migration has been applied (fresh or pre-ledger legacy database).
-pub(crate) fn current_schema_version(conn: &Connection) -> Result<u32, OrbitError> {
+pub fn current_schema_version(conn: &Connection) -> Result<u32, OrbitError> {
     Ok(applied_migrations(conn)?
         .last()
         .map(|m| m.version)

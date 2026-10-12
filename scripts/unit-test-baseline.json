@@ -523,6 +523,8 @@
         "runtime/recovery_authority/tests/certificate.rs::interrupted_attempts_survive_restart_without_trusting_stale_evidence",
         "runtime/recovery_authority/tests/root.rs::a_symlink_below_the_trusted_root_is_refused_before_anything_is_created",
         "runtime/recovery_authority/tests/root.rs::a_symlinked_authority_database_is_refused",
+        "runtime/recovery_authority/tests/schema.rs::newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse",
+        "runtime/recovery_authority/tests/schema.rs::shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes",
         "runtime/recovery_authority/tests/worker.rs::worker_process_binding_survives_descendants_and_forged_environment",
         "runtime/task/locks/tests/commands.rs::files_shape_reservations_reject_outside_workspace_before_persisting",
         "runtime/task/locks/tests/index.rs::task_lock_conflicts_use_selector_anchor_overlap",
