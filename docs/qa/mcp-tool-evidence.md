@@ -1,8 +1,8 @@
 ---
 type: context
 summary: "Behavioral evidence matrix for the advertised MCP tools and their verified limits."
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 ---
 
 # MCP behavioral evidence
@@ -55,7 +55,7 @@ All `S` proofs are in `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs` or its indic
 - **S-domain**: `desktop::domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority` reads readiness/catalog, toggles a routine, reloads disabled state after server restart, checks stale toggle refusal preserves bytes, and checks disabled/mixed-input pipeline and missing resume/worker calls leave the run list empty. It checks unprivileged routine, readiness and ordinary pipeline calls are denied.
 - **S-agent / S-agent-denial**: `a_remote_operator_session_invokes_an_agent_end_to_end` / `a_remote_agent_session_cannot_invoke_an_agent`; the agent executable is a local response stub.
 - **S-replica**: `a_replica_mcp_session_enforces_checkout_capability_classes` checks coordination refusals, a permitted workspace listing with crews and absence of refused effects.
-- **S-selector**: `every_workspace_scoped_tool_behavior_matches_its_own_selector_wording`, `mcp_task_show_follows_the_global_id_and_explicit_workspace_stays_a_filter`, and `mcp_workspace_argument_must_be_a_string_and_a_blank_one_defers_to_the_session` check dispatch/filter behavior, not just advertised wording.
+- **S-selector**: `every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirement`, `mcp_task_show_follows_the_global_id_and_explicit_workspace_stays_a_filter`, and `mcp_workspace_argument_must_be_a_string_and_a_blank_one_defers_to_the_session` check dispatch/filter behavior, not just advertised wording.
 - **S-federated**: `federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations` (including the local row's own crews under `include: ["crews"]`) and `direct_and_federated_local_calls_record_equivalent_audit_contexts`.
 - **S-rehome**: `mcp_friction_rehome_moves_a_record_into_its_registered_owner` asserts that an update with `rehome_to` leaves the target copy and source disposition, and that a repeat is refused.
 - **S-context**: `mcp_task_add_and_update_validate_context_selectors`.
@@ -80,7 +80,7 @@ refuses their canonical and advertised spellings before admission or mutation.
 They have no public compatibility aliases.
 
 `internal_drain::public_drain_calls_and_spoofed_initialize_are_refused_and_audited`
-uses production stdio and checks the 27-tool count, both retired spellings,
+uses production stdio and checks the 28-tool count, both retired spellings,
 operator and managed-agent discovery, spoofed client/initialize claims, denied
 custom RPC and durable refusal audit rows without changing task state.
 
