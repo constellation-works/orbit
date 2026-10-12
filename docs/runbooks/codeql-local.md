@@ -278,6 +278,64 @@ pulled into another module with `include!` is not a module of its own, so the
 extractor skips its semantic analysis and the run refuses; declare it with
 `mod` instead of excluding it. A failed query's partial SARIF is also unusable.
 
+### Source-defined validation barriers
+
+For a source-available validator, use `ReturnValue` in `barrierModel`, including
+when it returns `Result<PathBuf, E>` or `Result<Option<PathBuf>, E>`:
+
+```yaml
+- ["orbit_crate::module::validated_path", "ReturnValue", "path-injection", "manual"]
+```
+
+On Linux with CodeQL 2.27.1 (rust-all 0.2.22), the real-CodeQL fixture below
+reports `rust/path-injection` through
+`ReturnValue.Field[core::result::Result::Ok(0)]` and through its nested
+`.Field[core::option::Option::Some(0)]` form. The SARIF path traverses the
+source-defined body, the returned `[Ok]` value and the caller's `TryExpr`.
+Whole-call `ReturnValue` barriers stop both flows; an `Option<PathBuf>`
+validator with `ReturnValue` also stops flow. Loading an extension without
+schema errors does not establish that its access path blocks taint.
+
+The bundled Rust barrier implementation (`DataFlowImpl.qll`, `barrierNode`)
+selects a reporting expression using `stack.headOfSingleton()`. A field-bearing
+summary stack does not identify the whole-call barrier that body flow needs.
+This is a barrier limitation: do not mechanically change `Result::Ok` access
+paths in source, sink or summary models, which have different interpretations.
+Rerun the fixture when upgrading the bundle; this result is version-specific.
+
+A whole-return barrier also covers the error variant. Use it only for a narrow
+validator whose success payload is checked, whose other success variants carry
+no unsafe value, and whose error payload is used only for diagnostics or
+propagation. Error text may contain rejected input; it must never be reused as
+a filesystem path (or, for other barrier kinds, argv or a request URL). If that
+contract does not hold, isolate validation into a helper returning only the
+admitted value, such as `Option<PathBuf>`, instead of marking the aggregate
+result safe. Models must name the function's current defining module, including
+private submodules; a stale path silently matches no calls.
+
+Run the opt-in behavior fixture with the same prerequisites as the local runner:
+
+```bash
+python3 scripts/test-codeql-path-barriers.py
+```
+
+It generates a separate Cargo workspace under `.orbit/tmp/`, copies the local
+runner, and runs `rust-security-extended` with complete Linux extraction. The
+validators intentionally perform no validation, so only the model can stop
+taint. An explicit `remote` source model keeps the fixture independent of the
+suite's disabled-by-default command-argument threat model. Its unmodelled
+control must alert, as must the Result-field cases using `?`, explicit `Ok`
+matching, and nested Result/Option extraction. The Result whole-return, nested
+whole-return and Option whole-return cases must have no alert. The fixture
+checks SARIF locations and retains its generated sources, models, runner log,
+`report.json` and the runner's extraction/SARIF evidence in that scratch tree.
+It never executes the deliberately unsafe Rust program or adds its models to
+production scanning.
+
+The extension schema gate refuses the known ineffective Result-field barrier
+form in repository path models. This guard supplements the opt-in flow test;
+schema validation alone cannot prove barrier behavior.
+
 ## Reusing a verified implementer database
 
 A reviewer working in the implementer's checkout and scratch, with nothing

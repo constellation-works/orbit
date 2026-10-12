@@ -47,14 +47,14 @@ APPROVED_MODELS = {
         (
             "barrierModel",
             "orbit_cmd::update::source::validated_release_url",
-            "ReturnValue.Field[core::result::Result::Ok(0)]",
+            "ReturnValue",
         ),
     },
     COMMAND_INJECTION_KIND: {
         (
             "barrierModel",
             "orbit_common::fs::git::admitted_git_args",
-            "ReturnValue.Field[core::result::Result::Ok(0)]",
+            "ReturnValue",
         ),
     },
 }
@@ -464,6 +464,15 @@ def _validate_repository_model_scope(
             )
 
     kind = values.get("kind")
+    # Repository validators have available bodies. CodeQL 2.27.1 loads these
+    # field paths but does not block body flow; the real-CodeQL fixture in
+    # test-codeql-path-barriers.py establishes this, including nested Option.
+    if (predicate == "barrierModel" and kind == PATH_INJECTION_KIND
+            and values.get("output", "").startswith(
+                "ReturnValue.Field[core::result::Result::Ok(0)]")):
+        errors.append(_error(
+            path, f"{location}: Result-field barriers do not block source-defined flow; "
+            "use a reviewed ReturnValue validator (docs/runbooks/codeql-local.md)"))
     if kind in APPROVED_MODELS:
         model = (predicate, callable_path, values.get("output"))
         if model not in APPROVED_MODELS[kind]:

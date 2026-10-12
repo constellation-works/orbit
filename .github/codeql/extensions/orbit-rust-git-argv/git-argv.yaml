@@ -3,6 +3,8 @@
 # argv-borne way to do that (non-admitted global options and `-c` overrides,
 # subcommands outside the plumbing set, program-naming options, `init` from a
 # non-empty template) before the argv reaches `Command::args`.
+# Use the whole call result for source-defined validators (codeql-local.md).
+# Error payloads are diagnostics, never argv or request URLs.
 extensions:
   - addsTo:
       pack: codeql/rust-all
@@ -10,7 +12,7 @@ extensions:
     data:
       - [
           "orbit_common::fs::git::admitted_git_args",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "command-injection",
           "manual",
         ]

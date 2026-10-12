@@ -42,13 +42,13 @@ TWO_VALID_ROWS = """extensions:
     data:
       - [
           "orbit_store::driver::file::friction_store::validated_friction_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_cmd::diagnostics::validated_diagnostics_file_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -145,7 +145,7 @@ OVERBROAD_ACCESS_PATH = """extensions:
 """
 
 RELEASE_CALLABLE = "orbit_cmd::update::source::validated_release_url"
-RELEASE_OUTPUT = "ReturnValue.Field[core::result::Result::Ok(0)]"
+RELEASE_OUTPUT = "ReturnValue"
 GIT_ARGV_CALLABLE = "orbit_common::fs::git::admitted_git_args"
 
 
@@ -239,6 +239,20 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("expected an exact access path", errors[0])
 
+    def test_ineffective_result_field_barriers_are_refused(self):
+        data_file = self.write_pack(TWO_VALID_ROWS)
+        for suffix in ("", ".Field[core::option::Option::Some(0)]"):
+            with self.subTest(suffix=suffix):
+                data_file.write_text(model_yaml("barrierModel", [
+                    "orbit_common::storage::sqlite::validated_sqlite_path",
+                    "ReturnValue.Field[core::result::Result::Ok(0)]" + suffix,
+                    "path-injection", "manual",
+                ]), encoding="utf-8")
+                errors = self.errors()
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("Result-field barriers do not block source-defined flow", errors[0],
+                              "protects against silently ineffective path-validation models")
+
     def test_generated_style_yaml_discovery_includes_extension(self):
         data_file = self.write_pack(TWO_VALID_ROWS)
         discovered = list(data_file.parent.rglob("*.yaml"))
@@ -273,7 +287,7 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertTrue(any("only allowed for the reviewed" in error for error in errors), errors)
 
     def test_transmission_kind_rejected_for_unapproved_access_path(self):
-        self.write_pack(model_yaml("barrierModel", release_row(output="ReturnValue")))
+        self.write_pack(model_yaml("barrierModel", release_row(output="ReturnValue.Field[core::result::Result::Ok(0)]")))
         errors = self.errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("'transmission' model kind is only allowed", errors[0])
