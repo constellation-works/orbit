@@ -63,31 +63,6 @@ fn mirror_publishing(version: &str) -> tempfile::TempDir {
     mirror
 }
 
-fn run_git(repo: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {} failed: {output:?}",
-        args.join(" ")
-    );
-}
-
-fn init_git_repo(repo: &Path) {
-    fs::create_dir_all(repo).expect("create repository");
-    run_git(repo, &["init", "--quiet"]);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# update root test\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
 fn initialize_root(repo: &Path, home: &Path, mirror: &Path, root: &Path, suffix: &str) {
     let root = root.to_string_lossy();
     let machine_name = format!("update-{suffix}");
@@ -180,7 +155,10 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
     let root_a = temp.path().join("root-a");
     let root_b = temp.path().join("root-b");
     fs::create_dir_all(&home).expect("create home");
-    init_git_repo(&checkout_b);
+    crate::git_repo::SeededRepo::new(&checkout_b)
+        .host_default_branch()
+        .readme("# update root test\n")
+        .build();
     let mirror = mirror_publishing(env!("CARGO_PKG_VERSION"));
     initialize_root(&checkout_b, &home, mirror.path(), &root_a, "a");
     initialize_root(&checkout_b, &home, mirror.path(), &root_b, "b");
@@ -278,7 +256,10 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
     fs::create_dir_all(&home).expect("create home");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# update root test\n")
+        .build();
     let mirror = mirror_publishing(env!("CARGO_PKG_VERSION"));
     orbit(&repo, &home, mirror.path())
         .args([
@@ -335,7 +316,10 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let repo = temp.path().join("repo");
     let scratch = temp.path().join("scratch");
     fs::create_dir_all(&home).expect("create home");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# update root test\n")
+        .build();
     // Keep cwd lookup local without adding an initialized workspace authority
     // to the host-global preflight below.
     fs::create_dir_all(repo.join(".orbit")).expect("uninitialized lookup boundary");
@@ -443,7 +427,10 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let repo = temp.path().join("repo");
     let scratch = temp.path().join("scratch");
     fs::create_dir_all(&home).expect("create home");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .host_default_branch()
+        .readme("# update root test\n")
+        .build();
     let mirror = mirror_publishing("99.0.0");
     initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
 

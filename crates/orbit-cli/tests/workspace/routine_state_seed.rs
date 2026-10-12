@@ -23,7 +23,10 @@ fn workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host() {
     let root = temp.path().join("root");
     fs::create_dir_all(&home).expect("create home");
     fs::create_dir_all(&repo).expect("create repo");
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .branch("trunk")
+        .readme("# state seed test\n")
+        .build();
     let root_arg = root.to_string_lossy().into_owned();
 
     run_success(
@@ -207,32 +210,4 @@ fn run_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
             String::from_utf8_lossy(&output)
         )
     })
-}
-
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    run_git(repo, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# state seed test\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

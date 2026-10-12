@@ -40,13 +40,13 @@ impl Workspace {
         fs::create_dir_all(&home).expect("create home");
         fs::create_dir_all(repo.join("src")).expect("create repo src");
 
-        run_git(&repo, &["init"]);
-        run_git(&repo, &["config", "user.name", "Orbit Test"]);
-        run_git(&repo, &["config", "user.email", "orbit-test@example.com"]);
-        run_git(&repo, &["config", "commit.gpgsign", "false"]);
+        crate::git_repo::run(&repo, &["init"]);
+        crate::git_repo::run(&repo, &["config", "user.name", "Orbit Test"]);
+        crate::git_repo::run(&repo, &["config", "user.email", "orbit-test@example.com"]);
+        crate::git_repo::run(&repo, &["config", "commit.gpgsign", "false"]);
         fs::write(repo.join("src/lib.rs"), "pub fn run() {}\n").expect("write committed file");
-        run_git(&repo, &["add", "src/lib.rs"]);
-        run_git(&repo, &["commit", "-m", "initial"]);
+        crate::git_repo::run(&repo, &["add", "src/lib.rs"]);
+        crate::git_repo::run(&repo, &["commit", "-m", "initial"]);
 
         let workspace = Self {
             temp,
@@ -218,7 +218,7 @@ impl Workspace {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create worktree parent");
         }
-        run_git(
+        crate::git_repo::run(
             &self.repo,
             &[
                 "worktree",
@@ -574,22 +574,5 @@ fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
     assert!(
         rejected.contains("file:src/not_yet.rs") && rejected.contains("allow_missing_context"),
         "the registered checkout keeps the strict guard: {rejected}"
-    );
-}
-
-fn run_git(cwd: &Path, args: &[&str]) {
-    let output = crate::git_repo::command()
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
-        cwd.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }

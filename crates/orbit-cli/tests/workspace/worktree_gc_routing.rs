@@ -62,7 +62,9 @@ fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_
     let repo = temp.path().join("repo");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&repo).unwrap();
-    init_git_repo(&repo);
+    crate::git_repo::SeededRepo::new(&repo)
+        .readme("# worktree gc routing test\n")
+        .build();
     run_success(
         &repo,
         &home,
@@ -166,8 +168,12 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     fs::create_dir_all(&home).expect("create isolated home");
     fs::create_dir_all(&repo_a).expect("create repo a");
     fs::create_dir_all(&repo_b).expect("create repo b");
-    init_git_repo(&repo_a);
-    init_git_repo(&repo_b);
+    crate::git_repo::SeededRepo::new(&repo_a)
+        .readme("# worktree gc routing test\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&repo_b)
+        .readme("# worktree gc routing test\n")
+        .build();
 
     // Host identity lives in the default global root ($HOME/.orbit) — no
     // --root/ORBIT_ROOT override, matching the real split-root production
@@ -443,7 +449,7 @@ spec:
         .join(".orbit/state/worktrees")
         .join(format!("orbit-{run_id}"));
     let branch = format!("orbit/gc-fixture-{label}");
-    run_git(
+    crate::git_repo::run(
         &workspace.repo,
         &[
             "worktree",
@@ -455,8 +461,8 @@ spec:
         ],
     );
     fs::write(worktree.join("fixture.txt"), label).expect("write worktree fixture file");
-    run_git(&worktree, &["add", "fixture.txt"]);
-    run_git(&worktree, &["commit", "-m", "gc fixture content"]);
+    crate::git_repo::run(&worktree, &["add", "fixture.txt"]);
+    crate::git_repo::run(&worktree, &["commit", "-m", "gc fixture content"]);
 
     (worktree, task_id)
 }
@@ -590,33 +596,6 @@ fn command(cwd: &Path, home: &Path) -> assert_cmd::Command {
     command
 }
 
-fn init_git_repo(repo: &Path) {
-    crate::git_repo::init(repo);
-    run_git(repo, &["config", "user.name", "Orbit Test"]);
-    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("README.md"), "# worktree gc routing test\n").expect("write readme");
-    run_git(repo, &["add", "README.md"]);
-    run_git(repo, &["commit", "--quiet", "-m", "initial"]);
-}
-
-fn run_git(cwd: &Path, args: &[&str]) -> String {
-    let output = crate::git_repo::command()
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {} failed in {}:\nstdout:\n{}\nstderr:\n{}",
-        args.join(" "),
-        cwd.display(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
 #[test]
 fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree() {
     let temp = tempdir().unwrap();
@@ -626,8 +605,12 @@ fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree(
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&repo_a).unwrap();
     fs::create_dir_all(&repo_b).unwrap();
-    init_git_repo(&repo_a);
-    init_git_repo(&repo_b);
+    crate::git_repo::SeededRepo::new(&repo_a)
+        .readme("# worktree gc routing test\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&repo_b)
+        .readme("# worktree gc routing test\n")
+        .build();
     run_success(
         &repo_a,
         &home,
@@ -709,7 +692,7 @@ fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree(
         "uncommitted operator work\n"
     );
     assert!(tree_b.exists());
-    run_git(&tree_a, &["restore", "README.md"]);
+    crate::git_repo::run(&tree_a, &["restore", "README.md"]);
     let removed = gc(&confirmed);
     assert_eq!(removed["dry_run"], false);
     assert_eq!(removed["reports"][0]["action"], "removed");
@@ -720,7 +703,7 @@ fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree(
         fs::read_to_string(tree_b.join("fixture.txt")).unwrap(),
         "direct-b"
     );
-    assert!(!run_git(&repo_a, &["worktree", "list", "--porcelain"]).contains(run_id));
+    assert!(!crate::git_repo::run(&repo_a, &["worktree", "list", "--porcelain"]).contains(run_id));
     assert!(gc(&confirmed)["reports"].as_array().unwrap().is_empty());
     assert_eq!(
         run_json(&repo_a, &home, &["task", "show", &task_a, "--json"])["status"],
