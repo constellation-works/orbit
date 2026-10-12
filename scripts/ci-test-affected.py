@@ -259,7 +259,7 @@ def unit_milliseconds(path):
 
 FINISHED_SECONDS = re.compile(r"^\s*Finished\b.*\bin\s+([0-9]*\.?[0-9]+)s\s*$")
 COMPILING_PACKAGE = re.compile(r"^\s*Compiling (\S+) v\d")
-DOCTEST_PACKAGE = re.compile(r"^\s*Doc-tests (\S+)\s*$")
+DOCTEST_TARGET = re.compile(r"^\s*Doc-tests (\S+)\s*$")
 TEST_RESULT_SECONDS = re.compile(r"test result:.*\bfinished in ([0-9]*\.?[0-9]+)s\s*$")
 
 
@@ -276,12 +276,16 @@ def finished_milliseconds(text):
     return total if saw else None
 
 
-def mentioned_packages(text):
+def mentioned_packages(text, doctest_packages):
     names = []
     for line in text_lines(text):
-        match = COMPILING_PACKAGE.match(line) or DOCTEST_PACKAGE.match(line)
-        if match and match.group(1) not in names:
-            names.append(match.group(1))
+        match = COMPILING_PACKAGE.match(line)
+        name = match.group(1) if match else None
+        match = DOCTEST_TARGET.match(line)
+        if match:
+            name = doctest_packages.get(match.group(1))
+        if name and name not in names:
+            names.append(name)
     return names
 
 
@@ -311,14 +315,14 @@ def package_test_milliseconds(junit):
     return totals if saw else None
 
 
-def doctest_milliseconds(text):
-    """Per-package doctest time. Cargo names the package, then the result."""
+def doctest_milliseconds(text, doctest_packages):
+    """Per-package doctest time, resolving Cargo's library target labels."""
     totals = {}
     current = None
     for line in text_lines(text):
-        match = DOCTEST_PACKAGE.match(line)
+        match = DOCTEST_TARGET.match(line)
         if match:
-            current = match.group(1)
+            current = doctest_packages.get(match.group(1))
             continue
         if current is None:
             continue
@@ -337,7 +341,7 @@ def libtest_milliseconds(text):
     saw = False
     in_doctest = False
     for line in text_lines(text):
-        if DOCTEST_PACKAGE.match(line):
+        if DOCTEST_TARGET.match(line):
             in_doctest = True
             continue
         if in_doctest:
@@ -362,8 +366,19 @@ class PhaseTimings:
     those sums, which is what a later reader can check.
     """
 
-    def __init__(self, packages):
+    def __init__(self, packages, metadata):
         self.packages = list(packages)
+        # Cargo prints the library target name, which may be normalized or
+        # explicitly named. Only unique targets among selected packages can
+        # be attributed from that label alone.
+        owners = {}
+        for package in metadata["packages"]:
+            if package["name"] in self.packages:
+                for target in package["targets"]:
+                    if target["doctest"]:
+                        owners.setdefault(target["name"], set()).add(package["name"])
+        self.doctest_packages = {target: next(iter(names)) for target, names in owners.items()
+                                 if len(names) == 1}
         self.compile = None
         self.test = None
         self.unsplit_compile = 0
@@ -416,10 +431,10 @@ class PhaseTimings:
         if units is not None:
             self.add_compile_units(units)
         else:
-            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text))
+            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text, self.doctest_packages))
         if junit is not None:
             self.add_tests(package_test_milliseconds(junit))
-        self.add_tests(doctest_milliseconds(text))
+        self.add_tests(doctest_milliseconds(text, self.doctest_packages))
         if self.test is None:
             ms = libtest_milliseconds(text)
             if ms is not None:
@@ -660,7 +675,7 @@ def main():
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # One timings object across the test command and the doctest command.
     # `--timings` is a report of the build those commands already do.
-    timings = PhaseTimings(run_packages)
+    timings = PhaseTimings(run_packages, metadata)
     with tempfile.TemporaryDirectory(prefix="ci-test-affected-") as report:
         junit = Path(report) / "junit.xml"
         if nextest.returncode == 0:
