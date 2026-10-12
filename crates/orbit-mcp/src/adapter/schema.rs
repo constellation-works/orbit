@@ -5,7 +5,8 @@ use orbit_common::governance::friction::{
 };
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
-    McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam, ToolSchema,
+    McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam,
+    ToolSchema,
 };
 use rmcp::model::{JsonObject, Tool, ToolAnnotations};
 use serde_json::{Value, json};
@@ -133,7 +134,7 @@ pub(super) fn ensure_workspace_selector(
     if definition.scope != McpToolScope::WorkspaceRequired {
         return;
     }
-    let id_routed = crate::federated::is_id_routed_tool(&definition.schema.name);
+    let id_routed = definition.rules.id_route == McpIdRoute::Task;
     match advertisement {
         SelectorAdvertisement::Authoritative(binding) => {
             ensure_authoritative_selector(schema, definition, binding, id_routed);
@@ -160,11 +161,9 @@ fn ensure_authoritative_selector(
     binding: WorkspaceBinding,
     id_routed: bool,
 ) {
-    // `orbit.task.show` still opens a workspace runtime, but `id` is globally
-    // resolved by default [ORB-10961]. The generic selector text would make
-    // clients inject cwd, initialize metadata, or a linked-worktree runtime
-    // identity. The tool declares its own optional filter instead.
-    if definition.schema.name == "orbit.task.show" {
+    // The owning definition may declare an authoritative optional filter
+    // whose wording must survive session binding.
+    if definition.rules.declared_workspace_selector {
         return;
     }
     let Some(properties) = selector_properties(schema) else {
@@ -240,10 +239,13 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
     tool_name: &str,
     params: &[ToolParam],
     taxonomy: Option<&[(String, String)]>,
+    decoration: McpInputDecoration,
 ) -> JsonObject {
     let mut schema = tool_input_schema_for(tool_name, params);
-    decorate_friction_schema(&mut schema, tool_name, taxonomy);
-    if tool_name == "orbit.search" {
+    if decoration == McpInputDecoration::Friction {
+        decorate_friction_schema(&mut schema, taxonomy);
+    }
+    if decoration == McpInputDecoration::Search {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
             if let Some(query) = properties.get_mut("query").and_then(Value::as_object_mut) {
                 query.insert("minLength".to_string(), json!(1));
@@ -282,14 +284,7 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
     schema
 }
 
-fn decorate_friction_schema(
-    schema: &mut JsonObject,
-    tool_name: &str,
-    taxonomy: Option<&[(String, String)]>,
-) {
-    if !matches!(tool_name, "orbit.friction.add" | "orbit.friction.update") {
-        return;
-    }
+fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String, String)]>) {
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };

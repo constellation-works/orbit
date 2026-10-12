@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
+use crate::presentation_definition::presentation_definition;
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::normalize_self_reported_actor;
-use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use orbit_types::tool::{
+    McpInputDecoration, McpPresentationRead, McpToolDefinition, ToolSessionContext,
+};
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use rmcp::model::{
@@ -100,19 +103,17 @@ impl OrbitToolServer {
         &self,
         definition: &McpToolDefinition,
     ) -> Result<Map<String, Value>, OrbitError> {
-        let taxonomy = matches!(
-            definition.schema.name.as_str(),
-            "orbit.friction.add" | "orbit.friction.update"
-        )
-        .then(|| self.host.friction_tag_taxonomy(&self.session_context()))
-        .transpose()?
-        .flatten();
+        let taxonomy = (definition.rules.input_decoration == McpInputDecoration::Friction)
+            .then(|| self.host.friction_tag_taxonomy(&self.session_context()))
+            .transpose()?
+            .flatten();
         let mut schema = match definition.input_schema.as_ref().and_then(Value::as_object) {
             Some(declared) => super::schema::declared_input_schema(declared),
             None => super::schema::build_input_schema_with_friction_taxonomy(
                 &definition.schema.name,
                 &definition.schema.parameters,
                 taxonomy.as_deref(),
+                definition.rules.input_decoration,
             ),
         };
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
@@ -140,9 +141,12 @@ impl OrbitToolServer {
     fn without_hidden_tools(
         &self,
         mut result: ListToolsResult,
+        definitions: &[McpToolDefinition],
     ) -> Result<ListToolsResult, McpError> {
         let hidden = self.host.hidden_tool_names(&self.session_context());
-        if hidden.contains("orbit.task.show") {
+        if presentation::reader(definitions, McpPresentationRead::Task)
+            .is_some_and(|reader| hidden.contains(&reader.schema.name))
+        {
             result
                 .tools
                 .retain(|tool| !presentation::is_presentation(tool.name.as_ref()));
@@ -227,8 +231,8 @@ impl OrbitToolServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        if presentation::is_presentation(request.name.as_ref()) {
-            let result = self.dispatch_presentation(request).await;
+        if let Some(definition) = presentation_definition(request.name.as_ref()) {
+            let result = self.dispatch_presentation(request, definition.kind).await;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
                 Err(error) => tool_error_result(&error),
@@ -255,13 +259,13 @@ impl OrbitToolServer {
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(Map::new()));
 
-        if self
+        let definitions = self
             .load_tool_definitions()
-            .map_err(invalid_definitions_mcp_error)?
+            .map_err(invalid_definitions_mcp_error)?;
+        let definition = definitions
             .iter()
-            .any(|definition| {
-                definition.schema.name == canonical && host_owns_plugin_selector(definition)
-            })
+            .find(|definition| definition.schema.name == canonical);
+        if definition.is_some_and(host_owns_plugin_selector)
             && let Value::Object(arguments) = &mut input
             && let Some(selector) = arguments
                 .get("workspace")
@@ -277,25 +281,8 @@ impl OrbitToolServer {
         // The host resolves a selector into its checkout (and a federated mux
         // may translate it again). Return the exact accepted client route token,
         // never the destination's local path or a guessed workspace name.
-        let domain_extension = match canonical.as_str() {
-            "orbit.task.show" => {
-                input.get("view").is_some() || input.get("snapshot") == Some(&Value::Bool(true))
-            }
-            "orbit.task.list"
-            | "orbit.workflow.run.show"
-            | "orbit.workflow.run.list"
-            | "orbit.auto_task.list" => input.get("view").is_some(),
-            "orbit.task.add" | "orbit.task.update" => {
-                ["request_id", "expected_revision", "verdict", "complete"]
-                    .iter()
-                    .any(|key| input.get(*key).is_some())
-            }
-            "orbit.auto_task.update" => input.get("expected_enabled").is_some(),
-            "orbit.auto_task.mint" => input.get("acknowledge_unconditional").is_some(),
-            "orbit.pipeline.invoke" => input.get("default_input") == Some(&Value::Bool(true)),
-            "orbit.workflow.auto" | "orbit.routine.control" => true,
-            _ => false,
-        };
+        let domain_extension =
+            definition.is_some_and(|definition| definition.rules.workspace_echo.applies(&input));
         let desktop_selector = domain_extension
             .then(|| {
                 input
@@ -345,20 +332,19 @@ impl OrbitToolServer {
     async fn dispatch_presentation(
         &self,
         request: CallToolRequestParams,
+        kind: crate::presentation_definition::PresentationKind,
     ) -> Result<Value, OrbitError> {
         let definitions = self.load_tool_definitions()?;
-        if !presentation::available(&definitions)
-            || self
-                .host
-                .hidden_tool_names(&self.session_context())
-                .contains("orbit.task.show")
-        {
+        let hidden = self.host.hidden_tool_names(&self.session_context());
+        let task_reader = presentation::reader(&definitions, McpPresentationRead::Task)
+            .filter(|reader| !hidden.contains(&reader.schema.name));
+        let Some(task_reader) = task_reader else {
             return Err(OrbitError::InvalidInput(
                 "read-only task presentation unavailable on this host".into(),
             ));
-        }
+        };
         let input = Value::Object(request.arguments.unwrap_or_default());
-        let Some(selection) = presentation::selection(request.name.as_ref(), &input)? else {
+        let Some(selection) = presentation::selection(kind, &input)? else {
             return Ok(presentation::empty_panel());
         };
         let presentation::Selection {
@@ -377,28 +363,31 @@ impl OrbitToolServer {
         // The explicit filter reaches the same host operation, audit and policy
         // checks as an ordinary data call. Client metadata never enters context.
         let run_selection = kind == "run";
-        let hidden = self.host.hidden_tool_names(&self.session_context());
-        let bounded_run = run_selection
-            && !hidden.contains("orbit.workflow.run.show")
-            && definitions.iter().any(|definition| {
-                definition.schema.name == "orbit.workflow.run.show"
-                    && definition
-                        .schema
-                        .parameters
-                        .iter()
-                        .any(|parameter| parameter.name == "view")
+        let run_reader = presentation::reader(&definitions, McpPresentationRead::Run)
+            .filter(|reader| !hidden.contains(&reader.schema.name))
+            .filter(|reader| {
+                reader
+                    .schema
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.name == "view")
             });
-        if run_selection && !bounded_run {
-            return Err(OrbitError::InvalidInput(
-                "run presentation unavailable on this host".into(),
-            ));
+        let read_name = if run_selection {
+            run_reader.ok_or_else(|| {
+                OrbitError::InvalidInput("run presentation unavailable on this host".into())
+            })?
+        } else {
+            task_reader
         }
+        .schema
+        .name
+        .clone();
         let task = tokio::task::spawn_blocking(move || {
-            if bounded_run {
-                return host.call_tool("orbit.workflow.run.show", serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25}), context);
+            if run_selection {
+                return host.call_tool(&read_name, serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25}), context);
             }
             host.call_tool(
-                "orbit.task.show",
+                &read_name,
                 serde_json::json!({
                     "workspace": selector, "id": task_key, "fields": presentation::TASK_FIELDS
                 }),
@@ -572,7 +561,7 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(cache) = surface.lists.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
-            return self.without_hidden_tools((**cached).clone());
+            return self.without_hidden_tools((**cached).clone(), &surface.definitions);
         }
 
         // Build and validate the map on the same first pass as the list. This
@@ -619,7 +608,7 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(mut cache) = surface.lists.lock() {
             cache.insert(cache_key, Arc::new(result.clone()));
         }
-        self.without_hidden_tools(result)
+        self.without_hidden_tools(result, &surface.definitions)
     }
 
     async fn list_resources(

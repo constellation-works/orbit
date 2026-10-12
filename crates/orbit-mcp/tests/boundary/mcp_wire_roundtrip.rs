@@ -216,6 +216,15 @@ fn definition(name: &str) -> McpToolDefinition {
         },
         McpToolScope::WorkspaceRequired,
     )
+    // Fake hosts must carry the same internal rules as the real owning registry.
+    .with_rules(
+        orbit_tools::canonical_builtin_mcp_tool_definitions()
+            .unwrap()
+            .into_iter()
+            .find(|definition| definition.schema.name == name)
+            .map(|definition| definition.rules)
+            .unwrap_or_default(),
+    )
     .with_annotations((name == "demo.inspect").then_some(McpToolAnnotations::READ_ONLY))
 }
 
@@ -962,7 +971,10 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
         .unwrap();
     assert_eq!(mismatch.is_error, Some(true));
     client.cancel().await.unwrap();
-    server_task.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), server_task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 struct CanonicalContractHost;
@@ -1093,4 +1105,135 @@ async fn a_lock_wait_timeout_is_a_retryable_lock_busy_on_the_wire() {
 
     client.cancel().await.expect("cancel");
     server_task.await.expect("server");
+}
+
+/// A host declares transport behavior on a name the adapter has never seen.
+struct MetadataHost {
+    calls: Mutex<Vec<String>>,
+}
+
+impl McpHost for MetadataHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        use orbit_types::tool::{
+            McpInputCondition, McpPresentationRead, McpToolRules, McpWorkspaceEcho,
+        };
+        let mut reader = definition("custom.record");
+        reader.scope = McpToolScope::Global;
+        reader.annotations = Some(McpToolAnnotations::READ_ONLY);
+        reader.rules = McpToolRules {
+            workspace_echo: McpWorkspaceEcho::WhenAny(vec![
+                McpInputCondition::Present("view".into()),
+                McpInputCondition::True("flag".into()),
+            ]),
+            presentation_read: Some(McpPresentationRead::Task),
+            ..Default::default()
+        };
+        Ok(vec![reader])
+    }
+
+    fn call_tool(&self, name: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        self.calls.lock().unwrap().push(name.into());
+        Ok(json!({
+            "id": "TST-1", "title": "Metadata reader", "updated_at": "2026-10-11T00:00:00Z",
+            "workspace": "/host/checkout", "catalog": {}, "runs": {}
+        }))
+    }
+}
+
+#[tokio::test]
+async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_names() {
+    let host = Arc::new(MetadataHost {
+        calls: Mutex::new(Vec::new()),
+    });
+    let server = OrbitToolServer::new_with_context(
+        host.clone(),
+        ToolSessionContext {
+            workspace: Some("session-default".into()),
+            ..ToolSessionContext::trusted_local(None, None, None)
+        },
+    );
+    let (client_io, server_io) = duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(server_io)
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
+    });
+    let client = ClientInfo::default().serve(client_io).await.unwrap();
+    let listed = client.peer().list_all_tools().await.unwrap();
+    assert!(listed.iter().any(|tool| tool.name == "orbit_ui_inspect"));
+    for tool in &listed {
+        assert!(serde_json::to_value(tool).unwrap().get("rules").is_none());
+    }
+    for arguments in [
+        json!({}),
+        json!({"flag": false}),
+        json!({"flag": null}),
+        json!({"flag": "true"}),
+    ] {
+        let result = client
+            .peer()
+            .call_tool(call("custom_record", arguments))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(
+            result.structured_content.unwrap()["workspace"],
+            "/host/checkout"
+        );
+    }
+    for arguments in [
+        json!({"view": null}),
+        json!({"flag": true}),
+        json!({"view": false, "workspace": " "}),
+    ] {
+        let result = client
+            .peer()
+            .call_tool(call("custom_record", arguments))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+    assert_eq!(
+        host.calls.lock().unwrap().len(),
+        4,
+        "refused calls must not reach the host"
+    );
+    let result = client
+        .peer()
+        .call_tool(call(
+            "custom_record",
+            json!({"flag": true, "workspace": "opaque-token"}),
+        ))
+        .await
+        .unwrap();
+    let value = result.structured_content.unwrap();
+    assert_eq!(value["workspace"], "opaque-token");
+    assert_eq!(value["catalog"]["workspace"], "opaque-token");
+    assert_eq!(value["runs"]["workspace"], "opaque-token");
+    let result = client
+        .peer()
+        .call_tool(call(
+            "orbit_ui_inspect",
+            json!({"workspace": "opaque-token", "id": "TST-1"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(false));
+    assert_eq!(result.structured_content.unwrap()["task"]["id"], "TST-1");
+    assert!(
+        host.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|name| name == "custom.record")
+    );
+    client.cancel().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), server_task)
+        .await
+        .unwrap()
+        .unwrap();
 }

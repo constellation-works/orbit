@@ -242,11 +242,14 @@ impl FromStr for McpCapability {
     }
 }
 
-/// A schema paired with the only routing fact MCP needs for exposure.
+/// A schema paired with host-declared MCP exposure and transport behavior.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpToolDefinition {
     pub schema: ToolSchema,
     pub scope: McpToolScope,
+    /// Internal behavior consumed by the adapter, not MCP client annotations.
+    #[serde(default)]
+    pub rules: super::McpToolRules,
     /// The tool's own JSON Schema for its input, when it declares one — a
     /// plugin tool's manifest `input_schema`. MCP advertises it as written
     /// instead of the schema derived from the flat `schema.parameters`, which
@@ -324,6 +327,7 @@ impl McpToolDefinition {
         Self {
             schema,
             scope,
+            rules: super::McpToolRules::default(),
             input_schema: None,
             annotations: None,
         }
@@ -331,6 +335,12 @@ impl McpToolDefinition {
 
     pub fn with_annotations(mut self, annotations: Option<McpToolAnnotations>) -> Self {
         self.annotations = annotations;
+        self
+    }
+
+    /// Attach the owning tool's internal transport rules.
+    pub fn with_rules(mut self, rules: super::McpToolRules) -> Self {
+        self.rules = rules;
         self
     }
 
