@@ -516,10 +516,13 @@ pub fn read_file_lock_holder(lock_path: &Path) -> Option<FileLockHolderInfo> {
 /// OS released its lock with the process — so it is skipped and removed.
 /// Torn and unreadable records are skipped, like the exclusive record.
 fn read_shared_file_lock_holders(lock_path: &Path) -> Vec<FileLockHolderInfo> {
-    let (Some(parent), Some(prefix)) = (lock_path.parent(), shared_holder_prefix(lock_path)) else {
+    let (Some(parent), Some(prefix)) = (
+        validated_lock_holder_parent(lock_path),
+        shared_holder_prefix(lock_path),
+    ) else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(parent) else {
+    let Ok(entries) = std::fs::read_dir(&parent) else {
         return Vec::new();
     };
     let mut holders = Vec::new();
@@ -575,11 +578,14 @@ fn shared_holder_prefix(lock_path: &Path) -> Option<String> {
 
 /// Record this shared holder beside the lock. Best effort, like the
 /// exclusive record: the OS lock is authoritative, and a store that refuses
-/// the record still serves the read.
+/// the record still serves the read. The record goes in the canonical lock
+/// directory that readers scan, so an aliased lock path is read where it was
+/// written.
 fn write_shared_holder_record(lock_path: &Path, label: &str) -> Option<PathBuf> {
     let prefix = shared_holder_prefix(lock_path)?;
     let sequence = SHARED_HOLDER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = lock_path.with_file_name(format!("{prefix}{}-{sequence}", std::process::id()));
+    let path = validated_lock_holder_parent(lock_path)?
+        .join(format!("{prefix}{}-{sequence}", std::process::id()));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     let file = open_private_file(&path, &mut options).ok()?;
@@ -622,13 +628,13 @@ fn read_file_lock_holder_with_hook(
 ///
 /// `lock_path` reaches this crate as a caller-selected value (a task lock, a
 /// store lock) with no upstream containment check. Canonicalizing only the
-/// parent — not the final component — keeps the read confined to the
-/// resolved parent directory while still accepting a trusted parent alias
-/// (for example a checkout projection symlink) [ORB-11953]. Deciding whether
-/// the final component itself is safe to read is [`open_lock_holder_file`]'s
-/// job, not this function's: resolving that here and handing back a path
-/// left a window between this check and the caller's open where the final
-/// component could be swapped for a symlink [ORB-12029].
+/// parent — not the final component — keeps the reads and record writes
+/// confined to the resolved parent directory while still accepting a trusted
+/// parent alias (for example a checkout projection symlink) [ORB-11953].
+/// Deciding whether the final component itself is safe to read is
+/// [`open_lock_holder_file`]'s job, not this function's: resolving that here
+/// and handing back a path left a window between this check and the caller's
+/// open where the final component could be swapped for a symlink [ORB-12029].
 fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
     lock_path.parent()?.canonicalize().ok()
 }
