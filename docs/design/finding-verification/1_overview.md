@@ -20,9 +20,10 @@ Review jobs file what they believe are defects as `bug` tasks. A review can be
 wrong: the code may not behave as claimed, the defect may already be fixed, or
 the path may be unreachable. `finding_verification_pipeline` has a read-only
 verifier crew judge each such finding against the code at one pinned revision.
-It records a CONFIRMED or REJECTED verdict with `path:line` evidence. Until a
+It records a CONFIRMED or REJECTED verdict with `path:line` evidence. When a
+workspace opts in with `[review] verify_findings = true` (default off), until a
 finding is CONFIRMED for its current material, approval, promotion to backlog
-and drain admission refuse it and name the job. Editing its title, description,
+and drain admission refuse it and name the job [ORB-15760]. Editing its title, description,
 criteria, tags, type or evidence selectors requires verification again;
 comment-only edits retain confirmation. Legacy records without a finding
 fingerprint cannot unlock admission. A REJECTED verdict moves the task to

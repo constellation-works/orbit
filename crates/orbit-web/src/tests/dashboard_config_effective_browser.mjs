@@ -9,7 +9,9 @@
 // the restates-global filter, the inspector chain for an overridden key and
 // for a not-inherited one, a save to the chosen file with its CLI preview,
 // a refused save, removing a workspace override, crews by provider, paths,
-// and a 375px phone with no horizontal page scroll. No Orbit store is contacted.
+// the Review findings switch persisting `review.verify_findings` across a
+// reload, and a 375px phone with no horizontal page scroll. No Orbit store is
+// contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -37,6 +39,7 @@ const SECTIONS = [
   { token: 'machine', title: 'Machine (machine.*)', blurb: 'This machine\'s identity.', key_prefix: 'machine' },
   { token: 'delivery', title: 'Delivery (workflow.*)', blurb: 'How work is claimed and shipped.', key_prefix: 'workflow' },
   { token: 'execution', title: 'Execution (execution.*)', blurb: 'How agents run.', key_prefix: 'execution', not_inherited: true },
+  { token: 'review', title: 'Review (review.*)', blurb: 'Review before landing.', key_prefix: 'review' },
 ];
 const KEYS = [
   { key: 'machine.id', section: 'machine', type: 'string', readOnly: 'a machine identity is generated once by `orbit init` and never reused', globalOnly: true, description: 'Generated machine identity.' },
@@ -51,6 +54,7 @@ const KEYS = [
   { key: 'execution.codex.sandbox', section: 'execution', type: 'string', options: ['read-only', 'workspace-write', 'danger-full-access'], builtIn: 'workspace-write', replaceOnly: true, description: 'Codex sandbox mode.' },
   { key: 'execution.env.pass', section: 'execution', type: 'array<string>', builtIn: [], replaceOnly: true, description: 'Environment variables passed to agents.' },
   { key: 'execution.codex.approval_policy', section: 'execution', type: 'string', options: ['never', 'on-request'], builtIn: 'never', replaceOnly: true, description: 'When Codex asks before acting.' },
+  { key: 'review.verify_findings', section: 'review', type: 'bool', builtIn: false, description: 'Review findings must be verified before approval.' },
 ];
 const files = {
   global: {
@@ -266,7 +270,7 @@ try {
   const strip = await layers();
   evidenceLog.layers = strip;
   assert(strip.map((card) => card.layer).join() === 'built-in,global,workspace,registry', `four layer cards: ${JSON.stringify(strip)}`);
-  assert(strip[0].number === '3' && strip[0].count.includes('keys at default'), `three keys sit at their built-in default: ${JSON.stringify(strip[0])}`);
+  assert(strip[0].number === '4' && strip[0].count.includes('keys at default'), `four keys sit at their built-in default: ${JSON.stringify(strip[0])}`);
   assert(strip[1].number === '3' && strip[1].count.includes('8 in file') && strip[1].pressed === 'false', `global wins 3 of its 8 keys: ${JSON.stringify(strip[1])}`);
   assert(strip[2].number === '5' && strip[2].count.includes('all 5 in file'), `workspace wins all 5 of its keys: ${JSON.stringify(strip[2])}`);
   const registry = await page.locator('#config-body .cfx-layer.registry').textContent();
@@ -402,8 +406,42 @@ try {
   const localRoot = await page.locator('#config-body .cfx-path', { hasText: 'local root' }).locator('dd').textContent();
   assert(localRoot === 'same as workspace root', `local root equal to the workspace root says so: ${localRoot}`);
 
+  // 8. The Review findings switch reads review.verify_findings (off at its
+  //    built-in default), writes the workspace file through the key route,
+  //    and shows the persisted value after a reload.
+  const verify = () => page.locator('#config-body .cfx-verify').evaluate((node) => ({
+    checked: node.querySelector('#cfx-verify-findings').checked,
+    role: node.querySelector('#cfx-verify-findings').getAttribute('role'),
+    label: node.querySelector('.cfx-switch').textContent,
+    note: node.querySelector('.cfx-section-note').textContent,
+    hints: [...node.querySelectorAll('p.cfx-hint')].map((hint) => hint.textContent),
+    cli: node.querySelector('.cfx-cli').textContent,
+    notice: node.querySelector('.cfx-notice')?.textContent || null,
+  }));
+  const before = await verify();
+  evidenceLog.verifyBefore = before;
+  assert(!before.checked && before.role === 'switch' && before.label === 'Review findings must be verified before approval', `the switch starts off and names its effect: ${JSON.stringify(before)}`);
+  assert(before.note === 'review.verify_findings = false (built-in)' && before.hints[0].startsWith('Off:'), `the card states the value and its source: ${JSON.stringify(before)}`);
+  assert(before.cli === 'orbit config set review.verify_findings true', `the CLI equivalent turns it on: ${before.cli}`);
+  await page.locator('#cfx-verify-findings').click();
+  await until('the switch to persist on', async () => (await verify()).note === 'review.verify_findings = true (workspace)');
+  const switchedOn = await verify();
+  evidenceLog.verifyOn = { write: writes.at(-1), card: switchedOn };
+  assert(JSON.stringify(writes.at(-1)) === JSON.stringify({ method: 'PUT', key: 'review.verify_findings', value: true, scope: 'workspace' }), `the switch writes the workspace file: ${JSON.stringify(writes.at(-1))}`);
+  assert(files.workspace['review.verify_findings'] === true, 'the workspace config now carries the setting');
+  assert(switchedOn.checked && switchedOn.hints[0].startsWith('On:') && switchedOn.notice === 'Saved review.verify_findings = true to the workspace file.', `the card confirms the save: ${JSON.stringify(switchedOn)}`);
+  await page.reload();
+  await page.locator('#config-body .cfx-verify').waitFor({ state: 'visible' });
+  const reloaded = await verify();
+  evidenceLog.verifyReloaded = reloaded;
+  assert(reloaded.checked && reloaded.note === 'review.verify_findings = true (workspace)', `the persisted value survives a reload: ${JSON.stringify(reloaded)}`);
+  await page.locator('#cfx-verify-findings').click();
+  await until('the switch to persist off', async () => (await verify()).note === 'review.verify_findings = false (workspace)');
+  assert(JSON.stringify(writes.at(-1)) === JSON.stringify({ method: 'PUT', key: 'review.verify_findings', value: false, scope: 'workspace' }) && files.workspace['review.verify_findings'] === false, `switching off writes false: ${JSON.stringify(writes.at(-1))}`);
+  assert(!(await verify()).checked, 'the switch reads off again');
+
   // Primary controls are 44px targets.
-  const small = await page.locator('#config-body .cfx-row, #config-body .cfx-seg, #config-body .cfx-layer, #config-body .cfx-btn, #config-body .cfx-radio, #config-body .cfx-input')
+  const small = await page.locator('#config-body .cfx-row, #config-body .cfx-seg, #config-body .cfx-layer, #config-body .cfx-btn, #config-body .cfx-radio, #config-body .cfx-input, #config-body .cfx-switch')
     .evaluateAll((nodes) => nodes.filter((node) => node.getBoundingClientRect().height < 44).map((node) => node.className));
   assert(small.length === 0, `every primary control is at least 44px tall: ${JSON.stringify(small)}`);
   // Keyboard focus is visible on a row.
@@ -414,7 +452,7 @@ try {
   assert(outline !== 'none', `a focused row shows an outline: ${outline}`);
   await page.screenshot({ path: path.join(evidence, 'config-effective-1440.png'), fullPage: true });
 
-  // 8. Narrow viewports: the inspector stacks under the table and nothing
+  // 9. Narrow viewports: the inspector stacks under the table and nothing
   //    scrolls sideways.
   for (const width of [768, 375]) {
     await page.setViewportSize({ width, height: 900 });
@@ -425,7 +463,7 @@ try {
       const table = document.querySelector('#config-body .cfx-keys').getBoundingClientRect();
       const panel = document.querySelector('#config-body .cfx-inspector');
       const body = document.getElementById('config-body').getBoundingClientRect();
-      const clipped = [...document.querySelectorAll('#config-body .cfx-row, #config-body .cfx-layer, #config-body .cfx-inspector, #config-body .cfx-provider, #config-body .cfx-step')]
+      const clipped = [...document.querySelectorAll('#config-body .cfx-row, #config-body .cfx-layer, #config-body .cfx-inspector, #config-body .cfx-provider, #config-body .cfx-step, #config-body .cfx-verify')]
         .filter((node) => node.getBoundingClientRect().right > body.right + 1).length;
       return { below: panel.getBoundingClientRect().top >= table.bottom - 1, position: getComputedStyle(panel).position, clipped };
     });
@@ -449,13 +487,14 @@ try {
       'browser-config-effective-remove-workspace-override',
       'browser-config-effective-crews-by-provider',
       'browser-config-effective-paths-local-root',
+      'browser-config-effective-finding-verification-switch',
       'browser-config-effective-44px-targets-and-focus',
       'browser-config-effective-phone-no-horizontal-scroll',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard Settings › Effective browser checks passed at 1440px, 768px and 375px: layer counts, restates filter, inspector chains, save, remove override, crews and paths.');
+  console.log('Dashboard Settings › Effective browser checks passed at 1440px, 768px and 375px: layer counts, restates filter, inspector chains, save, remove override, crews, paths and the Review findings switch.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'config-effective-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   await page?.screenshot({ path: path.join(evidence, 'config-effective-failure.png'), fullPage: true }).catch(() => {});

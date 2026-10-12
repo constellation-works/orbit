@@ -83,6 +83,10 @@ pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 /// [`OperationLayer`].
 const REVIEW_BASELINE_COMMANDS_KEY: &str = "review.baseline_commands";
 
+/// The opt-in review-finding verification gate [ORB-15760]. Not review
+/// policy either: [`crate::ConfigSnapshot`] reads it.
+const REVIEW_VERIFY_FINDINGS_KEY: &str = "review.verify_findings";
+
 /// Checks a claimed leaf's host owes for the paths it changed.
 pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 
@@ -93,6 +97,7 @@ const REVIEW_KEYS: &[&str] = &[
     REVIEW_BEFORE_LANDING_HOSTS_KEY,
     REVIEW_MINUTES_KEY,
     REVIEW_BASELINE_COMMANDS_KEY,
+    REVIEW_VERIFY_FINDINGS_KEY,
     REVIEW_HOST_EVIDENCE_KEY,
 ];
 

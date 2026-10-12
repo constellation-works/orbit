@@ -1,10 +1,12 @@
 //! Verification of review-filed defect findings before they are promoted.
 //!
 //! A review job files what it believes is a defect as a `bug` task tagged with
-//! the review that found it. Until `finding_verification_pipeline` records a
-//! CONFIRMED verdict for it, the task may not be promoted to `backlog` nor
-//! admitted by a drain; a REJECTED verdict moves it to `rejected` with its
-//! evidence. The trusted record is the `finding_verified` history entry the
+//! the review that found it. When the workspace sets `[review]
+//! verify_findings = true`, the task may not be approved, promoted to
+//! `backlog` nor admitted by a drain until `finding_verification_pipeline`
+//! records a CONFIRMED verdict for it; with the setting off (the default)
+//! verification state does not gate it. Either way, a REJECTED verdict moves
+//! it to `rejected` with its evidence. The trusted record is the `finding_verified` history entry the
 //! verification actor writes; its comment is the human-readable copy that
 //! `orbit task show` prints. The design is
 //! `docs/design/finding-verification/2_design.md`.
@@ -408,7 +410,7 @@ impl UnverifiedFindingHold {
             _ => "",
         };
         format!(
-            "Unverified review finding: a review-filed bug is promoted or admitted only after `{FINDING_VERIFICATION_JOB}` records a CONFIRMED verdict for it.{latest} Run `orbit run job {FINDING_VERIFICATION_JOB} --input 'task_ids=[\"{}\"]'`, or enable the seeded `finding_verification.yaml` routine to verify it automatically. To accept the finding without verification, change its type from `bug` or remove its review tag.",
+            "Unverified review finding: a review-filed bug is promoted or admitted only after `{FINDING_VERIFICATION_JOB}` records a CONFIRMED verdict for it.{latest} Run `orbit run job {FINDING_VERIFICATION_JOB} --input 'task_ids=[\"{}\"]'`, or enable the seeded `finding_verification.yaml` routine to verify it automatically. To accept the finding without verification, change its type from `bug` or remove its review tag; to stop gating review findings in this workspace, run `orbit config set review.verify_findings false`.",
             self.task_id
         )
     }
@@ -531,20 +533,42 @@ impl OrbitRuntime {
         })
     }
 
+    /// Whether this workspace gates review findings on verification
+    /// (`[review] verify_findings`, default off). Read from the config files
+    /// on each check rather than from the settings this runtime opened with,
+    /// so a dashboard toggle or `orbit config set` applies to a running drain,
+    /// clock or dashboard without a restart.
+    pub(crate) fn verifies_review_findings(&self) -> Result<bool, OrbitError> {
+        let roots = orbit_config::ConfigRoots::new(self.global_root(), self.shared_root());
+        Ok(orbit_config::ResolvedConfig::load(&roots)?
+            .snapshot
+            .review_verify_findings)
+    }
+
     /// The hold that keeps `task` from promotion and from admission while it
-    /// is a review finding without a CONFIRMED verdict. History is read only
-    /// for a review finding in a verifiable status.
+    /// is a review finding without a CONFIRMED verdict and the workspace
+    /// opted into [`Self::verifies_review_findings`]. Config and history are
+    /// read only for a review finding in a verifiable status.
     pub(crate) fn unverified_finding_hold(
         &self,
         task: &Task,
     ) -> Result<Option<UnverifiedFindingHold>, OrbitError> {
-        if !is_review_finding(task) || !VERIFIABLE_STATUSES.contains(&task.status) {
+        self.unverified_finding_hold_in(task, &|| self.get_task_history(&task.id))
+    }
+
+    /// [`Self::unverified_finding_hold`] reading history through `history`.
+    pub(crate) fn unverified_finding_hold_in(
+        &self,
+        task: &Task,
+        history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+    ) -> Result<Option<UnverifiedFindingHold>, OrbitError> {
+        if !is_review_finding(task)
+            || !VERIFIABLE_STATUSES.contains(&task.status)
+            || !self.verifies_review_findings()?
+        {
             return Ok(None);
         }
-        Ok(UnverifiedFindingHold::of(
-            task,
-            &self.get_task_history(&task.id)?,
-        ))
+        Ok(UnverifiedFindingHold::of(task, &history()?))
     }
 
     /// Refuse to promote `task` while [`Self::unverified_finding_hold`] holds it.

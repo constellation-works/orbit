@@ -372,6 +372,17 @@ button.cfx-layer:hover { border-color: var(--border-strong); background: var(--b
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 
+/* Review finding verification switch. */
+.cfx-verify { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+.cfx-switch {
+  display: flex; align-items: center; gap: 10px; width: fit-content; min-height: 44px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-sunk); cursor: pointer;
+}
+.cfx-switch:has(input:checked) { border-color: var(--accent-line); background: var(--accent-wash); }
+.cfx-switch.disabled { color: var(--fg-mute); cursor: not-allowed; }
+.cfx-switch input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.cfx-verify .cfx-hint { margin: 0; }
+
 /* Key table and inspector. */
 .cfx-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 14px; align-items: start; }
 .cfx-keys { overflow: hidden; }
@@ -560,7 +571,7 @@ textarea.cfx-input { min-height: 88px; padding: 10px 12px; resize: vertical; lin
   .cfx-callouts, .cfx-providers, .cfx-paths { grid-template-columns: minmax(0, 1fr); }
   .cfx-path { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .cfx-desc { white-space: normal; }
-  .cfx-inspector, .cfx-review, .cfx-paths-panel { padding: 12px; }
+  .cfx-inspector, .cfx-review, .cfx-verify, .cfx-paths-panel { padding: 12px; }
   .cfx-actions .cfx-btn { flex: 1 1 auto; }
 }
 

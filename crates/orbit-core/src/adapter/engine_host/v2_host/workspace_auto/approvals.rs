@@ -22,7 +22,8 @@
 //! archives one Orbit automation filed once its cited commits are proven on
 //! the base branch; the read-only readiness view only reports it.
 //!
-//! A review-filed bug without a CONFIRMED verification verdict is held as
+//! While the workspace sets `[review] verify_findings`, a review-filed bug
+//! without a CONFIRMED verification verdict is held as
 //! `unverified_review_finding` before it costs a pilot: approval would refuse
 //! it anyway, and the detail names the verification job.
 

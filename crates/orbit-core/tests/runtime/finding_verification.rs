@@ -36,16 +36,8 @@ struct Fixture {
     repo: PathBuf,
 }
 
-impl Fixture {
-    fn new() -> Self {
-        let root = TempDir::new().unwrap();
-        let global = root.path().join("home/.orbit");
-        let repo = root.path().join("repo");
-        std::fs::create_dir_all(&global).unwrap();
-        std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-        std::fs::write(
-            repo.join(".orbit/config.toml"),
-            r#"
+/// The fixture's `config.toml` before its `[review]` table.
+const FIXTURE_CONFIG: &str = r#"
 [workflow]
 default_crew = "medium_codex"
 low_complexity_crews = ["low_lane"]
@@ -63,7 +55,25 @@ model = "fixture-medium-claude"
 [crews.hard_lane]
 provider = "claude"
 model = "fixture-hard"
-"#,
+"#;
+
+impl Fixture {
+    /// A workspace that opted into the verification gate.
+    fn new() -> Self {
+        Self::with_review("[review]\nverify_findings = true\n")
+    }
+
+    /// A workspace whose config ends with `review`, a `[review]` table or
+    /// nothing.
+    fn with_review(review: &str) -> Self {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+        std::fs::write(
+            repo.join(".orbit/config.toml"),
+            format!("{FIXTURE_CONFIG}{review}"),
         )
         .unwrap();
         for args in [
@@ -585,6 +595,107 @@ fn promotion_and_backlog_admission_refuse_an_unverified_review_finding() {
         .runtime
         .approve_task(&finding.id, None, None)
         .expect("a confirmed finding is approved");
+}
+
+/// `[review] verify_findings` is off unless set: approval, promotion,
+/// backlog admission and readiness ignore verification state, while the
+/// state trigger still offers findings to a verification routine. The
+/// setting is read when the gate is checked, so turning it on applies to
+/// this already-open runtime.
+#[test]
+fn without_the_setting_a_review_finding_is_approved_promoted_and_admitted() {
+    if !isolated(
+        "finding_verification::without_the_setting_a_review_finding_is_approved_promoted_and_admitted",
+    ) {
+        return;
+    }
+    for review in ["", "[review]\nverify_findings = false\n"] {
+        let fixture = Fixture::with_review(review);
+        let approved = fixture.finding("Approved unverified", TaskComplexity::Medium);
+        fixture
+            .runtime
+            .approve_task(&approved.id, None, None)
+            .unwrap_or_else(|error| panic!("approval ignores verification ({review:?}): {error}"));
+        assert_eq!(fixture.status(&approved), TaskStatus::Backlog);
+
+        let promoted = fixture.finding("Promoted unverified", TaskComplexity::Medium);
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &promoted.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("promotion ignores verification ({review:?}): {error}"));
+        assert_eq!(fixture.status(&promoted), TaskStatus::Backlog);
+
+        let filed = fixture.task(
+            "Filed to backlog unverified",
+            TaskComplexity::Medium,
+            TaskType::Bug,
+            &["qa-sweep"],
+            Some(TaskStatus::Backlog),
+        );
+        let backlog = fixture.action("list_backlog_tasks", json!({}));
+        assert!(
+            !backlog["excluded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["reason"] == "unverified_review_finding"),
+            "admission ignores verification ({review:?}): {backlog}"
+        );
+        let readiness = fixture
+            .runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        let reasons = readiness["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["task_id"] == filed.id.as_str())
+            .map(|entry| entry["reason"].clone())
+            .collect::<Vec<_>>();
+        assert!(
+            !reasons.is_empty(),
+            "the finding is in readiness: {readiness}"
+        );
+        assert!(
+            !reasons.contains(&json!("unverified_review_finding")),
+            "readiness reports no unverified finding ({review:?}): {readiness}"
+        );
+
+        // The routine and the pipeline stay available with the gate off.
+        let pending =
+            evaluate_routine(&fixture.runtime, &verification_routine(), false, Utc::now()).unwrap();
+        let members = pending.state.unwrap().members.unwrap();
+        assert!(members.pending.contains_key(&filed.id), "{members:?}");
+
+        // Opting in applies to the open runtime at its next check.
+        std::fs::write(
+            fixture.repo.join(".orbit/config.toml"),
+            format!("{FIXTURE_CONFIG}[review]\nverify_findings = true\n"),
+        )
+        .unwrap();
+        let held = fixture.finding("Held after opt-in", TaskComplexity::Medium);
+        let refusal = fixture
+            .runtime
+            .approve_task(&held.id, None, None)
+            .expect_err("the opted-in gate refuses an unverified finding")
+            .to_string();
+        assert!(refusal.contains(JOB), "{refusal}");
+        let backlog = fixture.action("list_backlog_tasks", json!({}));
+        assert!(
+            backlog["excluded"].as_array().unwrap().iter().any(|entry| {
+                entry["id"] == filed.id.as_str() && entry["reason"] == "unverified_review_finding"
+            }),
+            "{backlog}"
+        );
+    }
 }
 
 fn verification_routine() -> RoutineDefinition {

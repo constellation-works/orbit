@@ -300,6 +300,12 @@ define_config_settings! {
         section: ConfigSection::Review, order: 20,
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
+    review_verify_findings: bool => bool {
+        key: "review.verify_findings", value_type: "bool",
+        description: "Review findings must be verified before approval: a review-filed bug (tagged code-review, delivery-code-review, security-review or qa-sweep) is refused at approval, promotion and drain admission until `finding_verification_pipeline` records a CONFIRMED verdict for it. Off by default, when verification state is ignored. Read when the gate is checked, so a change applies to running drains and the dashboard. Turning it on does not enable the seeded `finding_verification` routine.",
+        section: ConfigSection::Review, order: 40,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     retention_audit_days: u32 => u32 {
         key: "retention.audit_days", value_type: "integer",
         description: "Days `orbit gc audit` keeps command and run audit rows; older rows, and the audit blobs no remaining row or pending write names, are reclaimable (1..=36500; default 60).",
