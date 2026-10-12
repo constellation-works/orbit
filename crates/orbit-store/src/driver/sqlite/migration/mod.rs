@@ -21,7 +21,6 @@ mod resource_minutes;
 mod routine;
 mod task_commit_journal;
 mod task_reservations;
-mod tools;
 
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
 use audit_events::{

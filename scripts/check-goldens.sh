@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Verify (or, with --update, regenerate) checked-in orbit-cli help and
-# description, CI log, and sandbox profile goldens without running the
-# workspace test suite.
+# Verify (or, with --update, regenerate) checked-in CLI/MCP, CI log, sandbox
+# profile, and store-ledger schema goldens without running the full workspace
+# test suite.
 #
 # Covers:
 #   - sanitized CI signature and GitHub log fixture goldens
@@ -14,8 +14,10 @@ set -euo pipefail
 #   - crates/orbit-exec/tests/sandbox_profile_goldens/ (compiled SBPL on every
 #     platform, Bubblewrap/Landlock on Linux)
 #   - crates/orbit-core/tests/sandbox_profile_goldens/ (resolved Linux sandbox)
+#   - store-ledger sqlite_schema prefixes under orbit-store migration/tests/
 #
 # Regeneration env vars (also printed by the failing tests):
+#   ORBIT_UPDATE_STORE_SCHEMA_GOLDENS=1
 #   ORBIT_UPDATE_LOG_GOLDENS=1
 #   ORBIT_UPDATE_HELP_GOLDENS=1
 #   ORBIT_UPDATE_OUTPUT_GOLDENS=1
@@ -36,6 +38,7 @@ case "${1:-}" in
 esac
 
 if [[ "$update" == true ]]; then
+  export ORBIT_UPDATE_STORE_SCHEMA_GOLDENS=1
   export ORBIT_UPDATE_LOG_GOLDENS=1
   export ORBIT_UPDATE_HELP_GOLDENS=1
   export ORBIT_UPDATE_OUTPUT_GOLDENS=1
@@ -60,3 +63,6 @@ cargo="${CARGO:-cargo}"
   mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot -- --exact
 "$cargo" test -p orbit-exec --test sandbox_profile_goldens
 "$cargo" test -p orbit-core --test sandbox_profile_goldens
+
+"$cargo" test -p orbit-store --lib \
+  driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens -- --exact

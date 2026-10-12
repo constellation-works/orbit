@@ -166,7 +166,7 @@ applies this rule.
 ## One versioned ledger per SQLite database, with frozen migration bodies
 
 **Recorded:** 2026-10-12 · [ORB-15729]
-**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema`, `crates/orbit-store/src/driver/sqlite/task_registry/schema.rs::ensure_compatible_schema`, `crates/orbit-store/src/driver/sqlite/task_registry/envelope_stamps.rs::ensure_envelope_stamps`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
+**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/schema.rs::ensure_compatible_schema`, `crates/orbit-store/src/driver/sqlite/task_registry/envelope_stamps.rs::ensure_envelope_stamps`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
 
 ### Context
 
@@ -174,17 +174,16 @@ Four mechanisms change the schemas of the SQLite databases in `orbit-store`,
 and only the first can tell an older binary what it may do with the result:
 
 1. **The store ledger** (`ledger::MIGRATIONS`, v1–v45) carries the
-   compatibility record from the decisions above. Its bodies are not frozen,
-   though. The v1 baseline is declared immutable but calls
-   `ensure_audit_events_schema`, a shared helper that nine later entries also
-   call (v15–v18, v24, v25, v30–v32). v15 also re-runs the whole v7 body,
-   v13 re-runs `ensure_task_reservations_schema`, and v10 shares
-   `ensure_invocation_schema_v1` with the baseline. Editing one of these
-   helpers would change what every shipped entry that calls it does to a
-   database that has not applied that entry yet, and nothing checks that a
-   shipped entry still produces what it shipped with. v13 and v15 also
-   re-create earlier shape in case a ledger skipped the baseline, so they are
-   not pure deltas.
+   compatibility record from the decisions above. At decision time its
+   bodies were not frozen: the immutable v1 baseline called the shared
+   `ensure_audit_events_schema`, as did nine later entries (v15–v18, v24,
+   v25, v30–v32). v15 also re-ran the whole v7 body, v13 re-ran
+   `ensure_task_reservations_schema`, and v10 shared `ensure_invocation_schema_v1`
+   with the baseline. Editing a helper changed every shipped caller, and
+   no check guarded the schema each prefix produced. The freeze-in-place
+   now gives each version private copies and checks every prefix with a
+   schema golden. v13 and v15 still re-create earlier shape when a ledger
+   skipped the baseline; deleting those paths remains a separate change.
 2. **The task registry** (`tasks/index.sqlite`, a separate file) has no
    named migrations. `PRAGMA user_version = 5` is a reader floor.
    `apply_schema` re-runs idempotently below 5, and additive setup
