@@ -82,7 +82,7 @@ the executing-process hostname, while caller/process fields are additive.
 Some runtime paths write targeted command-audit rows directly:
 
 - `crates/orbit-core/src/adapter/command/dispatch/execute.rs` records runtime-backed, in-process, and global CLI/MCP tool invocations as `command: tool` with `subcommand: "run"` or `"run-mcp"`.
-- `crates/orbit-cli/src/command/mcp/server.rs` composes `orbit-mcp` framing with `orbit-cmd` registered runtime selection and carries the session capability policy. Global discovery, unknown/unadvertised names, and workspace setup failures use Core's global audit seam; resolved workspace calls use the runtime seam. Core dispatch enforces governed operation authorization, while federated routing applies destination tool-class checks before delivery.
+- `crates/orbit-cli/src/command/mcp/server/` composes `orbit-mcp` framing with `orbit-cmd` registered runtime selection and carries the session capability policy. Global discovery, unknown/unadvertised names, and workspace setup failures use Core's global audit seam; resolved workspace calls use the runtime seam. Core dispatch enforces governed operation authorization, while federated routing applies destination tool-class checks before delivery.
 - `crates/orbit-core/src/runtime/task/locks/audit.rs` records task lock reservation checks, reservations, releases, and denials.
 - `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/gate_starvation.rs` records gate-starvation deferrals for task bundles, naming the blocking tasks and claims.
 
