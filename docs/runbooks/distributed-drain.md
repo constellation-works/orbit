@@ -137,7 +137,11 @@ comparisons one ten-minute deadline within the routed call's fifteen minutes.
 A cut or other inconclusive attempted run is retained separately from conclusive
 base results; retries reuse its refusal and partial failures never confirm the
 report. A later conclusive base result can replace that refusal; a moved base
-or different replay selection gets its own check. A follower that cannot resolve
+or different replay selection gets its own check. When the owner's own
+completed base run contradicts the report instead (passes the reported tests or
+fails without one), the owner releases the claim with a `known_red_contradicted`
+reason and the follower closes its settlement obsolete; no revoke is needed.
+A follower that cannot resolve
 or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
 before-PR review on is refused (`before_pr_unsupported`).

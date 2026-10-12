@@ -40,7 +40,7 @@ use orbit_common::{
 };
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    BaselineHoldStatus, ClaimExecutionContext, ClaimedKnownRed, DispatchError,
+    BaselineHoldStatus, ClaimExecutionContext, ClaimedKnownRed, DispatchError, KnownRedUnconfirmed,
     RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
     TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
@@ -3822,8 +3822,9 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                     let refusal = owner_check(&fx.base_sha, &claimed)
                         .expect_err(&format!("{case}: the owner refuses the report"));
                     assert!(
-                        refusal.contains("does not fail `test orbit-core::runtime suite::added`"),
-                        "{case}: {refusal}"
+                        matches!(&refusal, KnownRedUnconfirmed::Contradicted(reason)
+                            if reason.contains("does not fail `test orbit-core::runtime suite::added`")),
+                        "{case}: the owner's base run contradicts it: {refusal:?}"
                     );
                     continue;
                 };
@@ -3860,11 +3861,12 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                 let off_base = owner_check(&fx.candidate, &report.failures)
                     .expect_err(&format!("{case}: a base off the owner's branch is refused"));
                 assert!(
-                    off_base.contains(&format!(
+                    matches!(&off_base, KnownRedUnconfirmed::Inconclusive(reason)
+                    if reason.contains(&format!(
                         "base {} is not in the history of this owner's {BASE}",
                         fx.candidate
-                    )),
-                    "{case}: {off_base}"
+                    ))),
+                    "{case}: nothing ran, so nothing is contradicted: {off_base:?}"
                 );
                 assert!(!cache.exists(), "{case}: the owner ran nothing");
 

@@ -30,7 +30,7 @@ mod worktree;
 #[cfg(test)]
 mod tests;
 
-pub use base_claim::{ClaimedKnownRed, verify_claimed_known_red};
+pub use base_claim::{ClaimedKnownRed, KnownRedUnconfirmed, verify_claimed_known_red};
 pub use baseline::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};
 pub(super) use candidate_resume::candidate_resume;
 pub(super) use candidate_validate::candidate_validate;
