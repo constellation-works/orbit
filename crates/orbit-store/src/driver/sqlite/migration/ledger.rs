@@ -646,7 +646,7 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
             "SELECT key, value, updated_at FROM schema_meta
              WHERE key LIKE ?1 ORDER BY key",
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map([format!("{LEDGER_KEY_PREFIX}%")], |row| {
             Ok((
@@ -655,11 +655,11 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut applied = Vec::new();
     for row in rows {
-        let (key, name, applied_at) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+        let (key, name, applied_at) = row.map_err(sqlite_store_error)?;
         let version = parse_ledger_key(&key)?;
         applied.push(AppliedMigration {
             version,
@@ -794,10 +794,14 @@ pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Err
         rusqlite::Error::SqliteFailure(sqlite_error, _)
             if sqlite_error.code == ErrorCode::DiskFull
     ) {
-        return OrbitError::Store(format!(
-            "SQLITE_FULL / ENOSPC while committing migration v{} ({}): {error}",
-            migration.version, migration.name
-        ));
+        return sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!(
+                "SQLITE_FULL / ENOSPC while committing migration v{} ({}): {error}",
+                migration.version, migration.name
+            ),
+        );
     }
 
     sqlite_error(

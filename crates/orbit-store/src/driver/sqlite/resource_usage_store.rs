@@ -6,6 +6,7 @@
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
@@ -16,10 +17,6 @@ use crate::contracts::{
 
 fn stamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Micros, true)
-}
-
-fn store_error(error: rusqlite::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
 }
 
 /// SQLite integers are signed; a byte count past `i64::MAX` saturates.
@@ -69,7 +66,7 @@ impl ResourceUsageStoreBackend for Store {
                     ],
                 )
                 .map(|_| ())
-                .map_err(store_error)
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -95,7 +92,7 @@ impl ResourceUsageStoreBackend for Store {
                     ],
                 )
                 .map(|inserted| inserted > 0)
-                .map_err(store_error)
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -116,7 +113,7 @@ impl ResourceUsageStoreBackend for Store {
                 ORDER BY minute_index
                 "#,
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         let rows = statement
             .query_map(params![workspace_id, run_id], |row| {
                 Ok(RunResourceMinute {
@@ -137,8 +134,9 @@ impl ResourceUsageStoreBackend for Store {
                     samples: row.get(11)?,
                 })
             })
-            .map_err(store_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
     }
 
     fn delivery_run_resources(
@@ -159,7 +157,7 @@ impl ResourceUsageStoreBackend for Store {
                 ORDER BY r.workspace_id, r.run_id, r.minute_index
                 "#,
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         let rows = statement
             .query_map(params![stamp(since)], |row| {
                 let run = DeliveryRunResources {
@@ -184,10 +182,10 @@ impl ResourceUsageStoreBackend for Store {
                 };
                 Ok((run, minute))
             })
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         let mut runs: Vec<DeliveryRunResources> = Vec::new();
         for row in rows {
-            let (run, minute) = row.map_err(store_error)?;
+            let (run, minute) = row.map_err(sqlite_store_error)?;
             match runs.last_mut() {
                 Some(last)
                     if last.workspace_id == run.workspace_id && last.run_id == run.run_id =>
@@ -218,12 +216,12 @@ impl ResourceUsageStoreBackend for Store {
                 [],
                 |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         Ok(DeliveryRunsFreshness {
             newest_finished_at: newest
                 .map(|at| crate::parse_timestamp(&at))
                 .transpose()
-                .map_err(store_error)?,
+                .map_err(sqlite_store_error)?,
             finished_runs: unsigned(finished),
         })
     }
@@ -243,7 +241,7 @@ impl ResourceUsageStoreBackend for Store {
                 ORDER BY minute_at
                 "#,
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         let rows = statement
             .query_map(params![stamp(since)], |row| {
                 Ok(HostResourceMinute {
@@ -256,8 +254,9 @@ impl ResourceUsageStoreBackend for Store {
                     recorded_by_run_id: row.get(6)?,
                 })
             })
-            .map_err(store_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
     }
 
     fn resource_minutes_older_than(
@@ -276,7 +275,7 @@ impl ResourceUsageStoreBackend for Store {
         };
         conn.query_row(sql, params![stamp(cutoff)], |row| row.get::<_, i64>(0))
             .map(unsigned)
-            .map_err(store_error)
+            .map_err(sqlite_store_error)
     }
 
     fn prune_resource_minutes_batch(
@@ -300,7 +299,7 @@ impl ResourceUsageStoreBackend for Store {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
                 .execute(sql, params![stamp(cutoff), limit])
-                .map_err(store_error)
+                .map_err(sqlite_store_error)
         })
     }
 }

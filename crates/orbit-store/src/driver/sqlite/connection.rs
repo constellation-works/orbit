@@ -1,8 +1,10 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::{apply_default_pragmas, open_private, sqlite_store_error};
+use orbit_common::storage::sqlite::{
+    apply_default_pragmas, open_private, sqlite_error, sqlite_store_error,
+};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
@@ -48,7 +50,13 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
             })
         },
     )
-    .map_err(|error| OrbitError::Store(format!("register {UNICODE_LOWER_SQL}: {error}")))?;
+    .map_err(|error| {
+        sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!("register {UNICODE_LOWER_SQL}: {error}"),
+        )
+    })?;
 
     conn.create_scalar_function(
         "orbit_failure_class",
@@ -71,7 +79,13 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
                 .to_string())
         },
     )
-    .map_err(|error| OrbitError::Store(format!("register orbit_failure_class: {error}")))
+    .map_err(|error| {
+        sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!("register orbit_failure_class: {error}"),
+        )
+    })
 }
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
@@ -122,7 +136,7 @@ impl Store {
         ) {
             Ok(value) => Ok(Some(value)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) => Err(OrbitError::Store(err.to_string())),
+            Err(err) => Err(sqlite_store_error(err)),
         }
     }
 
@@ -176,10 +190,14 @@ impl Store {
         {
             conn.pragma_update(None, "query_only", "ON")
                 .map_err(|error| {
-                    OrbitError::Store(format!(
-                        "cannot pin '{}' read-only for a forward-compatible open: {error}",
-                        path.display()
-                    ))
+                    sqlite_error(
+                        StorageLayer::Store,
+                        &error,
+                        format!(
+                            "cannot pin '{}' read-only for a forward-compatible open: {error}",
+                            path.display()
+                        ),
+                    )
                 })?;
         }
         Ok(Self {
@@ -248,7 +266,7 @@ impl Store {
     /// connection so a cached runtime handle cannot hide a replaced path.
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         register_sql_functions(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -258,7 +276,7 @@ impl Store {
     }
 
     pub fn open_in_memory() -> Result<Self, OrbitError> {
-        let conn = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;
+        let conn = Connection::open_in_memory().map_err(sqlite_store_error)?;
         apply_default_pragmas(&conn)?;
         register_sql_functions(&conn)?;
         migration::apply_schema(&conn)?;
@@ -363,12 +381,12 @@ impl Store {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare("PRAGMA quick_check")
-            .map_err(|e| OrbitError::Store(format!("quick_check: {e}")))?;
+            .map_err(|e| sqlite_error(StorageLayer::Store, &e, format!("quick_check: {e}")))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| OrbitError::Store(format!("quick_check: {e}")))?
+            .map_err(|e| sqlite_error(StorageLayer::Store, &e, format!("quick_check: {e}")))?
             .collect::<Result<Vec<String>, _>>()
-            .map_err(|e| OrbitError::Store(format!("quick_check: {e}")))?;
+            .map_err(|e| sqlite_error(StorageLayer::Store, &e, format!("quick_check: {e}")))?;
         if rows.len() == 1 && rows[0] == "ok" {
             return Ok(());
         }
@@ -383,9 +401,9 @@ impl Store {
     /// the write lock; cached handles and read-only opens cannot prove readiness.
     pub fn check_path_writable(path: &Path) -> Result<(), OrbitError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         conn.busy_timeout(std::time::Duration::from_secs(1))
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         check_connection_writable(&conn)
     }
 
@@ -420,5 +438,11 @@ impl Store {
 
 fn check_connection_writable(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
-        .map_err(|error| OrbitError::Store(format!("write probe failed: {error}")))
+        .map_err(|error| {
+            sqlite_error(
+                StorageLayer::Store,
+                &error,
+                format!("write probe failed: {error}"),
+            )
+        })
 }

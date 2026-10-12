@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 /// v26 `remove_operation_mode` migration (ORB-12772): drop the operation-mode
@@ -12,5 +13,5 @@ pub(super) fn apply_remove_operation_mode(conn: &Connection) -> Result<(), Orbit
             DROP TABLE IF EXISTS operation_recovery;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

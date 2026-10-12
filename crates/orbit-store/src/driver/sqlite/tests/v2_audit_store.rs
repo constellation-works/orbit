@@ -8,6 +8,7 @@
 //! in-memory store's reader is that same connection.
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use super::super::v2_audit_store::{clear_tail_snapshot_rendezvous, set_tail_snapshot_rendezvous};
 use crate::Store;
@@ -28,7 +29,7 @@ fn delayed_insert_during_tail_read_keeps_snapshot_ranks_and_the_newest_event() {
     let journal = store
         .with_read_connection(|conn| {
             conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
-                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
         })
         .expect("journal mode");
     assert_eq!(

@@ -1,6 +1,7 @@
 //! Recover the stored bytes for a generation-fenced checkpoint write.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::AutomationState;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -20,7 +21,7 @@ pub(super) fn previous_json(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     match raw {
         Some(raw) if decode::<AutomationState>(&raw)? == *previous => Ok(Some(raw)),

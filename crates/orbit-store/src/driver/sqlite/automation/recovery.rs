@@ -6,6 +6,7 @@ use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::recovery::{RecoveryRecord, ReissuedAction};
 use orbit_types::workflow::automation::{AutomationState, BatchAttempt, BatchState};
 use rusqlite::{TransactionBehavior, params};
@@ -39,7 +40,7 @@ pub(super) fn commit(
                     previous_json
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if changed == 0 {
             return Ok(false);
@@ -54,7 +55,7 @@ pub(super) fn commit(
                 record_json
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         Ok(true)
     })
@@ -85,7 +86,7 @@ pub(super) fn reset(
                 "DELETE FROM automation_consumers WHERE consumer=?1 AND generation=?2 AND state_json=?3",
                 params![previous.consumer, previous.generation, previous_json],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if changed == 0 {
             return Ok(false);
@@ -100,7 +101,7 @@ pub(super) fn reset(
                 record_json
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         Ok(true)
     })
@@ -181,7 +182,7 @@ pub(super) fn stall(
                 ],
             )
             .map(|changed| changed == 1)
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     })
 }
 
@@ -195,15 +196,15 @@ pub(super) fn list(
             .prepare(
                 "SELECT record_json FROM automation_recoveries WHERE consumer=?1 ORDER BY recorded_at DESC,rowid DESC LIMIT ?2",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![consumer, limit.min(100)], |row| {
                 row.get::<_, String>(0)
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
-        rows.map(|row| decode(&row.map_err(|e| OrbitError::Store(e.to_string()))?))
+        rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
             .collect()
     })
 }

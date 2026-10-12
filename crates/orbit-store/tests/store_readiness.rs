@@ -1,15 +1,16 @@
 //! Worker store readiness through public composition, separate from identity
-//! allocation and coordinated admission. Mutable fixtures run in isolated
-//! children with cleared Orbit authority and a disposable home.
+//! allocation and coordinated admission, and how a read-only store classifies
+//! the writes it refuses. Mutable fixtures run in isolated children with
+//! cleared Orbit authority and a disposable home.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
 use std::path::Path;
 use std::process::Command;
 
-use orbit_common::{OrbitError, process, test_env};
+use orbit_common::{OrbitError, StorageLayer, process, test_env};
 use orbit_store::Store;
-use orbit_store::compose::ensure_sqlite_store_ready;
+use orbit_store::compose::{ensure_sqlite_store_ready, tool_store_sqlite};
 use orbit_store::contracts::{CompatibilityRecord, MigrationCompatibility};
 use orbit_store::maintenance::migration::{SUPPORTED_SCHEMA_VERSION, read_schema_ledger_status};
 use rusqlite::Connection;
@@ -90,7 +91,8 @@ fn observationally_read_only_supported_store_is_not_ready() {
     // platforms that refuse to remove read-only files.
     std::fs::set_permissions(&database, original).unwrap();
     let error = readiness.expect_err("workers must refuse an observational store pre-claim");
-    assert!(matches!(error, OrbitError::Store(_)), "{error}");
+    assert!(error.is_readonly_or_access_failure(), "{error}");
+    assert_eq!(error.storage_layer(), Some(StorageLayer::Store));
     assert_eq!(std::fs::read(&database).unwrap(), before);
 }
 
@@ -132,7 +134,34 @@ fn store_in_read_only_directory_degrades_to_observational_reads() {
     assert!(store.is_read_only(), "the store must open observationally");
     drop(store);
     let error = readiness.expect_err("workers must refuse an observational store pre-claim");
-    assert!(matches!(error, OrbitError::Store(_)), "{error}");
+    assert!(error.is_readonly_or_access_failure(), "{error}");
+    assert_eq!(error.storage_layer(), Some(StorageLayer::Store));
+    assert_eq!(std::fs::read(&database).unwrap(), before);
+}
+
+/// SQLite's own read-only refusal of a store write keeps its class through
+/// the driver, so fail-open callers can tell it from any other store failure.
+/// The deferred transaction opens; the statement is what SQLite refuses.
+#[test]
+fn write_to_read_only_store_is_classified_access_denied() {
+    if !isolated("write_to_read_only_store_is_classified_access_denied") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let database = supported_database(root.path());
+    let before = std::fs::read(&database).unwrap();
+
+    let store = Store::open_read_only(&database).expect("supported schema remains readable");
+    assert!(store.is_read_only(), "fixture must open observationally");
+    let written = tool_store_sqlite(store).set_tool_enabled("fixture", false);
+
+    let error = written.expect_err("a read-only store refuses the write");
+    assert!(
+        matches!(error, OrbitError::StorageAccessDenied { .. }),
+        "{error:?}"
+    );
+    assert!(error.is_readonly_or_access_failure(), "{error}");
+    assert_eq!(error.storage_layer(), Some(StorageLayer::Store));
     assert_eq!(std::fs::read(&database).unwrap(), before);
 }
 

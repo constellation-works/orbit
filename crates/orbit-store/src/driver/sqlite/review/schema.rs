@@ -1,6 +1,7 @@
 //! Append-only schema registry for review records.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::Store;
 use crate::driver::sqlite::migration::FeatureMigration;
@@ -18,21 +19,21 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
                  CREATE TABLE review_landings (record_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, landed_commit TEXT NOT NULL, landing_json TEXT NOT NULL, recorded_at TEXT NOT NULL);
                  CREATE INDEX review_landings_attempt ON review_landings(attempt_id, recorded_at);",
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
     }),
     FeatureMigration::breaking(2, "lineage_holder_run", |conn| {
         conn.execute_batch(
             "ALTER TABLE review_lineages ADD COLUMN holder_run_id TEXT;
          CREATE INDEX review_lineages_holder ON review_lineages(workspace_id, holder_run_id);",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))
+        .map_err(sqlite_store_error)
     }),
     FeatureMigration::breaking(3, "review_reconciliations", |conn| {
         conn.execute_batch(
             "CREATE TABLE review_reconciliations (workspace_id TEXT NOT NULL, reconciliation_id TEXT NOT NULL, task_id TEXT NOT NULL, request_key TEXT NOT NULL, revision INTEGER NOT NULL, record_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(workspace_id, reconciliation_id), UNIQUE(workspace_id, task_id, request_key));
          CREATE INDEX review_reconciliations_task ON review_reconciliations(workspace_id, task_id, updated_at);",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))
+        .map_err(sqlite_store_error)
     }),
     // The persisted reconciliation JSON now binds the actual landed commit.
     // There is no SQLite column change, but the feature version must advance

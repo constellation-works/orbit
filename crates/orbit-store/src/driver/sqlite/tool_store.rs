@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::tool::StoredTool;
 use rusqlite::{OptionalExtension, params};
 
@@ -12,7 +13,7 @@ impl Store {
             .prepare(
                 "SELECT name, path, description, parameters_json, enabled, builtin FROM tools ORDER BY name",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -26,10 +27,10 @@ impl Store {
                     builtin: row.get::<_, i32>(5)? != 0,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     pub fn get_tool(&self, name: &str) -> Result<Option<StoredTool>, OrbitError> {
@@ -39,7 +40,7 @@ impl Store {
             .prepare(
                 "SELECT name, path, description, parameters_json, enabled, builtin FROM tools WHERE name = ?1",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let result = stmt
             .query_row(params![name], |row| {
@@ -54,7 +55,7 @@ impl Store {
                 })
             })
             .optional()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         Ok(result)
     }
@@ -78,7 +79,7 @@ impl<'a> StoreTx<'a> {
                     now_string(),
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         Ok(())
     }
@@ -87,7 +88,7 @@ impl<'a> StoreTx<'a> {
         let affected = self
             .tx
             .execute("DELETE FROM tools WHERE name = ?1", params![name])
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         Ok(affected > 0)
     }
@@ -99,7 +100,7 @@ impl<'a> StoreTx<'a> {
                 "UPDATE tools SET enabled = ?1, updated_at = ?2 WHERE name = ?3",
                 params![enabled as i32, now_string(), name],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         Ok(affected > 0)
     }

@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ANONYMOUS_ACTOR_LABEL, AuditAttribution};
 use rusqlite::params;
 
@@ -34,25 +35,23 @@ impl Store {
              GROUP BY role ORDER BY COUNT(*) DESC"
         };
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
 
         let rows = if let Some(s) = since {
             stmt.query_map(params![s.to_rfc3339()], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
         } else {
             stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
         };
 
-        rows.map_err(|e| OrbitError::Store(e.to_string()))
+        rows.map_err(sqlite_store_error)
     }
 
     /// Capability and policy decisions, counted once per invocation and operation.
@@ -90,15 +89,13 @@ impl Store {
         )
         SELECT operation, COUNT(DISTINCT attempt) FROM decisions
         GROUP BY operation ORDER BY COUNT(DISTINCT attempt) DESC, operation ASC";
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
         stmt.query_map(params![since.map(DateTime::to_rfc3339)], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
     }
 
     pub fn get_audit_tool_call_counts_by_role(
@@ -109,9 +106,7 @@ impl Store {
 
         let sql = tool_call_counts_by_role_sql(since.is_some());
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
 
         let rows = if let Some(s) = since {
             stmt.query_map(params![s.to_rfc3339()], |row| {
@@ -121,7 +116,7 @@ impl Store {
                     failed: row.get::<_, i64>(2)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
         } else {
             stmt.query_map([], |row| {
@@ -131,11 +126,11 @@ impl Store {
                     failed: row.get::<_, i64>(2)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
         };
 
-        rows.map_err(|e| OrbitError::Store(e.to_string()))
+        rows.map_err(sqlite_store_error)
     }
 
     /// Per-(actor, attribution) counts for audited tool invocations, over the
@@ -196,9 +191,7 @@ impl Store {
              ORDER BY COUNT(*) DESC, attribution ASC, actor ASC"
         );
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 
         let map_row = |row: &rusqlite::Row<'_>| {
             let attribution_raw: String = row.get(0)?;
@@ -217,15 +210,15 @@ impl Store {
 
         let rows = if let Some(s) = since {
             stmt.query_map(params![s.to_rfc3339()], map_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
         } else {
             stmt.query_map([], map_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
         };
 
-        rows.map_err(|e| OrbitError::Store(e.to_string()))
+        rows.map_err(sqlite_store_error)
     }
 
     /// Per-(surface, role) tool call counts where `tool_name` matches
@@ -241,9 +234,7 @@ impl Store {
 
         let sql = tool_call_counts_by_surface_and_role_sql(since.is_some());
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 
         let rows = if let Some(s) = since {
             stmt.query_map(params![s.to_rfc3339()], |row| {
@@ -254,7 +245,7 @@ impl Store {
                     failed: row.get::<_, i64>(3)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
         } else {
             stmt.query_map([], |row| {
@@ -265,11 +256,11 @@ impl Store {
                     failed: row.get::<_, i64>(3)? as u64,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
         };
 
-        rows.map_err(|e| OrbitError::Store(e.to_string()))
+        rows.map_err(sqlite_store_error)
     }
 
     /// Top (role, tool_name) pairs by call count across the audit log,
@@ -288,9 +279,7 @@ impl Store {
 
         let sql = top_tool_calls_sql(since.is_some(), limit > 0);
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 
         let map_row = |row: &rusqlite::Row<'_>| {
             Ok(AuditTopToolCall {
@@ -303,23 +292,23 @@ impl Store {
         let rows = match (since, limit) {
             (Some(s), 0) => stmt
                 .query_map(params![s.to_rfc3339()], map_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>(),
             (Some(s), n) => stmt
                 .query_map(params![s.to_rfc3339(), n as i64], map_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>(),
             (None, 0) => stmt
                 .query_map([], map_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>(),
             (None, n) => stmt
                 .query_map(params![n as i64], map_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>(),
         };
 
-        rows.map_err(|e| OrbitError::Store(e.to_string()))
+        rows.map_err(sqlite_store_error)
     }
 
     /// Per-tool aggregate of audit events with `timestamp >= since`. Folds
@@ -351,9 +340,7 @@ impl Store {
                      AND orbit_failure_class(COALESCE(tool_name, 'unknown'), status, error_message) = 'unexpected' THEN 1 ELSE 0 END), 0) \
                    FROM audit_events WHERE timestamp >= ?1 GROUP BY tool";
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![since.to_rfc3339()], |row| {
@@ -372,10 +359,10 @@ impl Store {
                     callable_unexpected_failures: row.get(11)?,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Per-role aggregate of audit events with `timestamp >= since`, including
@@ -405,9 +392,7 @@ impl Store {
                    FROM audit_events WHERE timestamp >= ?1 \
                    GROUP BY +role ORDER BY COUNT(*) DESC, role ASC";
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![since.to_rfc3339()], |row| {
@@ -420,10 +405,10 @@ impl Store {
                     no_subcommand: row.get(5)?,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Per-canonical-actor aggregate of audit events with `timestamp >= since`,
@@ -456,9 +441,7 @@ impl Store {
                    GROUP BY 1, 2, 3, 4 \
                    ORDER BY COUNT(*) DESC, 1 ASC, 2 ASC";
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![since.to_rfc3339()], |row| {
@@ -472,10 +455,10 @@ impl Store {
                     cli: row.get(6)?,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 }
 

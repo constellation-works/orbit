@@ -7,6 +7,7 @@ use super::relations::validate_replacement_relations;
 use super::store::TaskRegistryStore;
 use crate::contracts::{TaskCompletionByComplexity, TaskIndexFilter, TaskTerminalTransition};
 use chrono::{DateTime, Utc};
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     TaskEnvelopeV2, TaskStatus, complexity_bucket, complexity_bucket_ord, normalize_task_tags,
@@ -49,7 +50,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         for envelope in envelopes {
             let binding = task_bundle_by_id(&tx, &envelope.id)?
@@ -69,12 +70,12 @@ impl TaskRegistryStore {
                 "DELETE FROM task_bundle_tags WHERE task_id = ?1",
                 [&envelope.id],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
             tx.execute(
                 "DELETE FROM task_bundle_relations WHERE source_task_id = ?1",
                 [&envelope.id],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
 
         {
@@ -83,7 +84,7 @@ impl TaskRegistryStore {
                 writer.write(&partition_id, envelope)?;
             }
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     pub fn replace_workspace_task_indexes(
@@ -100,7 +101,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let registered = task_ids_for_workspace(&tx, &partition_id)?;
         let requested = envelopes
@@ -120,17 +121,17 @@ impl TaskRegistryStore {
             "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
             [&partition_id],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         tx.execute(
             "DELETE FROM task_bundle_relations WHERE workspace_id = ?1",
             [&partition_id],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         tx.execute(
             "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
             [&partition_id],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         {
             let mut writer = TaskIndexWriter::prepare(&tx)?;
@@ -138,7 +139,7 @@ impl TaskRegistryStore {
                 writer.write(&partition_id, envelope)?;
             }
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     pub fn indexed_task_versions_for_workspace(
@@ -153,14 +154,14 @@ impl TaskRegistryStore {
                  WHERE workspace_id = ?1
                  ORDER BY task_id ASC",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([partition_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Status projection for every task in the coordination registry. Task
@@ -170,15 +171,15 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare_cached("SELECT task_id, status FROM task_bundle_index ORDER BY task_id ASC")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut statuses = BTreeMap::new();
         for row in rows {
-            let (task_id, raw_status) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (task_id, raw_status) = row.map_err(sqlite_store_error)?;
             let status = raw_status.parse::<TaskStatus>().map_err(|e| {
                 OrbitError::Store(format!(
                     "invalid indexed status '{raw_status}' for task '{task_id}': {e}"
@@ -199,12 +200,12 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare_cached("SELECT 1 FROM task_bundle_tags WHERE task_id = ?1 AND tag = ?2")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut tagged = BTreeSet::new();
         for task_id in task_ids {
             if stmt
                 .exists(rusqlite::params![task_id, tag])
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
             {
                 tagged.insert(task_id.clone());
             }
@@ -227,9 +228,9 @@ impl TaskRegistryStore {
                     WHERE workspace_id = ?1 AND complexity IS NULL
                  )",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .query_row([partition_id], |row| row.get(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         Ok(exists != 0)
     }
 
@@ -249,7 +250,7 @@ impl TaskRegistryStore {
                  WHERE workspace_id = ?1
                  GROUP BY complexity, status",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([&partition_id], |row| {
                 Ok((
@@ -258,12 +259,11 @@ impl TaskRegistryStore {
                     row.get::<_, i64>(2)?,
                 ))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut by_bucket: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
         for row in rows {
-            let (raw_complexity, status, count) =
-                row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (raw_complexity, status, count) = row.map_err(sqlite_store_error)?;
             let bucket = complexity_bucket(raw_complexity.as_deref()).to_string();
             *by_bucket
                 .entry(bucket)
@@ -309,7 +309,7 @@ impl TaskRegistryStore {
                    AND terminal_month IS NOT NULL
                    AND terminal_month >= ?2",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([&partition_id, &first_month], |row| {
                 Ok((
@@ -319,11 +319,11 @@ impl TaskRegistryStore {
                     row.get::<_, String>(3)?,
                 ))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut out = Vec::new();
         for row in rows {
             let (task_id, raw_status, raw_complexity, raw_updated_at) =
-                row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                row.map_err(sqlite_store_error)?;
             let at = DateTime::parse_from_rfc3339(&raw_updated_at)
                 .map_err(|e| {
                     OrbitError::Store(format!(
@@ -364,15 +364,15 @@ impl TaskRegistryStore {
                  WHERE workspace_id = ?1
                  ORDER BY task_id ASC",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([partition_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut map = BTreeMap::new();
         for row in rows {
-            let (task_id, raw) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (task_id, raw) = row.map_err(sqlite_store_error)?;
             map.insert(task_id, complexity_bucket(raw.as_deref()).to_string());
         }
         Ok(map)

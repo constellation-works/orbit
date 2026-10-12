@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{
@@ -148,7 +149,7 @@ pub(super) fn apply_baseline_schema(conn: &Connection) -> Result<(), OrbitError>
             CREATE INDEX IF NOT EXISTS idx_adrs_owner ON adrs(owner);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     ensure_agent_sessions_schema(conn)?;
     ensure_tools_schema(conn)?;
@@ -204,7 +205,7 @@ fn ensure_agent_sessions_schema(conn: &Connection) -> Result<(), OrbitError> {
                 DROP TABLE agent_sessions_legacy;
             "#,
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     add_column_if_missing(conn, "agent_sessions", "identity_id", "TEXT")?;
@@ -314,7 +315,7 @@ fn ensure_v2_state_consolidation_schema(conn: &Connection) -> Result<(), OrbitEr
             );
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 // Frozen private copy for v1. Do not share with another migration.
@@ -367,7 +368,7 @@ fn ensure_audit_events_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -383,7 +384,7 @@ fn ensure_audit_events_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -413,7 +414,7 @@ fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), OrbitError> 
             ON task_reservations(workspace_orbit_dir, released_at);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "task_reservations", "workspace_id", "TEXT")?;
     add_column_if_missing(conn, "task_reservations", "owner_run_id", "TEXT")?;
@@ -433,7 +434,7 @@ fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), OrbitError> 
             ON task_reservations(workspace_id, expires_at);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -458,7 +459,7 @@ fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
             ON tool_calls(tool_name);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 fn ensure_learning_index_schema(conn: &Connection) -> Result<(), OrbitError> {
@@ -484,7 +485,7 @@ fn ensure_learning_index_schema(conn: &Connection) -> Result<(), OrbitError> {
                 ON learnings_index(status) WHERE status = 'active';
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     // C2 (T20260511-6) adds an optional `priority` column used as the
     // secondary ranking key in `search`. NULL is acceptable; the search
@@ -517,7 +518,7 @@ fn ensure_tools_schema(conn: &Connection) -> Result<(), OrbitError> {
             "#,
             [],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     if table_has_column(conn, "tools", "is_builtin")? {
@@ -531,24 +532,24 @@ fn ensure_tools_schema(conn: &Connection) -> Result<(), OrbitError> {
             "#,
             [],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     conn.execute(
         "UPDATE tools SET parameters_json = '[]' WHERE parameters_json = ''",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     conn.execute(
         "UPDATE tools SET created_at = datetime('now') WHERE created_at = ''",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     conn.execute(
         "UPDATE tools SET updated_at = datetime('now') WHERE updated_at = ''",
         [],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }

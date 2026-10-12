@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 
 use crate::Store;
@@ -22,10 +23,6 @@ const LIVE_STATES: &str = "('pending','running','retrying')";
 
 fn stamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Micros, true)
-}
-
-fn store_error(error: rusqlite::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
 }
 
 fn unsigned(value: i64) -> u64 {
@@ -44,7 +41,7 @@ impl AdmissionLoadStoreBackend for Store {
                 "DELETE FROM admission_reservations WHERE reserved_at < ?1",
                 params![stamp(query.reservations_expire_before)],
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
             let reservations = reservations(conn)?;
             let since = reservations.first().map(|first| first.reserved_at);
             let load = AdmissionLoad {
@@ -66,7 +63,7 @@ impl AdmissionLoadStoreBackend for Store {
                         stamp(query.now),
                     ],
                 )
-                .map_err(store_error)?;
+                .map_err(sqlite_store_error)?;
                 written.push(AdmissionReservation {
                     workspace_id: reservation.workspace_id,
                     task_id: reservation.task_id,
@@ -88,7 +85,7 @@ fn reservations(conn: &Connection) -> Result<Vec<AdmissionReservation>, OrbitErr
              FROM admission_reservations
              ORDER BY reserved_at, rowid",
         )
-        .map_err(store_error)?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map([], |row| {
             Ok(AdmissionReservation {
@@ -100,8 +97,9 @@ fn reservations(conn: &Connection) -> Result<Vec<AdmissionReservation>, OrbitErr
                 reserved_at: crate::parse_timestamp(&row.get::<_, String>(5)?)?,
             })
         })
-        .map_err(store_error)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+        .map_err(sqlite_store_error)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
 }
 
 /// Live delivery runs of every workspace, and those created at or after
@@ -123,7 +121,7 @@ fn delivery_runs(
     );
     let mut runs: BTreeMap<(String, String), AdmissionRun> = BTreeMap::new();
     let mut collect = |sql: String, extra: Option<String>| -> Result<(), OrbitError> {
-        let mut statement = conn.prepare(&sql).map_err(store_error)?;
+        let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let values = jobs
             .iter()
             .map(|job| (*job).to_string())
@@ -143,9 +141,9 @@ fn delivery_runs(
                     newest_minute: None,
                 })
             })
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         for run in rows {
-            let run = run.map_err(store_error)?;
+            let run = run.map_err(sqlite_store_error)?;
             runs.insert((run.workspace_id.clone(), run.run_id.clone()), run);
         }
         Ok(())
@@ -176,7 +174,7 @@ fn delivery_runs(
              ORDER BY minute_index DESC
              LIMIT 1",
         )
-        .map_err(store_error)?;
+        .map_err(sqlite_store_error)?;
     for run in runs.iter_mut().filter(|run| run.live) {
         let mut rows = newest
             .query_map(params![run.workspace_id, run.run_id], |row| {
@@ -198,8 +196,8 @@ fn delivery_runs(
                     samples: row.get(11)?,
                 })
             })
-            .map_err(store_error)?;
-        run.newest_minute = rows.next().transpose().map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
+        run.newest_minute = rows.next().transpose().map_err(sqlite_store_error)?;
     }
     runs.sort_by(|a, b| {
         (a.created_at, &a.workspace_id, &a.run_id).cmp(&(b.created_at, &b.workspace_id, &b.run_id))

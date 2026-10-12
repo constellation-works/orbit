@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::hold_step;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::task::{TaskStatus, task_id_prefix};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
@@ -45,7 +46,7 @@ impl TaskRegistryStore {
                  LEFT JOIN task_bundle_relations r ON r.source_task_id = i.task_id AND r.relation_type = 'child_of'
                  WHERE i.workspace_id = ?1",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([&partition_id], |row| {
                 Ok((
@@ -63,12 +64,12 @@ impl TaskRegistryStore {
                     row.get::<_, Option<String>>(7)?,
                 ))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         // One statement keeps scalar fields, tags and parent targets in the
         // same SQLite snapshot when a writer replaces them in a transaction.
         let mut indexed = BTreeMap::new();
         for row in rows {
-            let (task_id, row, tag, parent) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (task_id, row, tag, parent) = row.map_err(sqlite_store_error)?;
             let entry = indexed.entry(task_id).or_insert(row);
             if let Some(tag) = tag {
                 entry.tags.insert(tag);
@@ -118,7 +119,7 @@ impl TaskRegistryStore {
                         params_from_iter(values.iter()),
                         |row| row.get(0),
                     )
-                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                    .map_err(sqlite_store_error)?;
                 Some(usize::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))?)
             }
             None => None,
@@ -142,9 +143,7 @@ impl TaskRegistryStore {
             sql.push_str(" LIMIT ?");
             values.push(Value::Integer(i64::try_from(limit).unwrap_or(i64::MAX)));
         }
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(params_from_iter(values.iter()), |row| {
                 Ok(TaskIndexKey {
@@ -152,10 +151,10 @@ impl TaskRegistryStore {
                     created_at: row.get(1)?,
                 })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let total = total.unwrap_or(rows.len());
         Ok(TaskIndexSelection { rows, total })
     }
@@ -181,10 +180,10 @@ impl TaskRegistryStore {
 
         let mut stmt = conn
             .prepare("SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ?1")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([&partition_id], decode_status_row)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         collect_statuses(rows, &mut statuses)?;
 
         let missing = targets
@@ -197,12 +196,10 @@ impl TaskRegistryStore {
                 String::from("SELECT task_id, status FROM task_bundle_index WHERE task_id IN (");
             push_placeholders(&mut sql, chunk.len());
             sql.push(')');
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params_from_iter(chunk.iter()), decode_status_row)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             collect_statuses(rows, &mut statuses)?;
         }
 
@@ -303,7 +300,7 @@ fn collect_statuses(
     statuses: &mut BTreeMap<String, TaskStatus>,
 ) -> Result<(), OrbitError> {
     for row in rows {
-        let (task_id, raw_status) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+        let (task_id, raw_status) = row.map_err(sqlite_store_error)?;
         statuses.insert(
             task_id.clone(),
             parse_indexed_status(&task_id, &raw_status)?,
@@ -336,7 +333,7 @@ fn representative_of_prefix(
             decode_status_row,
         )
         .optional()
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     row.map(|(task_id, raw_status)| {
         let status = parse_indexed_status(&task_id, &raw_status)?;
         Ok((task_id, status))

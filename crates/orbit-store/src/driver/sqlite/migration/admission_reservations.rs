@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 /// v47 `admission_reservations`: one row per task an admitter decided to
@@ -24,5 +25,5 @@ pub(super) fn apply_admission_reservations(conn: &Connection) -> Result<(), Orbi
             ON admission_reservations(reserved_at);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

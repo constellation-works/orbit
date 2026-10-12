@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_exists};
@@ -26,7 +27,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
             );
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
+    .map_err(sqlite_store_error)?;
     ensure_audit_events_schema_v24(conn)?;
     for column in ["plugin_name", "plugin_version", "plugin_manifest_digest"] {
         add_column_if_missing(conn, "audit_events", column, "TEXT")?;
@@ -37,7 +38,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
             ON audit_events(plugin_name);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v30 `audit_plugin_secrets` migration: the names (JSON array) of the
@@ -157,7 +158,7 @@ fn ensure_audit_events_schema_v24(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -173,7 +174,7 @@ fn ensure_audit_events_schema_v24(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -228,7 +229,7 @@ fn ensure_audit_events_schema_v30(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -244,7 +245,7 @@ fn ensure_audit_events_schema_v30(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -299,7 +300,7 @@ fn ensure_audit_events_schema_v31(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -315,7 +316,7 @@ fn ensure_audit_events_schema_v31(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
@@ -370,7 +371,7 @@ fn ensure_audit_events_schema_v32(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -386,7 +387,7 @@ fn ensure_audit_events_schema_v32(conn: &Connection) -> Result<(), OrbitError> {
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }

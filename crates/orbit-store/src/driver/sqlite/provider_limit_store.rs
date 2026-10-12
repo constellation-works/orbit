@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use rusqlite::{TransactionBehavior, params};
 
@@ -59,7 +60,7 @@ impl ProviderLimitStoreBackend for Store {
                     ],
                 )
                 .map(|changed| changed > 0)
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -75,7 +76,7 @@ impl ProviderLimitStoreBackend for Store {
                 ORDER BY observed_at DESC, provider, model_scope, window_label
                 "#,
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let non_empty = |value: String| (!value.is_empty()).then_some(value);
         let rows = statement
             .query_map([], |row| {
@@ -106,8 +107,8 @@ impl ProviderLimitStoreBackend for Store {
                     partial: false,
                 })
             })
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
     }
 }

@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use rusqlite::params;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::contracts::InvocationInsertParams;
 use crate::{Store, now_string};
@@ -54,9 +55,7 @@ impl Store {
     ) -> Result<(), OrbitError> {
         let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let tx = conn.transaction().map_err(sqlite_store_error)?;
 
         tx.execute(
             INVOCATION_INSERT_SQL.as_str(),
@@ -78,13 +77,13 @@ impl Store {
                 params.trace.provider_cost_usd,
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         let invocation_id = tx.last_insert_rowid();
         insert_invocation_task_ids(&tx, invocation_id, &params.task_ids)?;
         insert_tool_calls(&tx, invocation_id, &params.trace.tool_calls)?;
 
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 }
 
@@ -98,7 +97,7 @@ fn insert_invocation_task_ids(
             "INSERT OR IGNORE INTO invocation_tasks(invocation_id, task_id) VALUES (?1, ?2)",
             params![invocation_id, task_id],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     Ok(())
 }
@@ -119,7 +118,7 @@ fn insert_tool_calls(
                 tool_call.result_bytes as i64,
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 fn ensure_routine_schema(conn: &Connection) -> Result<(), OrbitError> {
@@ -50,7 +51,7 @@ fn ensure_routine_schema(conn: &Connection) -> Result<(), OrbitError> {
             );
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v11 `routine_scheduler_schema` migration (ORB-10462): routine tables were

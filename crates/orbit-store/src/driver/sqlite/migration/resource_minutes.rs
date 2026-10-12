@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 /// v44 `run_resource_minutes`: one row per minute of a delivery run's worker
@@ -33,7 +34,7 @@ pub(super) fn apply_run_resource_minutes(conn: &Connection) -> Result<(), OrbitE
             ON run_resource_minutes(workspace_id, task_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v45 `host_resource_minutes`: host CPU (cores, from `/proc/stat` ticks) and
@@ -55,5 +56,5 @@ pub(super) fn apply_host_resource_minutes(conn: &Connection) -> Result<(), Orbit
             );
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

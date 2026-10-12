@@ -1,6 +1,7 @@
 //! Fire intent, dispatch and outcome writes, fire queries, and row hydration.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState};
@@ -34,7 +35,7 @@ impl Store {
                         now,
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if inserted == 0 {
                 return Ok(false);
             }
@@ -44,7 +45,7 @@ impl Store {
                      WHERE routine_name = ?1",
                     params![intent.routine_name, intent.slot, now],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(true)
         })
     }
@@ -110,7 +111,7 @@ impl Store {
                         now
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -131,7 +132,7 @@ impl Store {
             fire_row,
         )
         .optional()
-        .map_err(|error| OrbitError::Store(error.to_string()))?
+        .map_err(sqlite_store_error)?
         .map(RoutineFireRecord::try_from_row)
         .transpose()
     }
@@ -146,7 +147,7 @@ impl Store {
                  WHERE state IN (?1, ?2)
                  ORDER BY routine_name ASC, slot ASC, attempt ASC"
             ))
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(
                 params![
@@ -155,7 +156,7 @@ impl Store {
                 ],
                 fire_row,
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         collect_fires(rows)
     }
 
@@ -172,10 +173,10 @@ impl Store {
                  WHERE routine_name = ?1
                  ORDER BY slot DESC, attempt DESC LIMIT ?2"
             ))
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(params![routine_name, limit as i64], fire_row)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         collect_fires(rows)
     }
 }
@@ -215,7 +216,7 @@ fn collect_fires(
     let mut fires = Vec::new();
     for row in rows {
         fires.push(RoutineFireRecord::try_from_row(
-            row.map_err(|error| OrbitError::Store(error.to_string()))?,
+            row.map_err(sqlite_store_error)?,
         )?);
     }
     Ok(fires)
