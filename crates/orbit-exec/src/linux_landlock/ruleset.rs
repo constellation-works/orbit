@@ -331,6 +331,8 @@ impl Ruleset {
                 0u32,
             )
         };
+        // Read errno before `close`, which overwrites it when it fails.
+        let add_error = std::io::Error::last_os_error();
         // SAFETY: `parent_fd` is the descriptor opened in this function and is
         // no longer referenced by the kernel after `landlock_add_rule` returns.
         unsafe { libc::close(parent_fd) };
@@ -338,7 +340,7 @@ impl Ruleset {
             return Err(OrbitError::PolicyDenied(format!(
                 "landlock_add_rule failed for `{}`: {}",
                 grant.path.display(),
-                std::io::Error::last_os_error()
+                add_error
             )));
         }
         Ok(())
