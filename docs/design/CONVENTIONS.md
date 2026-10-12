@@ -1,7 +1,7 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-09
+last_updated: 2026-10-11
 last_validated: 2026-10-09
 status: Accepted
 ---
@@ -212,6 +212,7 @@ Retired features are removed from this table along with their folder.
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
+| Auto-concurrency | [docs/design/auto-concurrency/](./auto-concurrency/) | claude |
 | Auto-tasks | [docs/design/auto-tasks/](./auto-tasks/) | claude |
 | Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
