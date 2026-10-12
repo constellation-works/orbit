@@ -18,7 +18,7 @@ related_artifacts: [ORB-15722]
 
 This doc covers every place Orbit waits on a child process it spawned:
 the three supervisors, two ad-hoc wait loops, and their callers, verified
-at `f9d7a0ccd`, with the changes of steps 1–3 and 5 reflected below. §1–§3
+at `f9d7a0ccd`, with the changes of steps 1–3, 5 and 6 reflected below. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -96,6 +96,10 @@ the supervision notes to stderr.
 - **Stopped descendants.** With the opt-in watch, a descendant that stays
   stopped past the threshold is ended and reported in the outcome; exec
   notes it on stderr.
+- **Periodic checks.** `Supervision::every` runs a caller's check on the
+  supervisor thread at a nonzero interval. A returned stop cause ends the
+  group under the requested termination policy; `None` continues the run.
+  Build phases use `ProcessStopCause::Requested` for their directory cap.
 - **Outcome.** The result carries `timed_out`, typed `ProcessStopCause`s
   and `drain_stopped`, so callers never parse stderr to classify a run.
 
@@ -148,13 +152,16 @@ is no profile temp file to retain. Non-Unix stdin is refused.
 
 - **Plugin build phases** —
   [`build_sandbox/supervise.rs`](../../../crates/orbit-exec/src/build_sandbox/supervise.rs).
-  It sets `setsid` and `RLIMIT_CORE=0` in `pre_exec`. Two relay threads send
-  chunks over a channel into one head/tail `BuildLog` (1 MiB). It enforces a
-  wall clock, checks the build-directory size every second, and stops
-  through `OwnedChild::terminate_with_signal` with exec's five-second grace.
-  The owned handle stops and reaps the group on a wait error or panic,
-  before the sandbox guard drops. After exit it drains for 2 s; a reader
-  that has not finished is detached, not joined.
+  It keeps `setsid` and `RLIMIT_CORE=0` in `pre_exec` and adopts the child
+  into the shared supervisor. Both stream sinks share one head/tail
+  `BuildLog` (1 MiB), retained across phases. A fixed deadline enforces the
+  wall clock, and the supervisor's one-second periodic hook checks the
+  build-directory size, requesting a stop when the cap is exceeded. The
+  caller also checks the directory after exit to catch fast writes.
+  Termination uses exec's five-second grace. The sandbox guard stays live
+  through supervision; after exit the supervisor drains for 2 s and joins
+  both pipe workers, stopping readers whose pipes remain held outside the
+  group.
 - **Automation source commands** —
   [`source/command.rs`](../../../crates/orbit-core/src/application/automation/source/command.rs).
   Stdin, stdout and stderr are unlinked temp files, so a large Git listing
@@ -208,7 +215,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-engine/src/executor/automation/vcs/required_command.rs` | `run_process_supervised` | Deadline, typed stop cause for inconclusive runs |
 | `orbit-engine/src/executor/automation/shell.rs`, `vcs/deferral_probe.rs` | `spawn_owned_supervised_cancellable` (sandbox-spawned child) | Adopt an owned child, empty stdin, deadline, `timed_out` |
 | `orbit-exec/src/validation_env.rs` | `run_probe_process` | Kill at once on deadline (an interactive shell ignores SIGTERM) |
-| `orbit-exec/src/build_sandbox/supervise.rs` | `OwnedChild::terminate_with_signal` | Group termination with grace (§1.4) |
+| `orbit-exec/src/build_sandbox/supervise.rs` | `SupervisedChild::supervise` | Shared head/tail log, deadline, periodic directory cap, group termination with grace (§1.4) |
 
 ### 2.3 Engine provider supervisor callers
 
@@ -317,9 +324,11 @@ with `Termination`, the cancellation flag, `intercept_signals`, the drain
 budget and an optional stopped-descendant threshold. A sink's `finish`
 returns the bytes the outcome reports, and errors are still `OrbitError`.
 Step 5 added what the engine needs: `on_spawn`, a `Periodic` hook (`every`
-in the sketch, without a stop cause yet), an `extendable_deadline` beside
+in the sketch), an `extendable_deadline` beside
 `timeout`, an `on_stopped_descendant` callback, the flag fallback when no
 wakeup pair can be created, and the post-kill group drain after every exit.
+Step 6 lets `Periodic::run` return `Option<ProcessStopCause>`: build-directory
+checks can stop the group, while progress sampling returns `None` to continue.
 The engine's sink keeps its capture behind a shared handle instead of
 returning it from `finish`, because progress sampling reads it while the
 child runs. The remaining options and `SuperviseError` arrive with the steps

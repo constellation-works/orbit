@@ -181,6 +181,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
             drop(capture);
             (progress.report)(&sample);
         }
+        None
     };
     let outcome = child.supervise(Supervision {
         stdin,

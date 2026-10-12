@@ -33,10 +33,13 @@ pub enum Termination {
 /// A hook supervision runs on its own thread while the child lives.
 pub struct Periodic<'a> {
     /// Time between runs; the first runs one interval after supervision
-    /// starts.
+    /// starts. Must be nonzero.
     pub interval: Duration,
     /// Runs between waits on the child, so never once a wait has seen it exit.
-    pub run: &'a mut dyn FnMut(),
+    /// Returning a cause ends the group with the request's `termination`
+    /// policy. Finish promptly so deadline and cancellation checks are not
+    /// delayed. Return `None` to keep supervising.
+    pub run: &'a mut dyn FnMut() -> Option<ProcessStopCause>,
 }
 
 /// One supervised run of a [`SupervisedChild`](super::SupervisedChild).
@@ -85,7 +88,7 @@ pub struct Supervision<'a> {
 /// What supervising a child observed.
 #[derive(Debug)]
 pub struct Outcome {
-    /// The child exited zero and no sink stopped the run.
+    /// The child exited zero and no sink or periodic check stopped the run.
     pub success: bool,
     pub exit_code: Option<i32>,
     /// What the stdout sink retained.
@@ -95,7 +98,7 @@ pub struct Outcome {
     /// The deadline elapsed and the supervisor ended the child's group.
     pub timed_out: bool,
     /// Every stop the supervisor observed, most significant first: a
-    /// termination without an exit code, then sink stops, then an intercepted
+    /// termination without an exit code, then periodic and sink stops, then an intercepted
     /// signal.
     pub stop_causes: Vec<ProcessStopCause>,
     /// Descendants the stopped-descendant watch ended.

@@ -7,7 +7,8 @@
 //! [`Termination`] policy, a cancellation flag, SIGINT/SIGTERM interception
 //! with fan-out to live child groups, a bounded post-exit drain, an opt-in
 //! stopped-descendant watch, and caller hooks: one at spawn, one run
-//! periodically while the child lives, and a deadline the caller can extend.
+//! periodically while the child lives with an optional caller stop cause,
+//! and a deadline the caller can extend.
 //! The [`Outcome`] carries typed stop metadata, so callers never classify a
 //! run by parsing its output.
 //!
