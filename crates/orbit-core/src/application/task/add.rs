@@ -8,7 +8,9 @@ use orbit_types::task::{
 };
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{random_crew_ticket, seeded_crew_ticket};
+use crate::application::job::crew_pools::{
+    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket,
+};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{
@@ -239,39 +241,57 @@ impl OrbitRuntime {
                 action_key,
                 digest,
             )?;
-            // The create contract carries no history, so the provenance entry
-            // is a second write inside the same mutation as the insert.
-            let task = match &crew_assignment {
-                Some(assignment) if !replayed => self
-                    .stores()
-                    .task_records()
-                    .update(
-                        &task.id,
-                        StoreTaskUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            append_history: vec![crew_assigned_history(assignment)],
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|error| {
-                        if digest.is_some() {
-                            OrbitError::DesktopWriteAccepted {
-                                task_id: task.id.clone(),
-                                reason: format!("creation provenance refresh failed: {error}"),
-                            }
-                        } else {
-                            error
-                        }
-                    })?,
-                _ => task,
-            };
+            // The insert is committed from here on, so its event is published
+            // even when the provenance write below fails.
             let event = (!replayed).then(|| OrbitEvent::TaskAdded {
                 id: task.id.clone(),
             });
+            let task = match &crew_assignment {
+                Some(assignment) if !replayed => {
+                    self.record_creation_crew_provenance(task, assignment, digest)
+                }
+                _ => Ok(task),
+            };
             Ok((task, event))
-        })?;
+        })??;
 
         Ok(task)
+    }
+
+    /// Append the `crew_assigned` history entry to a task just inserted.
+    ///
+    /// The create contract carries no history, so this is a second write
+    /// after the insert has committed. Failing the create here would leave the
+    /// task behind, and an unkeyed retry would insert a duplicate, so the
+    /// created task is returned without the entry; `crew_source` on the task
+    /// still records where its crew came from. A desktop create reports the
+    /// committed id as an accepted write instead.
+    fn record_creation_crew_provenance(
+        &self,
+        task: Task,
+        assignment: &CreationCrewAssignment,
+        digest: Option<&str>,
+    ) -> Result<Task, OrbitError> {
+        let update = self.stores().task_records().update(
+            &task.id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_history: vec![crew_assigned_history(assignment)],
+                ..Default::default()
+            },
+        );
+        match update {
+            Ok(task) => Ok(task),
+            Err(error) if digest.is_some() => Err(OrbitError::DesktopWriteAccepted {
+                task_id: task.id,
+                reason: format!("creation provenance refresh failed: {error}"),
+            }),
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, %error,
+                    "task created but its crew_assigned history entry could not be written");
+                Ok(task)
+            }
+        }
     }
 }
 
