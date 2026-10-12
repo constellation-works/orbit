@@ -5,6 +5,7 @@ use rusqlite::Connection;
 
 use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_state};
 
+mod admission_reservations;
 mod audit_events;
 mod baseline;
 mod feature;
@@ -23,6 +24,7 @@ mod task_commit_journal;
 mod task_reservations;
 
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
+use admission_reservations::apply_admission_reservations;
 use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,
     apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_tool_call_index,

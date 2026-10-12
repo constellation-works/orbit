@@ -289,6 +289,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0046".to_string(),
                 "job_run_step_lock_wait".to_string()
             ),
+            (
+                "migration.v0047".to_string(),
+                "admission_reservations".to_string()
+            ),
         ]
     );
 }
@@ -840,10 +844,10 @@ fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
     assert_eq!(workspace_of("jrun-gone"), None);
 }
 
-/// The two resource-minute tables are additive: a binary without them keeps
-/// opening the migrated database read-write, and upgrade admission sees no
-/// new writer or reader floor, so they force no generation switch while old
-/// drains still run.
+/// The two resource-minute tables, and the admission reservations after them,
+/// are additive: a binary without them keeps opening the migrated database
+/// read-write, and upgrade admission sees no new writer or reader floor, so
+/// they force no generation switch while old drains still run.
 #[test]
 fn resource_minute_tables_keep_an_older_binary_writing() {
     let position = |name: &str| {
@@ -853,7 +857,7 @@ fn resource_minute_tables_keep_an_older_binary_writing() {
             .expect("registered migration")
     };
     let first = position("run_resource_minutes");
-    let last = position("host_resource_minutes");
+    let last = position("admission_reservations");
     let newer = &ledger::MIGRATIONS[..=last];
     let older = &ledger::MIGRATIONS[..first];
 
@@ -863,7 +867,11 @@ fn resource_minute_tables_keep_an_older_binary_writing() {
             .expect("migrate")
             .is_none()
     );
-    for table in ["run_resource_minutes", "host_resource_minutes"] {
+    for table in [
+        "run_resource_minutes",
+        "host_resource_minutes",
+        "admission_reservations",
+    ] {
         assert!(table_exists(&conn, table).expect("introspect"), "{table}");
     }
     let open = ledger::run_migrations(&conn, older)

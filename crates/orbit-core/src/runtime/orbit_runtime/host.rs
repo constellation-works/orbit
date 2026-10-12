@@ -3,11 +3,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_store::contracts::{
+    AdmissionLoadQuery, AdmissionLoadStoreBackend, NewAdmissionReservation,
+};
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 
 use super::OrbitRuntime;
+use crate::runtime::host_resource::delivery::delivery_jobs;
+use crate::runtime::host_resource::forecast::{
+    ForecastDecision, HostLoadForecast, HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
+};
 use crate::runtime::host_resource::profile::{
     ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
 };
@@ -103,6 +110,82 @@ impl OrbitRuntime {
     /// it.
     pub fn resource_profile_for(&self, lookup: &ProfileLookup) -> Result<ProfileMatch, OrbitError> {
         Ok(self.resource_profiles()?.lookup(lookup))
+    }
+
+    /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of
+    /// `/proc`, so a fixture can present a measured host.
+    pub fn with_host_load_proc_root(mut self, proc_root: PathBuf) -> Self {
+        self.host_load = Arc::new(HostLoadProbe::new(proc_root));
+        self
+    }
+
+    /// Decide admissions against the host load forecast, serialized with
+    /// every other admitter on this host: under the host admission lock,
+    /// build the forecast, let `decide` choose, and reserve each task it
+    /// admitted, so the next admitter in any process counts it before its run
+    /// exists.
+    ///
+    /// The running set, reservations and baseline are read fresh inside the
+    /// lock on every call; profiles come from the profile cache. `decide`
+    /// runs while the store is locked for writing: it must only compute over
+    /// the forecast, and not call the store, the network or a subprocess.
+    pub fn admit_against_forecast<T>(
+        &self,
+        decide: impl FnOnce(&HostLoadForecast) -> Result<ForecastDecision<T>, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        self.admit_against_forecast_at(Utc::now(), decide)
+    }
+
+    /// [`Self::admit_against_forecast`] as of `now`: the clock delivery ages,
+    /// reservation expiry and new reservations are measured on.
+    pub fn admit_against_forecast_at<T>(
+        &self,
+        now: DateTime<Utc>,
+        decide: impl FnOnce(&HostLoadForecast) -> Result<ForecastDecision<T>, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let profiles = self.resource_profiles()?;
+        let horizon = self
+            .context
+            .settings()
+            .auto_concurrency()
+            .horizon_cap_minutes;
+        let store = self.sqlite_store()?;
+        // Any wait for a CPU window happens here, outside the lock.
+        self.host_load.prepare();
+        let jobs = delivery_jobs();
+        let query = AdmissionLoadQuery {
+            now,
+            delivery_jobs: &jobs,
+            reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
+        };
+        let mut decide = Some(decide);
+        let mut outcome = None;
+        store.admit_under_host_lock(&query, &mut |load| {
+            let decide = decide.take().ok_or_else(|| {
+                OrbitError::Execution("the admission decision ran twice".to_string())
+            })?;
+            let forecast = build_forecast(
+                load,
+                Arc::clone(&profiles),
+                self.host_load.measure(),
+                horizon,
+                now,
+            );
+            let decision = decide(&forecast)?;
+            outcome = Some(decision.outcome);
+            Ok(decision
+                .admitted
+                .into_iter()
+                .map(|admitted| NewAdmissionReservation {
+                    workspace_id: admitted.lookup.workspace_id,
+                    task_id: admitted.task_id,
+                    work_class: admitted.lookup.work_class,
+                    complexity: admitted.lookup.complexity,
+                    base_class: admitted.lookup.base_class.as_str().to_string(),
+                })
+                .collect())
+        })?;
+        outcome.ok_or_else(|| OrbitError::Execution("the admission decision never ran".to_string()))
     }
 
     fn host_resource_paths(&self) -> Vec<PathBuf> {

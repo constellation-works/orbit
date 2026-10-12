@@ -8,7 +8,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-config/src/registry/settings/machine.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
@@ -16,9 +16,11 @@ related_artifacts: [ORB-15757]
 # Auto-concurrency — Design
 
 > **Status: Draft proposal; rollout steps 1 (Record, §2) and 2 (Profiles
-> report, §3) are implemented.** §1 describes today's code and cites it. §2
-> describes the recording that ships and §3 the profiles `orbit run profiles`
-> reports; everything after it is the proposed design.
+> report, §3) are implemented, and so are the load forecast (§4) and the host
+> admission lock (§5.2) that step 3 builds on.** §1 describes today's code and
+> cites it. §2 describes the recording that ships, §3 the profiles
+> `orbit run profiles` reports, and §4 and §5.2 the forecast and lock, which
+> no drain calls yet; everything else is the proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -319,6 +321,29 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
 - **Reservations.** An admission that has been decided but whose run does not
   exist yet is a reservation (§5.2). It is counted from `t = 0`.
 
+Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`)
+and built only under the host admission lock (§5.2):
+
+- **Running set.** Live (`pending`, `running`, `retrying`) runs of the
+  delivery jobs (`runtime/host_resource/delivery.rs`) in every workspace,
+  grouped per workspace and task. A delivery's class and admission time come
+  from its run input's `resource_class`, else its newest minute; a run with
+  neither is assumed to be `change` work admitted when the run was created.
+  `a_i` is whole minutes since admission. A delivery's current use is the sum
+  of its live runs' newest minutes.
+- **Flat tail.** A delivery past its profile's last minute, or with no
+  profile at all, contributes its current use at every minute.
+- **Baseline.** CPU is busy cores over the interval since the previous
+  `/proc/stat` reading, at least 250 ms; the first call waits for that
+  interval before taking the lock. Memory is `MemTotal − MemAvailable`. `B`
+  never goes below zero. An unreadable host, or a CPU reading with no ticks
+  since the previous one, leaves that baseline unknown, and the series counts
+  it as zero.
+- **Output.** `HostLoadForecast`: the CPU (cores) and memory (bytes) series
+  for `t = 0 … horizon_cap_minutes`, each with its baseline and its peak and
+  minute, plus the running deliveries and reservations with the profile step
+  that described each, and the profiles a caller looks candidates up in.
+
 ## 5. Admission
 
 ### 5.1 Gap fit
@@ -369,6 +394,22 @@ Two drains on one host must not fill the same gap. Each takes a host lock
 A reservation leaves the forecast once its run exists in `job_runs`, or after
 five minutes if dispatch failed. The lock covers only computation over local
 tables, so it is held for milliseconds.
+
+Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
+`admit_under_host_lock`:
+
+- **One entry point.** The caller passes its decision. It gets the forecast
+  and returns its own outcome and the tasks it admitted, each with the profile
+  lookup key it chose. The decision runs while `orbit.db` is locked for
+  writing, so it must not call the store, the network or a subprocess.
+- **Fresh reads.** Each call reads the running set, the reservations and the
+  host load inside the transaction. Only profiles come from the profile cache,
+  read before the lock.
+- **Reservations.** Rows of `admission_reservations` (store schema v47) hold
+  the workspace, task id, work class, complexity, base class and time. A
+  reservation's run is a delivery run in its workspace that names its task and
+  was created at or after the reservation. Rows older than five minutes are
+  deleted when the next lock is taken.
 
 ### 5.3 Starvation
 

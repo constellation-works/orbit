@@ -14,41 +14,18 @@
 use chrono::{DateTime, Utc};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, JobRun, JobRunState};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
+pub(crate) use crate::runtime::host_resource::delivery::DeliveryResourceClass;
+use crate::runtime::host_resource::delivery::{
+    RESOURCE_CLASS_KEY, SUBMITTED_DELIVERY_JOBS, resource_class_in,
+};
 use crate::runtime::run_input::singular_task_id_from_input;
-
-/// Run-input key holding the delivery's [`DeliveryResourceClass`].
-pub(crate) const RESOURCE_CLASS_KEY: &str = "resource_class";
-
-/// The pipelines a delivery is made of, whose submission captures the class.
-const SUBMITTED_DELIVERY_JOBS: &[&str] = &[
-    "task_auto_pipeline",
-    "task_gate_pipeline",
-    "task_pr_pipeline",
-    "task_local_pipeline",
-];
 
 /// Run-input key of a repair claim's candidate (`orbit-store` pull leaf).
 const CLAIM_REPAIR_KEY: &str = "claim_repair";
-
-/// One delivery's profile key and clock, fixed when it was admitted.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct DeliveryResourceClass {
-    pub(crate) task_id: String,
-    pub(crate) work_class: String,
-    #[serde(default)]
-    pub(crate) complexity: Option<String>,
-    /// When the delivery's first run was admitted.
-    pub(crate) admitted_at: DateTime<Utc>,
-    /// A resumed, replayed or retried delivery: its clock restarted part way
-    /// through, so profiles exclude it.
-    #[serde(default)]
-    pub(crate) resumed: bool,
-}
 
 /// The work class of a task with these tags.
 pub(crate) fn work_class(tags: &[String]) -> String {
@@ -63,12 +40,6 @@ pub(crate) fn work_class(tags: &[String]) -> String {
         return "no-diff".to_string();
     }
     "change".to_string()
-}
-
-fn class_in(input: &Value, task_id: &str) -> Option<DeliveryResourceClass> {
-    serde_json::from_value::<DeliveryResourceClass>(input.get(RESOURCE_CLASS_KEY)?.clone())
-        .ok()
-        .filter(|class| class.task_id == task_id)
 }
 
 impl OrbitRuntime {
@@ -99,8 +70,10 @@ impl OrbitRuntime {
         let inherited = parent_run_id
             .and_then(|run_id| self.get_job_run_backend(run_id).ok().flatten())
             .and_then(|parent| parent.input)
-            .and_then(|parent| class_in(&parent, &task_id));
-        let carried = retried.then(|| class_in(input, &task_id)).flatten();
+            .and_then(|parent| resource_class_in(&parent, &task_id));
+        let carried = retried
+            .then(|| resource_class_in(input, &task_id))
+            .flatten();
         let class = inherited.or(carried).or_else(|| {
             self.get_task(&task_id)
                 .ok()
@@ -137,7 +110,7 @@ impl OrbitRuntime {
         }
         let input = run.input.as_ref()?;
         let task_id = singular_task_id_from_input(input)?;
-        let mut class = match class_in(input, task_id) {
+        let mut class = match resource_class_in(input, task_id) {
             Some(class) => class,
             None => {
                 let claimed_complexity = claimed

@@ -62,6 +62,11 @@ Per-minute resource history:
 - Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
 - Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, a fixed window independent of `retention.runs_days`.
 
+Admission reservations:
+
+- Live in the host-wide `admission_reservations` table (workspace, task id, work class, complexity and time; no payloads).
+- Are deleted by the next admission once older than five minutes.
+
 Invocation metrics:
 
 - Live in SQLite as usage records.

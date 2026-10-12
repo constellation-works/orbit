@@ -14,6 +14,7 @@
 orbit_common::isolate_test_process!();
 
 mod actor_identity;
+mod admission_forecast;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod agent_sandbox_mask;
 mod artifact_tools;

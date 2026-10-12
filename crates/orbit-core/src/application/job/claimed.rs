@@ -37,7 +37,7 @@ pub(crate) struct ClaimedLeaf {
 /// a durable admission is a mis-dispatch, not a workload: every step below
 /// `worktree` reads claim context that will never resolve.
 pub(crate) const CLAIMED_LEAF_JOBS: &[&str] =
-    &["task_claimed_local_pipeline", "task_claimed_pr_pipeline"];
+    crate::runtime::host_resource::delivery::CLAIMED_LEAF_JOBS;
 
 impl ClaimedLeaf {
     /// The owner's gates this claim was admitted under [ORB-15622]: the
