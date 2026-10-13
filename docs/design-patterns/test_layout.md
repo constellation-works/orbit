@@ -61,6 +61,7 @@ The principle: keep production directory listings free of `#[cfg(test)]` artefac
 
 - **You're tempted to "fix" a test failure by widening a private to `pub(crate)` purely for test access.** That's the smell the structural enforcement is meant to catch. Either restructure so the seam is at a deliberate public boundary, or accept that the helper is covered transitively through its caller. Visibility widening that exists *only* for tests is debt.
 - **You're writing an integration test that exercises the crate's public API end-to-end.** Add a module to the crate's integration binary for that area, `tests/<area>/main.rs` ([Integration-test cost](test_strategy.md#integration-test-cost)). It compiles against the crate's public surface, which is exactly what integration tests want.
+- Persistence and index lifecycle behavior that can use exported store and query helpers belongs in that area binary too; `crates/orbit-search/tests/lexical/main.rs` covers its SQLite migration and synchronous FTS updates through `LexicalIndex`.
 - **The module has zero non-trivial logic worth a unit test.** Don't scaffold an empty `tests/` for the sake of uniformity.
 
 ## Edge case: standalone top-level files
