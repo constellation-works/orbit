@@ -1416,7 +1416,7 @@ function activeRefreshJobs() {
 
   if (activeTab === "diagnostics") {
     // Most diagnostics fetches are per-workspace. Runs has a bounded aggregate
-    // endpoint; Metrics, errors, friction and Scoreboard still require a
+    // endpoint; Metrics, errors, friction and Cost still require a
     // concrete workspace and show placeholders without one.
     // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
@@ -1440,17 +1440,15 @@ function activeRefreshJobs() {
       renderDiagnosticsPlaceholders();
       return jobs;
     }
-    if (activeDiagSubtab === "scoreboard") {
-      // ORB-10444: Scoreboard folded in from the retired top-level tab.
-      // ORB-10872: every refresh honors the shared dashboard window so
-      // delivery/operations and Managed Execution stay on the same cutoff.
-      // A mismatched window, a superseded request, or a stale workspace
-      // visit is not painted.
-      add("Health › Scoreboard", fetchAndRenderScoreboard());
+    if (activeDiagSubtab === "cost") {
+      // ORB-15921: Cost kept the managed-execution panel from Scoreboard.
+      // Every refresh honors the shared dashboard window. A mismatched
+      // window, a superseded request, or a stale workspace visit is not painted.
+      add("Health › Cost", fetchAndRenderScoreboard());
       return jobs;
     }
     if (activeDiagSubtab === "metrics") {
-      // ORB-15746: trends follow the shared window like the Scoreboard.
+      // ORB-15746: trends follow the shared window like Cost.
       add("Health › Metrics", fetchAndRenderMetrics());
       return jobs;
     }

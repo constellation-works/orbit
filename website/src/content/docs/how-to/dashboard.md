@@ -149,7 +149,7 @@ prove that a particular task or run succeeded.
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
-| **Health** | Incidents, Doctor, Errors, Reliability, Metrics, and Scoreboard. |
+| **Health** | Incidents, Doctor, Errors, Reliability, Metrics, and Cost. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
@@ -319,15 +319,16 @@ From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
 
 The Audit **Failure categories**, **Unexpected Failures by Callable Tool**,
-and **Lifecycle diagnostics** views, plus the Health scoreboard, use the capped
-incident scan. When the scan reaches its limit, each view marks its counts as
-**capped** and shows partial coverage. These counts cover only the newest
-non-success audit rows in the selected window; older failures and affected runs
-may be omitted. Per-tool unexpected-failure rates use the scanned failure
-counts with successful-call counts from the full window, so rates may be
-understated. A zero in the scoreboard means no incidents in that scanned
-sample. Total audited events and raw tool-call counts still cover the full
-window.
+and **Lifecycle diagnostics** views use the capped incident scan. When the scan
+reaches its limit, each view marks its counts as **capped** and shows partial
+coverage. These counts cover only the newest non-success audit rows in the
+selected window; older failures and affected runs may be omitted. Per-tool
+unexpected-failure rates use the scanned failure counts with successful-call
+counts from the full window, so rates may be understated. Total audited events
+and raw tool-call counts still cover the full window.
+
+Health › Cost (`#diagnostics/cost`) shows managed-execution cost and token
+usage for the selected window. Older `#diagnostics/scoreboard` links open Cost.
 
 ## Automation
 
