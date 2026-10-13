@@ -918,7 +918,18 @@ per attempt so a commit landed from another machine is not misread as missing. C
 conflict, unsatisfied protection or an exhausted check budget records a durable stop and leaves the
 task in `review`, except that a repairable stop starts the automatic repair above. A hosted check the
 accepted before-landing review owed the owner (`owner_owed_evidence`) must report an explicit success on the
-pinned head before the merge is sent; a skipped or neutral result keeps the owner waiting, and a failed one stops the landing [ORB-15677]. Owner-local candidates fast-forward the local landing branch and are verified
+pinned head before the merge is sent; a skipped or neutral result keeps the owner waiting [ORB-15677].
+A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
+error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
+same job passes on the moved landing tip) updates the pull request branch from the landing branch
+once; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
+once; `candidate` is a repairable stop whose evidence carries the signature and log excerpt. Past
+that budget, or when the jobs or log are unreadable, the landing stops in `review` with the
+classification. A branch-updated head is merged only when it is a two-parent merge of the accepted
+candidate and a commit on the landing branch whose tree equals their clean `merge-tree`; the
+accepted candidate and its evidence stay the validated commit. A claimed leaf whose required
+command failed on a red base that the follower has since recorded green releases `baseline_red`
+without a hold, keeping its candidate for the next claim. Owner-local candidates fast-forward the local landing branch and are verified
 from the ref; before the branch moves, the owner retains a direct landing intent naming the
 handoff's task, so delivery consumers attribute the fast-forward. No-diff delivery verifies its covering commit on the landing ref with no external
 call. Every completion re-runs authorization, candidate and validation checks inside the
@@ -1294,5 +1305,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-15191] — made a multi-slot local drain or discovery ship wait for the task pilot to prepare empty-context backlog work (`awaiting_footprint`), then run it only alone (`awaiting_exclusive_slot`), after three such tasks edited one stylesheet concurrently.
 - [ORB-15285] — kept a review-filed task's evidence selectors through task-pilot assessments that propose only modification targets.
 - [ORB-15705] — pruned settled claims' mutation receipts 7 days after their last mutation, keeping claim and lifecycle rows as the namespace that refuses a late replay.
+- [ORB-15956] — classified a landing's failed pull request check as inherited, transient or candidate, each with a one-time recovery, and let a red base recorded green release without a hold.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

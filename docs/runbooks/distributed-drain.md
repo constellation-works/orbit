@@ -749,7 +749,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   at capacity), `environment` (validation lacked a tool), `owner_route` (the
   leaf could not reach the owner), `baseline_red` (required validation fails
   on the base exactly as on the candidate; the owner holds the task until the
-  base passes), `transient` (validation could not reach the network after its
+  base passes. When the follower has already recorded that command passing
+  on the base branch's current tip, the release carries no hold and keeps
+  the candidate, which the task's next claim resumes on that base), `transient` (validation could not reach the network after its
   reruns, the forge kept refusing the leaf's push past its retry window
   (`[forge_unavailable]`), an Orbit upgrade refused the leaf's agent mid-step
   (`[upgrade_pending]`, see [in-flight agent steps during a binary swap](upgrades.md#in-flight-agent-steps-during-a-binary-swap)),
@@ -1165,6 +1167,26 @@ one. From then on:
 - Each accepted handoff is authorized in the same transaction that moves the
   task to `review`, and `task_landing_pipeline` starts at once. The task
   reaches `done` when the landing job has verified the merge.
+- When a pull request's hosted check fails, the landing classifies each
+  failed job from its failed-step log (the CI sweep's log read and error
+  signature) before it stops anything:
+  - **inherited**: the same signature fails on the candidate's base commit,
+    or the landing branch has moved past that base and the same job passes
+    on its tip. The landing updates the pull request's branch from the
+    landing branch once and waits for the checks on the new head. No agent
+    runs. The owner merges that head only when it is a clean merge of the
+    accepted candidate with a commit already on the landing branch.
+  - **transient**: the log shows the network or the runner giving out. The
+    landing reruns the failed jobs once and judges the rerun.
+  - **candidate**: anything else. The landing stops for the claim's one
+    automatic repair, the same repair a conflicting base gets, and the stop
+    evidence carries the failed step's signature and log excerpt for the
+    repair leaf.
+
+  Each of the rerun, the branch update and the repair is spent once. A
+  failure past that budget, or one the landing cannot classify (its jobs or
+  log are unreadable), stops the landing with the task in `review` and the
+  classification in the stop evidence (`orbit task show <task-id>`).
 - Claims admitted before the change keep their `review` contract and still
   need **Approve handoff**.
 - Setting the key back to `review` (or removing it) stops every handoff that

@@ -143,6 +143,45 @@ pub(super) fn pr_close(input: &Value) -> Result<Value, OrbitError> {
     }))
 }
 
+/// [ORB-15956] Merge the base branch's current tip into a pull request's
+/// branch, as the provider's "update branch" does. `expected_head_sha` makes
+/// the provider refuse a head that moved after the caller read it.
+/// Single-shot: a retry after an ambiguous failure could merge twice.
+pub(super) fn pr_update_branch(input: &Value) -> Result<Value, OrbitError> {
+    let number = required_string(input, "pr")?;
+    let expected_head = required_string(input, "expected_head_sha")?;
+    let workspace_path = required_string(input, "workspace_path")?;
+    if !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid private automation VCS PR update selector '{number}'; expected a pull \
+             request number in the workspace repository"
+        )));
+    }
+    if !valid_expected_remote_sha(Some(expected_head)) {
+        return Err(OrbitError::InvalidInput(
+            "PR branch update requires an exact 40- or 64-character expected_head_sha".into(),
+        ));
+    }
+    let result = execute(
+        "gh",
+        vec![
+            "api".to_string(),
+            format!("repos/{{owner}}/{{repo}}/pulls/{number}/update-branch"),
+            "--method".to_string(),
+            "PUT".to_string(),
+            "-f".to_string(),
+            format!("expected_head_sha={expected_head}"),
+        ],
+        Some(Path::new(workspace_path)),
+        SLOW_TIMEOUT_MS,
+        "PR branch update",
+    )?;
+    Ok(json!({
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }))
+}
+
 pub(super) fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
     let workspace_path = required_string(input, "workspace_path")?;

@@ -32,7 +32,7 @@ use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
-use super::drain::{PullLauncher, PullPeer};
+use super::drain::{PullLauncher, PullPeer, recorded_base_no_longer_red};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::WorkerLaunchError;
 
@@ -241,6 +241,10 @@ impl LeafPullLauncher<'_> {
 }
 
 impl PullLauncher for LeafPullLauncher<'_> {
+    fn base_no_longer_red(&self, hold: &orbit_types::workflow::BaselineRedHold) -> Option<String> {
+        recorded_base_no_longer_red(&self.runtime.paths().repo_root, hold)
+    }
+
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {
         let bound = self.bound_runtime(admission)?;
         let run_id = bound

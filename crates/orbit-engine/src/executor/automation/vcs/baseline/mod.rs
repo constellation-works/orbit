@@ -64,7 +64,9 @@ pub(super) use cache::{CachePaths, cache_paths};
 pub(super) use cache::{cached_base_check, in_detached_worktree};
 #[allow(unused_imports)]
 pub(super) use command::NETWORK_RETRIES;
-pub(super) use command::{run_validation_command, run_validation_command_until};
+pub(super) use command::{
+    network_inconclusive, run_validation_command, run_validation_command_until,
+};
 pub use compare::BaseCommandResult;
 pub(crate) use compare::FAILING_TESTS_KEY;
 pub(super) use compare::{

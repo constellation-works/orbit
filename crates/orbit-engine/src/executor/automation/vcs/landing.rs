@@ -23,7 +23,11 @@
 //!    validation and a new handoff; this activity never rebases, force-pushes
 //!    or merges around a gate. A stop on a conflicting or stale base is
 //!    recorded as repairable, and the owner store hands that candidate to one
-//!    automatic repair leaf that does exactly that [ORB-14261].
+//!    automatic repair leaf that does exactly that [ORB-14261]. A failed
+//!    hosted check is classified first ([`super::landing_checks`]): a failure
+//!    inherited from the base updates the branch onto the current base once,
+//!    a transient one is rerun once, and one the candidate caused stops for
+//!    the same single repair [ORB-15956].
 //!
 //! The guarded `review -> done` transition is the owner store's, behind its own
 //! recheck of the current authorization and the digest-pinned validation
@@ -45,6 +49,9 @@ use crate::context::{
 use super::super::ci::bounded_u64;
 use super::super::input::input_string_field;
 use super::git::{fetch_remote_base, git_command_success, git_output};
+use super::landing_checks::{
+    CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks, verified_base_update,
+};
 use super::operations;
 use super::pr::{
     DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus, classify_pr_state,
@@ -180,7 +187,8 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
             let status = read_pr_status(host, &context.workspace_path, &number.to_string())?;
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
-                    let pin = pin_for(candidate);
+                    let mut pin = pin_for(candidate);
+                    adopt_base_update(&mut pin, context, &status);
                     let evidence = match pin.ensure_delivered(&status, &number.to_string()) {
                         Ok(delivered) => json!({
                             "reconciled": "pull_request_merged",
@@ -276,7 +284,8 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     let pr_number = number.to_string();
     let workspace = context.workspace_path.clone();
     let workspace_path = workspace.to_string_lossy().into_owned();
-    let pin = pin_for(candidate);
+    let mut pin = pin_for(candidate);
+    let mut recovery = CheckRecovery::default();
 
     let max_wait_seconds = bounded_u64(
         input,
@@ -297,6 +306,9 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     loop {
         let status = read_pr_status(host, &workspace, &pr_number)?;
         let state = classify_pr_state(&status);
+        // [ORB-15956] A branch update this landing (or an earlier attempt)
+        // requested moved the head onto a verified merge with the base.
+        let updated_head = adopt_base_update(&mut pin, context, &status);
         if let PrMergeState::Merged = state {
             let delivered = match pin.ensure_delivered(&status, &pr_number) {
                 Ok(delivered) => delivered,
@@ -304,11 +316,17 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 // handoff's delivery, whatever it merged.
                 Err(error) => return Err(stop(host, context, &error.to_string())?),
             };
-            let evidence = json!({
+            let mut evidence = json!({
                 "delivery": delivered.as_json(),
                 "pull_request": number,
                 "candidate": candidate.candidate.commit,
             });
+            if let Some(head) = &updated_head {
+                evidence["updated_head"] = json!(head);
+            }
+            if let Some(actions) = recovery.evidence() {
+                evidence["check_recovery"] = actions;
+            }
             let observed = observe_or_stop(host, context, Some(&status), view)?;
             if let Some(intent_id) = intent {
                 record(
@@ -335,17 +353,51 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         // each reports an explicit success on the pinned head. A skipped or
         // neutral result keeps waiting. Branch protection is separate.
         let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
-        if let OwedHostedChecks::Failed(reason) = &owed {
-            return Err(stop(
+        // [ORB-15956] A failed check, owed or required, is classified and
+        // recovered before anything stops on it.
+        let failed = failed_checks(&status);
+        let check_reason = match (&owed, &state) {
+            (OwedHostedChecks::Failed(reason), _) => Some(format!(
+                "pull request #{pr_number}: {reason}; the review owed it to that check"
+            )),
+            (_, PrMergeState::Blocked(reason)) if !failed.is_empty() && !behind_base(&status) => {
+                Some(format!(
+                    "pull request #{pr_number} cannot be merged ({reason})"
+                ))
+            }
+            _ => None,
+        };
+        let mut waiting_on_recovery = false;
+        if let Some(reason) = check_reason {
+            if failed.is_empty() {
+                return Err(stop(
+                    host,
+                    context,
+                    &format!("{reason}, so the candidate stays in review"),
+                )?);
+            }
+            let tip = landing_tip(context, view);
+            match recover_failed_checks(
                 host,
                 context,
-                &format!(
-                    "pull request #{pr_number}: {reason}; the review owed it to that check, so \
-                     the candidate stays in review"
-                ),
-            )?);
+                &status,
+                &failed,
+                tip.as_deref(),
+                &mut recovery,
+                &reason,
+            )? {
+                CheckRecoveryStep::Acted => continue,
+                CheckRecoveryStep::Wait => waiting_on_recovery = true,
+                CheckRecoveryStep::Repair(evidence) => {
+                    return Err(stop_for_repair(host, context, &evidence)?);
+                }
+                CheckRecoveryStep::Stop(evidence) => {
+                    return Err(stop(host, context, &evidence)?);
+                }
+            }
         }
         match state {
+            _ if waiting_on_recovery => {}
             PrMergeState::Merged => unreachable!("merged is handled above"),
             PrMergeState::Closed => {
                 return Err(stop(
@@ -414,6 +466,10 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 let intent_id = format!("{}:{pr_number}", context.handoff_id);
                 // Durable before the external mutation: a lost reply after this
                 // point is uncertainty the next attempt reconciles.
+                let head = pin
+                    .candidate_sha()
+                    .unwrap_or(&candidate.candidate.commit)
+                    .to_string();
                 record(
                     host,
                     context,
@@ -426,6 +482,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         "pull_request": number,
                         "strategy": capabilities.strategy.as_str(),
                         "candidate": candidate.candidate.commit,
+                        "head": head,
                     }),
                 )?;
                 intent = Some(intent_id);
@@ -437,7 +494,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         "pr": pr_number,
                         "strategy": capabilities.strategy.as_str(),
                         "auto": false,
-                        "reviewed_head_sha": candidate.candidate.commit,
+                        "reviewed_head_sha": head,
                         "workspace_path": workspace_path,
                     }),
                 )?;
@@ -790,6 +847,72 @@ fn contains_commit(workspace: &Path, reference: &str, commit: &str) -> Result<bo
         workspace,
         &["merge-base", "--is-ancestor", commit, reference],
     )
+}
+
+/// [ORB-15956] Pin the pull request's reported head instead of the accepted
+/// candidate when it is a verified provider branch update of that candidate.
+/// Returns the adopted head. Any other head is left to the pin to refuse.
+fn adopt_base_update(
+    pin: &mut DeliveryPin,
+    context: &HandoffLandingContext,
+    status: &PullRequestStatus,
+) -> Option<String> {
+    let candidate = &context.candidate;
+    let head = status.head_sha.as_deref()?;
+    if head == candidate.candidate.commit
+        || status.head_branch.as_deref() != Some(candidate.source_branch.as_str())
+    {
+        return None;
+    }
+    let landing = resolve_landing_ref(
+        &context.workspace_path,
+        &candidate.landing_branch,
+        &candidate.delivery,
+    )
+    .ok()?;
+    match verified_base_update(
+        &context.workspace_path,
+        &candidate.candidate.commit,
+        head,
+        &candidate.source_branch,
+        &landing,
+    ) {
+        Ok(()) => {
+            if pin.candidate_sha() != Some(head) {
+                pin.adopt_refreshed_candidate(Some(head));
+            }
+            Some(head.to_string())
+        }
+        Err(refusal) => {
+            tracing::warn!(
+                head,
+                refusal,
+                "handoff_land: the pull request's head is not a verified base update of the \
+                 candidate"
+            );
+            None
+        }
+    }
+}
+
+/// The landing branch's current commit in the owner checkout, refreshed from
+/// `origin` when the landing reads published delivery.
+fn landing_tip(context: &HandoffLandingContext, view: &LandingView) -> Option<String> {
+    let candidate = &context.candidate;
+    if view.refreshed {
+        let _ = fetch_remote_base(&context.workspace_path, &candidate.landing_branch);
+    }
+    let landing = resolve_landing_ref(
+        &context.workspace_path,
+        &candidate.landing_branch,
+        &candidate.delivery,
+    )
+    .ok()?;
+    git_output(
+        &context.workspace_path,
+        &["rev-parse", &format!("{landing}^{{commit}}")],
+    )
+    .ok()
 }
 
 fn pin_for(candidate: &HandoffCandidate) -> DeliveryPin {
