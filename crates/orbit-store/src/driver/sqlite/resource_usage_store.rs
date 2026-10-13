@@ -1,5 +1,6 @@
 //! Per-minute run and host resource history in `run_resource_minutes` and
-//! `host_resource_minutes`.
+//! `host_resource_minutes`, and admission pass forecasts in
+//! `admission_forecasts`.
 //!
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
 //! so SQLite orders and compares them as text.
@@ -11,8 +12,9 @@ use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{
-    DeliveryRunResources, DeliveryRunsFreshness, HostResourceMinute, ResourceMinuteLoad,
-    ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
+    AdmissionForecastPoint, AdmissionForecastRecord, DeliveryRunResources, DeliveryRunsFreshness,
+    HostResourceMinute, ResourceMinuteLoad, ResourceMinutesTable, ResourceUsageStoreBackend,
+    RunResourceMinute,
 };
 
 fn stamp(at: DateTime<Utc>) -> String {
@@ -26,6 +28,19 @@ fn bytes(value: u64) -> i64 {
 
 fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
+}
+
+fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
+    serde_json::to_string(value)
+        .map_err(|error| OrbitError::Store(format!("encode an admission forecast: {error}")))
+}
+
+/// A JSON column read back; a value this binary cannot read is a
+/// conversion failure of that column.
+fn decode<T: serde::de::DeserializeOwned>(index: usize, raw: &str) -> rusqlite::Result<T> {
+    serde_json::from_str(raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, error.into())
+    })
 }
 
 impl ResourceUsageStoreBackend for Store {
@@ -259,6 +274,79 @@ impl ResourceUsageStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
+    fn record_admission_forecast(
+        &self,
+        record: &AdmissionForecastRecord,
+    ) -> Result<(), OrbitError> {
+        let points = encode(&record.points)?;
+        let admitted = encode(&record.admitted)?;
+        let fit_admitted = encode(&record.fit_admitted)?;
+        let fit_skipped = encode(&record.fit_skipped)?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    r#"
+                    INSERT INTO admission_forecasts (
+                        workspace_id, run_id, forecast_at, mode, cpu_count,
+                        memory_total_bytes, points_json, admitted_json,
+                        fit_admitted_json, fit_skipped_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    "#,
+                    params![
+                        record.workspace_id,
+                        record.run_id,
+                        stamp(record.forecast_at),
+                        record.mode,
+                        record.cpu_count,
+                        record.memory_total_bytes.map(bytes),
+                        points,
+                        admitted,
+                        fit_admitted,
+                        fit_skipped,
+                    ],
+                )
+                .map(|_| ())
+                .map_err(sqlite_store_error)
+        })
+    }
+
+    fn admission_forecasts(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<AdmissionForecastRecord>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT workspace_id, run_id, forecast_at, mode, cpu_count,
+                       memory_total_bytes, points_json, admitted_json,
+                       fit_admitted_json, fit_skipped_json
+                FROM admission_forecasts
+                WHERE forecast_at >= ?1
+                ORDER BY forecast_at, rowid
+                "#,
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = statement
+            .query_map(params![stamp(since)], |row| {
+                Ok(AdmissionForecastRecord {
+                    workspace_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    forecast_at: crate::parse_timestamp(&row.get::<_, String>(2)?)?,
+                    mode: row.get(3)?,
+                    cpu_count: row.get(4)?,
+                    memory_total_bytes: row.get::<_, Option<i64>>(5)?.map(unsigned),
+                    points: decode::<Vec<AdmissionForecastPoint>>(6, &row.get::<_, String>(6)?)?,
+                    admitted: decode(7, &row.get::<_, String>(7)?)?,
+                    fit_admitted: decode(8, &row.get::<_, String>(8)?)?,
+                    fit_skipped: decode(9, &row.get::<_, String>(9)?)?,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
+    }
+
     fn resource_minutes_older_than(
         &self,
         table: ResourceMinutesTable,
@@ -271,6 +359,9 @@ impl ResourceUsageStoreBackend for Store {
             }
             ResourceMinutesTable::Host => {
                 "SELECT COUNT(*) FROM host_resource_minutes WHERE minute_at < ?1"
+            }
+            ResourceMinutesTable::AdmissionForecast => {
+                "SELECT COUNT(*) FROM admission_forecasts WHERE forecast_at < ?1"
             }
         };
         conn.query_row(sql, params![stamp(cutoff)], |row| row.get::<_, i64>(0))
@@ -294,6 +385,10 @@ impl ResourceUsageStoreBackend for Store {
             ResourceMinutesTable::Host => {
                 "DELETE FROM host_resource_minutes WHERE rowid IN ( \
                      SELECT rowid FROM host_resource_minutes WHERE minute_at < ?1 LIMIT ?2)"
+            }
+            ResourceMinutesTable::AdmissionForecast => {
+                "DELETE FROM admission_forecasts WHERE rowid IN ( \
+                     SELECT rowid FROM admission_forecasts WHERE forecast_at < ?1 LIMIT ?2)"
             }
         };
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {

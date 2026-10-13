@@ -71,4 +71,4 @@ Maintenance:
   orbit run cancel <run_id>
   orbit run concurrency <run_id> --set 7
   orbit run extend <run_id> --for 2h [--concurrency <N>]
-  orbit run profiles [--json]
+  orbit run profiles [--accuracy] [--json]

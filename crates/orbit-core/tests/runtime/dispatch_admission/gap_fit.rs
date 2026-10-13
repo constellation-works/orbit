@@ -13,7 +13,9 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{ResourceUsageStoreBackend, RunResourceMinute};
+use orbit_store::contracts::{
+    AdmissionForecastPoint, ResourceUsageStoreBackend, RunResourceMinute,
+};
 use orbit_tools::ToolContext;
 use orbit_types::workflow::{DrainAdmissionForecast, JobRun, JobRunState};
 use serde_json::{Value, json};
@@ -594,4 +596,89 @@ fn a_pass_gap_fit_refuses_entirely_polls() {
     let record = recorded(&fixture.runtime, &drain, &pass);
     assert_eq!(record.skipped[0].task_id, heavy);
     let _: DateTime<Utc> = record.forecast_at.unwrap();
+}
+
+/// `shadow` and `enforce` passes each record the forecast at the offsets
+/// inside the horizon (10 minutes here, so +5 and +10), counting what the
+/// pass admitted, with the pass's decisions; `off` records nothing. The
+/// accuracy report counts, per drain, what shadow would have held.
+#[test]
+fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
+    if !isolated(
+        "dispatch_admission::gap_fit::shadow_and_enforce_passes_record_their_forecast_and_off_records_none",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("off", "");
+    fixture.finished_delivery("hard", &[1.0, 1.0, 1.0, 6.0, 1.0]);
+    fixture.finished_delivery("medium", &[1.0, 6.0, 1.0]);
+    // Long enough to still run at +5.
+    fixture.finished_delivery("low", &[0.5; 8]);
+    fixture.running_hard_delivery();
+    let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+    let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+    let store = fixture.runtime.sqlite_store().unwrap();
+    let since = Utc::now() - Duration::hours(1);
+
+    let off = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&off), vec![heavy.clone(), light.clone()]);
+    assert!(store.admission_forecasts(since).unwrap().is_empty());
+
+    let shadow = classify(&fixture.with_mode("shadow", ""), &drain, 4);
+    assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
+    let enforce = classify(&fixture.with_mode("enforce", ""), &drain, 4);
+    assert_eq!(admitted(&enforce), vec![light.clone()], "{enforce:#}");
+
+    let records = store.admission_forecasts(since).unwrap();
+    let [shadow_record, enforce_record] = records.as_slice() else {
+        panic!("{records:#?}");
+    };
+    assert_eq!(shadow_record.mode, "shadow");
+    assert_eq!(shadow_record.admitted, vec![heavy.clone(), light.clone()]);
+    assert_eq!(enforce_record.mode, "enforce");
+    assert_eq!(enforce_record.admitted, vec![light.clone()]);
+    // The running `hard` delivery is over by +5 and the CPU baseline is
+    // unknown, so the CPU is the admitted `low` delivery's 0.5 cores; memory
+    // is the 2 GiB in use plus its 1 GiB. `medium` is over by then too.
+    let expected = vec![
+        AdmissionForecastPoint {
+            offset_minutes: 5,
+            cpu_cores: 0.5,
+            memory_bytes: 3 * GIB,
+        },
+        AdmissionForecastPoint {
+            offset_minutes: 10,
+            cpu_cores: 0.0,
+            memory_bytes: 2 * GIB,
+        },
+    ];
+    for record in [shadow_record, enforce_record] {
+        assert_eq!(record.workspace_id, fixture.workspace_id());
+        assert_eq!(record.run_id, drain);
+        assert_eq!(record.cpu_count, Some(10));
+        assert_eq!(record.memory_total_bytes, Some(32 * GIB));
+        assert_eq!(record.points, expected, "{record:#?}");
+        assert_eq!(record.fit_admitted, vec![light.clone()]);
+        assert_eq!(record.fit_skipped, vec![heavy.clone()]);
+    }
+
+    let report = fixture.runtime.forecast_accuracy().unwrap();
+    assert_eq!(report.forecasts, 2);
+    let [decisions] = report.drains.as_slice() else {
+        panic!("{report:#?}");
+    };
+    assert_eq!(decisions.run_id, drain);
+    assert_eq!((decisions.shadow_passes, decisions.enforce_passes), (1, 1));
+    assert_eq!(decisions.admitted, 2);
+    assert_eq!(decisions.would_hold, vec![heavy]);
+    assert!(decisions.would_add.is_empty(), "{decisions:#?}");
+    // No worker has measured the host yet, so nothing pairs.
+    assert!(report.pairs.is_empty());
+    let unmeasured: Vec<(u32, u64)> = report
+        .offsets
+        .iter()
+        .map(|offset| (offset.offset_minutes, offset.unmeasured))
+        .collect();
+    assert_eq!(unmeasured, vec![(5, 2), (10, 2), (20, 0), (30, 0)]);
 }

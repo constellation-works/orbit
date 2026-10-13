@@ -429,8 +429,9 @@ fn run_retention_drops_terminal_state_and_keeps_run_history() {
     assert_eq!(check["status"], "ok");
 }
 
-/// The per-minute run and host resource history is pruned by run retention
-/// after 30 days, host-wide, whatever window the run sweep uses.
+/// The per-minute run and host resource history, and the admission forecasts
+/// checked against it, are pruned by run retention after 30 days, host-wide,
+/// whatever window the run sweep uses.
 #[test]
 fn run_retention_prunes_resource_minutes_past_thirty_days() {
     const TEST: &str = "store_gc::run_retention_prunes_resource_minutes_past_thirty_days";
@@ -467,6 +468,16 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
             )
             .unwrap();
         }
+        for (workspace, days) in [("ws_a", 31), ("ws_b", 60), ("ws_a", 2)] {
+            db.execute(
+                "INSERT INTO admission_forecasts (workspace_id, run_id, forecast_at, mode, \
+                     cpu_count, memory_total_bytes, points_json, admitted_json, \
+                     fit_admitted_json, fit_skipped_json) \
+                 VALUES (?1, 'jrun-drain', ?2, 'shadow', 16, 4096, '[]', '[]', '[]', '[]')",
+                params![workspace, stamp(days)],
+            )
+            .unwrap();
+        }
     }
 
     let plan = fixture.json(&["gc", "runs", "--json"]);
@@ -476,6 +487,9 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
     assert_eq!(tables[0]["rows"], 2);
     assert_eq!(tables[1]["table"], "host_resource_minutes");
     assert_eq!(tables[1]["rows"], 2);
+    assert_eq!(tables[2]["table"], "admission_forecasts");
+    assert_eq!(tables[2]["retention_days"], 30);
+    assert_eq!(tables[2]["rows"], 2);
     assert_eq!(
         fixture.count("SELECT COUNT(*) FROM run_resource_minutes"),
         3
@@ -491,6 +505,7 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
     ]);
     assert_eq!(applied["resource_minutes"][0]["rows_removed"], 2);
     assert_eq!(applied["resource_minutes"][1]["rows_removed"], 2);
+    assert_eq!(applied["resource_minutes"][2]["rows_removed"], 2);
     assert_eq!(
         fixture.count("SELECT COUNT(*) FROM run_resource_minutes WHERE run_id = 'jrun-recent'"),
         1
@@ -503,6 +518,7 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
         fixture.count("SELECT COUNT(*) FROM host_resource_minutes"),
         1
     );
+    assert_eq!(fixture.count("SELECT COUNT(*) FROM admission_forecasts"), 1);
 }
 
 fn find_check<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {

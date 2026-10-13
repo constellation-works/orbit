@@ -62,6 +62,11 @@ Per-minute resource history:
 - Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
 - Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, a fixed window independent of `retention.runs_days`.
 
+Admission forecasts:
+
+- Live in the host-wide `admission_forecasts` table (drain workspace and run, forecast time and mode, host size, forecast values, and the task ids the pass admitted and gap fit judged; no payloads).
+- Are pruned with the per-minute resource history by `orbit gc runs --apply` when older than 30 days.
+
 Admission reservations:
 
 - Live in the host-wide `admission_reservations` table (workspace, task id, work class, complexity and time; no payloads).

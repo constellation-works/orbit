@@ -3,6 +3,12 @@ Show what each kind of delivery costs on this host, minute by minute
 Usage: orbit run profiles [OPTIONS]
 
 Options:
+      --accuracy
+          Compare recorded admission forecasts with the host's measured load
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
@@ -13,14 +19,11 @@ Options:
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
-      --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
 
       --json
           Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
 
   -h, --help
           Print help (see a summary with '-h')
@@ -33,6 +36,10 @@ BUILD_FLAG marks no-diff profiles, and templates whose tasks are `no-diff-expect
 
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.
 
+`--accuracy` reports instead how well the host load forecast held up, from what drains in `machine.auto_concurrency.mode` `shadow` or `enforce` recorded each admission pass over the last 30 days: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR is its mean, UNDER how often the forecast was below the measured load, and WORST the largest miss with the minute it forecast. A point whose minute has no measurement yet is counted as unmeasured. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted that it did not. `--json` adds every forecast point paired with its measured minute.
+
 Examples:
   orbit run profiles
   orbit run profiles --json
+  orbit run profiles --accuracy
+  orbit run profiles --accuracy --json

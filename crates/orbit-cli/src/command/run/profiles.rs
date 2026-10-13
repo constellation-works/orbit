@@ -1,9 +1,11 @@
-//! `orbit run profiles` — the host's delivery resource profiles.
+//! `orbit run profiles` — the host's delivery resource profiles, and with
+//! `--accuracy` how well admission forecasts matched the measured host.
 
 use std::fmt::Write as _;
 
 use clap::Args;
 use orbit_core::OrbitRuntime;
+use orbit_core::runtime::host_resource::accuracy::{ErrorSummary, ForecastAccuracy};
 use orbit_core::runtime::host_resource::profile::{
     BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, ResourceProfile,
 };
@@ -34,12 +36,29 @@ building. The deliveries behind each flag are named below the table. Templates t
 design, such as qa-sweep, are never flagged.\n\n\
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, \
 memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.\n\n\
-Examples:\n  orbit run profiles\n  orbit run profiles --json"
+`--accuracy` reports instead how well the host load forecast held up, from what drains in \
+`machine.auto_concurrency.mode` `shadow` or `enforce` recorded each admission pass over the last \
+30 days: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
+the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR \
+is its mean, UNDER how often the forecast was below the measured load, and WORST the largest \
+miss with the minute it forecast. A point whose minute has no measurement yet is counted as \
+unmeasured. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
+tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
+that it did not. `--json` adds every forecast point paired with its measured minute.\n\n\
+Examples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  \
+orbit run profiles --accuracy --json"
 )]
-pub struct RunProfilesArgs {}
+pub struct RunProfilesArgs {
+    /// Compare recorded admission forecasts with the host's measured load
+    #[arg(long)]
+    pub accuracy: bool,
+}
 
 impl Execute for RunProfilesArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        if self.accuracy {
+            return accuracy(runtime);
+        }
         let profiles = runtime.resource_profiles()?;
         let doc = json!({
             "built_at": profiles.built_at,
@@ -148,4 +167,101 @@ fn build_flags(profiles: &[std::sync::Arc<ResourceProfile>]) -> Option<String> {
         }
     }
     Some(text)
+}
+
+/// `--accuracy`: per-offset forecast error, then per-drain shadow decisions.
+fn accuracy(runtime: &OrbitRuntime) -> CommandOut {
+    use crate::output::table::{Column, Table};
+    use comfy_table::Cell;
+
+    let report = runtime.forecast_accuracy()?;
+    let doc = serde_json::to_value(&report).map_err(|error| {
+        orbit_core::OrbitError::Execution(format!("encode forecast accuracy: {error}"))
+    })?;
+    let mut offsets = Table::new(vec![
+        Column::new("OFFSET").fixed(),
+        Column::new("PAIRS").fixed(),
+        Column::new("CPU_MEAN_ERR").fixed(),
+        Column::new("CPU_UNDER").fixed(),
+        Column::new("CPU_WORST").fixed(),
+        Column::new("MEM_MEAN_ERR").fixed(),
+        Column::new("MEM_UNDER").fixed(),
+        Column::new("MEM_WORST"),
+    ]);
+    for offset in &report.offsets {
+        let mut row = vec![
+            Cell::new(format!("+{}m", offset.offset_minutes)),
+            Cell::new(if offset.unmeasured > 0 {
+                format!("{} ({} unmeasured)", offset.paired, offset.unmeasured)
+            } else {
+                offset.paired.to_string()
+            }),
+        ];
+        row.extend(error_cells(&offset.cpu, |cores| {
+            format!("{cores:+.1} cores")
+        }));
+        row.extend(error_cells(&offset.memory, |bytes| {
+            format!("{:+.1} GiB", bytes / GIB)
+        }));
+        offsets.add_row(row);
+    }
+    let mut drains = Table::new(vec![
+        Column::new("WORKSPACE").fixed(),
+        Column::new("DRAIN").fixed(),
+        Column::new("SHADOW_PASSES").fixed(),
+        Column::new("ENFORCE_PASSES").fixed(),
+        Column::new("ADMITTED").fixed(),
+        Column::new("WOULD_HOLD").fixed(),
+        Column::new("WOULD_ADD"),
+    ])
+    .empty_message("no admission forecasts recorded on this host");
+    for drain in &report.drains {
+        drains.add_row(vec![
+            Cell::new(&drain.workspace_id),
+            Cell::new(&drain.run_id),
+            Cell::new(drain.shadow_passes),
+            Cell::new(drain.enforce_passes),
+            Cell::new(drain.admitted),
+            Cell::new(drain.would_hold.len()),
+            Cell::new(drain.would_add.len()),
+        ]);
+    }
+    Ok(Payload::blocks(
+        doc,
+        vec![
+            Block::text(summary(&report)),
+            Block::table(offsets),
+            Block::table(drains),
+        ],
+    )
+    .into())
+}
+
+fn summary(report: &ForecastAccuracy) -> String {
+    format!(
+        "{} admission forecasts since {}; error is forecast minus measured.",
+        report.forecasts,
+        report.since.format("%Y-%m-%d %H:%MZ")
+    )
+}
+
+/// Mean error, under-forecast rate and worst miss, or `-` without pairs.
+fn error_cells(summary: &ErrorSummary, value: impl Fn(f64) -> String) -> Vec<comfy_table::Cell> {
+    use comfy_table::Cell;
+    let (Some(mean), Some(under), Some(worst)) = (
+        summary.mean_error,
+        summary.under_rate,
+        summary.worst_miss.as_ref(),
+    ) else {
+        return vec![Cell::new("-"), Cell::new("-"), Cell::new("-")];
+    };
+    vec![
+        Cell::new(value(mean)),
+        Cell::new(format!("{:.0}%", under * 100.0)),
+        Cell::new(format!(
+            "{} at {}",
+            value(worst.error),
+            worst.minute_at.format("%m-%d %H:%MZ")
+        )),
+    ]
 }

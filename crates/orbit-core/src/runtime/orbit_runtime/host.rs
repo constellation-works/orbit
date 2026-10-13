@@ -6,18 +6,20 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionLoadQuery, AdmissionLoadStoreBackend, NewAdmissionReservation,
+    AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend,
+    NewAdmissionReservation, ResourceUsageStoreBackend,
 };
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 
 use super::OrbitRuntime;
+use crate::runtime::host_resource::accuracy::{ForecastAccuracy, forecast_accuracy};
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, HostLoadForecast, HostLoadProbe,
     RESERVATION_TTL_MINUTES, build_forecast,
 };
 use crate::runtime::host_resource::profile::{
-    ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
+    PROFILE_HISTORY_DAYS, ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
 };
 use crate::runtime::host_resource::{
     HostResourceMonitor, HostResourceProbe, HostResourceStatus, ResourceAdmission,
@@ -136,6 +138,29 @@ impl OrbitRuntime {
     /// it.
     pub fn resource_profile_for(&self, lookup: &ProfileLookup) -> Result<ProfileMatch, OrbitError> {
         Ok(self.resource_profiles()?.lookup(lookup))
+    }
+
+    /// Record one drain admission pass's forecast and decisions, for the
+    /// forecast accuracy report.
+    pub(crate) fn record_admission_forecast(
+        &self,
+        record: &AdmissionForecastRecord,
+    ) -> Result<(), OrbitError> {
+        self.sqlite_store()?.record_admission_forecast(record)
+    }
+
+    /// How the admission forecasts recorded on this host over the last
+    /// [`PROFILE_HISTORY_DAYS`] compare with its measured minutes, and how
+    /// each drain's shadow decisions compare with what it admitted.
+    pub fn forecast_accuracy(&self) -> Result<ForecastAccuracy, OrbitError> {
+        let store = self.sqlite_store()?;
+        let since = Utc::now() - Duration::days(PROFILE_HISTORY_DAYS);
+        let records = store.admission_forecasts(since)?;
+        let minutes = match records.first() {
+            Some(first) => store.host_resource_minutes(first.forecast_at - Duration::minutes(1))?,
+            None => Vec::new(),
+        };
+        Ok(forecast_accuracy(&records, &minutes, since))
     }
 
     /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of

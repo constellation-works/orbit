@@ -29,6 +29,8 @@
 //! into: a candidate joins its pass only if, at every minute of its horizon,
 //! the forecast plus its profile stays under `admit_cpu_percent` of the
 //! host's cores and `admit_memory_percent` of its memory.
+//! [`HostLoadForecast::accuracy_points`] is what the pass records of it, to
+//! check against the host's measured minutes.
 
 use std::sync::Arc;
 
@@ -40,11 +42,13 @@ use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, Profile
 mod build;
 mod fit;
 mod host_load;
+mod record;
 
 pub(crate) use build::build_forecast;
 pub(crate) use fit::{AdmissionLimits, gap_fit};
 pub use fit::{ForecastGap, GapMiss, GapResource};
 pub(crate) use host_load::HostLoadProbe;
+pub use record::{ACCURACY_OFFSETS, ForecastPoints};
 
 /// Minutes after which a reservation whose run never appeared leaves the
 /// forecast.

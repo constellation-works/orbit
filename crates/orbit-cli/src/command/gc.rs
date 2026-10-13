@@ -149,8 +149,9 @@ impl Execute for AuditGcArgs {
                   evidence can still resume, and every non-terminal run are never touched. The \
                   run row, its steps and its summary stay, so `orbit run show` and run history \
                   keep working, and `archived_at` records when the state was dropped. The \
-                  host's per-minute run and host resource history older than 30 days goes in \
-                  the same pass, whatever the window.\n\n\
+                  host's per-minute run and host resource history, and the admission \
+                  forecasts recorded against it, older than 30 days go in the same pass, \
+                  whatever the window.\n\n\
                   Examples:\n  orbit gc runs\n  orbit gc runs --apply"
 )]
 pub struct RunGcArgs {

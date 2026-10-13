@@ -291,3 +291,7 @@ v47 admission_reservations
 + ["index","idx_admission_reservations_reserved","admission_reservations","CREATE INDEX idx_admission_reservations_reserved\n            ON admission_reservations(reserved_at)"]
 + ["table","admission_reservations","admission_reservations","CREATE TABLE admission_reservations (\n                workspace_id TEXT NOT NULL,\n                task_id TEXT NOT NULL,\n                work_class TEXT NOT NULL,\n                complexity TEXT,\n                base_class TEXT NOT NULL,\n                reserved_at TEXT NOT NULL\n            )"]
 
+v48 admission_forecasts
++ ["index","idx_admission_forecasts_at","admission_forecasts","CREATE INDEX idx_admission_forecasts_at\n            ON admission_forecasts(forecast_at)"]
++ ["table","admission_forecasts","admission_forecasts","CREATE TABLE admission_forecasts (\n                workspace_id TEXT NOT NULL,\n                run_id TEXT NOT NULL,\n                forecast_at TEXT NOT NULL,\n                mode TEXT NOT NULL,\n                cpu_count INTEGER,\n                memory_total_bytes INTEGER,\n                points_json TEXT NOT NULL,\n                admitted_json TEXT NOT NULL,\n                fit_admitted_json TEXT NOT NULL,\n                fit_skipped_json TEXT NOT NULL\n            )"]
+

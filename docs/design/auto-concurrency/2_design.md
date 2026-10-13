@@ -19,13 +19,14 @@ related_artifacts: [ORB-15757, ORB-15774]
 > report, §3) are implemented, and so are the load forecast (§4), the host
 > admission lock (§5.2), local-drain steps 3 and 4 (Shadow and Enforce),
 > and pull-drain admission (§6). Local drains implement gap fit (§5.1) and
-> the starvation guard (§5.3).** §1 describes today's code and cites it,
-> with `mode = off` still the default. §2 describes the recording that
-> ships, §3 the profiles `orbit run profiles` reports, §4 and §5 the
-> forecast and local admission, §6 pull admission, and the `drain_last_pass`,
-> `orbit run show` and `orbit run readiness` rows of §7 the record and
-> diagnostics a local pass exposes. The dashboard of §7 and the shadow
-> report of §8 are the proposed design.
+> the starvation guard (§5.3), and record each pass's forecast for the
+> accuracy report (§8).** §1 describes today's code and cites it, with
+> `mode = off` still the default. §2 describes the recording that ships, §3
+> the profiles `orbit run profiles` reports, §4 and §5 the forecast and local
+> admission, §6 pull admission, the `drain_last_pass`, `orbit run show`,
+> `orbit run readiness` and `orbit run profiles --accuracy` rows of §7 the
+> record and diagnostics a local pass exposes, and §8.1 the accuracy report.
+> The dashboard of §7 is the proposed design.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -533,6 +534,7 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard. No line without a recorded block; JSON preserves `pipeline_state.drain_last_pass.admission_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, and each judged candidate's profile source and wait. JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast`; without a recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
+| `orbit run profiles --accuracy` | Implemented (§8.1): recorded forecasts against the measured host per offset, and shadow decisions against actual admissions per drain. `--json` for the raw pairs |
 | Dashboard | later: the forecast curve against measured load, with running tasks stacked |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
@@ -555,6 +557,44 @@ first.
 5. **macOS.** A sampler that sums CPU time and resident memory over the
    worker's process tree, using `orbit-common/src/process/ancestry.rs`. Until
    it exists, the Mac admits as today.
+
+### 8.1 The accuracy report
+
+Implemented for local drains in `workspace_auto/classify.rs` (recording),
+`runtime/host_resource/forecast/record.rs` (the recorded points) and
+`runtime/host_resource/accuracy.rs` (the report), read through
+`OrbitRuntime::forecast_accuracy` and shown by
+`orbit run profiles --accuracy`:
+
+- **Record.** Every pass under `shadow` or `enforce` that built a forecast
+  writes one `admission_forecasts` row (store schema v48): the drain's
+  workspace and run, the forecast time, the mode, the host's cores and
+  memory, and the forecast at +5, +10, +20 and +30 minutes for CPU and
+  memory. An offset past `horizon_cap_minutes` is not recorded. The row also
+  holds the tasks the pass admitted after the pull admission section, and
+  the tasks gap fit admitted and skipped; under `shadow` those differ. A
+  pass that built no forecast, because no slot or candidate was free, and
+  every pass with `mode = off`, records nothing. Recording is best effort,
+  like `drain_last_pass`.
+- **What is forecast.** The recorded value is `F(t)` plus each task the
+  pass actually admitted, at `P(t) · alive(t)` as a reservation counts: the
+  load the forecast expects given what admission did. Under `shadow` that is
+  the `off` wave, not the gap-fit wave. A baseline that could not be read
+  counts as zero, as it did for admission.
+- **Pairs.** A point forecast at `forecast_at` for `+n` pairs with the
+  `host_resource_minutes` row of the minute `forecast_at` truncated to the
+  minute, plus `n`. A point without that row is counted as unmeasured.
+- **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
+  and mean absolute error of forecast minus measured, the share of pairs
+  under-forecast, and the worst miss with its minute and drain.
+- **Shadow decisions**, per drain, over its `shadow` passes: the distinct
+  tasks it admitted, those gap fit would have held, and those gap fit would
+  have admitted in a pass that did not. `enforce` passes are counted only.
+- **Window and retention.** The report reads the last 30 days. Rows are
+  pruned with the resource history by `orbit gc runs --apply` after 30 days,
+  whatever `retention.runs_days` says.
+- **Pull drains** record nothing yet: a follower's `pull_admission_fit`
+  fits kinds of work, not tasks, and is kept only on its run state.
 
 ## 9. Concerns & Honest Limitations
 

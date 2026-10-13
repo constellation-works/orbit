@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Duration, Utc};
 use orbit_engine::DispatchError;
-use orbit_store::contracts::OwnerWaveCandidate;
+use orbit_store::contracts::{AdmissionForecastRecord, OwnerWaveCandidate};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
     DrainAdmissionForecast, DrainAdmissionPass, DrainCapacity, DrainWaitingTask, GapFitHead,
@@ -18,11 +18,13 @@ use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
 };
 use crate::adapter::engine_host::v2_host::admission::claim_holders::ClaimHolders;
 use crate::adapter::engine_host::v2_host::admission::cpu_light::{LightBudget, ResourceGate};
-use crate::adapter::engine_host::v2_host::admission::gap_fit::{GapFit, GapFitMode, HeadWait};
+use crate::adapter::engine_host::v2_host::admission::gap_fit::{
+    GapFit, GapFitMode, HeadWait, task_lookup,
+};
 use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
     FootprintGuard, whole_tree_holder,
 };
-use crate::runtime::host_resource::forecast::ForecastDecision;
+use crate::runtime::host_resource::forecast::{ForecastDecision, ForecastPoints};
 use crate::runtime::task::locks::lock_context_files_for_task;
 
 use super::drains::{
@@ -257,14 +259,32 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // `free_slots`. `off` never builds a forecast.
     let gap_fit_mode =
         GapFitMode::from_setting(&runtime.context.settings().auto_concurrency().mode);
-    let (mut selection, admission_forecast) = match gap_fit_mode {
-        None => (select(None), None),
+    let GapFitPass {
+        mut selection,
+        record: admission_forecast,
+        forecast,
+    } = match gap_fit_mode {
+        None => GapFitPass {
+            selection: select(None),
+            record: None,
+            forecast: None,
+        },
         Some(mode) => {
             let can_admit = free_slots > 0 && !examined.is_empty();
             gap_fit_selection(runtime, action, input, mode, &pending, can_admit, &select)?
         }
     };
     admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)?;
+    if let (Some(forecast), Some(record)) = (forecast, admission_forecast.as_ref()) {
+        record_admission_forecast(
+            runtime,
+            input,
+            forecast,
+            record,
+            &selection.selected,
+            &snapshot.task_lookup,
+        );
+    }
     // What `enforce` kept out is waiting like a deferral; `shadow` only
     // records what it would have done.
     let gap_fit_waiting: Vec<DrainWaitingTask> = admission_forecast
@@ -396,6 +416,14 @@ pub(in super::super) fn classify_workspace_auto_tasks(
 /// The waiting reason of a candidate `enforce` gap fit kept out of a pass.
 const GAP_FIT_REASON: &str = "gap_fit";
 
+/// A pass's wave and, under `shadow` or `enforce`, its gap fit.
+struct GapFitPass {
+    selection: AdmissionSelection,
+    record: Option<DrainAdmissionForecast>,
+    /// The forecast the pass decided against, when it built one.
+    forecast: Option<ForecastPoints>,
+}
+
 /// Select the wave with gap fit, under the host admission lock.
 ///
 /// The forecast is built, the wave chosen and, in `enforce`, a reservation
@@ -414,7 +442,7 @@ fn gap_fit_selection(
     pending: &[String],
     can_admit: bool,
     select: &dyn Fn(Option<&mut GapFit<'_>>) -> AdmissionSelection,
-) -> Result<(AdmissionSelection, Option<DrainAdmissionForecast>), DispatchError> {
+) -> Result<GapFitPass, DispatchError> {
     let settings = runtime.context.settings().auto_concurrency();
     let previous = previous_head(runtime, input);
     let head_wait = HeadWait {
@@ -423,10 +451,11 @@ fn gap_fit_selection(
         now: Utc::now(),
     };
     if !can_admit {
-        return Ok((
-            select(None),
-            Some(head_wait.record_without_forecast(mode, pending)),
-        ));
+        return Ok(GapFitPass {
+            selection: select(None),
+            record: Some(head_wait.record_without_forecast(mode, pending)),
+            forecast: None,
+        });
     }
     let workspace_id = runtime
         .workspace_id()
@@ -443,7 +472,7 @@ fn gap_fit_selection(
         let selection = select(Some(&mut gap_fit));
         let (record, reservations) = gap_fit.finish(pending);
         Ok(ForecastDecision {
-            outcome: (selection, record),
+            outcome: (selection, record, forecast.accuracy_points()),
             admitted: match mode {
                 GapFitMode::Enforce => reservations,
                 GapFitMode::Shadow => Vec::new(),
@@ -451,8 +480,16 @@ fn gap_fit_selection(
         })
     });
     match (mode, decided) {
-        (GapFitMode::Enforce, Ok((selection, record))) => Ok((selection, Some(record))),
-        (GapFitMode::Shadow, Ok((_, record))) => Ok((select(None), Some(record))),
+        (GapFitMode::Enforce, Ok((selection, record, forecast))) => Ok(GapFitPass {
+            selection,
+            record: Some(record),
+            forecast: Some(forecast),
+        }),
+        (GapFitMode::Shadow, Ok((_, record, forecast))) => Ok(GapFitPass {
+            selection: select(None),
+            record: Some(record),
+            forecast: Some(forecast),
+        }),
         (GapFitMode::Enforce, Err(error)) => Err(DispatchError::action_failed(
             action,
             format!("admit against the host load forecast: {error}"),
@@ -463,18 +500,18 @@ fn gap_fit_selection(
                 %error,
                 "shadow gap fit could not forecast the host; the pass admits as it would without it"
             );
-            Ok((select(None), None))
+            Ok(GapFitPass {
+                selection: select(None),
+                record: None,
+                forecast: None,
+            })
         }
     }
 }
 
 /// The starvation guard's head as the drain's previous pass recorded it.
 fn previous_head(runtime: &OrbitRuntime, input: &Value) -> Option<GapFitHead> {
-    let run_id = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    let run_id = drain_run_id(input)?;
     runtime
         .read_run_state(run_id)
         .ok()
@@ -574,16 +611,69 @@ fn admit_through_section(
     Ok(())
 }
 
-/// Persist what this pass left waiting on the drain's own run state, so
-/// `orbit run show` can report it after the drain ends. Best effort: a run
-/// that cannot record it must still admit work.
-fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionPass) {
-    let Some(run_id) = input
+/// Record the pass's forecast, counting what it admitted, with its gap-fit
+/// decisions, for the forecast accuracy report. Best effort, like the last
+/// pass: a drain that cannot record it must still admit work.
+fn record_admission_forecast(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    mut forecast: ForecastPoints,
+    record: &DrainAdmissionForecast,
+    admitted: &[String],
+    tasks: &BTreeMap<String, Task>,
+) {
+    let Some(run_id) = drain_run_id(input) else {
+        return;
+    };
+    let result = runtime.workspace_id().and_then(|workspace_id| {
+        for task in admitted.iter().filter_map(|task_id| tasks.get(task_id)) {
+            forecast.admit(&task_lookup(&workspace_id, task));
+        }
+        runtime.record_admission_forecast(&AdmissionForecastRecord {
+            workspace_id,
+            run_id: run_id.to_string(),
+            forecast_at: forecast.at,
+            mode: record.mode.clone(),
+            cpu_count: forecast.cpu_count,
+            memory_total_bytes: forecast.memory_total_bytes,
+            points: forecast.into_points(),
+            admitted: admitted.to_vec(),
+            fit_admitted: record
+                .admitted
+                .iter()
+                .map(|admission| admission.task_id.clone())
+                .collect(),
+            fit_skipped: record
+                .skipped
+                .iter()
+                .map(|skip| skip.task_id.clone())
+                .collect(),
+        })
+    });
+    if let Err(error) = result {
+        tracing::warn!(
+            target: "orbit.core.job_run",
+            run_id,
+            %error,
+            "drain could not record its admission forecast; the accuracy report will miss this pass"
+        );
+    }
+}
+
+/// The drain's run id, when the pass belongs to one.
+fn drain_run_id(input: &Value) -> Option<&str> {
+    input
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    else {
+}
+
+/// Persist what this pass left waiting on the drain's own run state, so
+/// `orbit run show` can report it after the drain ends. Best effort: a run
+/// that cannot record it must still admit work.
+fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionPass) {
+    let Some(run_id) = drain_run_id(input) else {
         return;
     };
     let mut pass = Some(pass);

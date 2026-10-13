@@ -1,5 +1,6 @@
 //! Per-minute CPU and memory history for auto-concurrency profiles: each
-//! delivery run's worker scope, and the host as a whole.
+//! delivery run's worker scope, and the host as a whole. Beside it, each
+//! admission pass's forecast, to check against the host's measured minutes.
 //!
 //! CPU is in cores (CPU time over wall time) and memory in non-reclaimable
 //! bytes on both sides, so the host's load minus the sum of its runs is the
@@ -7,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use serde::{Deserialize, Serialize};
 
 /// One minute of one run's worker scope.
 #[derive(Debug, Clone, PartialEq)]
@@ -88,13 +90,47 @@ pub struct DeliveryRunsFreshness {
     pub finished_runs: u64,
 }
 
-/// The two per-minute tables retention prunes.
+/// One minute of an admission pass's forecast, minutes after the pass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdmissionForecastPoint {
+    pub offset_minutes: u32,
+    pub cpu_cores: f64,
+    pub memory_bytes: u64,
+}
+
+/// One drain admission pass's forecast and decisions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmissionForecastRecord {
+    pub workspace_id: String,
+    /// The drain's run id.
+    pub run_id: String,
+    pub forecast_at: DateTime<Utc>,
+    /// `shadow` or `enforce`.
+    pub mode: String,
+    /// The host's size when the forecast was built; `None` when it could not
+    /// be read.
+    pub cpu_count: Option<u32>,
+    pub memory_total_bytes: Option<u64>,
+    /// The host's forecast load at each recorded offset, counting what the
+    /// pass admitted.
+    pub points: Vec<AdmissionForecastPoint>,
+    /// The tasks the pass admitted.
+    pub admitted: Vec<String>,
+    /// The tasks gap fit admitted: under `shadow`, what `enforce` would have.
+    pub fit_admitted: Vec<String>,
+    /// The tasks gap fit kept out.
+    pub fit_skipped: Vec<String>,
+}
+
+/// The resource history tables retention prunes on their 30-day window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceMinutesTable {
     /// `run_resource_minutes`, keyed by `minute_started_at`.
     Run,
     /// `host_resource_minutes`, keyed by `minute_at`.
     Host,
+    /// `admission_forecasts`, keyed by `forecast_at`.
+    AdmissionForecast,
 }
 
 impl ResourceMinutesTable {
@@ -103,6 +139,7 @@ impl ResourceMinutesTable {
         match self {
             Self::Run => "run_resource_minutes",
             Self::Host => "host_resource_minutes",
+            Self::AdmissionForecast => "admission_forecasts",
         }
     }
 }
@@ -139,7 +176,18 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         since: DateTime<Utc>,
     ) -> Result<Vec<HostResourceMinute>, OrbitError>;
 
-    /// Rows of `table` from minutes before `cutoff`, across every workspace.
+    /// Record one admission pass's forecast.
+    fn record_admission_forecast(&self, record: &AdmissionForecastRecord)
+    -> Result<(), OrbitError>;
+
+    /// Admission forecasts made at or after `since`, across every workspace,
+    /// oldest first.
+    fn admission_forecasts(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<AdmissionForecastRecord>, OrbitError>;
+
+    /// Rows of `table` from before `cutoff`, across every workspace.
     fn resource_minutes_older_than(
         &self,
         table: ResourceMinutesTable,
