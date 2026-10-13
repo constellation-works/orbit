@@ -3,9 +3,11 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::{JobRunState, JobRunStep, JobTargetType};
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::InvocationTrace;
+use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -38,6 +40,7 @@ fn record_run(
     at: DateTime<Utc>,
     partition: Option<&str>,
 ) {
+    outcome(fixture, run, at, JobRunState::Success, "performed");
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
@@ -61,13 +64,168 @@ fn record_run(
             tx.connection()
                 .execute(
                     "UPDATE invocations SET ts = ?1, workspace_id = COALESCE(?2, workspace_id)
-                     WHERE job_run_id = ?3",
+                     WHERE id = (SELECT MAX(id) FROM invocations WHERE job_run_id = ?3)",
                     (at.to_rfc3339(), partition, run),
                 )
                 .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();
+}
+
+fn outcome(fixture: &Fixture, name: &str, at: DateTime<Utc>, state: JobRunState, decision: &str) {
+    let run = fixture.seed_run(name, "task_pr_pipeline", state);
+    let mut pipeline = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    pipeline.pipeline["commit"] = json!({
+        "phase": "commit", "decision": decision, "committed": decision == "performed",
+    });
+    let store = fixture.runtime.sqlite_store().unwrap();
+    let workspace = fixture.runtime.workspace_id().unwrap();
+    store
+        .upsert_job_run_for_workspace(&workspace, &run, Some(&pipeline))
+        .unwrap();
+    store
+        .upsert_job_run_step_for_workspace(
+            &workspace,
+            &run.run_id,
+            &JobRunStep {
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "implement_one".into(),
+                started_at: Some(at - Duration::hours(1)),
+                finished_at: Some(at + Duration::seconds(1)),
+                duration_ms: None,
+                exit_code: Some(0),
+                agent_response_json: None,
+                state,
+                error_code: None,
+                error_message: None,
+                lock_wait_ms: None,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn implement_one_outcome_filters_every_aggregation_and_retry_attempt() {
+    isolated(
+        "metrics_trends::implement_one_outcome_filters_every_aggregation_and_retry_attempt",
+        || {
+            let fixture = Fixture::new();
+            let task = add_task(&fixture, TaskComplexity::Hard, TaskStatus::Backlog);
+            let at = Utc::now() - Duration::hours(2);
+            record_run(&fixture, "candidate", Some(&task), 20, at, None);
+            for (name, state, decision) in [
+                ("failed", JobRunState::Failed, "performed"),
+                ("cancelled", JobRunState::Cancelled, "performed"),
+                ("interrupted", JobRunState::Interrupted, "performed"),
+                ("timeout", JobRunState::Timeout, "performed"),
+                ("skipped", JobRunState::Skipped, "performed"),
+                ("running", JobRunState::Running, "performed"),
+                ("review", JobRunState::Success, "skipped_no_diff_expected"),
+                ("no-op", JobRunState::Success, "verified_no_diff"),
+                ("landed", JobRunState::Success, "verified_already_landed"),
+            ] {
+                record_run(&fixture, name, Some(&task), 100, at, None);
+                outcome(&fixture, name, at, state, decision);
+            }
+            // A retry can preserve the step's original start time: an earlier
+            // invocation inside that same interval must not inherit its success.
+            record_run(
+                &fixture,
+                "candidate",
+                Some(&task),
+                90,
+                at - Duration::minutes(5),
+                None,
+            );
+            outcome(&fixture, "candidate", at, JobRunState::Success, "performed");
+            record_run(
+                &fixture,
+                "previous-ok",
+                Some(&task),
+                30,
+                at - Duration::hours(30),
+                None,
+            );
+            record_run(
+                &fixture,
+                "previous-review",
+                Some(&task),
+                100,
+                at - Duration::hours(30),
+                None,
+            );
+            outcome(
+                &fixture,
+                "previous-review",
+                at - Duration::hours(30),
+                JobRunState::Success,
+                "skipped_no_diff_expected",
+            );
+            // Invocation-only history is unknown; a foreign successful run with the
+            // same id cannot supply outcome evidence for this workspace.
+            record_run(&fixture, "unknown", Some(&task), 100, at, None);
+            let foreign = fixture.seed_run("unknown", "task_pr_pipeline", JobRunState::Success);
+            let mut foreign_pipeline =
+                PipelineState::new(foreign.run_id.clone(), foreign.job_id.clone(), json!({}));
+            foreign_pipeline.pipeline["commit"] = json!({"decision":"performed", "committed":true});
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace("foreign", &foreign, Some(&foreign_pipeline))
+                .unwrap();
+            fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
+            tx.connection().execute("DELETE FROM job_run_states WHERE workspace_id = 'ws_http_fixture' AND run_id = 'unknown'", [])
+                .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+            let server = fixture.server(false);
+            let path = format!("/api/diagnostics/implement_one?since=24h&{WS}");
+            let default = json_ok(server.get(&path));
+            let succeeded = json_ok(server.get(&format!("{path}&outcome=succeeded")));
+            for filtered in [&default, &succeeded] {
+                assert_eq!(filtered["outcome"], "succeeded");
+                assert_eq!(filtered["current"]["all"], stats(1, 20, 20, 20));
+                assert_eq!(filtered["current"]["hard"], stats(1, 20, 20, 20));
+                assert_eq!(filtered["previous"]["all"], stats(1, 30, 30, 30));
+                assert_eq!(bucket_of(filtered, at)["all"]["n"], 1);
+                assert_eq!(filtered["actors"][0]["n"], 1);
+                assert_eq!(
+                    filtered["actors"][0]["previous_avg"],
+                    json!((30 * MINUTE_MS) as f64)
+                );
+                assert_eq!(filtered["slowest"].as_array().unwrap().len(), 1);
+                assert_eq!(filtered["slowest"][0]["duration_ms"], 20 * MINUTE_MS);
+                assert_eq!(filtered["implement_one_by_complexity"][0]["n"], 2);
+            }
+            let all = json_ok(server.get(&format!("{path}&outcome=all")));
+            assert_eq!(all["outcome"], "all");
+            assert_eq!(all["current"]["all"]["n"], 12);
+            assert_eq!(all["previous"]["all"]["n"], 2);
+            assert_eq!(
+                all["buckets"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|bucket| bucket["all"]["n"].as_u64().unwrap_or(0))
+                    .sum::<u64>(),
+                12
+            );
+            assert_eq!(all["actors"][0]["n"], 12);
+            assert_eq!(all["slowest"][0]["duration_ms"], 100 * MINUTE_MS);
+            assert_eq!(all["implement_one_by_complexity"][0]["n"], 14);
+            assert_eq!(
+                server
+                    .get(&format!("{path}&outcome=bogus"))
+                    .status()
+                    .as_u16(),
+                400
+            );
+        },
+    );
 }
 
 /// Closes `task` in the index at `at`: the row the completion trend reads.
@@ -158,7 +316,8 @@ fn implement_one_trend_buckets_this_workspaces_runs_by_complexity() {
                 "the floored start adds the partial hour"
             );
             let start = since(&day["window"]);
-            assert!(start <= now - Duration::hours(24) && start > now - Duration::hours(25));
+            let until: DateTime<Utc> = day["window"]["until"].as_str().unwrap().parse().unwrap();
+            assert!(start <= until - Duration::hours(24) && start > until - Duration::hours(25));
             assert_eq!(start.timestamp() % 3600, 0, "buckets start on the hour");
             assert_eq!(day["truncated"], false);
 

@@ -381,6 +381,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     }
     setDiagSubtabImpl(ctx, sub);
     hash = `#diagnostics/${sub}?window=${encodeURIComponent(getWindow())}`;
+    if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
   } else if (top === "audit") {
     const sub = ["events", "codebase"].includes(segments[1]) ? segments[1] : ctx.getActiveAuditSubtab();
     ctx.applyAuditHashQuery(query, sub);

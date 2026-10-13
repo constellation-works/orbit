@@ -42,6 +42,7 @@ function payloadFor(url) {
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one': return {
+      outcome: url.searchParams.get("outcome") || "succeeded",
       window: trendWindow(url), truncated: false,
       buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), all: stats, low: stats, medium: null, hard: null, other_runs: 0 })),
       current: { all: stats, low: stats, medium: null, hard: null, xhard: null, unset: null },
