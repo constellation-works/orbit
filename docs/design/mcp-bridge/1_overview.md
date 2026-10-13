@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-10-09
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Draft
 feature: mcp-bridge
 doc_role: overview
@@ -25,8 +25,10 @@ socket: MCP client <-> TCP  <-> orbit mcp listen <-> Orbit Core
 
 `orbit mcp serve --mode federated` is a separate stdio mode, not a fourth
 transport. It includes the accepting machine plus operator-configured SSH
-destinations, advertises host-qualified workspace selectors, and routes each
-selected call to the encoded destination. Direct `--mode remote` remains the
+destinations and advertises host-qualified workspace selectors. Workspace-
+scoped calls that supply a selector route to its encoded destination. For
+id-routed task tools, an id-only call instead routes by the configured task-ID
+prefix to the host that holds that task. Direct `--mode remote` remains the
 byte-transparent one-host proxy described above.
 
 The remote side is intentionally just direct SSH stdio. The local proxy starts a

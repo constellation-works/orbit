@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-10-09
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -22,7 +22,7 @@ The v1 design rests on six invariants:
 1. The accepting machine is authoritative for registry and runtime state.
 2. A remote session is one direct SSH hop; no Orbit process relays it onward.
 3. The client-side proxy is byte-transparent and policy-free.
-4. Every tools/call enters Core's dispatch and audit boundary exactly once,
+4. Every direct v1 tools/call enters Core's dispatch and audit boundary exactly once,
    including global discovery, unknown raw names, and setup failures.
 5. The destination serves the authority its argv requests. A forwarded caller
    label is self-asserted audit metadata and does not grant or restrict authority.
@@ -182,10 +182,10 @@ audit boundary. The listener adds no broker, checkout preflight, placement
 decision, capability filter, or authorization step of its own; it is hardcoded
 to agent authority because it authenticates no client.
 
-## 5. Workspace authority
+## 5. Direct v1 workspace authority
 
-The client selects only an SSH destination. It does not inspect a checkout or a
-registry to decide where an operation belongs.
+The direct v1 client selects only an SSH destination. It does not inspect a
+checkout or a registry to decide where an operation belongs.
 
 On the accepting server:
 
