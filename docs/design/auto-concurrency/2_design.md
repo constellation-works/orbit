@@ -6,7 +6,7 @@ last_validated: 2026-10-12
 status: Draft
 feature: auto-concurrency
 doc_role: design
-summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
+summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
 paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/gap_fit.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
@@ -20,10 +20,11 @@ related_artifacts: [ORB-15757, ORB-15774]
 > admission lock (§5.2), local-drain steps 3 and 4 (Shadow and Enforce),
 > and pull-drain admission (§6). Local drains implement gap fit (§5.1) and
 > the starvation guard (§5.3), and record each pass's forecast for the
-> accuracy report (§8).** §1 describes today's code and cites it, with
-> `mode = off` still the default. §2 describes the recording that ships, §3
-> the profiles `orbit run profiles` reports, §4 and §5 the forecast and local
-> admission, §6 pull admission, the `drain_last_pass`, `orbit run show`,
+> accuracy report (§8). macOS records the same minutes from the worker's
+> process tree (rollout step 5).** §1 describes today's code and cites it,
+> with `mode = off` still the default. §2 describes the recording that ships,
+> §3 the profiles `orbit run profiles` reports, §4 and §5 the forecast and
+> local admission, §6 pull admission, the `drain_last_pass`, `orbit run show`,
 > `orbit run readiness` and `orbit run profiles --accuracy` rows of §7 the
 > record and diagnostics a local pass exposes, and §8.1 the accuracy report.
 > The dashboard of §7 is the proposed design.
@@ -93,7 +94,8 @@ defaults to true. Orbit reads the scope's `memory.events` and `pids.events`
 to tell a limit breach from other failures. A worker locates its own scope
 (`WorkerScopeCgroup::of_current_process`) and records its CPU and memory per
 minute (§2). Admission reads none of it yet. macOS has no scopes, so its
-workers run uncontained and record nothing.
+workers run uncontained and record the same minutes from the process tree
+(§2).
 
 **No-diff work still builds today.** Owner-run pipelines skip validation
 for a `no-diff-expected` task with a clean tree: `task_pr_pipeline.yaml`'s
@@ -126,9 +128,11 @@ per-minute CPU and memory history (§2).
 A worker samples **its own** scope, so attribution is exact and no central
 sampler is needed.
 
-Implemented in `application/job/pipeline/worker/usage.rs` (sampler) and
-`worker/delivery_class.rs` (work class), with the host reads in
-`runtime/host_resource/usage.rs`.
+Implemented in `application/job/pipeline/worker/usage.rs` (minute
+aggregator) and `worker/usage_tree.rs` (macOS process tree), with the work
+class in `worker/delivery_class.rs`, the host reads in
+`runtime/host_resource/usage.rs`, and the macOS walk in
+`orbit-common/src/process/ancestry.rs`.
 
 - **What.** Every 5 s, a background thread in a delivery run's worker reads
   its scope's `cpu.stat` `usage_usec` and memory. CPU is measured in cores
@@ -179,10 +183,21 @@ Implemented in `application/job/pipeline/worker/usage.rs` (sampler) and
 - **Retention.** 30 days for both tables, whatever `retention.runs_days` says.
   `orbit gc runs --apply`, and so the `store-gc` routine, prunes them
   host-wide.
-- **No scope, no samples.** A worker without a scope records nothing: macOS,
-  containment disabled, or no user manager. That host stays on today's
-  admission (§5.4) until it has samples. macOS gets a process-tree sampler
-  later (§8).
+- **macOS process tree.** macOS has no scopes. Every 5 s the worker sums
+  its own process tree (`process_tree` in `ancestry.rs`). CPU time is the
+  non-negative delta of each process seen in both samples, plus the full
+  CPU time of a process that appeared since the previous sample. The first
+  sample is a baseline, so a worker's lifetime before that does not land in
+  the first minute. A process that exits drops out of the sum; it is not
+  subtracted and its CPU is not added again. Memory is the sum of
+  `ri_phys_footprint` (`proc_pid_rusage`), the non-reclaimable footprint, not
+  resident size: resident size counts file-backed and shared pages and would
+  overstate the tree the way `memory.current` does. A tree that cannot be
+  read (a sandbox denial, for example) skips that sample and leaves the
+  worker's run outcome unchanged.
+- **No scope, no samples, on Linux.** A Linux worker without a scope
+  records nothing: containment disabled, or no user manager. That host stays
+  on today's admission (§5.4) until it has samples.
 
 Workers also keep a host series, `host_resource_minutes`, holding host CPU
 and memory per wall-clock minute in the same units: busy cores from
@@ -554,9 +569,11 @@ first.
    shadow decisions with what admission actually did.
 4. **Enforce** on dk-server-1 first, a follower with the smallest blast
    radius, then on dk-server-2.
-5. **macOS.** A sampler that sums CPU time and resident memory over the
-   worker's process tree, using `orbit-common/src/process/ancestry.rs`. Until
-   it exists, the Mac admits as today.
+5. **macOS.** Implemented: a sampler sums CPU time and `ri_phys_footprint`
+   over the worker's process tree, using
+   `orbit-common/src/process/ancestry.rs`, and writes the same
+   `run_resource_minutes` rows as the Linux scope sampler. The Mac admits
+   as today until those rows exist; recording does not change admission.
 
 ### 8.1 The accuracy report
 
@@ -619,8 +636,10 @@ Implemented for local drains in `workspace_auto/classify.rs` (recording),
 - **Profiles are per host and need warm-up.** A new host, workspace, class
   or complexity is admitted pessimistically, borrowing the heaviest profile
   of its class, until it has 10 deliveries.
-- **Linux only at first.** macOS has no worker scopes. Without
-  `machine.worker_containment`, Linux records nothing either.
+- **Linux scopes, macOS process tree.** macOS has no worker scopes and
+  samples the worker's process tree instead. A tree the sandbox will not
+  let the worker read adds no sample. Without `machine.worker_containment`,
+  Linux records nothing either.
 - **Throughput is not measured.** The design fills headroom under the
   thresholds. It does not check that more concurrency lands more work. When
   the bottleneck is something else, such as conflicts or review, it fills

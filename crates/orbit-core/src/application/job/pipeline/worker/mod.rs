@@ -9,8 +9,9 @@
 //! What stays on [`OrbitRuntime`] here is the *child* process's own work:
 //! executing the run it was handed (`execute`), its startup checks (`start`),
 //! the diagnostics it records (`audit`) and the per-minute resource history
-//! of its own scope (`usage`, keyed by the `delivery_class` captured at
-//! admission), plus thin delegations to the supervisor for callers that
+//! of its own scope on Linux, or its process tree on macOS (`usage`, keyed
+//! by the `delivery_class` captured at admission), plus thin delegations to
+//! the supervisor for callers that
 //! already hold a runtime.
 
 use std::sync::Arc;
@@ -34,6 +35,7 @@ pub(super) mod scope;
 mod start;
 pub(super) mod supervisor;
 mod usage;
+mod usage_tree;
 
 #[cfg(test)]
 mod tests;

@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod ancestry;
 #[cfg(unix)]
 mod bounded;
 // Linux fault injection and macOS native libproc identity/liveness coverage.
