@@ -41,6 +41,7 @@ pub(super) struct TreeSampler {
 }
 
 impl TreeSampler {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(super) fn new(
         read: impl FnMut() -> Option<Vec<ProcessTreeProcess>> + Send + 'static,
     ) -> Self {
