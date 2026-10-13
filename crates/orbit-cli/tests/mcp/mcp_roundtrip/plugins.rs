@@ -86,7 +86,6 @@ fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
 }
 
 #[cfg(unix)]
-#[test]
 fn brokered_plugin_calls_audit_only_caller_owned_failures() {
     if !orbit_exec::macos_sandbox_test_guard(
         "brokered_plugin_calls_audit_only_caller_owned_failures",
@@ -341,7 +340,6 @@ fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64,
 }
 
 #[cfg(unix)]
-#[test]
 fn managed_global_plugin_tool_refusals_are_audited() {
     if !orbit_exec::macos_sandbox_test_guard("managed_global_plugin_tool_refusals_are_audited") {
         return;
@@ -435,7 +433,6 @@ fn managed_global_plugin_tool_refusals_are_audited() {
 }
 
 #[cfg(unix)]
-#[test]
 fn unreachable_host_read_is_audited_once_by_cli() {
     let workspace = McpWorkspace::init();
     // The audit schema is opened lazily. Exercise an audited built-in before
@@ -465,7 +462,6 @@ fn unreachable_host_read_is_audited_once_by_cli() {
 }
 
 #[cfg(unix)]
-#[test]
 fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
     for scope in ["workspace", "global"] {
         let workspace = McpWorkspace::init();
@@ -537,7 +533,6 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
 }
 
 #[cfg(unix)]
-#[test]
 fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
     if !orbit_exec::macos_sandbox_test_guard(
         "exec_plugin_error_reaches_mcp_caller_as_structured_content",
@@ -569,7 +564,6 @@ fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
 }
 
 #[cfg(unix)]
-#[test]
 fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not() {
     if !orbit_exec::macos_sandbox_test_guard(
         "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
@@ -675,7 +669,6 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
 /// One live session observes lifecycle changes through both name translation
 /// and tools/list, while unrelated calls keep the manifest-derived cache hot.
 #[cfg(unix)]
-#[test]
 fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
@@ -790,7 +783,6 @@ fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
 /// Definitions gate the whole plugin, even though they do not declare tools.
 /// Compare one live server with new processes after edits to every kind.
 #[cfg(unix)]
-#[test]
 fn a_live_session_refreshes_definition_admission_and_membership() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -962,7 +954,6 @@ fn add_global_tool(source: &Path) {
 }
 
 #[cfg(unix)]
-#[test]
 fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
@@ -1107,7 +1098,6 @@ fn write_callback_plugin_with_scope(
 /// backend's good behaviour or the inherited `ORBIT_ALLOWED_TOOLS` value
 /// (design docs/design/plugins/1_scope.md §4.2).
 #[cfg(unix)]
-#[test]
 fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_callback_reaches_only_its_granted_orbit_tools",
@@ -1275,7 +1265,6 @@ fn callback_probe_input(tool: &str, forge: Option<&str>) -> String {
 /// admit a tool outside the recorded allowlist, and a recorded tool still
 /// runs (design docs/design/plugins/1_scope.md §4.2).
 #[cfg(unix)]
-#[test]
 fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
@@ -1349,7 +1338,6 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
 /// remains is the one the host wrote into the callback session, which the
 /// child cannot reach at all (design §4.2, §4.3) [ORB-12801].
 #[cfg(unix)]
-#[test]
 fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
@@ -1427,7 +1415,6 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
 /// workspace path, including deny mode. Read the actual credential the host
 /// gives the sandboxed backend, rather than its informational environment.
 #[cfg(unix)]
-#[test]
 fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
@@ -1539,7 +1526,6 @@ fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
 /// namespace variable. Clearing the *session* does not admit anything either
 /// — a confined child with no credential is refused outright [ORB-12798].
 #[cfg(unix)]
-#[test]
 fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
@@ -1688,7 +1674,6 @@ fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -
 /// sandbox (design §4.2, §4.3) [ORB-12798].
 // Linux: Landlock and real setsid descendants prove callback authority survives session escape.
 #[cfg(target_os = "linux")]
-#[test]
 #[allow(clippy::print_stderr)]
 fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
     if !setsid_available() {
@@ -1800,7 +1785,6 @@ fn setsid_available() -> bool {
 /// and proxies `<ns>.<verb>` to it, so a plugin that already ships an MCP
 /// server needs no rewrite (design §4.2).
 #[cfg(unix)]
-#[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_plugin_is_advertised_and_proxied() {
     if !orbit_exec::macos_sandbox_test_guard("an_mcp_backend_plugin_is_advertised_and_proxied") {
@@ -1853,7 +1837,6 @@ const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31c
 /// the value appears in no MCP response, no `plugin show` output, and no audit
 /// row — which records the delivered secret's name only.
 #[cfg(unix)]
-#[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it() {
     if !orbit_exec::macos_sandbox_test_guard(
@@ -1974,7 +1957,6 @@ const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
 /// record each outcome by name. Neither value reaches an MCP response or an
 /// audit row.
 #[cfg(unix)]
-#[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value() {
     if !orbit_exec::macos_sandbox_test_guard(
@@ -2180,7 +2162,6 @@ fn write_probe_plugin(home: &Path, namespace: &str) -> PathBuf {
 /// grant exists for still runs [ORB-12777].
 // Linux: Landlock denies writes to Orbit authority roots while permitted callbacks still execute.
 #[cfg(target_os = "linux")]
-#[test]
 fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
     let workspace = McpWorkspace::init();
     let source = write_probe_plugin(&workspace.home, "probe");
@@ -2254,5 +2235,152 @@ fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
             "{} was modified by the confined plugin",
             target.display()
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_failure_auditing() {
+    for (name, check) in [
+        (
+            "brokered_plugin_calls_audit_only_caller_owned_failures",
+            brokered_plugin_calls_audit_only_caller_owned_failures as fn(),
+        ),
+        (
+            "managed_global_plugin_tool_refusals_are_audited",
+            managed_global_plugin_tool_refusals_are_audited as fn(),
+        ),
+        (
+            "unreachable_host_read_is_audited_once_by_cli",
+            unreachable_host_read_is_audited_once_by_cli as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_errors_and_discovery() {
+    for (name, check) in [
+        (
+            "unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli",
+            unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli as fn(),
+        ),
+        (
+            "exec_plugin_error_reaches_mcp_caller_as_structured_content",
+            exec_plugin_error_reaches_mcp_caller_as_structured_content as fn(),
+        ),
+        (
+            "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
+            an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn live_plugin_configuration() {
+    for (name, check) in [
+        (
+            "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
+            a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface as fn(),
+        ),
+        (
+            "a_live_session_refreshes_definition_admission_and_membership",
+            a_live_session_refreshes_definition_admission_and_membership as fn(),
+        ),
+        (
+            "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
+            a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn callback_tool_authorization() {
+    for (name, check) in [
+        (
+            "a_plugin_callback_reaches_only_its_granted_orbit_tools",
+            a_plugin_callback_reaches_only_its_granted_orbit_tools as fn(),
+        ),
+        (
+            "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
+            a_plugin_child_cannot_forge_its_orbit_tools_allowlist as fn(),
+        ),
+        (
+            "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
+            a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn callback_identity_confinement() {
+    for (name, check) in [
+        (
+            "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
+            a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling as fn(),
+        ),
+        (
+            "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
+            a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist as fn(),
+        ),
+        (
+            "an_mcp_backend_plugin_is_advertised_and_proxied",
+            an_mcp_backend_plugin_is_advertised_and_proxied as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_backend_secrets() {
+    for (name, check) in [
+        (
+            "an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it",
+            an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it as fn(),
+        ),
+        (
+            "an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value",
+            an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mcp_backend_discovery_and_secret_redaction() {
+    for (name, check) in [
+        (
+            "a_plugin_child_cannot_shed_its_callback_session_with_setsid",
+            a_plugin_child_cannot_shed_its_callback_session_with_setsid as fn(),
+        ),
+        (
+            "a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots",
+            a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
     }
 }

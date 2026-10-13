@@ -229,7 +229,7 @@ jobs:
           cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
           cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
           cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
-          cargo test --no-fail-fast -p orbit-cli --locked absent_unwritable_partition_keeps_cli_tool_reads_observational --test mcp
+          cargo test --no-fail-fast -p orbit-cli --locked observational_read_only_stores --test mcp
           cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep

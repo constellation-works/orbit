@@ -3,7 +3,6 @@
 use crate::isolated_cli_fixture::Fixture;
 use serde_json::json;
 
-#[test]
 fn approval_prints_latest_pilot_blocker_warnings_in_text_and_json() {
     let fixture = Fixture::new();
     for json_output in [false, true] {
@@ -64,7 +63,6 @@ fn approval_prints_latest_pilot_blocker_warnings_in_text_and_json() {
     }
 }
 
-#[test]
 fn task_show_summarizes_pilot_comments_without_changing_json_or_fallback() {
     let fixture = Fixture::new();
     let id = fixture.json(&["task", "list", "--json"])[0]["id"]
@@ -156,4 +154,21 @@ fn task_show_summarizes_pilot_comments_without_changing_json_or_fallback() {
         fixture.json(&["task", "show", &id, "--fields", "comments", "--json"]),
         before["comments"]
     );
+}
+
+#[test]
+fn pilot_comment_rendering() {
+    for (name, check) in [
+        (
+            "approval_prints_latest_pilot_blocker_warnings_in_text_and_json",
+            approval_prints_latest_pilot_blocker_warnings_in_text_and_json as fn(),
+        ),
+        (
+            "task_show_summarizes_pilot_comments_without_changing_json_or_fallback",
+            task_show_summarizes_pilot_comments_without_changing_json_or_fallback as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

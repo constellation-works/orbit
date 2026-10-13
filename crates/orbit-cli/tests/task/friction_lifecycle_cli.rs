@@ -8,7 +8,6 @@ use serde_json::json;
 use crate::{git_repo, isolated_cli_fixture};
 use isolated_cli_fixture::Fixture;
 
-#[test]
 fn friction_update_empty_title_restores_derivation_like_the_tool() {
     let fixture = Fixture::new();
     let created = fixture.json(&[
@@ -45,7 +44,6 @@ fn friction_update_empty_title_restores_derivation_like_the_tool() {
     }
 }
 
-#[test]
 fn friction_update_empty_rehome_to_clears_alone_and_with_other_edits() {
     let fixture = Fixture::new();
     let created = fixture.json(&[
@@ -85,7 +83,6 @@ fn friction_update_empty_rehome_to_clears_alone_and_with_other_edits() {
     }
 }
 
-#[test]
 fn friction_optional_blank_strings_without_clear_semantics_remain_omitted() {
     let fixture = Fixture::new();
     let created = fixture.json(&[
@@ -122,7 +119,6 @@ fn friction_optional_blank_strings_without_clear_semantics_remain_omitted() {
     assert!(listed.as_array().unwrap().iter().any(|row| row["id"] == id));
 }
 
-#[test]
 fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     let mut fixture = Fixture::new();
     fixture.root = PathBuf::new();
@@ -369,7 +365,6 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     );
 }
 
-#[test]
 fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
     let mut fixture = Fixture::new();
     // Cross-workspace fixtures use the shared HOME registry and distinct checkout data.
@@ -551,7 +546,6 @@ fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
     );
 }
 
-#[test]
 fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     let fixture = Fixture::new();
     let add_token = format!("ghp_{}", "a".repeat(36));
@@ -724,7 +718,6 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     }
 }
 
-#[test]
 fn friction_add_description_alias_is_redacted_like_body() {
     let fixture = Fixture::new();
     let token = format!("ghp_{}", "f".repeat(36));
@@ -749,4 +742,50 @@ fn friction_add_description_alias_is_redacted_like_body() {
     let id = created["id"].as_str().expect("friction id");
     let shown = fixture.json(&["friction", "show", id, "--json"]);
     assert!(!shown.to_string().contains(&token));
+}
+
+#[test]
+fn friction_clear_semantics_and_replica_admission() {
+    for (name, check) in [
+        (
+            "friction_update_empty_title_restores_derivation_like_the_tool",
+            friction_update_empty_title_restores_derivation_like_the_tool as fn(),
+        ),
+        (
+            "friction_update_empty_rehome_to_clears_alone_and_with_other_edits",
+            friction_update_empty_rehome_to_clears_alone_and_with_other_edits as fn(),
+        ),
+        (
+            "friction_optional_blank_strings_without_clear_semantics_remain_omitted",
+            friction_optional_blank_strings_without_clear_semantics_remain_omitted as fn(),
+        ),
+        (
+            "replica_closes_legacy_local_frictions_with_audit_without_owner_mutations",
+            replica_closes_legacy_local_frictions_with_audit_without_owner_mutations as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn friction_ownership_and_redaction() {
+    for (name, check) in [
+        (
+            "friction_cli_triage_stats_and_rehome_preserve_workspace_ownership",
+            friction_cli_triage_stats_and_rehome_preserve_workspace_ownership as fn(),
+        ),
+        (
+            "friction_title_is_redacted_on_add_and_update_before_persistence",
+            friction_title_is_redacted_on_add_and_update_before_persistence as fn(),
+        ),
+        (
+            "friction_add_description_alias_is_redacted_like_body",
+            friction_add_description_alias_is_redacted_like_body as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

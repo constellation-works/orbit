@@ -27,6 +27,18 @@ make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI log, sandbox and SQLite ledger schema goldens; UPDATE=1 regenerates
 ```
 
+When renaming or consolidating a test selected by macOS CI, update the filter
+in `.github/workflows/ci-macos.yml` and run `make check-ci-macos`. This lists
+actual compiled tests, including the workspace feature set, so a filter cannot
+silently become a zero-test pass.
+
+The task and MCP CLI integration binaries use named contract tables, with
+four and eight nextest slots respectively. Each row keeps its assertions and disposable state; rows that
+share a workspace address independent task IDs. Exact-child fixtures isolate
+the complete table once, rather than re-executing removed test entry points.
+The [MCP and task test budget report](reviews/cli-mcp-task-test-budget.md)
+records the coverage mapping and candidate-host before/after measurements.
+
 Tasks tagged `no-diff-expected` run no workspace gates or required validation
 commands and attach no `no-diff.json` or workspace validation logs, in owner or
 claimed mode. Run only commands the task's own brief requires; a QA sweep may

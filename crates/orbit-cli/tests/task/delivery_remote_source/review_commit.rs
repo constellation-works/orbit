@@ -59,13 +59,7 @@ fn refused(result: Result<Value, orbit_common::OrbitError>, case: &str) {
     assert!(error.contains(REFUSAL), "{case}: {error}");
 }
 
-#[test]
 fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
-    const TEST: &str = "delivery_remote_source::review_commit::review_coverage_bound_to_the_batch_is_the_no_diff_evidence";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, attempt, run_id) = admitted_action(&fixture, 0, REVIEW_CONSUMER);
     let action_id = attempt.action_id.clone().expect("admitted action");
@@ -181,14 +175,7 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
 /// summary Orbit derives from its evidence, but that summary does not pay
 /// for the batch: settlement records the typed reason, spends the retry and
 /// leaves the obligation owed [ORB-15186].
-#[test]
 fn a_derived_summary_leaves_the_batch_owed() {
-    const TEST: &str =
-        "delivery_remote_source::review_commit::a_derived_summary_leaves_the_batch_owed";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, attempt, run_id) = admitted_action(&fixture, 1, REVIEW_CONSUMER);
     let action_id = attempt.action_id.clone().expect("admitted action");
@@ -255,13 +242,7 @@ fn a_derived_summary_leaves_the_batch_owed() {
 /// the current summary text, not the event, decides who wrote it: a review that
 /// replaces Orbit's summary settles the batch without spending a retry
 /// [ORB-15255].
-#[test]
 fn an_agent_replacement_of_a_derived_summary_settles_the_batch() {
-    const TEST: &str = "delivery_remote_source::review_commit::an_agent_replacement_of_a_derived_summary_settles_the_batch";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, attempt, run_id) = admitted_action(&fixture, 1, REVIEW_CONSUMER);
     let action_id = attempt.action_id.clone().expect("admitted action");
@@ -317,4 +298,28 @@ fn an_agent_replacement_of_a_derived_summary_settles_the_batch() {
             .any(|entry| entry.event == orbit_types::task::EXECUTION_SUMMARY_DERIVED_EVENT),
         "the derivation stays in the task's history"
     );
+}
+
+#[test]
+fn review_commit_contracts() {
+    if !in_isolated_child("delivery_remote_source::review_commit::review_commit_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "review_coverage_bound_to_the_batch_is_the_no_diff_evidence",
+            review_coverage_bound_to_the_batch_is_the_no_diff_evidence as fn(),
+        ),
+        (
+            "a_derived_summary_leaves_the_batch_owed",
+            a_derived_summary_leaves_the_batch_owed as fn(),
+        ),
+        (
+            "an_agent_replacement_of_a_derived_summary_settles_the_batch",
+            an_agent_replacement_of_a_derived_summary_settles_the_batch as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "Recovery contract row");
+        check();
+    }
 }

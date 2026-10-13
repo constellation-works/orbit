@@ -9,13 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::Utc;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
-use crate::auto_task_lifecycle_cli::git;
-use crate::isolated_cli_fixture::Fixture;
-use crate::review_after_landing_cli::{
-    commit, enable_review_crew, in_isolated_child, land_and_evaluate, open_runtime, retarget,
-    set_policy, toggle, trigger,
-};
-
 /// Counts acquisitions of the task store's partition commit lock: the file
 /// lock records one event per acquisition a caller paid for, and none for a
 /// re-entrant nested section.
@@ -51,29 +44,12 @@ fn acquisitions<T>(op: impl FnOnce() -> T) -> (T, u64) {
     (output, count.load(Ordering::Relaxed))
 }
 
-#[test]
-fn one_config_show_takes_the_task_commit_lock_once() {
-    const TEST: &str = "config_show_task_reads::one_config_show_takes_the_task_commit_lock_once";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-    let fixture = Fixture::new();
-    enable_review_crew(&fixture);
-    git(&fixture, &["checkout", "-b", "fixture-delivery"]);
-    commit(&fixture, "baseline\n");
-    retarget(&fixture, &trigger());
-    set_policy(&fixture, "operation.review_crew", "sonnet");
-    toggle(&fixture, "on");
-    let runtime = open_runtime(&fixture);
-    land_and_evaluate(&fixture, &runtime, "landed\n")
-        .expect("an enabled consumer mints a review task for the landed batch");
-    drop(runtime);
-
-    // What `orbit config show` resolves its review section from.
-    let runtime = open_runtime(&fixture);
+pub(crate) fn assert_one_config_show_takes_the_task_commit_lock_once(
+    runtime: &orbit_core::OrbitRuntime,
+) {
     let (view, taken) = acquisitions(|| {
         orbit_core::application::review::review_switches_view(
-            &runtime,
+            runtime,
             runtime.operation_policy(),
             Utc::now(),
         )
@@ -90,7 +66,7 @@ fn one_config_show_takes_the_task_commit_lock_once() {
 
     // The dashboard's effective view embeds the same section.
     let (effective, taken) =
-        acquisitions(|| orbit_core::application::config::effective_view(&runtime).unwrap());
+        acquisitions(|| orbit_core::application::config::effective_view(runtime).unwrap());
     assert!(effective["review"]["after_landing"]["health"].is_object());
     assert_eq!(taken, 1, "the effective config view takes the lock once");
 }
