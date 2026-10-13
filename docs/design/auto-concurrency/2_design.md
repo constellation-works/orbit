@@ -458,8 +458,8 @@ Two drains on one host must not fill the same gap. Each takes a host lock
 
 1. Build the forecast.
 2. Decide the admissions.
-3. Write one `admission_reservations` row per admitted task, holding the task
-   id, profile key and time.
+3. Write `admission_reservations` for the admitted capacity, holding the task
+   id (or `pending:<request_id>` for a pull), profile keys and time.
 4. Release the lock.
 
 A reservation leaves the forecast once its run exists in `job_runs`, or after
@@ -480,7 +480,17 @@ Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
   the workspace, task id, work class, complexity, base class and time. A
   reservation's run is a delivery run in its workspace that names its task and
   was created at or after the reservation. Rows older than five minutes are
-  deleted when the next lock is taken.
+  deleted when the next lock is taken. A pending pull holds the alternatives
+  in its final admissible set under one `pending:<request_id>` key. Its CPU
+  and memory contributions are the maximum at each minute across those
+  alternatives, not their sum: exactly one task can be granted. This covers
+  different CPU and memory peaks without assuming one profile dominates both.
+- **Exchange and release.** The store can remove reservation keys, read the
+  remaining load and write replacements in one host transaction. A returned
+  claim replaces its pending key with the task's precise key before creating
+  a leaf; the queued leaf inherits that profile key and clock. Idle, confirmed
+  refusal, and abandonment/cancellation remove pending capacity. No host
+  write transaction spans an owner call.
 
 ### 5.3 Starvation
 
@@ -528,16 +538,32 @@ admission lock (§5.2):
 2. Under `mode = enforce` the request carries the fits as `admissible` on its
    `orbit.task.pull` request: `(work class, complexity)` keys and template
    names. When nothing fits, the drain sends no request, records
-   `forecast_no_headroom` as its refusal, and polls again.
+   `forecast_no_headroom` as its refusal, and polls again. The request identity
+   is allocated before the fit. In the same transaction as the decision,
+   pending capacity is reserved for the final admissible set (§5.2), before
+   the decision lock is released or the owner is contacted.
 3. The owner skips a ready or repair candidate outside the list. A template
    task is inside it when its template is listed; any other task when its
    work class and complexity are. Each skipped task is returned in the
    receipt's `capacity_unavailable`, which the follower records among its
    excluded backlog as `capacity_unavailable`.
-4. A claim that returns is reserved on the follower, stamped when its request
-   went out and keyed by the class of this replica's copy of the task. The
-   reservation is written before the next request is forecast, and the
-   claim's leaf run, created after that stamp, replaces it in the forecast.
+4. A claim that returns atomically replaces the placeholder on the follower
+   with precise task capacity, keyed by the class of this replica's copy of
+   the task. This happens before leaf creation, not after bind or launch.
+   The leaf inherits that key and admission clock, and replaces the task
+   reservation in the forecast immediately, even before its worker starts.
+   Idle and confirmed refusals delete the placeholder. If local allocation
+   fails or has no free slot, the unsent placeholder is deleted too.
+5. A lost reply or an undecodable/unknown owner outcome retains the pending
+   capacity until recovery or the five-minute TTL. Every carried unanswered
+   request must reacquire/refresh capacity under the host lock before being
+   re-sent with its original identity and admissible set. If the set no longer
+   fits, it waits without sending or executing work. If a reply arrives after
+   the TTL and another admitter filled the gap, the returned claim remains
+   recorded but unlaunched until precise capacity fits. The owner is never
+   unclaimed merely because the host has to wait. Confirmed cancellation or
+   abandonment releases the placeholder; an unavailable owner leaves it to
+   recovery/TTL.
 
 Each request is one candidate against a fresh forecast. The drain records the
 last fit as `pull_admission_fit` on its run state: the mode, whether it was
@@ -545,8 +571,9 @@ sent, the work that fits, and the minute and resource each unfit kind would
 exceed, for example `change/hard: cpu 94% at +6m`.
 
 `mode = shadow` computes and records the same fit, with `sent` false, and
-requests as with `off`. Its claims are reserved too, so shadow forecasts count
-them. With `off`, on a host with no profiles, or when the host's load cannot
+requests as with `off`, writing no pending placeholder. Its returned claims
+are reserved before leaf creation, so shadow forecasts count them; shadow
+admission remains unchanged. With `off`, on a host with no profiles, or when the host's load cannot
 be read, nothing is computed and the request carries no list; the owner then
 selects as before.
 

@@ -56,11 +56,12 @@ fn admitted_claim(admission: &LocalPullAdmission) -> Result<ExecutionClaim, Orbi
 /// nothing sent here names a machine; the claim and run IDs only say which
 /// attempt is being carried forward, and the owner's claim journal refuses any
 /// attempt that is not this machine's current one.
-pub(crate) struct RoutedPullPeer {
+pub(crate) struct RoutedPullPeer<'a> {
+    pub(crate) runtime: &'a OrbitRuntime,
     pub(crate) transport: Arc<dyn DrainOwnerTransport>,
 }
 
-impl RoutedPullPeer {
+impl RoutedPullPeer<'_> {
     fn call(
         &self,
         destination: &PullDestination,
@@ -82,7 +83,17 @@ fn encode<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
     serde_json::to_value(value).map_err(|error| OrbitError::Store(error.to_string()))
 }
 
-impl PullPeer for RoutedPullPeer {
+impl PullPeer for RoutedPullPeer<'_> {
+    fn prepare(&self, request: &AdmissionRequest) -> Result<bool, OrbitError> {
+        self.runtime.prepare_pull_capacity(request)
+    }
+    fn capacity(&self, admission: &LocalPullAdmission) -> Result<bool, OrbitError> {
+        self.runtime.reconcile_pull_capacity(admission)
+    }
+    fn discard(&self, request: &AdmissionRequest) -> Result<(), OrbitError> {
+        self.runtime.release_pull_capacity(request)
+    }
+
     fn request(
         &self,
         destination: &PullDestination,

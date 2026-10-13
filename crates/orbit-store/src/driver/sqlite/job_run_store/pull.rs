@@ -649,6 +649,21 @@ pub(super) fn mutate(
                 // owner task's crew rather than this host's `default_crew`.
                 let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
                 let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                // Carry the profile key already chosen by admission into the
+                // queued leaf. The host forecast then exchanges its reservation
+                // for a run with the same price before the worker starts.
+                let resource_class = conn.query_row(
+                    "SELECT work_class, complexity, reserved_at FROM admission_reservations
+                     WHERE workspace_id = ?1 AND task_id = ?2 ORDER BY reserved_at DESC, rowid DESC LIMIT 1",
+                    params![workspace, claim.task_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?)),
+                ).optional().map_err(sqlite_store_error)?;
+                if let Some((work_class, complexity, admitted_at)) = resource_class {
+                    input["resource_class"] = serde_json::json!({
+                        "task_id": claim.task_id, "work_class": work_class,
+                        "complexity": complexity, "admitted_at": admitted_at,
+                    });
+                }
                 // The leaf's review admission is the claim's captured contract,
                 // never this host's settings [ORB-13908].
                 if let (Some(review), Some(object)) = (claim_review_admission(&record.request, now), input.as_object_mut()) {

@@ -8,8 +8,9 @@
 //! so the first submission naming the task records the class in its run input
 //! and every child that names the same task inherits it. A later tag edit
 //! therefore never moves a delivery's minutes between profiles. A claimed
-//! leaf is created by the pull store, not submitted, so its worker captures
-//! the class when it starts; the leaf is the whole delivery.
+//! leaf is created by the pull store, which carries its admission reservation's
+//! class into the queued run. Without a reservation, its worker captures the
+//! class when it starts; the leaf is the whole delivery.
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::Task;

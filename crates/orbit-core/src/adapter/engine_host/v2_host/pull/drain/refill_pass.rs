@@ -36,7 +36,7 @@ impl PullDrain<'_> {
     pub(crate) fn refill_pass_requesting(
         &self,
         destination: &PullDestination,
-        template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
+        template: &dyn Fn(&str) -> Result<Option<AdmissionRequest>, OrbitError>,
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
         requested: Option<&Requested<'_>>,
         ceiling: usize,
@@ -68,7 +68,7 @@ impl PullDrain<'_> {
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
         ceiling: usize,
     ) -> RefillPass {
-        self.refill_pass_requesting(destination, template, admitting, None, ceiling)
+        self.refill_pass_requesting(destination, &|_| template(), admitting, None, ceiling)
     }
 
     /// [`Self::refill_pass`] as a `Result`, for fixtures that only care
@@ -95,7 +95,7 @@ impl PullDrain<'_> {
     fn refill_into(
         &self,
         destination: &PullDestination,
-        template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
+        template: &dyn Fn(&str) -> Result<Option<AdmissionRequest>, OrbitError>,
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
         requested: Option<&Requested<'_>>,
         ceiling: usize,
@@ -109,35 +109,37 @@ impl PullDrain<'_> {
                 return Ok(());
             }
         }
-        let Some(mut next) = template()? else {
-            return Ok(());
-        };
-        for slot in 0..ceiling {
+        for _ in 0..ceiling {
             if !admitting()? {
                 break;
             }
-            // [ORB-14257] Each request after the first is built again: a leaf
-            // this pass launched may already have released its claim and
-            // excluded its crew, and must not be pulled straight back.
-            if slot > 0 {
-                let Some(fresh) = template()? else {
-                    break;
-                };
-                next = fresh;
-            }
-            let template = &next;
+            // Allocate identity before fitting, so capacity can be held in
+            // the same host transaction that computes the request's fit.
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes).map_err(|error| {
                 OrbitError::Execution(format!("allocate pull request identity: {error}"))
             })?;
-            let mut request = template.clone();
-            request.request_id = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-            let requested_at = Utc::now();
-            let Some(record) = self
-                .jobs
-                .allocate_pull_request(destination, &request, ceiling)?
-            else {
+            let request_id: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            // Rebuild every time: earlier leaves can change crew exclusions
+            // and the host forecast before this request is made.
+            let Some(mut request) = template(&request_id)? else {
                 break;
+            };
+            request.request_id = request_id;
+            let requested_at = Utc::now();
+            let record = match self
+                .jobs
+                .allocate_pull_request(destination, &request, ceiling)
+            {
+                Ok(Some(record)) => record,
+                Ok(None) => {
+                    self.peer.discard(&request)?;
+                    break;
+                }
+                Err(error) => {
+                    self.peer.discard(&request)?;
+                    return Err(error);
+                }
             };
             let sent = requested.map(|_| record.clone());
             let reconciled = self.reconcile(record);

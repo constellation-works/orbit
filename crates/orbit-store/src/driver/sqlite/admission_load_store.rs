@@ -30,9 +30,10 @@ fn unsigned(value: i64) -> u64 {
 }
 
 impl AdmissionLoadStoreBackend for Store {
-    fn admit_under_host_lock(
+    fn admit_under_host_lock_replacing(
         &self,
         query: &AdmissionLoadQuery<'_>,
+        remove: &[(&str, &str)],
         decide: AdmissionDecision<'_>,
     ) -> Result<Vec<AdmissionReservation>, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -42,6 +43,13 @@ impl AdmissionLoadStoreBackend for Store {
                 params![stamp(query.reservations_expire_before)],
             )
             .map_err(sqlite_store_error)?;
+            for (workspace, task) in remove {
+                conn.execute(
+                    "DELETE FROM admission_reservations WHERE workspace_id = ?1 AND task_id = ?2",
+                    params![workspace, task],
+                )
+                .map_err(sqlite_store_error)?;
+            }
             let reservations = reservations(conn)?;
             let since = reservations.first().map(|first| first.reserved_at);
             let load = AdmissionLoad {

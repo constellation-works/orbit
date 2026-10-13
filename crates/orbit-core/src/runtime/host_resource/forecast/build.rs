@@ -18,6 +18,8 @@ use crate::runtime::run_input::singular_task_id_from_input;
 /// so the lookup falls back to the heavier profiles.
 const UNKNOWN_WORK_CLASS: &str = "change";
 
+type PendingSeries = (Vec<f64>, Vec<f64>);
+
 /// The forecast over `0 ..= horizon` minutes from `now`.
 pub(crate) fn build_forecast(
     load: &AdmissionLoad,
@@ -58,6 +60,7 @@ pub(crate) fn build_forecast(
     }
 
     let mut reservations = Vec::new();
+    let mut pending: BTreeMap<(&str, &str), PendingSeries> = BTreeMap::new();
     for reservation in load
         .reservations
         .iter()
@@ -76,8 +79,18 @@ pub(crate) fn build_forecast(
         let found = profiles.lookup(&lookup);
         if let Some(profile) = found.profile.as_deref() {
             for (t, minute) in profile.series.iter().take(points).enumerate() {
-                cpu[t] += minute.cpu_cores * minute.alive;
-                memory[t] += minute.memory_bytes as f64 * minute.alive;
+                let cores = minute.cpu_cores * minute.alive;
+                let bytes = minute.memory_bytes as f64 * minute.alive;
+                if reservation.task_id.starts_with("pending:") {
+                    let (cpu, memory) = pending
+                        .entry((&reservation.workspace_id, &reservation.task_id))
+                        .or_insert_with(|| (vec![0.0; points], vec![0.0; points]));
+                    cpu[t] = cpu[t].max(cores);
+                    memory[t] = memory[t].max(bytes);
+                } else {
+                    cpu[t] += cores;
+                    memory[t] += bytes;
+                }
             }
         }
         reservations.push(ReservedAdmission {
@@ -89,6 +102,13 @@ pub(crate) fn build_forecast(
             profile_source: found.source,
             profile_key: found.profile.as_ref().map(|profile| profile.key.clone()),
         });
+    }
+
+    for (pending_cpu, pending_memory) in pending.into_values() {
+        for t in 0..points {
+            cpu[t] += pending_cpu[t];
+            memory[t] += pending_memory[t];
+        }
     }
 
     let running_cpu: f64 = running.iter().map(|d| d.current_cpu_cores).sum();

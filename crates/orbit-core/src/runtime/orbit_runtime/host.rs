@@ -194,6 +194,17 @@ impl OrbitRuntime {
         now: DateTime<Utc>,
         decide: impl FnOnce(&HostLoadForecast) -> Result<ForecastDecision<T>, OrbitError>,
     ) -> Result<T, OrbitError> {
+        self.admit_against_forecast_replacing_at(now, &[], decide)
+    }
+
+    /// Exchange reservation keys while computing the decision under one host
+    /// lock. Returning an error preserves the old reservations.
+    pub(crate) fn admit_against_forecast_replacing_at<T>(
+        &self,
+        now: DateTime<Utc>,
+        remove: &[(&str, &str)],
+        decide: impl FnOnce(&HostLoadForecast) -> Result<ForecastDecision<T>, OrbitError>,
+    ) -> Result<T, OrbitError> {
         let profiles = self.resource_profiles()?;
         let horizon = self
             .context
@@ -211,7 +222,7 @@ impl OrbitRuntime {
         };
         let mut decide = Some(decide);
         let mut outcome = None;
-        store.admit_under_host_lock(&query, &mut |load| {
+        store.admit_under_host_lock_replacing(&query, remove, &mut |load| {
             let decide = decide.take().ok_or_else(|| {
                 OrbitError::Execution("the admission decision ran twice".to_string())
             })?;
@@ -229,38 +240,21 @@ impl OrbitRuntime {
         outcome.ok_or_else(|| OrbitError::Execution("the admission decision never ran".to_string()))
     }
 
-    /// Reserve tasks admitted outside a forecast decision, under the host
-    /// admission lock, so the next admitter on the host counts each before
-    /// its run exists. A pull drain's claim is one: the owner chose the
-    /// task, so the drain learns it only when the claim returns.
-    ///
-    /// Each reservation is stamped `decided_at`, when the admission was
-    /// decided: a delivery run naming its task created since then replaces
-    /// it, whether that run was created before or after this write.
-    pub fn reserve_admissions_at(
+    /// Delete capacity under the host lock without sampling load or profiles.
+    pub(crate) fn release_admission_reservations(
         &self,
-        decided_at: DateTime<Utc>,
-        admitted: Vec<AdmissionReservationRequest>,
+        remove: &[(&str, &str)],
     ) -> Result<(), OrbitError> {
-        if admitted.is_empty() {
-            return Ok(());
-        }
-        let store = self.sqlite_store()?;
-        let jobs = delivery_jobs();
-        let query = AdmissionLoadQuery {
-            now: decided_at,
-            delivery_jobs: &jobs,
-            reservations_expire_before: Utc::now() - Duration::minutes(RESERVATION_TTL_MINUTES),
-        };
-        let mut admitted = Some(admitted);
-        store.admit_under_host_lock(&query, &mut |_| {
-            Ok(admitted
-                .take()
-                .unwrap_or_default()
-                .into_iter()
-                .map(new_reservation)
-                .collect())
-        })?;
+        let now = Utc::now();
+        self.sqlite_store()?.admit_under_host_lock_replacing(
+            &AdmissionLoadQuery {
+                now,
+                delivery_jobs: &[],
+                reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
+            },
+            remove,
+            &mut |_| Ok(Vec::new()),
+        )?;
         Ok(())
     }
 

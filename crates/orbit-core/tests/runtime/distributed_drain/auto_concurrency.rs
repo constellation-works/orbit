@@ -14,7 +14,8 @@
 
 use super::*;
 use chrono::Duration as ChronoDuration;
-use orbit_core::runtime::host_resource::forecast::ForecastDecision;
+use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
+use orbit_core::runtime::host_resource::profile::ProfileLookup;
 use orbit_store::contracts::{
     AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend, AdmissionReservation,
     ResourceUsageStoreBackend, RunResourceMinute,
@@ -34,7 +35,7 @@ fn forecasting_using(mode: &str, tasks: usize, bytes: u64) -> (Pair, PathBuf) {
         tasks,
         &format!(
             "[machine.auto_concurrency]\nmode = \"{mode}\"\nmin_profile_deliveries = 1\n\
-             horizon_cap_minutes = 30\n"
+             horizon_cap_minutes = 30\nadmit_cpu_percent = 75\nadmit_memory_percent = 75\n"
         ),
     );
     let proc_root = pair._root.path().join(FOLLOWER).join("proc");
@@ -50,6 +51,10 @@ fn forecasting_using(mode: &str, tasks: usize, bytes: u64) -> (Pair, PathBuf) {
 /// One finished 31-minute `change`/`low` delivery using `bytes`, admitted
 /// two days ago.
 fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
+    finished_delivery_using(follower, bytes, 1.0);
+}
+
+fn finished_delivery_using(follower: &OrbitRuntime, bytes: u64, cores: f64) {
     let store = follower.sqlite_store().unwrap();
     let workspace = follower.workspace_id().unwrap();
     let admitted = Utc::now() - ChronoDuration::days(2);
@@ -88,7 +93,7 @@ fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
                 complexity: Some("low".into()),
                 resumed: false,
                 delivery_admitted_at: Some(admitted),
-                cpu_cores: 1.0,
+                cpu_cores: cores,
                 memory_bytes: bytes,
                 samples: 12,
             })
@@ -307,6 +312,14 @@ fn shadow_and_off_followers_request_without_a_list() {
         host_using(&proc_root, 16 * GIB);
         let drain = pair.run_drain();
 
+        let follower = pair.follower.clone();
+        *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
+            assert!(
+                reservations(&follower).is_empty(),
+                "shadow/off never holds pending capacity"
+            );
+            Ok(())
+        }));
         let pass = pair.pass(&drain);
 
         let pulls = pair.wire.calls("orbit.task.pull");
@@ -398,4 +411,270 @@ fn an_enforcing_follower_admits_work_too_big_to_fit_only_on_an_idle_host() {
     let fit = admission_fit(&pair, &drain).unwrap();
     assert!(fit.admissible.iter().any(|work| work == "change/low"));
     assert!(fit.unfit.is_empty(), "{fit:?}");
+}
+
+/// A second workspace shares the first follower's host database and wire.
+fn another_workspace(pair: &Pair, proc_root: &Path) -> Pair {
+    let repo = pair._root.path().join(FOLLOWER).join("other-repo");
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    let output = std::process::Command::new("git")
+        .args(["init", "--bare", "--initial-branch=main", "-q"])
+        .arg(repo.join(".git"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let follower = calm_host(
+        OrbitRuntime::from_roots(&pair.follower.global_root(), &repo.join(".orbit")).unwrap(),
+    )
+    .with_automation_machine_identity(Some(FOLLOWER.into()))
+    .with_coordination_write_owner(Some(OWNER.into()))
+    .with_drain_owner_transport(pair.wire.clone())
+    .with_host_load_proc_root(proc_root.to_path_buf());
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        follower.sqlite_store().unwrap(),
+        follower.workspace_id().unwrap(),
+    );
+    Pair {
+        _root: pair._root.clone(),
+        wire: pair.wire.clone(),
+        owner_repo: pair.owner_repo.clone(),
+        follower,
+        follower_repo: repo,
+        follower_jobs: jobs,
+        destination: pair.destination.clone(),
+        tasks: pair.tasks.clone(),
+    }
+}
+
+/// Try one local admission on another workspace, under the same host lock.
+fn local_admission(follower: &OrbitRuntime, task: &str) -> bool {
+    let lookup = ProfileLookup::new("ws-local", "change", Some("low".into()), false);
+    follower
+        .admit_against_forecast(|forecast| {
+            let profile = forecast.profiles.lookup(&lookup).profile.unwrap();
+            let fits = forecast.gap(75, 75).unwrap().fit(&profile).is_ok();
+            Ok(ForecastDecision {
+                outcome: fits,
+                admitted: if fits {
+                    vec![AdmissionReservationRequest {
+                        task_id: task.into(),
+                        lookup,
+                    }]
+                } else {
+                    vec![]
+                },
+            })
+        })
+        .unwrap()
+}
+
+/// Interleave a local drain and another workspace's pull exactly between
+/// the first pull's fit and owner response. No sleeps or host load are used.
+#[test]
+fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_replies() {
+    if !isolated(
+        module_path!(),
+        "pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_replies",
+    ) {
+        return;
+    }
+    for (bytes, cores, lost) in [
+        (12 * GIB, 1.0, false),
+        (GIB, 6.0, false),
+        (12 * GIB, 1.0, true),
+    ] {
+        let (pair, proc_root) = forecasting_using("enforce", 2, bytes);
+        // Replace the fixture's history with this case's CPU curve.
+        finished_delivery_using(&pair.follower, bytes, cores);
+        neighbour_delivery(&pair.follower);
+        host_using(&proc_root, 4 * GIB);
+        let second = another_workspace(&pair, &proc_root);
+        assert_ne!(
+            second.follower.workspace_id().unwrap(),
+            pair.follower.workspace_id().unwrap()
+        );
+        let second_drain = second.run_drain();
+        let follower = pair.follower.clone();
+        let wire = pair.wire.clone();
+        let barrier = move || {
+            let held = reservations(&follower);
+            assert!(
+                !held.is_empty() && held.iter().all(|r| r.task_id.starts_with("pending:")),
+                "{held:?}"
+            );
+            let (cpu, memory) = follower
+                .admit_against_forecast(|forecast| {
+                    Ok(ForecastDecision {
+                        outcome: (forecast.cpu.peak.value, forecast.memory.peak.value),
+                        admitted: vec![],
+                    })
+                })
+                .unwrap();
+            assert!(cpu <= 15.0 * 0.75 && memory <= (24 * GIB) as f64);
+            assert!(
+                !local_admission(&follower, "local-in-flight"),
+                "local work cannot fill the pending pull's gap"
+            );
+            let before = wire.calls("orbit.task.pull").len();
+            let pass = second.pass(&second_drain);
+            assert_eq!(wire.calls("orbit.task.pull").len(), before, "{pass}");
+            assert!(
+                second.leaf_runs().is_empty(),
+                "the second workspace must not execute"
+            );
+            Ok(())
+        };
+        *pair.wire.before_pull.lock().unwrap() = Some(Box::new(barrier));
+        if lost {
+            pair.wire.lose_next_reply("orbit.task.pull");
+        }
+        // Keep the leaf queued at bind so this fixture never starts a real
+        // provider; it still exercises durable leaf creation and pricing.
+        pair.wire.lose_next_reply("orbit.drain.claim.bind");
+        let drain = pair.run_drain();
+        let pass = pair.pass(&drain);
+        if lost {
+            assert!(error_of(&pass).contains("dropped"), "{pass}");
+            assert!(pair.leaf_runs().is_empty());
+            let pending = reservations(&pair.follower);
+            assert!(
+                !pending.is_empty() && pending.iter().all(|r| r.task_id.starts_with("pending:"))
+            );
+            assert!(!local_admission(&pair.follower, "local-before-expiry"));
+            // Advance only the admission clock: the normal TTL path deletes
+            // the lost request's reservation, without waiting five minutes.
+            pair.follower
+                .admit_against_forecast_at(Utc::now() + ChronoDuration::minutes(6), |_| {
+                    Ok(ForecastDecision {
+                        outcome: (),
+                        admitted: vec![],
+                    })
+                })
+                .unwrap();
+            assert!(reservations(&pair.follower).is_empty());
+            assert!(local_admission(&pair.follower, "local-after-expiry"));
+            let sends = pair.wire.calls("orbit.task.pull").len();
+            pair.pass(&drain);
+            assert_eq!(
+                pair.wire.calls("orbit.task.pull").len(),
+                sends,
+                "an expired request must reacquire capacity before re-send"
+            );
+            assert!(pair.leaf_runs().is_empty());
+            let now = Utc::now();
+            pair.follower
+                .sqlite_store()
+                .unwrap()
+                .admit_under_host_lock_replacing(
+                    &AdmissionLoadQuery {
+                        now,
+                        delivery_jobs: &[],
+                        reservations_expire_before: now - ChronoDuration::minutes(5),
+                    },
+                    &[("ws-local", "local-after-expiry")],
+                    &mut |_| Ok(vec![]),
+                )
+                .unwrap();
+            let follower = pair.follower.clone();
+            *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
+                assert!(
+                    reservations(&follower)
+                        .iter()
+                        .all(|r| r.task_id.starts_with("pending:"))
+                );
+                assert!(!local_admission(&follower, "local-on-retry"));
+                Ok(())
+            }));
+            pair.pass(&drain);
+            let calls = pair.wire.calls("orbit.task.pull");
+            assert_eq!(
+                calls[0]["request_id"], calls[1]["request_id"],
+                "retry the same owner claim"
+            );
+        }
+        assert_eq!(pair.leaf_runs().len(), 1, "{pass}");
+        let held = reservations(&pair.follower);
+        assert_eq!(
+            held.len(),
+            1,
+            "placeholder alternatives are replaced, not accumulated: {held:?}"
+        );
+        assert_eq!(held[0].task_id, pair.tasks[0]);
+        let leaf = pair
+            .follower_jobs
+            .get_job_run(&pair.leaf_runs()[0])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            leaf.input.as_ref().unwrap()["resource_class"]["complexity"],
+            "low"
+        );
+        pair.follower
+            .admit_against_forecast(|forecast| {
+                assert!(
+                    forecast.reservations.is_empty(),
+                    "leaf replaces precise reservation"
+                );
+                assert!(forecast.cpu.peak.value <= 15.0 * 0.75);
+                assert!(forecast.memory.peak.value <= (24 * GIB) as f64);
+                Ok(ForecastDecision {
+                    outcome: (),
+                    admitted: vec![],
+                })
+            })
+            .unwrap();
+    }
+}
+
+/// Definite idle/refusal and cancelled unknown requests release capacity.
+#[test]
+fn pending_pull_capacity_is_released_when_no_claim_will_execute() {
+    if !isolated(
+        module_path!(),
+        "pending_pull_capacity_is_released_when_no_claim_will_execute",
+    ) {
+        return;
+    }
+    for outcome in ["idle", "refusal", "cancel"] {
+        let (pair, proc_root) = forecasting("enforce", 0);
+        neighbour_delivery(&pair.follower);
+        host_using(&proc_root, 4 * GIB);
+        let drain = pair.run_drain();
+        let follower = pair.follower.clone();
+        let wire = pair.wire.clone();
+        *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
+            assert!(!reservations(&follower).is_empty());
+            if outcome == "refusal" {
+                return Err(OrbitError::PolicyDenied(
+                    "fixture owner refuses this request".into(),
+                ));
+            }
+            if outcome == "cancel" {
+                *wire.unreachable.lock().unwrap() = true;
+            }
+            Ok(())
+        }));
+        let result = pair.follower.run_deterministic("pull_refill", &json!({}), &json!({
+            "run_id": drain, "destination": pair.destination, "window_expired": false, "max_active_leaf_runs": 1,
+        }), ToolContext::default());
+        if outcome == "refusal" {
+            assert!(error_of(&result.unwrap()).contains("fixture owner refuses"));
+        } else {
+            result.unwrap();
+        }
+        if outcome == "cancel" {
+            assert!(
+                !reservations(&pair.follower).is_empty(),
+                "unknown owner outcome retains capacity until recovery or TTL"
+            );
+            *pair.wire.unreachable.lock().unwrap() = false;
+            // Exercise the drain's own graceful cancellation path.
+            pair.follower
+                .cancel_job_run_with_options(&drain, "fixture", "fixture", None, false)
+                .unwrap();
+            pair.pass(&drain);
+        }
+        assert!(reservations(&pair.follower).is_empty(), "{outcome}");
+        assert!(pair.leaf_runs().is_empty());
+    }
 }

@@ -57,6 +57,11 @@ pub use record::{ACCURACY_OFFSETS, ForecastPoints};
 /// forecast.
 pub const RESERVATION_TTL_MINUTES: i64 = 5;
 
+/// A pull request's mutually exclusive profile alternatives share this key.
+pub(crate) fn pending_pull_reservation_id(request_id: &str) -> String {
+    format!("pending:{request_id}")
+}
+
 /// The host's measured load, in the units of the task samples.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct HostLoad {
