@@ -115,6 +115,10 @@ spec:
               # ORB-15287: the pinned delivery base a deferred sandbox
               # validation must name.
               base_sha: "{{ steps.worktree.output.base_sha }}"
+              # ORB-15963: `validate` runs the required commands on the final
+              # candidate, so the envelope lists them for the implementer to
+              # leave to it.
+              final_validation: true
               # Claimed mode: the injected envelope is the task, the agent
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.

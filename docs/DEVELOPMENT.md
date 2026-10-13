@@ -95,14 +95,16 @@ To check whether a failure is pre-existing, replay the same command on the unmod
 
 ### Required validation commands
 
-The owner workspace lists `make ci-test-affected` in [`workflow.required_validation_commands`](CONFIG.md), in ignored per-user `.orbit/config.toml`. Append it and keep the existing entries:
+The owner workspace lists the four [gates](../AGENTS.md#gates) in [`workflow.required_validation_commands`](CONFIG.md), in ignored per-user `.orbit/config.toml`. The cheap gates come first, because validation stops at the first failing command:
 
 ```toml
 [workflow]
-required_validation_commands = ["make ci-fast", "make ci-test-affected"]
+required_validation_commands = ["make ci-fast", "make ci-lint", "make goldens", "make ci-test-affected"]
 ```
 
-For tasks that deliver a diff, candidate validation and before-PR review then require a passing affected-test record. Tasks tagged `no-diff-expected` do not run this list. Distributed review contracts freeze the owner's list at admission, so existing claims need a fresh admission after a change.
+For tasks that deliver a diff, candidate validation runs them once, in that order, on the final candidate after base synchronization, and before-PR review requires a passing record of each. Tasks tagged `no-diff-expected` do not run this list. A managed implementer finds the list in its envelope's `task.final_validation_commands` and leaves those commands to that validation ([required validation](CONFIG.md#required-validation)); it still runs focused checks and any gate the list omits, so a shorter list moves no gate out of the delivery.
+
+Roll a list change out from the operator's shell, never from an agent: deploy the Orbit build that reads it, edit the owner's `.orbit/config.toml` (copy it to each follower replica too, which `orbit doctor`'s `pull-gates` row compares), then start a new drain. A claim already admitted keeps the list its admission captured, which is never rewritten; a fresh admission picks up the new list.
 
 ### Validation failure diagnostics
 
