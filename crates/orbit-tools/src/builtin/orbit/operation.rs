@@ -6,6 +6,11 @@
 //! it is registered at, and its execution kind all come from the spec, so no
 //! verb needs a hand-written [`Tool`] implementation.
 //!
+//! Every call is checked against its spec here, before dispatch: this is the
+//! one entry every surface reaches (MCP, `orbit tool run`, the CLI, the
+//! dashboard and the deterministic dispatcher), so they all share one
+//! validation and the handler receives canonical input.
+//!
 //! A migrated noun supplies only its registry and a
 //! `From<Verb> for OrbitBuiltinAction` impl in [`crate::host`].
 
@@ -39,10 +44,9 @@ where
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        if self.0.rejects_agent_field {
-            super::reject_agent_field(&input, self.0.tool_name)?;
-        }
-        super::execute_host_action(ctx, input, self.0.verb.into())
+        let input = self.0.parse_input(input)?;
+        super::report_unknown_fields(ctx, self.0.tool_name, &input);
+        super::execute_host_action(ctx, input.into_value(), self.0.verb.into())
     }
 }
 

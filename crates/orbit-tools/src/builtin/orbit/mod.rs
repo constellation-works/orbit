@@ -21,6 +21,7 @@ pub(super) use orbit_common::protocol::tool_input::{optional_string_alias, requi
 
 use self::dispatch::{
     execute_host_action, orbit_id_params, reject_agent_field, reject_unknown_tool_arguments,
+    report_unknown_fields,
 };
 use self::identity::{identity_params, model_identity_params};
 use self::workspace::{apply_session_orchestrator_default, resolve_workspace_argument};

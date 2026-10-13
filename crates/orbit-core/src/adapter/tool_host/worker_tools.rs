@@ -1,5 +1,6 @@
 //! Generic coordination writes translated into owner claim transactions.
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::operation::OperationVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimWorkerUpdate,
@@ -222,8 +223,9 @@ pub(crate) fn execute(
         OrbitBuiltinAction::Friction(verb) => match verb {
             FrictionVerb::Add => {
                 binding.validate_arguments(input)?;
+                let parsed = verb.spec().parse_input(input.clone())?;
                 let (mut params, substitutions) =
-                    super::friction_tools::add_params(input, model.map(str::to_owned))?;
+                    super::friction_tools::add_params(&parsed, model.map(str::to_owned))?;
                 friction_tag_substitutions = substitutions;
                 params.during_task = Some(binding.task_id.clone());
                 let taxonomy = crate::runtime::friction::store_for(runtime)?

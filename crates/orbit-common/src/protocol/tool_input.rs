@@ -20,6 +20,13 @@ pub const RETIRED_TASK_ADD_INPUT_FIELDS: &[&str] = &[
 /// sets `additionalProperties: false` on the argument object.
 pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
 
+/// Top-level attribution keys the tool boundary reads for every Orbit builtin.
+///
+/// Identity resolution takes the caller's agent family from these keys when
+/// the session asserts none, so they are meaningful input even for an
+/// operation that declares no parameter of that name.
+pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["agent", "model"];
+
 /// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
 ///
 /// Transport wrappers in [`TOOL_INPUT_TRANSPORT_WRAPPER_KEYS`] are ignored.
@@ -186,6 +193,14 @@ pub fn required_string(
             return Ok(trimmed.to_string());
         }
     }
+    Err(missing_tool_field(input, canonical))
+}
+
+/// The refusal for input that omits the required field `canonical`.
+///
+/// When the input carries a known synonym of the field instead (`task_id` for
+/// `id`), the refusal names it and suggests the field.
+pub fn missing_tool_field(input: &Value, canonical: &str) -> OrbitError {
     // Task-owner routing reads required fields before dispatch can reject
     // unknown arguments. Preserve the field hint on that early error path.
     if let Some(object) = input.as_object()
@@ -194,15 +209,15 @@ pub fn required_string(
                 == Some(canonical)
         })
     {
-        return Err(OrbitError::invalid_input_with_suggestions(
+        return OrbitError::invalid_input_with_suggestions(
             format!(
                 "missing `{canonical}`; {}",
                 unknown_tool_field_message(std::slice::from_ref(unknown), Some(canonical)),
             ),
             vec![canonical.to_string()],
-        ));
+        );
     }
-    Err(OrbitError::InvalidInput(format!("missing `{canonical}`")))
+    OrbitError::InvalidInput(format!("missing `{canonical}`"))
 }
 
 pub fn optional_string(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {

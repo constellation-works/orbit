@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -11,7 +11,7 @@ summary: Decision log for the operations-as-data registry — the split spec/han
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933]
 ---
 
 # Operations as Data — Decisions
@@ -37,7 +37,7 @@ the same day. They govern kernel v2 and the migration plan in
 - **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default)** — Accepted.
 - **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
 - **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted; followed by friction since [ORB-15932].
-- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation planned ([ORB-15933]).
+- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation built in warn mode ([ORB-15933]).
 - **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted.
 - **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
 
@@ -510,5 +510,7 @@ only; the migration is still incremental, one noun at a time.
 - [ORB-15932] — built kernel v2's structure on friction: `effect`, `redact`,
   `NounSpec`, the generic tool and CLI adapters, and the CLI surface tables
   that replaced `CliRender`.
+- [ORB-15933] — built `parse_input` at the tool entry on friction in warn mode,
+  with `aliases`, `retired_fields` and `at_least_one_of` in the spec.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

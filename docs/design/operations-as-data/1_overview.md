@@ -1,17 +1,17 @@
 ---
 title: Operations as Data — Overview
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction is migrated onto kernel v2's structure, and input validation plus a planned noun-by-noun migration are accepted and in progress.
+summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction is migrated onto kernel v2's structure and validates input at the tool entry in warn mode, and a planned noun-by-noun migration is accepted and in progress.
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933]
 ---
 
 # Operations as Data — Overview
@@ -34,8 +34,10 @@ express what the task and auto-task commands need. The revised design (kernel
 v2) and a planned migration were accepted on 2026-10-12, replacing the
 touch-it-move-it ratchet, which migrated no noun in the eleven weeks it
 governed. [ORB-15932] built kernel v2's structure and ported friction onto it:
-read/write class and redaction are now declared in the spec. Accepted aliases,
-cross-field rules and input validation remain planned. The work is tracked as
+read/write class and redaction are now declared in the spec. [ORB-15933]
+declared accepted aliases, retired fields and the "change something" rule, and
+validates friction input once at the tool entry, warning about unknown fields
+before a later step refuses them. The work is tracked as
 Orbit tasks tagged `operations-as-data`, starting with [ORB-15932]. Each section
 of [2_design.md](./2_design.md) is marked **Implemented** or **Planned**.
 
@@ -79,9 +81,9 @@ and again in the tool handler.
   surface needs: the `orbit-core` handler table, the CLI renderers, MCP schema
   extensions. The placement rule is
   [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](./4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface).
-- **Operation input** *(planned)* — the tool input after the spec has
-  validated it once at the tool entry: aliases resolved, unknown fields refused,
-  types and required fields checked.
+- **Operation input** — the tool input after the spec has validated it once at
+  the tool entry: aliases resolved, retired fields refused, types and required
+  fields checked, and unknown fields reported (refused in a later step).
 
 ## 3. At a Glance
 
@@ -107,5 +109,7 @@ and again in the tool handler.
   registry, and the derived CLI, MCP, dashboard, and runtime adapters.
 - [ORB-15932] — first task of the accepted kernel v2 migration: built phase 0a's
   structure and ported friction onto it.
+- [ORB-15933] — phase 0b: input validation at the tool entry in warn mode, with
+  declared aliases, retired fields and `at_least_one_of`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -10,7 +10,8 @@
 //! What is left in this file is genuinely friction-specific and CLI-only: the
 //! request shaping in [`prepare`] and the text rendering in [`render`]. Both
 //! are exhaustive matches on [`FrictionVerb`], so a new verb fails to compile
-//! here until its CLI behaviour is decided.
+//! here until its CLI behaviour is decided. Field presence rules live in the
+//! spec; the adapter only words their refusal in flags.
 
 use clap::Args;
 use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
@@ -30,6 +31,7 @@ pub struct FrictionCommand {
 
 impl Execute for FrictionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        self.command.require_at_least_one_of()?;
         let Invocation { spec, mut input } = self.command;
         prepare(spec.verb, &mut input)?;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
@@ -51,31 +53,14 @@ fn prepare(
             );
             Ok(())
         }
-        FrictionVerb::Update => require_update_field(input),
         FrictionVerb::Add
         | FrictionVerb::Show
         | FrictionVerb::Stats
         | FrictionVerb::Tags
+        | FrictionVerb::Update
         | FrictionVerb::Resolve
         | FrictionVerb::Rehome => Ok(()),
     }
-}
-
-/// Input keys `friction update` accepts, in the order its flags are named.
-const UPDATE_FIELD_KEYS: [&str; 6] = ["status", "tags", "tag", "body", "title", "rehome_to"];
-
-/// Refuse a `friction update` that changes nothing, naming the CLI's flags.
-///
-/// The tool's own refusal names its input fields, which is right for MCP and
-/// wrong for a person at a prompt.
-fn require_update_field(input: &Map<String, Value>) -> Result<(), orbit_core::OrbitError> {
-    if UPDATE_FIELD_KEYS.iter().any(|key| input.contains_key(*key)) {
-        return Ok(());
-    }
-    Err(orbit_core::OrbitError::InvalidInput(
-        "nothing to update; pass at least one of `--status`, `--tag`, `--body`, `--title`, or `--rehome-to`"
-            .to_string(),
-    ))
 }
 
 /// Build a friction response's text payload.

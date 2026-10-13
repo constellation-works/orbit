@@ -23,8 +23,9 @@
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::operation::{
-    CliArgKind, CliBinding, OperationSpec, OperationVerb, ParamSpec, ParamType,
+    CliArgKind, CliBinding, OperationSpec, OperationVerb, ParamSpec, ParamType, alternatives,
 };
+use orbit_core::OrbitError;
 use serde_json::{Map, Value};
 
 /// One parsed operation invocation: which verb and its tool input.
@@ -45,6 +46,33 @@ impl<V: 'static> Invocation<V> {
     /// The audit `subcommand` label, derived from the CLI path.
     pub fn audit_subcommand(&self) -> String {
         self.spec.cli_path.join("-")
+    }
+
+    /// Refuse an invocation that sets none of the spec's `at_least_one_of`
+    /// parameters, naming the flags that would.
+    ///
+    /// The tool entry enforces the same rule but names input fields, which is
+    /// right for MCP and wrong for a person at a prompt.
+    pub fn require_at_least_one_of(&self) -> Result<(), OrbitError> {
+        if !self.spec.misses_at_least_one_of(&self.input) {
+            return Ok(());
+        }
+        let flags = self.spec.at_least_one_of.iter().map(|field| {
+            let binding = self
+                .spec
+                .cli_params()
+                .find(|(param, _)| param.name == *field)
+                .map(|(_, binding)| binding.kind);
+            match binding {
+                Some(CliArgKind::Flag { long, .. }) => format!("`--{long}`"),
+                Some(CliArgKind::Positional) | None => format!("`{field}`"),
+            }
+        });
+        Err(OrbitError::InvalidInput(format!(
+            "nothing to {}; pass at least one of {}",
+            self.spec.cli_path.join(" "),
+            alternatives(flags)
+        )))
     }
 }
 

@@ -11,7 +11,7 @@
 
 use crate::governance::operation::{
     CliArgKind, CliBinding, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
-    Redaction, operation_registry,
+    RETIRED_AGENT_FIELD, Redaction, operation_registry,
 };
 use orbit_types::tool::McpToolScope;
 
@@ -76,6 +76,7 @@ const ADD: FrictionOperation = FrictionOperation {
     params: &[&[
         ParamSpec {
             name: "body",
+            aliases: &["description"],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
@@ -88,6 +89,7 @@ const ADD: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "title",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
@@ -100,6 +102,7 @@ const ADD: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "tags",
+            aliases: &["tag"],
             param_type: ParamType::StringList,
             required: false,
             preserve_empty: false,
@@ -117,6 +120,7 @@ const ADD: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "during_task",
+            aliases: &["task_id"],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
@@ -129,6 +133,7 @@ const ADD: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "model",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
@@ -144,7 +149,8 @@ const ADD: FrictionOperation = FrictionOperation {
             }),
         },
     ]],
-    rejects_agent_field: true,
+    at_least_one_of: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -176,6 +182,7 @@ const LIST: FrictionOperation = FrictionOperation {
         count_param("offset", "Optional number of records to skip"),
         ParamSpec {
             name: "response_mode",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
@@ -186,7 +193,8 @@ const LIST: FrictionOperation = FrictionOperation {
             cli: None,
         },
     ]],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
     // Agents list frictions through `orbit.search` with `kind: friction` and
     // no query; this verb backs the CLI listing and the dashboard.
     mcp_scope: None,
@@ -200,7 +208,8 @@ const SHOW: FrictionOperation = FrictionOperation {
     cli_about: "Show a single friction record",
     effect: Effect::Read,
     params: &[&[BARE_ID_PARAM]],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
     // `list` already returns the record bodies an agent needs; fetching one by
     // id is a human/dashboard follow-up and stays on the CLI surface.
     mcp_scope: None,
@@ -214,7 +223,8 @@ const STATS: FrictionOperation = FrictionOperation {
     cli_about: "Compute friction rates",
     effect: Effect::Read,
     params: &[],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
     // Aggregate administration stays off the MCP surface.
     mcp_scope: None,
 };
@@ -227,7 +237,8 @@ const TAGS: FrictionOperation = FrictionOperation {
     cli_about: "List configured friction taxonomy tags",
     effect: Effect::Read,
     params: &[],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
     // The taxonomy is already spelled out in the `add`/`update` tag parameter
     // descriptions, so a separate advertised lookup earns nothing.
     mcp_scope: None,
@@ -243,6 +254,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
     params: &[&[
         ParamSpec {
             name: "id",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
@@ -256,6 +268,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
         text_param("status", "Optional status: open, triaged, or resolved"),
         ParamSpec {
             name: "tags",
+            aliases: &["tag"],
             param_type: ParamType::StringList,
             required: false,
             preserve_empty: false,
@@ -273,6 +286,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "body",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
@@ -285,6 +299,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "rehome_to",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: true,
@@ -297,6 +312,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "move",
+            aliases: &[],
             param_type: ParamType::Boolean,
             required: false,
             preserve_empty: false,
@@ -309,6 +325,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "title",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: true,
@@ -320,7 +337,8 @@ const UPDATE: FrictionOperation = FrictionOperation {
             }),
         },
     ]],
-    rejects_agent_field: false,
+    at_least_one_of: &["status", "tags", "body", "title", "rehome_to"],
+    retired_fields: &[],
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -332,7 +350,8 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     cli_about: "Mark a friction record as resolved",
     effect: Effect::Write,
     params: &[&[BARE_ID_PARAM]],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
     // Resolution is an operator decision taken through the CLI / dashboard.
     mcp_scope: None,
 };
@@ -347,6 +366,7 @@ const REHOME: FrictionOperation = FrictionOperation {
     params: &[&[
         ParamSpec {
             name: "id",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
@@ -359,6 +379,7 @@ const REHOME: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "to_workspace",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
@@ -370,7 +391,8 @@ const REHOME: FrictionOperation = FrictionOperation {
             }),
         },
     ]],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
     // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
     // remains the CLI spelling of the same move.
     mcp_scope: None,
@@ -406,6 +428,7 @@ const DURING_TASK_HELP: Description = Description::Static(
 /// description was already the spelled-out form.
 const BARE_ID_PARAM: ParamSpec = ParamSpec {
     name: "id",
+    aliases: &[],
     param_type: ParamType::String,
     required: true,
     preserve_empty: false,
@@ -421,6 +444,7 @@ const BARE_ID_PARAM: ParamSpec = ParamSpec {
 const fn text_param(name: &'static str, description: &'static str) -> ParamSpec {
     ParamSpec {
         name,
+        aliases: &[],
         param_type: ParamType::String,
         required: false,
         preserve_empty: false,
@@ -437,6 +461,7 @@ const fn text_param(name: &'static str, description: &'static str) -> ParamSpec 
 const fn count_param(name: &'static str, description: &'static str) -> ParamSpec {
     ParamSpec {
         name,
+        aliases: &[],
         param_type: ParamType::Integer,
         required: false,
         preserve_empty: false,

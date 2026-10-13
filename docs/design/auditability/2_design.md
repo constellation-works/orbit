@@ -3,7 +3,7 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-10-06
+last_updated: 2026-10-13
 last_validated: 2026-10-10
 status: Draft
 feature: auditability
@@ -85,6 +85,7 @@ Some runtime paths write targeted command-audit rows directly:
 - `crates/orbit-cli/src/command/mcp/server/` composes `orbit-mcp` framing with `orbit-cmd` registered runtime selection and carries the session capability policy. Global discovery, unknown/unadvertised names, and workspace setup failures use Core's global audit seam; resolved workspace calls use the runtime seam. Core dispatch enforces governed operation authorization, while federated routing applies destination tool-class checks before delivery.
 - `crates/orbit-core/src/runtime/task/locks/audit.rs` records task lock reservation checks, reservations, releases, and denials.
 - `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/gate_starvation.rs` records gate-starvation deferrals for task bundles, naming the blocking tasks and claims.
+- `crates/orbit-core/src/adapter/tool_host/host.rs` records one system row per unknown input field an operations-as-data tool accepted in warn mode, as `command: tool_input` with `subcommand: "unknown_field"`, `tool_name` and `target_id` the tool, and arguments naming the tool, field and actor ([ORB-15933]; see [operations-as-data §4](../operations-as-data/2_design.md#4-input-validation-at-the-tool-entry)). The distinct command keeps them out of `command: tool` aggregates.
 
 These producers share the SQLite schema and must preserve the same status, target, actor, and redaction expectations as CLI rows. Prescriptive coverage expectations live in [specs/coverage-matrix.md](./specs/coverage-matrix.md).
 
@@ -280,5 +281,6 @@ Each record contains timestamp, level, target, and structured fields. After [T20
 
 - **[ORB-10590]** — Gave friction records an author-settable `title` and replaced first-line derivation with a structural, write-time fallback ([Friction records carry an author-settable title; derivation is a structural fallback](./4_decisions.md#friction-records-carry-an-author-settable-title-derivation-is-a-structural-fallback)).
 - **[ORB-10680]** — Moved friction records into the host-global SQLite store under `(workspace_id, friction_id)` and pushed filters, paging, and stats into SQL ([Friction records move to SQLite with a legacy-evidence path projection](./4_decisions.md#friction-records-move-to-sqlite-with-a-legacy-evidence-path-projection)).
+- **[ORB-15933]** — Record an audit row per unknown input field an operations-as-data tool accepts in warn mode.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
