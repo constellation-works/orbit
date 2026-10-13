@@ -1,12 +1,12 @@
 # CLI process and workspace test budget candidate
 
-This candidate retires standalone entry points into contract tables. Every retained row keeps its original assertions and platform guards. Mutable runtime bodies run in an exact isolated child once per table. This reduces runner entries, rather than claiming that every row or CLI subprocess was removed.
+This candidate retires standalone entry points into contract tables. Retained behaviors keep their original assertions and platform guards. Mutable runtime bodies run in an exact isolated child once per table. Grouping reduces runner entries; the separate setup changes below remove actual repeated work.
 
 One duplicated replay-policy matrix retires against core integration coverage. The hung candidate-probe case moves to the public updater and uses the existing supervision-clock seam after the real candidate signals readiness, preserving timeout, untouched executable/generation, staging/backup cleanup and free admission during and after the probe.
 
 The original macOS-only 60-second wall wait is eliminated without shortening a startup deadline. Existing binary update argument, refusal and output cases remain. The Linux-only probe module is guarded at its declaration, removing an unused-import warning on macOS.
 
-## Measurements
+## Original attempt measurements
 
 The count limits pass; the summed-time limits fail. This is an incomplete candidate, not a review-ready delivery. Repository gates were not run because runtime acceptance remains unmet.
 
@@ -23,7 +23,19 @@ Process test wall time is 124.636 s; workspace test wall time is 67.526 s. These
 
 Final commands: `cargo nextest run -p orbit-cli --test process --no-fail-fast --success-output immediate --tool-config-file test-budget:<process-config>` and the same command with `--test workspace` / `<workspace-config>`, each under `env -u ORBIT_WORKER_CONTEXT_REQUIRED ./scripts/build-budget.py --`. Logs and JUnit reports are under `.orbit/tmp/test-budget/`; `measurements.json` records the current host, head, counts, summed times and sandbox notices.
 
-Validation: both full binary measurements exited 0; `cargo fmt --all -- --check` and `git diff --check` passed. `make ci-fast`, `make ci-test-affected`, `make ci-lint`, `make goldens` and `make check-ci-macos` were not run. Native CI filters still name the retained `generation_root::` and `run_observation::` modules, but their selection has not been validated by the gate. Local CodeQL does not apply to this test-only change.
+Original-attempt validation: both full binary measurements exited 0; `cargo fmt --all -- --check` and `git diff --check` passed. `make ci-fast`, `make ci-test-affected`, `make ci-lint`, `make goldens` and `make check-ci-macos` were not run. Native CI filters still name the retained `generation_root::` and `run_observation::` modules, but their selection has not been validated by the gate. Local CodeQL does not apply to this test-only change.
+
+## Native salvage setup changes
+
+The original candidate and failed/skipped evidence are preserved under `.orbit/tmp/salvage-15953-20261013/`. The source checkpoint was rebased onto `c2681b53e396d7f5e754691028788bb8b804f353` before profiling. These focused measurements are exploratory; they do not establish either full-binary runtime limit or the native-half criterion.
+
+- Read-only updater JSON, human-output and checkout-build refusal checks reuse one actual copied executable. Unknown, cargo and managed channel checks rename the same assessed file only after each child exits, so each next CLI still classifies its actual executable path. Replacement, handover, concurrency and quiescence fixtures retain distinct images and their deadlines.
+- GC's five eligible-state fixtures use the public registered-runtime composition and public task/archive/run lifecycle operations. Registry composition synchronizes the machine-owned task prefix and workspace binding. Each run records a real guarded child owner, finalizes, then releases and reaps that child before collection; a still-live owner remains ineligible. The existing CLI/routine GC assertions still execute.
+- Scratch overrides still submit the shipped job through the real CLI, then observe that actual run through the public wait API at its admitted one-second cadence. The default positive and negative `--wait`/output/exit controls remain through the real CLI. Retention, symlink, outside-target preservation and input-refusal assertions remain.
+
+The first profile isolated five setup-only zero-second GC jobs at 5.028–5.039 seconds each. After the setup replacement, the same existing GC table passed all three behaviors in 5.182 seconds (previous focused table 30.759 seconds), with each eligible-state seed taking 0.109–0.212 seconds. The existing scratch table passed in 14.393 seconds, with its override jobs taking 0.217 and 1.057 seconds; its default and negative CLI waits remained about five seconds each. The two updater tables passed in 13.973 seconds summed / 8.759 seconds wall. Native image assessment varied with concurrent fixtures, so these exploratory samples are not a controlled full-suite speedup claim.
+
+RSA key generation/export measured only 0.022–0.055 seconds, so the genuine cryptographic fixtures retain their current key generation and signing. Temporary profiling hooks were removed, and profile-only local-candidate, integrity and generation-helper source files were restored byte-for-byte before full measurements. The failed private-module import and still-live-owner seed experiment remain in their logs; neither is a passing baseline or accepted control. Formatting and diff checks passed after the fixes. Full native candidate measurements and required gates remain pending.
 
 ## Retirement map for the PR body
 
@@ -99,10 +111,10 @@ Each line maps one old standalone identity to its surviving table and same-named
 | `update::a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling` | `update::update_command_contracts_0` / `a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling` |
 | `update::help_documents_both_latest_and_explicit_version_selection` | `update::update_command_contracts_1` / `help_documents_both_latest_and_explicit_version_selection` |
 | `update::check_reports_the_available_release_and_exits_three` | `update::update_command_contracts_1` / `check_reports_the_available_release_and_exits_three` |
-| `update::check_renders_a_prefix_free_remediation_sentence` | `update::update_command_contracts_1` / `check_renders_a_prefix_free_remediation_sentence` |
+| `update::check_renders_a_prefix_free_remediation_sentence` | `update::update_command_contracts_1` / `check_reports_the_available_release_and_exits_three` calls the original human-output helper on the same assessed read-only executable |
 | `update::check_is_quiet_and_succeeds_when_the_installed_release_is_current` | `update::update_command_contracts_1` / `check_is_quiet_and_succeeds_when_the_installed_release_is_current` |
 | `update::check_succeeds_without_recommending_an_update_when_the_published_release_is_older` | `update::update_command_contracts_2` / `check_succeeds_without_recommending_an_update_when_the_published_release_is_older` |
-| `update::applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works` | `update::update_command_contracts_2` / `applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works` |
+| `update::applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works` | `update::update_command_contracts_1` / `check_reports_the_available_release_and_exits_three` calls the original refusal helper on the same assessed read-only executable |
 | `update::installed_and_unknown_location_binaries_are_not_checkout_builds` | `update::update_command_contracts_2` / `installed_and_unknown_location_binaries_are_not_checkout_builds` |
 | `update::an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work` | `update::update_command_contracts_2` / `an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work` |
 | `update::integrity::a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned` | `update::integrity::release_integrity_contracts_0` / `a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned` |

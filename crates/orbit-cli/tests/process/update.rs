@@ -583,16 +583,20 @@ fn check_reports_the_available_release_and_exits_three() {
             .contains("invalid input: "),
         "{report}"
     );
+    // These read-only views and the refusal use one assessed image. The
+    // parser, channel classification, output and exit paths still run through
+    // the real binary; no replacement or handover fixture shares this image.
+    check_renders_a_prefix_free_remediation_sentence(&executable, home.path(), mirror.path());
+    applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works(
+        &executable,
+        home.path(),
+        mirror.path(),
+    );
 }
 
-fn check_renders_a_prefix_free_remediation_sentence() {
-    let home = tempdir().expect("home");
-    let mirror = mirror_publishing("9.9.9");
-    let executable = checkout_build(home.path());
-    let output = output_of(
-        orbit_at(&executable, home.path(), home.path(), mirror.path()).args(["update", "--check"]),
-    )
-    .expect("run update --check");
+fn check_renders_a_prefix_free_remediation_sentence(executable: &Path, home: &Path, mirror: &Path) {
+    let output = output_of(orbit_at(executable, home, home, mirror).args(["update", "--check"]))
+        .expect("run update --check");
 
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let text = String::from_utf8_lossy(&output.stdout);
@@ -646,13 +650,13 @@ fn check_succeeds_without_recommending_an_update_when_the_published_release_is_o
     assert!(!text.contains("`orbit update`"), "{text}");
 }
 
-fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works() {
-    let home = tempdir().expect("home");
-    let mirror = mirror_publishing("9.9.9");
-    let executable = checkout_build(home.path());
+fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works(
+    executable: &Path,
+    home: &Path,
+    mirror: &Path,
+) {
     let output =
-        output_of(orbit_at(&executable, home.path(), home.path(), mirror.path()).arg("update"))
-            .expect("run update");
+        output_of(orbit_at(executable, home, home, mirror).arg("update")).expect("run update");
 
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -701,12 +705,18 @@ fn installed_and_unknown_location_binaries_are_not_checkout_builds() {
         "{stderr}"
     );
 
-    let cargo = install_test_binary(&home.path().join(".cargo").join("bin"));
+    // All children have exited before a rename. Assessment follows the file,
+    // while each next process still classifies its actual executable path.
+    let cargo = home.path().join(".cargo/bin/orbit");
+    fs::create_dir_all(cargo.parent().unwrap()).expect("cargo bin directory");
+    fs::rename(&unknown, &cargo).expect("move assessed image to cargo channel");
     let report = check(&cargo);
     assert_eq!(report["install_channel"], "cargo", "{report}");
     assert_eq!(report["updatable"], false, "{report}");
 
-    let managed = install_test_binary(&home.path().join(".orbit").join("bin"));
+    let managed = home.path().join(".orbit/bin/orbit");
+    fs::create_dir_all(managed.parent().unwrap()).expect("managed bin directory");
+    fs::rename(&cargo, &managed).expect("move assessed image to managed channel");
     let report = check(&managed);
     assert_eq!(report["install_channel"], "managed", "{report}");
     assert_eq!(report["updatable"], true, "{report}");
@@ -768,10 +778,6 @@ fn update_command_contracts_1() {
             check_reports_the_available_release_and_exits_three as fn(),
         ),
         (
-            "check_renders_a_prefix_free_remediation_sentence",
-            check_renders_a_prefix_free_remediation_sentence as fn(),
-        ),
-        (
             "check_is_quiet_and_succeeds_when_the_installed_release_is_current",
             check_is_quiet_and_succeeds_when_the_installed_release_is_current as fn(),
         ),
@@ -788,10 +794,6 @@ fn update_command_contracts_2() {
             "check_succeeds_without_recommending_an_update_when_the_published_release_is_older",
             check_succeeds_without_recommending_an_update_when_the_published_release_is_older
                 as fn(),
-        ),
-        (
-            "applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works",
-            applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works as fn(),
         ),
         (
             "installed_and_unknown_location_binaries_are_not_checkout_builds",
