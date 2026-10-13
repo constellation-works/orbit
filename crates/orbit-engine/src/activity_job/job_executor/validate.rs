@@ -84,6 +84,12 @@ pub(super) fn recovery_validation_continuations(
                     && ["prevalidated", "pull_request", "skipped_no_diff_expected"]
                     .iter()
                     .all(|key| validation_input.get(key).is_none())
+                    // A carried claim_validate result bypasses observing the
+                    // recovered candidate unless revalidation is statically
+                    // guaranteed. Dynamic expressions cannot prove that here.
+                    && (validation_input.get("carry").is_none_or(Value::is_null)
+                        || validation_input.get("revalidate").and_then(Value::as_bool)
+                            == Some(true))
                     && ["job_run_id", "completed_task_ids", "task_id"]
                         .iter()
                         .all(|key| validation_input.get(key).is_none() || same_binding(key))
