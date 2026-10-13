@@ -1,7 +1,8 @@
+use orbit_common::governance::friction::FRICTION;
 use orbit_types::tool::McpToolScope;
 
 use super::{
-    agent, auto_task, command, drain, friction, pipeline, search, task, workflow, workspace_claim,
+    agent, auto_task, command, drain, operation, pipeline, search, task, workflow, workspace_claim,
 };
 use crate::ToolRegistry;
 
@@ -42,9 +43,9 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register(drain::claim_bind::OrbitDrainClaimBindTool);
     registry.register(drain::claim_settle::OrbitDrainClaimSettleTool);
     registry.register(drain::claims::OrbitDrainClaimsTool);
-    // Friction schemas and MCP exposure are declared once in the shared
-    // operation registry and registered from there.
-    friction::register(registry);
+    // Friction schemas, MCP exposure and execution kinds are declared once in
+    // the shared operation registry and registered from there.
+    operation::register_noun(registry, &FRICTION);
     registry.register_mcp(task::add::OrbitTaskAddTool, McpToolScope::WorkspaceRequired);
     // Attach and read are the two halves of one artifact surface: without a
     // read verb an agent can store a reference it can never inspect again.

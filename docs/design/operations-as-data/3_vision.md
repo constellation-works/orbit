@@ -17,9 +17,10 @@ related_artifacts: [ORB-10358]
 # Operations as Data — Vision
 
 Forward-looking only. Everything below is a question or an option, not a plan.
-The friction pilot is the only part that is built; kernel v2 and the migration
-order are accepted and planned in [2_design.md](./2_design.md), which records what this doc
-used to leave open:
+The friction pilot and the structural half of kernel v2 (effect, noun spec,
+redaction class, generic adapters) are built; input validation and the
+migration order are accepted and planned in [2_design.md](./2_design.md), which
+records what this doc used to leave open:
 
 - *Which nouns migrate next, and when?* Answered by
   [2_design.md §9](./2_design.md#9-migration-plan): a planned order, starting

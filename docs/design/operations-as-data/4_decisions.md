@@ -11,7 +11,7 @@ summary: Decision log for the operations-as-data registry — the split spec/han
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932]
 ---
 
 # Operations as Data — Decisions
@@ -36,8 +36,8 @@ the same day. They govern kernel v2 and the migration plan in
 - **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission)** — Accepted.
 - **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default)** — Accepted.
 - **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
-- **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted.
-- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted.
+- **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted; followed by friction since [ORB-15932].
+- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation planned ([ORB-15933]).
 - **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted.
 - **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
 
@@ -82,7 +82,7 @@ verb that is declared but not implemented fails to compile.
 
 ## Renderers and HTTP routes stay hand-written
 
-**Amended by:** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. Routes and renderers stay hand-written.
+**Amended by:** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. [ORB-15932] did so for friction and removed `CliRender` from the kernel. Routes and renderers stay hand-written.
 
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
 **Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
@@ -112,7 +112,8 @@ tool names and parameter names from the registry.
 - Adding a friction verb that should be reachable over HTTP is still a two-place
   change (registry + route).
 - A noun whose output has a genuinely new shape needs a new `CliRender` variant
-  plus a renderer — also two places.
+  plus a renderer — also two places. (Since the amendment, it needs only a
+  renderer arm in the noun's CLI surface table.)
 - Cost: the dashboard is only partially derived, so it remains possible to add a
   verb and forget the route entirely; nothing fails, the verb is simply absent
   from the web UI, and no test catches it.
@@ -315,12 +316,12 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 
 The friction pilot put every fact it could express as data into the spec,
 including the CLI's choice of renderer (`CliRender`, whose `TagList` variant
-exists only for friction). Facts it could not express stayed on the surfaces,
+existed only for friction). Facts it could not express stayed on the surfaces,
 several of them more than once and behind wildcard arms: the read/write class of
-a friction verb is decided in `FrictionOperationTool::execution_kind`
+a friction verb was decided in `FrictionOperationTool::execution_kind`
 (`_ => Mutating`), in the `Commands::Friction` arm of the CLI registry
 (`== List`, else the full runtime), in the redaction policy, and in claimed-worker
-routing. Two of those already disagree about `show`, `stats` and `tags`. The
+routing. Two of those disagreed about `show`, `stats` and `tags`. The
 remaining nouns bring more single-surface facts: MCP schema conditionals for
 guarded task creation, CLI renderers, ID-addressed routing.
 
@@ -341,7 +342,7 @@ including ones nobody has met yet: ask which surfaces need it, then place it.
 ### Rejected alternatives
 
 - **Everything in the spec.** Kernel enums would grow a variant per noun quirk
-  (`CliRender::TagList` is the first), and MCP-only JSON Schema fragments or
+  (`CliRender::TagList` was the first), and MCP-only JSON Schema fragments or
   CLI-only request shaping would sit in the leaf crate every surface compiles
   against.
 - **Per-surface override tables with a default.** Shorter, but a default is a
@@ -360,8 +361,8 @@ including ones nobody has met yet: ask which surfaces need it, then place it.
 
 ## Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry
 
-**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; implemented by [ORB-15932] and [ORB-15933]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/friction/mod.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; `effect` and `redact` built on friction by [ORB-15932], input validation by [ORB-15933]
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/operation.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
 
 ### Context
 
@@ -410,6 +411,10 @@ drift the tool entry does not.
 - Cost: refusing unknown fields is a wire change for callers that send extra
   fields today, and each noun spends a 30-day window in which a mistyped field is
   logged but still ignored.
+- Friction's claimed-worker routing stayed an exhaustive surface table in
+  [ORB-15932] instead of deriving its read arm from `effect`: its write arms
+  carry logic (the `add` → claim rewrite), and a derived read route beside an
+  exhaustive verb match would need a wildcard arm.
 - Cost: `parse_input` has to reproduce the existing leniency exactly — a
   `StringList` that accepts a string, an array or a comma-separated string — or
   a migration changes what callers may send.
@@ -502,5 +507,8 @@ only; the migration is still incremental, one noun at a time.
   kernel v2 decisions (friction kernel port, input validation, auto-task).
 - [ORB-10358] — piloted [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 on the friction noun; produced the
   split table, the derived adapters, and the frozen-surface method.
+- [ORB-15932] — built kernel v2's structure on friction: `effect`, `redact`,
+  `NounSpec`, the generic tool and CLI adapters, and the CLI surface tables
+  that replaced `CliRender`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

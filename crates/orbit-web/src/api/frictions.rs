@@ -14,6 +14,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
+use orbit_common::governance::operation::OperationVerb;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -47,8 +48,7 @@ impl FrictionCall {
         if !self
             .verb
             .spec()
-            .params
-            .iter()
+            .params()
             .any(|declared| declared.name == param)
         {
             return Err(OrbitError::Execution(format!(

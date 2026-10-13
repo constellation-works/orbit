@@ -219,27 +219,35 @@ pub(crate) fn execute(
                 ..Default::default()
             })
         }
-        OrbitBuiltinAction::Friction(FrictionVerb::Add) => {
-            binding.validate_arguments(input)?;
-            let (mut params, substitutions) =
-                super::friction_tools::add_params(input, model.map(str::to_owned))?;
-            friction_tag_substitutions = substitutions;
-            params.during_task = Some(binding.task_id.clone());
-            let taxonomy = crate::runtime::friction::store_for(runtime)?
-                .tags()?
-                .into_iter()
-                .collect();
-            params.tags = orbit_store::contracts::normalize_friction_tags(params.tags, &taxonomy)?;
-            ClaimMutation::Friction(params)
-        }
+        OrbitBuiltinAction::Friction(verb) => match verb {
+            FrictionVerb::Add => {
+                binding.validate_arguments(input)?;
+                let (mut params, substitutions) =
+                    super::friction_tools::add_params(input, model.map(str::to_owned))?;
+                friction_tag_substitutions = substitutions;
+                params.during_task = Some(binding.task_id.clone());
+                let taxonomy = crate::runtime::friction::store_for(runtime)?
+                    .tags()?
+                    .into_iter()
+                    .collect();
+                params.tags =
+                    orbit_store::contracts::normalize_friction_tags(params.tags, &taxonomy)?;
+                ClaimMutation::Friction(params)
+            }
+            FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags => {
+                return Ok(None);
+            }
+            FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
+        },
         OrbitBuiltinAction::TaskShow
         | OrbitBuiltinAction::TaskList
         | OrbitBuiltinAction::TaskEligible
         | OrbitBuiltinAction::TaskLint
-        | OrbitBuiltinAction::TaskLocks
-        | OrbitBuiltinAction::Friction(
-            FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags,
-        ) => return Ok(None),
+        | OrbitBuiltinAction::TaskLocks => return Ok(None),
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
         OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
@@ -277,8 +285,7 @@ pub(crate) fn execute(
         | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset
         | OrbitBuiltinAction::TaskLocksRelease
-        | OrbitBuiltinAction::TaskLocksReserve
-        | OrbitBuiltinAction::Friction(_) => {
+        | OrbitBuiltinAction::TaskLocksReserve => {
             return Err(OrbitError::PolicyDenied(
                 "claimed worker operation requires its lifecycle boundary".into(),
             ));

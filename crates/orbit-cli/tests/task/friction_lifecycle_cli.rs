@@ -723,3 +723,30 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
         assert_no_token_in_dir(dir, &leaked_tokens);
     }
 }
+
+#[test]
+fn friction_add_description_alias_is_redacted_like_body() {
+    let fixture = Fixture::new();
+    let token = format!("ghp_{}", "f".repeat(36));
+    let input = json!({
+        "description": format!("Build exported GITHUB_TOKEN={token} into the log"),
+        "model": "codex",
+    })
+    .to_string();
+
+    let created = fixture.json(&["tool", "run", "orbit.friction.add", "--input", &input]);
+    assert_eq!(
+        created["body"], "Build exported GITHUB_TOKEN=[REDACTED_SECRET] into the log",
+        "the `description` alias for `body` must be redacted before persistence"
+    );
+    assert_eq!(created["redactions_applied"], true);
+    let redactions = created["redactions"].as_array().expect("redactions array");
+    assert!(
+        redactions.iter().any(|r| r["field_path"] == "description"),
+        "expected description in redactions report: {redactions:?}"
+    );
+
+    let id = created["id"].as_str().expect("friction id");
+    let shown = fixture.json(&["friction", "show", id, "--json"]);
+    assert!(!shown.to_string().contains(&token));
+}

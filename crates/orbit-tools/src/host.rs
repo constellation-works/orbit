@@ -129,6 +129,12 @@ pub enum OrbitBuiltinAction {
     WorkspaceClaimShow,
 }
 
+impl From<FrictionVerb> for OrbitBuiltinAction {
+    fn from(verb: FrictionVerb) -> Self {
+        Self::Friction(verb)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OrbitTaskScope {
     pub orbit_root: Option<PathBuf>,

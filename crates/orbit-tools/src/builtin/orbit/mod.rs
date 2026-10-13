@@ -3,7 +3,6 @@ pub mod auto_task;
 pub mod command;
 mod domain_control;
 pub mod drain;
-pub mod friction;
 pub mod operation;
 pub mod pipeline;
 pub mod search;
