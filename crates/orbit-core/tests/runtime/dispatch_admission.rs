@@ -79,7 +79,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     // libtest names a test by its module path below the crate root.
     let qualified = if test.contains("::") {
         test.to_string()
@@ -102,7 +102,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
     if ignored {
         command.arg("--ignored");
     }
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
@@ -117,7 +117,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
 }
 
 fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let workspace = repo.join(".orbit");
@@ -212,11 +212,7 @@ fn admitted(output: &Value) -> Vec<String> {
 /// With no pilot to prepare it and no other leaf in flight it goes alone, so
 /// only work that edits nothing shares its wave ([`unknown_footprint`]
 /// covers the waits).
-#[test]
 fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
-    if !isolated("empty_context_is_admitted_on_auto_ship_and_readiness_without_locks") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     seed(
         &runtime,
@@ -285,11 +281,7 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
 
 /// The shipped documentation chore mints with a locking scope, so a drain can
 /// admit it without pilot preparation and withhold overlapping work.
-#[test]
 fn doc_duties_mints_an_admissible_locking_context() {
-    if !isolated("doc_duties_mints_an_admissible_locking_context") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let definitions = runtime.paths().local_dir.join("auto_tasks");
     std::fs::create_dir_all(&definitions).unwrap();
@@ -318,11 +310,7 @@ fn doc_duties_mints_an_admissible_locking_context() {
 /// Automatic dispatch order is total: critical work first, then the
 /// corrective band (bugs and exact review-finding tags), then priority, with
 /// creation order and then the task id breaking every remaining tie.
-#[test]
 fn backlog_admission_orders_critical_then_corrective_then_priority_then_age() {
-    if !isolated("backlog_admission_orders_critical_then_corrective_then_priority_then_age") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let medium_first = seed(
         &runtime,
@@ -400,11 +388,7 @@ fn backlog_admission_orders_critical_then_corrective_then_priority_then_age() {
 }
 
 /// A backlog task is admitted only once every dependency is done.
-#[test]
 fn backlog_admission_waits_for_every_dependency_to_be_done() {
-    if !isolated("backlog_admission_waits_for_every_dependency_to_be_done") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let done = seed(
         &runtime,
@@ -468,11 +452,7 @@ fn backlog_admission_waits_for_every_dependency_to_be_done() {
 
 /// A backlog task whose files an in-progress task holds is withheld and
 /// reported with the holder, while unrelated work is still admitted.
-#[test]
 fn backlog_admission_excludes_work_locked_by_an_active_task() {
-    if !isolated("backlog_admission_excludes_work_locked_by_an_active_task") {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     for file in ["crates/foo/src/lib.rs", "crates/bar/src/lib.rs"] {
         let path = repo.join(file);
@@ -561,12 +541,7 @@ fn excluded_entry<'a>(output: &'a Value, task: &str) -> &'a Value {
 /// task used to take the freed lock on every pass, so the critical task never
 /// saw all of its locks free at once [ORB-14310]. Work that does not overlap
 /// the reserved surface keeps admitting throughout.
-#[test]
 fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free() {
-    if !isolated("a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free")
-    {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     write_files(&repo, &["a.rs", "b.rs", "free.rs"]);
     let holder_a = seed(
@@ -700,11 +675,7 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
 /// [ORB-14310]: only critical and high-priority lock-blocked tasks reserve, at
 /// most two per pass in dispatch order, and a task ranked ahead of a reserving
 /// task is never withheld by it.
-#[test]
 fn surface_reservations_are_bounded_by_priority_count_and_rank() {
-    if !isolated("surface_reservations_are_bounded_by_priority_count_and_rank") {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     write_files(
         &repo,
@@ -797,11 +768,7 @@ fn surface_reservations_are_bounded_by_priority_count_and_rank() {
 /// An in-progress `no-diff-expected` task does not exclude overlapping backlog
 /// work. An ordinary holder still does, and the tagged task still waits on
 /// its own dependency and on that ordinary lock [ORB-14247].
-#[test]
 fn no_diff_expected_does_not_hold_a_context_lock() {
-    if !isolated("no_diff_expected_does_not_hold_a_context_lock") {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     for file in [
         "crates/review/lib.rs",
@@ -1010,11 +977,7 @@ fn ship(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
 
 /// While an operator holds the claim, dispatch is refused to everyone else
 /// with the holder and expiry named, and the holder's own token passes.
-#[test]
 fn a_held_workspace_claim_gates_dispatch_to_its_holder() {
-    if !isolated("a_held_workspace_claim_gates_dispatch_to_its_holder") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     assert!(
         matches!(ship(&runtime, None), OrbitError::NotFound { .. }),
@@ -1085,11 +1048,7 @@ fn a_held_workspace_claim_gates_dispatch_to_its_holder() {
     );
 }
 
-#[test]
 fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
-    if !isolated("a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let source = running_run(
         &runtime,
@@ -1112,11 +1071,7 @@ fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
 }
 
 /// An expired claim stops gating dispatch with no release.
-#[test]
 fn an_expired_workspace_claim_stops_gating_dispatch() {
-    if !isolated("an_expired_workspace_claim_stops_gating_dispatch") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     as_operator(
         &runtime,
@@ -1145,11 +1100,7 @@ fn an_expired_workspace_claim_stops_gating_dispatch() {
 
 /// ORB-13916: deterministic gate evidence must not look like a human
 /// intervention, including replay and the coupled-repair selector write.
-#[test]
 fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
-    if !isolated("review_gate_writes_system_provenance_without_borrowing_the_operator") {
-        return;
-    }
     use chrono::Utc;
     use orbit_core::ActorIdentity;
     use orbit_core::application::task::TaskUpdateParams;
@@ -1163,7 +1114,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         ReviewVerdict::Reject,
         ReviewVerdict::AcceptWithFixes,
     ] {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         let workspace = repo.join(".orbit");
@@ -1555,7 +1506,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         return;
     }
 
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -1564,7 +1515,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     let mut warm = std::process::Command::new(std::env::current_exe().unwrap());
     warm.args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
         .env(WARM_ROOT, root.path());
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut warm, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
@@ -1686,11 +1637,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
 /// Sustained memory pressure holds the local drain's wave, ship discovery
 /// and readiness until memory falls below its resume mark; a live child keeps
 /// running throughout, and unknown CPU telemetry never holds anything.
-#[test]
 fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
-    if !isolated("sustained_pressure_holds_local_admission_until_it_clears_below_resume") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -1862,12 +1809,8 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
 
 /// With `workflow.resource_throttle.enabled = false` admission is what it was
 /// before the throttle: no sample is taken for it and pressure holds nothing.
-#[test]
 fn a_disabled_throttle_admits_under_pressure_without_sampling() {
-    if !isolated("a_disabled_throttle_admits_under_pressure_without_sampling") {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -1909,11 +1852,7 @@ const LIGHT_TAGS: &[&str] = &["code-review", "no-diff-expected", "auto-task:code
 /// leaves start up to the reserved light budget and an implementation leaf
 /// still waits; once the budget is taken a further light leaf waits too, and
 /// readiness names the light-budget reason.
-#[test]
 fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
-    if !isolated("a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -2033,11 +1972,7 @@ fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
 /// A minted qa-sweep or qa-full-sweep task is not CPU-light because its
 /// brief builds or runs the product; under CPU-only pressure it is held while
 /// a review auto-task is admitted from the light reservation [ORB-15766].
-#[test]
 fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
-    if !isolated("a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -2110,11 +2045,7 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
 
 /// Memory and disk pressure hold light leaves like any other: an agent
 /// session costs memory and its artifacts cost disk, whatever CPU does.
-#[test]
 fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
-    if !isolated("memory_and_disk_pressure_still_hold_light_auto_tasks") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -2167,11 +2098,7 @@ fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
 /// A frozen delivery batch within two hours of its deadline sorts ahead of
 /// same-priority backlog, including corrective work, so it is not left to
 /// expire in the queue; one further from its deadline keeps its place.
-#[test]
 fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
-    if !isolated("a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
     let older = seed(
@@ -2263,11 +2190,7 @@ fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
 /// A surface reservation follows frozen-batch expiry in the queue's order:
 /// expiry can promote ordinary work ahead of higher-priority work, or break a
 /// same-priority tie with older corrective work [ORB-15110].
-#[test]
 fn surface_reservations_follow_frozen_batch_expiry_order() {
-    if !isolated("surface_reservations_follow_frozen_batch_expiry_order") {
-        return;
-    }
     for (reserver_type, expiring_priority) in [
         (TaskType::Feature, TaskPriority::Medium),
         (TaskType::Bug, TaskPriority::High),
@@ -2447,14 +2370,8 @@ pub(super) fn admitted_frozen_batch(
 /// A shutdown inside the configured horizon holds a local wave, readiness, and
 /// an unattended entry. One minute past that horizon admits, while readiness
 /// and the entry decision still name the schedule.
-#[test]
 fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
-    if !isolated(
-        "a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let workspace = repo.join(".orbit");
@@ -2555,3 +2472,32 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
     assert!(decision.refusal.is_none(), "{decision:?}");
     assert!(decision.host_shutdown.is_some(), "{decision:?}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    empty_context_is_admitted_on_auto_ship_and_readiness_without_locks_scenarios,
+    empty_context_is_admitted_on_auto_ship_and_readiness_without_locks,
+    doc_duties_mints_an_admissible_locking_context,
+    backlog_admission_orders_critical_then_corrective_then_priority_then_age,
+    backlog_admission_waits_for_every_dependency_to_be_done,
+    backlog_admission_excludes_work_locked_by_an_active_task,
+    a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free,
+    surface_reservations_are_bounded_by_priority_count_and_rank,
+    no_diff_expected_does_not_hold_a_context_lock,
+    a_held_workspace_claim_gates_dispatch_to_its_holder,
+    a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run,
+    an_expired_workspace_claim_stops_gating_dispatch
+);
+
+crate::scenario_table!(
+    review_gate_writes_system_provenance_without_borrowing_the_operator_scenarios,
+    review_gate_writes_system_provenance_without_borrowing_the_operator,
+    sustained_pressure_holds_local_admission_until_it_clears_below_resume,
+    a_disabled_throttle_admits_under_pressure_without_sampling,
+    a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget,
+    a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks,
+    memory_and_disk_pressure_still_hold_light_auto_tasks,
+    a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog,
+    surface_reservations_follow_frozen_batch_expiry_order,
+    a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits
+);

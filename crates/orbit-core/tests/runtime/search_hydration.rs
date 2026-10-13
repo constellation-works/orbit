@@ -68,14 +68,8 @@ fn poison_friction(runtime: &OrbitRuntime, id: &str) {
     );
 }
 
-#[test]
 fn friction_search_and_listing_bound_store_reads() {
-    if !super::dispatch_admission::isolated(
-        "search_hydration::friction_search_and_listing_bound_store_reads",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = OrbitRuntime::from_roots(
         &root.path().join("global"),
         &root.path().join("repo/.orbit"),
@@ -130,14 +124,8 @@ fn friction_search_and_listing_bound_store_reads() {
     }
 }
 
-#[test]
 fn friction_tag_pages_fill_limit_and_check_matching_lookahead() {
-    if !super::dispatch_admission::isolated(
-        "search_hydration::friction_tag_pages_fill_limit_and_check_matching_lookahead",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = OrbitRuntime::from_roots(
         &root.path().join("global"),
         &root.path().join("repo/.orbit"),
@@ -327,16 +315,10 @@ impl<S: tracing::Subscriber> Layer<S> for Queries {
 
 /// Observe actual SQLite page executions at the composed-runtime boundary.
 /// This guards the fallback's scan cost without replacing the store with a mock.
-#[test]
 fn full_search_page_skips_any_term_scan() {
-    if !super::dispatch_admission::isolated(
-        "search_hydration::full_search_page_skips_any_term_scan",
-    ) {
-        return;
-    }
     use tracing_subscriber::prelude::*;
 
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = OrbitRuntime::from_roots(
         &root.path().join("global"),
         &root.path().join("repo/.orbit"),
@@ -397,17 +379,11 @@ fn full_search_page_skips_any_term_scan() {
 /// A status filter that rejects every any-term hit must not make the partial
 /// fill page through the whole match set: each FTS page re-sorts all matching
 /// chunks, so the query count has to stay constant as the match set grows.
-#[test]
 fn rejecting_filter_does_not_page_the_any_term_match_set() {
-    if !super::dispatch_admission::isolated(
-        "search_hydration::rejecting_filter_does_not_page_the_any_term_match_set",
-    ) {
-        return;
-    }
     use tracing_subscriber::prelude::*;
 
     const COMMON: usize = 60;
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = OrbitRuntime::from_roots(
         &root.path().join("global"),
         &root.path().join("repo/.orbit"),
@@ -489,13 +465,7 @@ impl<S: tracing::Subscriber> Layer<S> for CommitLockAcquisitions {
 /// A search used to enter the task store's commit boundary once per
 /// hydrated hit, each entry taking the partition lock and writing a holder
 /// record. Every task read of one search now shares a single acquisition.
-#[test]
 fn one_search_takes_the_task_commit_lock_once() {
-    if !super::dispatch_admission::isolated(
-        "search_hydration::one_search_takes_the_task_commit_lock_once",
-    ) {
-        return;
-    }
     use tracing_subscriber::prelude::*;
 
     let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).unwrap();
@@ -542,3 +512,17 @@ fn one_search_takes_the_task_commit_lock_once() {
         "every task read of one search shares one commit-lock acquisition"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    friction_search_and_listing_bound_store_reads_scenarios,
+    friction_search_and_listing_bound_store_reads,
+    friction_tag_pages_fill_limit_and_check_matching_lookahead
+);
+
+crate::scenario_table!(
+    full_search_page_skips_any_term_scan_scenarios,
+    full_search_page_skips_any_term_scan,
+    rejecting_filter_does_not_page_the_any_term_match_set,
+    one_search_takes_the_task_commit_lock_once
+);

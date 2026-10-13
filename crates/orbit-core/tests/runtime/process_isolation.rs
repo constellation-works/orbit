@@ -10,7 +10,7 @@ const CHILD: &str = "process_isolation::worker_binding_child";
 
 #[test]
 fn an_inherited_worker_binding_is_absent_in_the_runtime_binary() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     // This binary's own scrub set the marker, so clear it: the child then scrubs
     // itself as a fresh test process does.

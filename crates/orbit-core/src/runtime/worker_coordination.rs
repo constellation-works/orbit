@@ -15,6 +15,56 @@ use crate::OrbitRuntime;
 const OWNER_READ_LOCK_BUSY_RETRY_DELAYS: [Duration; 2] =
     [Duration::from_secs(1), Duration::from_secs(3)];
 
+#[cfg(feature = "test-support")]
+thread_local! {
+    static RETRY_WAIT: std::cell::Cell<Option<fn(Duration)>> = const { std::cell::Cell::new(None) };
+    static PIPELINE_POLL_WAIT: std::cell::Cell<Option<fn(Duration)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Substitute only the owner-read retry wait on this thread, restoring it on
+/// return or unwind. Retry count, error handling and production delays stay intact.
+#[cfg(feature = "test-support")]
+pub fn with_owner_read_retry_wait<T>(wait: fn(Duration), operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<fn(Duration)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RETRY_WAIT.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(RETRY_WAIT.with(|slot| slot.replace(Some(wait))));
+    operation()
+}
+
+/// Substitute only a pipeline wait's polling sleep on this thread. Elapsed
+/// time, caller deadlines, snapshots and child/process operations remain real.
+/// Restore the previous callback on return or unwind; worker threads must opt in
+/// separately, and cadence/deadline conformance tests must use the system wait.
+#[cfg(feature = "test-support")]
+pub fn with_pipeline_poll_wait<T>(wait: fn(Duration), operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<fn(Duration)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PIPELINE_POLL_WAIT.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(PIPELINE_POLL_WAIT.with(|slot| slot.replace(Some(wait))));
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn pipeline_poll_wait_override() -> Option<fn(Duration)> {
+    PIPELINE_POLL_WAIT.with(std::cell::Cell::get)
+}
+
+fn retry_wait(delay: Duration) {
+    #[cfg(feature = "test-support")]
+    if let Some(wait) = RETRY_WAIT.with(|slot| slot.get()) {
+        wait(delay);
+        return;
+    }
+    std::thread::sleep(delay);
+}
+
 impl OrbitRuntime {
     pub fn current_worker_invocation(
         global_root: &std::path::Path,
@@ -112,7 +162,7 @@ impl OrbitRuntime {
                         error = %error,
                         "owner read lost to a lock-wait deadline; retrying",
                     );
-                    std::thread::sleep(*delay);
+                    retry_wait(*delay);
                 }
                 result => break result?,
             }

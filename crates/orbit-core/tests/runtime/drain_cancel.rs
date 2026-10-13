@@ -23,7 +23,7 @@ fn forced_local_cancel_and_admissions_stop_preserve_task_disposition() {
         (false, true, TaskStatus::Blocked),
         (true, false, TaskStatus::Backlog),
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let workspace = root.path().join("repo/.orbit");
         std::fs::create_dir_all(&global).unwrap();

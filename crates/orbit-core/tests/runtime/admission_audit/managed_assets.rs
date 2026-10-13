@@ -3,7 +3,7 @@ use std::path::Path;
 use orbit_types::identity::lower_hex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 use orbit_config::ConfigSeed;
@@ -84,7 +84,8 @@ mod artifacts {
             return;
         }
 
-        let root = tempdir().expect("create tempdir");
+        let root =
+            tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let auto_tasks_dir = workspace_root.join("auto_tasks");
 

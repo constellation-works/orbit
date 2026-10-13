@@ -57,13 +57,7 @@ fn apply(workspace: &Workspace, input: &Value) -> Result<Value, String> {
         .map_err(|error| error.to_string())
 }
 
-#[test]
 fn malformed_apply_input_is_refused_before_any_task_is_written() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::malformed_input::malformed_apply_input_is_refused_before_any_task_is_written",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = proposed(&workspace, "malformed");
     let other = proposed(&workspace, "sibling");
@@ -297,13 +291,7 @@ fn malformed_apply_input_is_refused_before_any_task_is_written() {
     assert_eq!(applied["status"], "succeeded", "{applied}");
 }
 
-#[test]
 fn malformed_partition_result_fails_only_its_partition() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::malformed_input::malformed_partition_result_fails_only_its_partition",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     // A refusal raised by a shared field reader keeps its action prefix.
     let refusal = |message: &str| {
@@ -364,3 +352,10 @@ fn malformed_partition_result_fails_only_its_partition() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    malformed_apply_input_is_refused_before_any_task_is_written_scenarios,
+    malformed_apply_input_is_refused_before_any_task_is_written,
+    malformed_partition_result_fails_only_its_partition
+);

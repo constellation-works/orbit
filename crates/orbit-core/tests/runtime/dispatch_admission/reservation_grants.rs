@@ -5,13 +5,7 @@ use orbit_store::contracts::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };
 
-#[test]
 fn no_diff_grants_check_frozen_claims_after_reservation_expiry() {
-    if !isolated(
-        "dispatch_admission::reservation_grants::no_diff_grants_check_frozen_claims_after_reservation_expiry",
-    ) {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
     let holder = seed(&runtime, Seed::default());
@@ -97,13 +91,7 @@ fn no_diff_grants_check_frozen_claims_after_reservation_expiry() {
     }
 }
 
-#[test]
 fn no_diff_grants_wait_for_persistent_holders_then_hold_no_files() {
-    if !isolated(
-        "dispatch_admission::reservation_grants::no_diff_grants_wait_for_persistent_holders_then_hold_no_files",
-    ) {
-        return;
-    }
     for reservation_only_task in [false, true] {
         let (_root, runtime, repo) = runtime();
         std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
@@ -362,3 +350,10 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
         "a rescue close neither starts work nor overrides the lifecycle"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    no_diff_grants_check_frozen_claims_after_reservation_expiry_scenarios,
+    no_diff_grants_check_frozen_claims_after_reservation_expiry,
+    no_diff_grants_wait_for_persistent_holders_then_hold_no_files
+);

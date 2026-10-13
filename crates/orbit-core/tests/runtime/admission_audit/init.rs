@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::fs::io::create_dir_symlink;
 use orbit_config::ConfigSeed;
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root, unlink_skills};
 
@@ -62,7 +62,7 @@ fn global_and_workspace_init_create_private_directory_trees_under_permissive_uma
         }
     }
 
-    let temp = tempdir().expect("tempdir");
+    let temp = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global/.orbit");
     init_workspace_at_root(
         &global_root,
@@ -145,7 +145,7 @@ fn refresh_defaults_preserves_a_user_authored_terra_crew() {
         return;
     }
 
-    let temp = tempdir().expect("tempdir");
+    let temp = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global/.orbit");
     let seed = ConfigSeed::from_families(["codex", "claude"]);
 
@@ -196,7 +196,7 @@ fn unlink_skills_does_not_follow_a_symlinked_discovery_directory() {
         return;
     }
 
-    let temp = tempdir().expect("tempdir");
+    let temp = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let root = temp.path().join("isolated");
     let global_root = root.join(".orbit");
     let skills_root = global_root.join("skills");
@@ -283,3 +283,5 @@ fn unlink_skills_does_not_follow_a_symlinked_discovery_directory() {
     );
     assert!(root.join(".agents").is_dir());
 }
+
+// Related boundary scenarios share the isolated table fixture.

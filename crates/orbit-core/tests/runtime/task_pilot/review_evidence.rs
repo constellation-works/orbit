@@ -85,13 +85,7 @@ fn outcome(applied: &Value) -> &Value {
     &applied["task_outcomes"][0]
 }
 
-#[test]
 fn root_selectors_apply_at_the_pinned_source() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::root_selectors_apply_at_the_pinned_source",
-    ) {
-        return;
-    }
     for after in [&["dir:."][..], &["dir:.", "file:README.md"][..]] {
         let workspace = Workspace::new();
         let task = workspace.filed_task("root scope", &[], &["file:README.md"]);
@@ -113,13 +107,7 @@ fn root_selectors_apply_at_the_pinned_source() {
     }
 }
 
-#[test]
 fn omitted_root_is_retained_as_review_evidence_and_is_never_missing() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::omitted_root_is_retained_as_review_evidence_and_is_never_missing",
-    ) {
-        return;
-    }
     for tags in [&["code-review"][..], &[][..]] {
         let workspace = Workspace::new();
         let filed = ["dir:.", "file:README.md"];
@@ -152,13 +140,7 @@ fn omitted_root_is_retained_as_review_evidence_and_is_never_missing() {
     }
 }
 
-#[test]
 fn root_assessments_preserve_pinned_path_confinement_and_kind_checks() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::root_assessments_preserve_pinned_path_confinement_and_kind_checks",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.commit_file("src/module.rs", "fn fixture() {}\n", "add a directory");
     let commit = workspace.object("HEAD");
@@ -219,13 +201,7 @@ fn root_assessments_preserve_pinned_path_confinement_and_kind_checks() {
     );
 }
 
-#[test]
 fn review_evidence_survives_narrowing_reassessment_and_replay() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::review_evidence_survives_narrowing_reassessment_and_replay",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.commit_files(&[&FILED[..], &[EXTRA]].concat());
     let task = workspace.filed_task("duplicate alert", &["delivery-code-review"], &FILED);
@@ -288,13 +264,7 @@ fn review_evidence_survives_narrowing_reassessment_and_replay() {
     assert_eq!(workspace.scope(&task.id), NARROWED);
 }
 
-#[test]
 fn evidence_that_no_longer_resolves_is_dropped_and_reported() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::evidence_that_no_longer_resolves_is_dropped_and_reported",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.commit_files(&FILED);
     let task = workspace.filed_task("duplicate alert", &["code-review"], &FILED);
@@ -326,13 +296,7 @@ fn evidence_that_no_longer_resolves_is_dropped_and_reported() {
     assert_eq!(outcome(&refused)["outcome"], "invalid", "{refused}");
 }
 
-#[test]
 fn a_task_no_review_filed_keeps_the_pilot_narrowing() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::a_task_no_review_filed_keeps_the_pilot_narrowing",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.commit_files(&FILED);
     let task = workspace.filed_task("ordinary", &["friction-curation"], &FILED);
@@ -348,13 +312,7 @@ fn a_task_no_review_filed_keeps_the_pilot_narrowing() {
     assert_eq!(workspace.scope(&task.id), NARROWED);
 }
 
-#[test]
 fn a_swept_proposal_is_applied_with_an_over_attachment_finding() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::review_evidence::a_swept_proposal_is_applied_with_an_over_attachment_finding",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let swept = (0..11)
         .map(|index| format!("file:src/swept/module_{index}.rs"))
@@ -388,3 +346,15 @@ fn a_swept_proposal_is_applied_with_an_over_attachment_finding() {
         "{applied}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    root_selectors_apply_at_the_pinned_source_scenarios,
+    root_selectors_apply_at_the_pinned_source,
+    omitted_root_is_retained_as_review_evidence_and_is_never_missing,
+    root_assessments_preserve_pinned_path_confinement_and_kind_checks,
+    review_evidence_survives_narrowing_reassessment_and_replay,
+    evidence_that_no_longer_resolves_is_dropped_and_reported,
+    a_task_no_review_filed_keeps_the_pilot_narrowing,
+    a_swept_proposal_is_applied_with_an_over_attachment_finding
+);

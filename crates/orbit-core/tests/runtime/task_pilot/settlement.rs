@@ -51,13 +51,7 @@ fn assert_assessed(workspace: &Workspace, attempt: &MemberAttempt, task: &Task) 
 /// The first apply rejects the pilot's assessment and requests a targeted
 /// repair. Until the repair apply records, the member stays claimed, so the
 /// repair apply still finds its claim and the run settles assessed.
-#[test]
 fn a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::settlement::a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("needs a repair");
@@ -139,13 +133,7 @@ fn a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply() {
 /// The shipped definition with a step inserted before `apply`: settlement
 /// still reads apply by its id, and the checkpoint now at apply's former
 /// position settles nothing.
-#[test]
 fn a_step_inserted_before_apply_does_not_move_what_settles_a_member() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::settlement::a_step_inserted_before_apply_does_not_move_what_settles_a_member",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let path = workspace
@@ -217,3 +205,10 @@ fn a_step_inserted_before_apply_does_not_move_what_settles_a_member() {
     .unwrap();
     assert_assessed(&workspace, &attempt, &task);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply_scenarios,
+    a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply,
+    a_step_inserted_before_apply_does_not_move_what_settles_a_member
+);

@@ -38,13 +38,7 @@ fn failure_text(observed: &Observed) -> String {
     }
 }
 
-#[test]
 fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
-    if !isolated(
-        "step_recovery::repair_commit::a_validate_repair_is_committed_by_the_host_and_retried_on_that_head",
-    ) {
-        return;
-    }
     let fixture = fixture();
     // A claimed leaf's `validate` has step recovery too, and the same commit.
     for (name, claimed) in [("owner_repair", false), ("claimed_repair", true)] {
@@ -174,13 +168,7 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
     assert_eq!(uncommitted.attempts_saw[1].1, "M candidate.txt");
 }
 
-#[test]
 fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed() {
-    if !isolated(
-        "step_recovery::repair_commit::a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed",
-    ) {
-        return;
-    }
     let fixture = fixture();
     let admitted_review = (
         "review_gate_admit",
@@ -259,3 +247,10 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_validate_repair_is_committed_by_the_host_and_retried_on_that_head_scenarios,
+    a_validate_repair_is_committed_by_the_host_and_retried_on_that_head,
+    a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
+);

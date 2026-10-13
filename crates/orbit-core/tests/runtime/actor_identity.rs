@@ -117,7 +117,7 @@ fn process_actor_is_used_for_task_attribution() {
     assert_eq!(actor.kind, expected_kind);
     assert_eq!(warnings.load(Ordering::SeqCst) > 0, expected == "unknown");
 
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();

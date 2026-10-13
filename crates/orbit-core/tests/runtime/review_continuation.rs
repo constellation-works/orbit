@@ -153,13 +153,7 @@ pub(super) fn run_review_pipeline(fixture: &Fixture) {
 /// [ORB-15094] The manifest advertises the deadline the reviewer process is
 /// given, for a `review.minutes` below, at and above the activity's 3600 s wall
 /// clock. The deadline is all the seconds the review has left.
-#[test]
 fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::the_manifest_advertises_the_deadline_the_host_hands_the_reviewer",
-    ) {
-        return;
-    }
     for (minutes, deadline_seconds) in [(30_u32, 1800_u64), (60, 3600), (120, 7200)] {
         let mut fixture = Fixture::new_with_review_minutes(minutes);
         fixture.admit();
@@ -204,13 +198,7 @@ fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
     }
 }
 
-#[test]
 fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::timeout_retains_partial_report_and_budget_and_resumes_the_same_review",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     RuntimeHost::mark_job_run_running(
@@ -478,13 +466,7 @@ fn latest_decision(fixture: &Fixture) -> orbit_types::task::TaskHistoryEntry {
         .unwrap()
 }
 
-#[test]
 fn fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     let repo = fixture.repo.clone();
     add_origin(&fixture);
@@ -575,13 +557,7 @@ fn fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage() {
 /// The reviewer's own partial commit changes the candidate tree on every
 /// timeout, so the bound must key on the implementation tree beneath it
 /// [ORB-14808].
-#[test]
 fn reviewer_partial_repairs_do_not_renew_the_timeout_allowance() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::reviewer_partial_repairs_do_not_renew_the_timeout_allowance",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     let repo = fixture.repo.clone();
     add_origin(&fixture);
@@ -633,13 +609,7 @@ fn reviewer_partial_repairs_do_not_renew_the_timeout_allowance() {
     );
 }
 
-#[test]
 fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::named_external_checks_hold_until_every_matching_result_and_log_arrives",
-    ) {
-        return;
-    }
     for verdict in ["incomplete", "changes_required"] {
         let mut fixture =
             Fixture::new_with_required_commands(&["hosted windows", "native macos", "codeql"]);
@@ -938,13 +908,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
 /// evidence has not arrived reaches the failure handoff under its typed code,
 /// so the task stays held in progress instead of being blocked as an
 /// escalation.
-#[test]
 fn an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     add_origin(&fixture);
     fixture.admit();
@@ -991,13 +955,7 @@ fn an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold() {
     );
 }
 
-#[test]
 fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     fixture.admit();
     let mut report = interrupted_report(&fixture);
@@ -1087,13 +1045,7 @@ fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree()
     );
 }
 
-#[test]
 fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check",
-    ) {
-        return;
-    }
     for case in [
         "reject",
         "open_defect",
@@ -1198,13 +1150,7 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
     }
 }
 
-#[test]
 fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::a_late_review_handoff_cannot_overwrite_an_operator_block",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     fixture
         .runtime
@@ -1247,13 +1193,7 @@ fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
 /// A before-PR reviewer that exits cleanly with only its initial placeholder
 /// report leaves its review unspent, and the handoff blocks delivery without
 /// calling the missing verdict an escalation [ORB-15130].
-#[test]
 fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
-    if !super::dispatch_admission::isolated(
-        "review_continuation::an_abandoned_before_pr_review_is_released_and_the_handoff_says_so",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     add_origin(&fixture);
     fixture.admit();
@@ -1317,3 +1257,26 @@ fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
         "{note}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    the_manifest_advertises_the_deadline_the_host_hands_the_reviewer_scenarios,
+    the_manifest_advertises_the_deadline_the_host_hands_the_reviewer,
+    timeout_retains_partial_report_and_budget_and_resumes_the_same_review,
+    fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage,
+    reviewer_partial_repairs_do_not_renew_the_timeout_allowance
+);
+
+crate::scenario_table!(
+    named_external_checks_hold_until_every_matching_result_and_log_arrives_scenarios,
+    named_external_checks_hold_until_every_matching_result_and_log_arrives,
+    an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold,
+    received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree
+);
+
+crate::scenario_table!(
+    external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check_scenarios,
+    external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check,
+    a_late_review_handoff_cannot_overwrite_an_operator_block,
+    an_abandoned_before_pr_review_is_released_and_the_handoff_says_so
+);

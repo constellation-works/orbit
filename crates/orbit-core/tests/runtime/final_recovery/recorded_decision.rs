@@ -84,13 +84,7 @@ fn system_comment(fixture: &Fixture, task: &str, message: String) {
     .unwrap();
 }
 
-#[test]
 fn a_replay_reads_the_typed_decision_not_a_decision_comment() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::recorded_decision::a_replay_reads_the_typed_decision_not_a_decision_comment",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
 
@@ -120,13 +114,7 @@ fn a_replay_reads_the_typed_decision_not_a_decision_comment() {
     assert_eq!(typed_decisions(&fixture, &task).len(), 1);
 }
 
-#[test]
 fn a_decision_comment_from_before_typed_decisions_still_answers_for_its_run() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::recorded_decision::a_decision_comment_from_before_typed_decisions_still_answers_for_its_run",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     // An older applier settled this run and recorded only its comment.
@@ -149,3 +137,10 @@ fn a_decision_comment_from_before_typed_decisions_still_answers_for_its_run() {
     assert!(typed_decisions(&fixture, &task).is_empty());
     assert_eq!(fixture.decision_comments(&task), 1);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_replay_reads_the_typed_decision_not_a_decision_comment_scenarios,
+    a_replay_reads_the_typed_decision_not_a_decision_comment,
+    a_decision_comment_from_before_typed_decisions_still_answers_for_its_run
+);

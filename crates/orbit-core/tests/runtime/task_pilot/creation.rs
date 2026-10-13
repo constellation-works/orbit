@@ -126,13 +126,7 @@ fn outcome(applied: &Value) -> &Value {
     &applied["task_outcomes"][0]
 }
 
-#[test]
 fn declared_creation_targets_survive_prepare_apply_restart_and_replay() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::declared_creation_targets_survive_prepare_apply_restart_and_replay",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.scoped_task(
         "mixed scope",
@@ -208,13 +202,7 @@ fn declared_creation_targets_survive_prepare_apply_restart_and_replay() {
     );
 }
 
-#[test]
 fn undeclared_missing_selectors_stay_refused() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::undeclared_missing_selectors_stay_refused",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let declared = workspace.scoped_task("declared", &[EXISTING, NEW_MODULE], true);
 
@@ -276,13 +264,7 @@ fn undeclared_missing_selectors_stay_refused() {
     }
 }
 
-#[test]
 fn legacy_missing_target_is_reported_and_reauthorized_through_task_update() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::legacy_missing_target_is_reported_and_reauthorized_through_task_update",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     // A record written before grants existed: the missing selector carries
     // no durable authorization, and nothing infers one.
@@ -345,13 +327,7 @@ fn legacy_missing_target_is_reported_and_reauthorized_through_task_update() {
     assert!(refused.is_err(), "a revoked grant must not revive");
 }
 
-#[test]
 fn creation_grant_changed_after_preparation_supersedes_the_write() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::creation_grant_changed_after_preparation_supersedes_the_write",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.scoped_task("legacy", &[EXISTING, NEW_MODULE], false);
     let prepared = workspace.prepare(&[&task.id]);
@@ -376,13 +352,7 @@ fn creation_grant_changed_after_preparation_supersedes_the_write() {
     assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
 }
 
-#[test]
 fn revoke_and_same_scope_reauthorization_supersedes_an_older_preparation() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::revoke_and_same_scope_reauthorization_supersedes_an_older_preparation",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.scoped_task("declared", &[EXISTING, NEW_MODULE], true);
     let prepared = workspace.prepare(&[&task.id]);
@@ -401,13 +371,7 @@ fn revoke_and_same_scope_reauthorization_supersedes_an_older_preparation() {
     assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), current);
 }
 
-#[test]
 fn benign_comment_and_artifact_writes_preserve_preparation() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::benign_comment_and_artifact_writes_preserve_preparation",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.scoped_task("declared", &[EXISTING, NEW_MODULE], true);
     let prepared = workspace.prepare(&[&task.id]);
@@ -456,3 +420,14 @@ fn benign_comment_and_artifact_writes_preserve_preparation() {
     let applied = workspace.apply_one(&prepared, &task.context_files, &[EXISTING, NEW_MODULE]);
     assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    declared_creation_targets_survive_prepare_apply_restart_and_replay_scenarios,
+    declared_creation_targets_survive_prepare_apply_restart_and_replay,
+    undeclared_missing_selectors_stay_refused,
+    legacy_missing_target_is_reported_and_reauthorized_through_task_update,
+    creation_grant_changed_after_preparation_supersedes_the_write,
+    revoke_and_same_scope_reauthorization_supersedes_an_older_preparation,
+    benign_comment_and_artifact_writes_preserve_preparation
+);

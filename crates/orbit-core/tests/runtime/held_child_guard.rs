@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn open() -> (TempDir, OrbitRuntime) {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();

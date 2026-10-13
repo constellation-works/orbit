@@ -311,14 +311,7 @@ fn term_ignoring_owner(pgid: libc::pid_t) -> Worker {
 /// with a comment naming the drain, while the launched leaf keeps running.
 /// Once that leaf hands off, the next pass delivers it and the drain ends
 /// `cancelled`.
-#[test]
 fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves() {
-    if !isolated(
-        module_path!(),
-        "a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves",
-    ) {
-        return;
-    }
     let pair = Pair::new(3);
     let drain = pair.run_drain();
     let running = pair.running_leaf(&drain, 2);
@@ -398,14 +391,7 @@ fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leav
 
 /// A drain owner that cannot be confirmed stopped must keep every carried
 /// claim and leave both the drain and its leaves unfinalized.
-#[test]
 fn a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain = pair.run_drain();
     let (running, worker) = pair.running_leaf_with_worker(&drain, 2);
@@ -438,14 +424,7 @@ fn a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner() {
 
 /// An owner that already exited still permits forced leaf cancellation and
 /// delivery of both launched and unlaunched claim releases.
-#[test]
 fn a_forced_drain_cancel_accepts_an_already_exited_drain_owner() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_accepts_an_already_exited_drain_owner",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -492,14 +471,7 @@ fn a_forced_drain_cancel_accepts_an_already_exited_drain_owner() {
 /// claim is released before the leaf is cancelled, and both the running and
 /// the unlaunched claim go back to the owner's backlog with a comment naming
 /// the drain and the reason.
-#[test]
 fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -555,14 +527,7 @@ fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog
 /// [ORB-13892] `force` stops only what the cancelled drain carries: a leaf
 /// another live drain for the same owner admitted keeps running, and its
 /// task stays claimed.
-#[test]
 fn a_forced_drain_cancel_leaves_another_live_drains_leaves_alone() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_leaves_another_live_drains_leaves_alone",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain_worker = Worker::spawn();
     let cancelled = pair.run_owner_drain(drain_worker.pid);
@@ -594,14 +559,7 @@ fn a_forced_drain_cancel_leaves_another_live_drains_leaves_alone() {
 /// [ORB-13892] A leaf `force` cannot stop and see gone keeps its claim: no
 /// release is recorded or sent, the cancel reports it as unstopped, and the
 /// leaf's own outcome still reaches the owner when it ends.
-#[test]
 fn a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -643,14 +601,7 @@ fn a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped() {
 /// [ORB-13892] The existing MCP stop control takes `force`: it stops
 /// admissions, cancels the drain, stops its running leaf and returns the
 /// leaf's task to the owner's backlog.
-#[test]
 fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
-    if !isolated(
-        module_path!(),
-        "the_mcp_stop_control_with_force_stops_claimed_leaves",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -692,14 +643,7 @@ fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
 
 /// A failed detached child does not hide the parent or prevent a later child
 /// from stopping. Both an unconfirmed worker and a missing run stay visible.
-#[test]
 fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
-    if !isolated(
-        module_path!(),
-        "a_forced_local_drain_cancel_reports_mixed_child_outcomes",
-    ) {
-        return;
-    }
     let pair = Pair::new(0);
     let jobs = &pair.follower_jobs;
     let drain = jobs
@@ -798,3 +742,16 @@ fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
     assert_eq!(pair.run_state(&another.run_id), JobRunState::Cancelled);
     assert_eq!(pair.run_state(&failed.run_id), JobRunState::Running);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves_scenarios,
+    a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves,
+    a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner,
+    a_forced_drain_cancel_accepts_an_already_exited_drain_owner,
+    a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog,
+    a_forced_drain_cancel_leaves_another_live_drains_leaves_alone,
+    a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped,
+    the_mcp_stop_control_with_force_stops_claimed_leaves,
+    a_forced_local_drain_cancel_reports_mixed_child_outcomes
+);

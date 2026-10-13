@@ -29,8 +29,6 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 const JOB: &str = "cascade_fixture";
 
 struct Fixture {
@@ -42,7 +40,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
         let jobs_dir = global.join("resources/jobs");
@@ -249,13 +247,7 @@ fn baseline_red_text() -> String {
     .text("the required check fails on the base exactly as on the candidate")
 }
 
-#[test]
 fn a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail() {
-    if !isolated(
-        "cascade_outcomes::a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let pending = format!(
         "before-landing review did not approve; {REVIEW_LANDING_DECISION_PENDING} (`orbit review \
@@ -282,12 +274,7 @@ fn a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail() 
     }
 }
 
-#[test]
 fn a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog() {
-    if !isolated("cascade_outcomes::a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog")
-    {
-        return;
-    }
     let fixture = Fixture::new();
     let task = fixture.task();
     let run_id = fixture.queued(json!({
@@ -312,13 +299,7 @@ fn a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog() {
     );
 }
 
-#[test]
 fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
-    if !isolated(
-        "cascade_outcomes::a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let leaf = fixture.queued(json!({}));
     fixture
@@ -354,11 +335,7 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
     assert_eq!(mixed.state, JobRunState::Failed, "{:?}", mixed.steps);
 }
 
-#[test]
 fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {
-    if !isolated("cascade_outcomes::cascaded_parents_name_their_leaf_and_fold_into_one_incident") {
-        return;
-    }
     let fixture = Fixture::new();
     let task = "ORB-90001";
     let leaf = fixture.failed_leaf(
@@ -448,13 +425,7 @@ fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {
     );
 }
 
-#[test]
 fn failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output() {
-    if !isolated(
-        "cascade_outcomes::failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     for (code, expected) in [
         (Some("validation_environment"), "validation_environment"),
@@ -493,12 +464,7 @@ fn failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output() 
 
 /// [ORB-15897] A successful run's record keeps the steps its audit trail
 /// holds, and the record answers on MCP as on every run view.
-#[test]
 fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
-    if !isolated("cascade_outcomes::mcp_shows_a_finished_runs_recorded_steps_with_their_provenance")
-    {
-        return;
-    }
     let fixture = Fixture::new();
     let run = fixture.guard(None, json!([{ "status": "success" }]));
     assert_eq!(run.state, JobRunState::Success, "{:?}", run.steps);
@@ -530,3 +496,14 @@ fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail_scenarios,
+    a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail,
+    a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog,
+    a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it,
+    cascaded_parents_name_their_leaf_and_fold_into_one_incident,
+    failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output,
+    mcp_shows_a_finished_runs_recorded_steps_with_their_provenance
+);

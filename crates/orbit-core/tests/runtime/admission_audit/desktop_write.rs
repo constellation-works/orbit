@@ -1,23 +1,9 @@
 use orbit_types::desktop::*;
 
 use super::desktop_support::{create, session};
-use super::task_support::{enter_isolated_child, test_runtime};
+use super::task_support::test_runtime;
 
-#[test]
 fn desktop_redacts_before_receipt_and_preserves_retries() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "desktop_redacts_before_receipt_and_preserves_retries",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "desktop_redacts_before_receipt_and_preserves_retries",
-    ) {
-        return;
-    }
     let (_root, runtime) = test_runtime();
     let session = session(false);
     let snapshot = runtime
@@ -50,21 +36,7 @@ fn desktop_redacts_before_receipt_and_preserves_retries() {
 
 // Persist a pre-status-extension receipt directly: using today's serializer to
 // make that receipt would not exercise compatibility with an old process.
-#[test]
 fn desktop_legacy_edit_receipt_survives_status_contract_extension() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "desktop_legacy_edit_receipt_survives_status_contract_extension",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "desktop_legacy_edit_receipt_survives_status_contract_extension",
-    ) {
-        return;
-    }
     let (_root, runtime) = test_runtime();
     let agent = session(false);
     let snapshot = runtime
@@ -121,3 +93,10 @@ fn desktop_legacy_edit_receipt_survives_status_contract_extension() {
     assert_eq!(result.snapshot.revision, committed.revision);
     assert_eq!(result.snapshot.task.title, "Before upgrade");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    desktop_redacts_before_receipt_and_preserves_retries_scenarios,
+    desktop_redacts_before_receipt_and_preserves_retries,
+    desktop_legacy_edit_receipt_survives_status_contract_extension
+);

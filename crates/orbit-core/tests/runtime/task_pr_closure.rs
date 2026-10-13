@@ -127,7 +127,8 @@ impl Fixture {
     }
 
     fn with_config(workspace_config: Option<&str>) -> Self {
-        let root = TempDir::new().expect("create tempdir");
+        let root =
+            TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
         let global_root = root.path().join("global");
         let repo_root = root.path().join("repo");
         let workspace_root = repo_root.join(".orbit");

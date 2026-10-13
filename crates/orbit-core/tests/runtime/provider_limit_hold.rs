@@ -203,13 +203,7 @@ fn an_antigravity_quota_holds_every_antigravity_crew_until_the_reported_reset() 
 
 /// A limit that reported no reset backs off from 30 minutes, doubling with
 /// each limit hold on that provider, up to 6 hours.
-#[test]
 fn a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours() {
-    if !isolated(
-        "provider_limit_hold::a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours",
-    ) {
-        return;
-    }
     let fx = fixture(ANTIGRAVITY_CREWS);
     let task = fx.task("gemini-flash");
     for minutes in [30, 60, 120, 240, 360, 360] {
@@ -229,13 +223,7 @@ fn a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours()
 
 /// A reported reset is clamped to between 5 minutes and 7 days from the
 /// failure.
-#[test]
 fn a_reported_reset_is_clamped_to_five_minutes_through_seven_days() {
-    if !isolated(
-        "provider_limit_hold::a_reported_reset_is_clamped_to_five_minutes_through_seven_days",
-    ) {
-        return;
-    }
     for (reported, bound) in [
         (Duration::minutes(-10), Duration::minutes(5)),
         (Duration::days(30), Duration::days(7)),
@@ -258,12 +246,7 @@ fn a_reported_reset_is_clamped_to_five_minutes_through_seven_days() {
 
 /// A limit that names a model excludes only the crews on that model; one
 /// naming a model no crew runs excludes every crew of the provider.
-#[test]
 fn a_model_scoped_limit_excludes_only_the_crews_on_that_model() {
-    if !isolated("provider_limit_hold::a_model_scoped_limit_excludes_only_the_crews_on_that_model")
-    {
-        return;
-    }
     for (model, excluded, drawn) in [
         ("gpt-5.1-codex-max", vec!["sol"], "luna"),
         ("gpt-9", vec!["luna", "sol"], "opus"),
@@ -280,3 +263,11 @@ fn a_model_scoped_limit_excludes_only_the_crews_on_that_model() {
         assert_eq!(fx.exclusion(&task, &["sol"])["crew"], drawn, "{model}");
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours_scenarios,
+    a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours,
+    a_reported_reset_is_clamped_to_five_minutes_through_seven_days,
+    a_model_scoped_limit_excludes_only_the_crews_on_that_model
+);

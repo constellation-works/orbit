@@ -36,7 +36,7 @@ struct Fixture {
 }
 
 fn fixture(pool: &str) -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -281,13 +281,7 @@ fn archive() -> FinalRecoveryDecision {
     }
 }
 
-#[test]
 fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::an_empty_crew_pool_skips_final_recovery_and_records_nothing",
-    ) {
-        return;
-    }
     let fixture = fixture("[]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -299,13 +293,7 @@ fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
     assert_eq!(fixture.state(&run).final_recovery, None);
 }
 
-#[test]
 fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -379,13 +367,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
     ));
 }
 
-#[test]
 fn a_local_decision_is_applied_to_the_task_through_the_applier() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::a_local_decision_is_applied_to_the_task_through_the_applier",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -414,13 +396,7 @@ fn a_local_decision_is_applied_to_the_task_through_the_applier() {
     );
 }
 
-#[test]
 fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::an_escalation_blocks_the_task_and_continues_into_the_failure_path",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -443,13 +419,7 @@ fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
     assert_eq!(fixture.status(&task), "blocked");
 }
 
-#[test]
 fn a_settled_task_stands_when_recording_its_outcome_fails() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::a_settled_task_stands_when_recording_its_outcome_fails",
-    ) {
-        return;
-    }
     // Decided by the on-call ORB-13886 review of ORB-13907: a task mutation
     // must not be followed by failure_activity because the run-state write
     // after it failed.
@@ -480,13 +450,7 @@ fn a_settled_task_stands_when_recording_its_outcome_fails() {
     );
 }
 
-#[test]
 fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
 
     // Crash after the task write: the resumed run's replay finds the decision
@@ -545,13 +509,7 @@ fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
     assert_eq!(fixture.decision_comments(&task), 1);
 }
 
-#[test]
 fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_log_tail_reads_only_the_requested_runs_bounded_log",
-    ) {
-        return;
-    }
     let fixture = fixture("[]");
     let logs = &fixture.runtime.paths().logs_dir;
     std::fs::create_dir_all(logs).unwrap();
@@ -581,13 +539,7 @@ fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
     );
 }
 
-#[test]
 fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_keeps_run_observers_and_every_declared_tool_write_denied",
-    ) {
-        return;
-    }
     use orbit_common::OrbitError;
     use orbit_common::security::child_env::{
         ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
@@ -676,13 +628,7 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
 /// [ORB-15162] A task that requires `orbit.task.add` still gets a final-recovery
 /// invocation. The tool stays out of the callable set, and the same requirement
 /// under a covering deny list still fails the implementing activity.
-#[test]
 fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_drops_a_required_tool_its_disallow_list_covers",
-    ) {
-        return;
-    }
     let fixture = fixture("[]");
     let task_id = fixture.task_requiring(&["orbit.task.add", "orbit.task.show"]);
     let tasks = std::slice::from_ref(&task_id);
@@ -798,3 +744,17 @@ fn shipped_disallow_list(activity: &str) -> Vec<String> {
     };
     spec.tool_disallow_list.expect("deny-mode activity")
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_empty_crew_pool_skips_final_recovery_and_records_nothing_scenarios,
+    an_empty_crew_pool_skips_final_recovery_and_records_nothing,
+    final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints,
+    a_local_decision_is_applied_to_the_task_through_the_applier,
+    an_escalation_blocks_the_task_and_continues_into_the_failure_path,
+    a_settled_task_stands_when_recording_its_outcome_fails,
+    a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome,
+    final_recovery_log_tail_reads_only_the_requested_runs_bounded_log,
+    final_recovery_keeps_run_observers_and_every_declared_tool_write_denied,
+    final_recovery_drops_a_required_tool_its_disallow_list_covers
+);

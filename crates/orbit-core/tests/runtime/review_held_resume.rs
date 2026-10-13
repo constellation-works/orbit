@@ -165,13 +165,7 @@ fn review(fixture: &Fixture, report: &mut Value) {
     run_review_pipeline(fixture);
 }
 
-#[test]
 fn an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, mut report) = hold_and_receive(&mut fixture);
     // A task pilot widens the selectors while the task waits in backlog.
@@ -235,13 +229,7 @@ fn an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evide
     assert_eq!(certificate.evidence_carried, None);
 }
 
-#[test]
 fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, mut report) = hold_and_receive(&mut fixture);
     commit_on_main(&fixture, "base.txt");
@@ -346,13 +334,7 @@ fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
     assert!(manifest(&fixture).satisfied_external_evidence.is_empty());
 }
 
-#[test]
 fn evidence_an_agent_rewrote_does_not_carry_across_a_rebase() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::evidence_an_agent_rewrote_does_not_carry_across_a_rebase",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, _) = hold_and_receive(&mut fixture);
     commit_on_main(&fixture, "base.txt");
@@ -372,13 +354,7 @@ fn evidence_an_agent_rewrote_does_not_carry_across_a_rebase() {
     assert!(manifest(&fixture).satisfied_external_evidence.is_empty());
 }
 
-#[test]
 fn a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, mut report) = hold_and_receive(&mut fixture);
     let next = next_run(&mut fixture, &hold);
@@ -409,3 +385,12 @@ fn a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence() 
     assert_eq!(again.run_id, next);
     assert_eq!(again.candidate.tree, changed_tree);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence_scenarios,
+    an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence,
+    evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged,
+    evidence_an_agent_rewrote_does_not_carry_across_a_rebase,
+    a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence
+);

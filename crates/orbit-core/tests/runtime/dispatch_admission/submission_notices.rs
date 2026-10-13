@@ -12,7 +12,7 @@ use orbit_types::workflow::{ChildDispatch, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::{PressureProbe, Seed, as_operator, isolated, running_run, seed};
+use super::{PressureProbe, Seed, as_operator, running_run, seed};
 
 // Not `ORBIT_`-prefixed: those names are never reported unset.
 const UNSET_PASS: &str = "FIXTURE_NOTICE_TOKEN";
@@ -44,13 +44,8 @@ fn receipt(notices: &SubmissionNotices) -> Value {
     receipt
 }
 
-#[test]
 fn each_submission_kind_carries_its_notices() {
-    if !isolated("dispatch_admission::submission_notices::each_submission_kind_carries_its_notices")
-    {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = throttled_runtime(root.path(), "");
     let mac = seed(
         &runtime,
@@ -120,14 +115,8 @@ fn each_submission_kind_carries_its_notices() {
     assert_eq!(discovery.warnings(), [warnings[2].clone()]);
 }
 
-#[test]
 fn a_validation_environment_warning_reaches_every_kind() {
-    if !isolated(
-        "dispatch_admission::submission_notices::a_validation_environment_warning_reaches_every_kind",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = throttled_runtime(
         root.path(),
         "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
@@ -164,13 +153,7 @@ fn a_validation_environment_warning_reaches_every_kind() {
 
 /// MCP returns the stop projection CLI and the dashboard return, inside its
 /// own envelope.
-#[test]
 fn an_mcp_stop_returns_the_shared_projection() {
-    if !isolated(
-        "dispatch_admission::submission_notices::an_mcp_stop_returns_the_shared_projection",
-    ) {
-        return;
-    }
     let (_root, runtime, _repo) = super::runtime();
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
     let child = running_run(&runtime, "task_auto_pipeline", json!({}));
@@ -216,3 +199,11 @@ fn an_mcp_stop_returns_the_shared_projection() {
         "{stopped:#}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    each_submission_kind_carries_its_notices_scenarios,
+    each_submission_kind_carries_its_notices,
+    a_validation_environment_warning_reaches_every_kind,
+    an_mcp_stop_returns_the_shared_projection
+);

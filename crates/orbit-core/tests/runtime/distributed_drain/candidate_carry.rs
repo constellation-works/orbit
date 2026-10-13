@@ -208,14 +208,7 @@ pub(super) fn claim_candidate(
 /// A candidate committed on one host and released before its push is carried
 /// to a durable ref on `origin`, and the task's next claim on a host with its
 /// own object store resumes that same commit instead of implementing anew.
-#[test]
 fn a_carried_candidate_resumes_on_another_host() {
-    if !isolated(
-        module_path!(),
-        "a_carried_candidate_resumes_on_another_host",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -291,14 +284,7 @@ fn a_carried_candidate_resumes_on_another_host() {
 /// When the candidate cannot be pushed to a durable ref, a claim on another
 /// host implements fresh and the owner's task history says why, typed; the
 /// host that holds the candidate is still offered it.
-#[test]
 fn an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason() {
-    if !isolated(
-        module_path!(),
-        "an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -475,14 +461,7 @@ fn resume_note(pair: &Pair, task: &str) -> String {
 /// `task_pr_pipeline`. That run continues the follower's candidate — same
 /// source run, same commit — instead of implementing anew, and never reads
 /// the unrelated owner run that shares the leaf's id.
-#[test]
 fn an_owner_local_run_continues_a_failed_claims_candidate() {
-    if !isolated(
-        module_path!(),
-        "an_owner_local_run_continues_a_failed_claims_candidate",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -530,14 +509,7 @@ fn an_owner_local_run_continues_a_failed_claims_candidate() {
 /// owner's own run implements fresh, says the foreign machine's run kept
 /// nothing, and does not resume what an unrelated owner run under the same
 /// id preserved.
-#[test]
 fn an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id() {
-    if !isolated(
-        module_path!(),
-        "an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     owner_published(&pair);
@@ -567,14 +539,7 @@ fn an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id() {
 /// not carry it to `origin` — is set aside by the owner's own run with a
 /// typed reason in the task's history naming the claim and the machine that
 /// holds it.
-#[test]
 fn an_owner_local_run_records_why_it_sets_a_kept_candidate_aside() {
-    if !isolated(
-        module_path!(),
-        "an_owner_local_run_records_why_it_sets_a_kept_candidate_aside",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -689,14 +654,7 @@ fn hold_superseded(pair: &Pair, task: &str) {
 /// [ORB-14905] An owner-local run held on a red base pushes its candidate to
 /// a durable ref on `origin`, and the task's next claim — on a host with its
 /// own object store — resumes that commit instead of implementing anew.
-#[test]
 fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
-    if !isolated(
-        module_path!(),
-        "a_red_base_hold_carries_its_candidate_to_another_hosts_claim",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -766,14 +724,7 @@ fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
 /// still held, the hold's output and comment say the candidate is host-local
 /// with the push diagnostic, and a claim on another host implements fresh
 /// for that typed reason.
-#[test]
 fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
-    if !isolated(
-        module_path!(),
-        "a_red_base_hold_whose_push_is_refused_stays_host_local",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -845,14 +796,7 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
 /// handed the kept candidate with its pull request, and its resume takes
 /// over the published branch from the earlier claim's retained checkout, so
 /// the leaf's push and `pr_open` go through #41 rather than a second PR.
-#[test]
 fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
-    if !isolated(
-        module_path!(),
-        "a_requeued_claim_continues_its_published_branch_and_pull_request",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -1042,41 +986,20 @@ fn landing_review_stopped(
 /// carries the reviewer-fixed tip to the durable ref, the owner keeps that
 /// tip, and the task's next claim on a host whose object store never had the
 /// fix resumes it, fix included.
-#[test]
 fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_landing_reviews_unpushed_fix_survives_to_another_host",
-    ) {
-        return;
-    }
     landing_review_fix_resumes(true, JobRunState::Failed);
 }
 
 /// A carry push failure must keep the reviewer's local tip for this host's
 /// next claim, rather than silently offering the older published head.
-#[test]
 fn a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host",
-    ) {
-        return;
-    }
     landing_review_fix_resumes(false, JobRunState::Failed);
 }
 
 /// A held leaf without a named external-evidence hold still settles its
 /// carried candidate; the reviewer-fixed tip must survive that terminal
 /// state just as it survives a failed review.
-#[test]
 fn a_held_landing_reviews_unpushed_fix_survives_to_another_host() {
-    if !isolated(
-        module_path!(),
-        "a_held_landing_reviews_unpushed_fix_survives_to_another_host",
-    ) {
-        return;
-    }
     landing_review_fix_resumes(true, JobRunState::Held);
 }
 
@@ -1251,3 +1174,23 @@ fn landing_review_fix_resumes(carry_available: bool, terminal: JobRunState) {
         "the reviewer's fix is applied for the next claim to continue"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_carried_candidate_resumes_on_another_host_scenarios,
+    a_carried_candidate_resumes_on_another_host,
+    an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason,
+    an_owner_local_run_continues_a_failed_claims_candidate,
+    an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id,
+    an_owner_local_run_records_why_it_sets_a_kept_candidate_aside,
+    a_red_base_hold_carries_its_candidate_to_another_hosts_claim,
+    a_red_base_hold_whose_push_is_refused_stays_host_local,
+    a_requeued_claim_continues_its_published_branch_and_pull_request
+);
+
+crate::scenario_table!(
+    a_rejected_landing_reviews_unpushed_fix_survives_to_another_host_scenarios,
+    a_rejected_landing_reviews_unpushed_fix_survives_to_another_host,
+    a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host,
+    a_held_landing_reviews_unpushed_fix_survives_to_another_host
+);

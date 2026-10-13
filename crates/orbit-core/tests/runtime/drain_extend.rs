@@ -28,7 +28,7 @@ struct Drains {
 
 impl Drains {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let workspace = root.path().join("repo/.orbit");
         std::fs::create_dir_all(&global).unwrap();
@@ -130,13 +130,7 @@ fn whole_seconds(at: DateTime<Utc>) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
-#[test]
 fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it() {
-    if !super::dispatch_admission::isolated(
-        "drain_extend::extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it",
-    ) {
-        return;
-    }
     let drains = Drains::new();
     for job in [PULL, OWNER] {
         let stamped = whole_seconds(Utc::now() + Duration::minutes(10));
@@ -217,13 +211,7 @@ fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never
     );
 }
 
-#[test]
 fn a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_drain_refuses() {
-    if !super::dispatch_admission::isolated(
-        "drain_extend::a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_drain_refuses",
-    ) {
-        return;
-    }
     let drains = Drains::new();
     let lapsed = whole_seconds(Utc::now() - Duration::minutes(5));
 
@@ -252,13 +240,7 @@ fn a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_dra
     );
 }
 
-#[test]
 fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() {
-    if !super::dispatch_admission::isolated(
-        "drain_extend::concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency",
-    ) {
-        return;
-    }
     let drains = Drains::new();
     for job in [PULL, OWNER] {
         let drain = drains.running(job, 3600, Utc::now() + Duration::minutes(10), |_| {});
@@ -286,13 +268,7 @@ fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() 
     }
 }
 
-#[test]
 fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed() {
-    if !super::dispatch_admission::isolated(
-        "drain_extend::stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed",
-    ) {
-        return;
-    }
     let drains = Drains::new();
     let open = Utc::now() + Duration::minutes(10);
     for job in [PULL, OWNER] {
@@ -379,13 +355,7 @@ fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_s
     assert!(error.contains("window to extend"), "{error}");
 }
 
-#[test]
 fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged() {
-    if !super::dispatch_admission::isolated(
-        "drain_extend::invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged",
-    ) {
-        return;
-    }
     let drains = Drains::new();
     for job in [PULL, OWNER] {
         let stamped = whole_seconds(Utc::now() + Duration::minutes(10));
@@ -439,3 +409,13 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it_scenarios,
+    extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it,
+    a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_drain_refuses,
+    concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency,
+    stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed,
+    invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged
+);

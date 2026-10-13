@@ -140,15 +140,7 @@ fn seed_running_run(runtime: &OrbitRuntime) -> String {
 /// The session still holds operator capability, so the authorization
 /// chokepoint admits the call: what refuses it is the self-dispatch guard, not
 /// a missing capability.
-#[test]
 fn managed_run_environment_denies_ship_and_resume_end_to_end() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "managed_run_environment_denies_ship_and_resume_end_to_end",
-    ) {
-        return;
-    }
-
     let _env = managed_tool_env_guard("jrun-test-managed");
     let (_root, runtime, _repo_root) = test_runtime();
     write_ship_job_asset(&runtime);
@@ -184,15 +176,7 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
 /// separates "my child is still running" from "some unrelated process now
 /// holds that number", and a PID recorded in a foreign PID namespace is
 /// `unknown` rather than a false `exited`.
-#[test]
 fn mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace",
-    ) {
-        return;
-    }
-
     let (_root, runtime, _repo_root) = test_runtime();
     let run_id = seed_running_run(&runtime);
     let pid = std::process::id();
@@ -286,15 +270,7 @@ fn mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace(
 /// [ORB-13899] A running invocation shows what its agent last said and when
 /// it last produced output, before any answer exists. A later sample whose
 /// output tail held no message keeps the earlier message but moves the time.
-#[test]
 fn mcp_run_show_reports_a_running_invocations_latest_message() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "mcp_run_show_reports_a_running_invocations_latest_message",
-    ) {
-        return;
-    }
-
     let (_root, runtime, _repo_root) = test_runtime();
     let run = crate::admission_audit::store_support::jobs(&runtime)
         .insert_job_run(
@@ -365,3 +341,11 @@ fn mcp_run_show_reports_a_running_invocations_latest_message() {
     assert_eq!(child["latest_message"], "Reading the sweep clock config.");
     assert_eq!(child["last_activity_at"], "2026-10-04T08:00:21+00:00");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    managed_run_environment_denies_ship_and_resume_end_to_end_scenarios,
+    managed_run_environment_denies_ship_and_resume_end_to_end,
+    mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace,
+    mcp_run_show_reports_a_running_invocations_latest_message
+);

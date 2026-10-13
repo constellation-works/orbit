@@ -26,15 +26,7 @@ fn acquire_claim(runtime: &OrbitRuntime, actor: &str) -> String {
         .to_string()
 }
 
-#[test]
 fn managed_run_environment_denies_command_exec() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "managed_run_environment_denies_command_exec",
-    ) {
-        return;
-    }
-
     let _env = managed_tool_env_guard("jrun-test-managed-command-exec");
     let (_root, runtime, repo_root) = test_runtime();
 
@@ -56,15 +48,7 @@ fn managed_run_environment_denies_command_exec() {
     assert!(error.to_string().contains("managed runs cannot execute"));
 }
 
-#[test]
 fn auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output",
-    ) {
-        return;
-    }
-
     // [ORB-12508] AUTHKEY / AUTHN / XAUTH / GITHUB_OAUTH must not reach
     // orbit.command.exec's child environment, and GIT_AUTHOR_* identity
     // values must still pass through. Synthetic fixtures only.
@@ -159,15 +143,7 @@ fn auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output() {
     }
 }
 
-#[test]
 fn secret_argv_reaches_child_but_is_redacted_in_the_audit_record() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "secret_argv_reaches_child_but_is_redacted_in_the_audit_record",
-    ) {
-        return;
-    }
-
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
     let token = acquire_claim(&runtime, "claude");
@@ -271,15 +247,7 @@ fn assert_outside_workspace(error: OrbitError, runtime: &OrbitRuntime) -> String
     message
 }
 
-#[test]
 fn working_directory_in_a_sibling_checkout_is_refused() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "working_directory_in_a_sibling_checkout_is_refused",
-    ) {
-        return;
-    }
-
     let _env = unmanaged_tool_env_guard();
     let (root, runtime, _repo_root) = test_runtime();
     let sibling = root.path().join("sibling");
@@ -296,15 +264,7 @@ fn working_directory_in_a_sibling_checkout_is_refused() {
 }
 
 #[cfg(unix)]
-#[test]
 fn working_directory_symlink_that_escapes_is_refused() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "working_directory_symlink_that_escapes_is_refused",
-    ) {
-        return;
-    }
-
     let _env = unmanaged_tool_env_guard();
     let (root, runtime, repo_root) = test_runtime();
     let outside = root.path().join("outside");
@@ -337,15 +297,7 @@ fn process_is_alive(pid: i32) -> bool {
 }
 
 #[cfg(unix)]
-#[test]
 fn command_past_its_timeout_is_killed_with_its_process_group() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "command_past_its_timeout_is_killed_with_its_process_group",
-    ) {
-        return;
-    }
-
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
     let token = acquire_claim(&runtime, "claude");
@@ -398,15 +350,7 @@ fn command_past_its_timeout_is_killed_with_its_process_group() {
     );
 }
 
-#[test]
 fn zero_timeout_is_refused_before_the_command_runs() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "zero_timeout_is_refused_before_the_command_runs",
-    ) {
-        return;
-    }
-
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
     let marker = repo_root.join("must-not-run");
@@ -431,3 +375,20 @@ fn zero_timeout_is_refused_before_the_command_runs() {
         "a refused call must not spawn the command"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    managed_run_environment_denies_command_exec_scenarios,
+    managed_run_environment_denies_command_exec,
+    auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output,
+    secret_argv_reaches_child_but_is_redacted_in_the_audit_record,
+    working_directory_in_a_sibling_checkout_is_refused,
+    zero_timeout_is_refused_before_the_command_runs
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    working_directory_symlink_that_escapes_is_refused_scenarios,
+    working_directory_symlink_that_escapes_is_refused,
+    command_past_its_timeout_is_killed_with_its_process_group
+);

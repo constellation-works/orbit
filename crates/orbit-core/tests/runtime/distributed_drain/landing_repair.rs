@@ -36,14 +36,7 @@ const REPAIRED: &str = "fn work() {\n    base();\n    first();\n}\n";
 /// drain's next pass takes the repair, its leaf resolves the conflict on the
 /// moved base, revalidates and hands off again under the same task, and that
 /// candidate lands: no operator acts between the first handoff and `done`.
-#[test]
 fn a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task() {
-    if !isolated(
-        module_path!(),
-        "a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task",
-    ) {
-        return;
-    }
     let owner = OwnerLocal::new();
     let first = owner.handed_off_leaf(|checkout, resumed| {
         assert_eq!(resumed["outcome"], "fresh", "{resumed}");
@@ -133,14 +126,7 @@ fn a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task() {
 /// The repaired candidate's own landing stops on its base too: there is no
 /// second automatic repair. The task blocks with a comment carrying both
 /// attempts' candidates and stop evidence, and no further pass takes it.
-#[test]
 fn a_second_base_stop_blocks_the_task_with_both_attempts_evidence() {
-    if !isolated(
-        module_path!(),
-        "a_second_base_stop_blocks_the_task_with_both_attempts_evidence",
-    ) {
-        return;
-    }
     let owner = OwnerLocal::new();
     let first = owner.handed_off_leaf(|checkout, _| {
         std::fs::write(checkout.join(FILE), FIRST).unwrap();
@@ -202,7 +188,7 @@ struct OwnerLocal {
 
 impl OwnerLocal {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let orbit = root.path().join(OWNER).join("repo/.orbit");
         std::fs::create_dir_all(&orbit).unwrap();
         std::fs::write(
@@ -534,3 +520,10 @@ impl OwnerCoordinator for ToSelf {
         self.0.execute_owner_coordination(name, input, session)
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task_scenarios,
+    a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task,
+    a_second_base_stop_blocks_the_task_with_both_attempts_evidence
+);

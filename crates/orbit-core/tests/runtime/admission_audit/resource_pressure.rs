@@ -5,15 +5,7 @@ use orbit_core::runtime::host_resource::ResourcePressureEvaluator;
 use orbit_core::runtime::host_resource::{DiskSample, ResourceSeverity};
 use std::path::PathBuf;
 
-#[test]
 fn sustained_pressure_holds_until_below_resume_for_each_resource() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "sustained_pressure_holds_until_below_resume_for_each_resource",
-    ) {
-        return;
-    }
-
     let settings = ConfigSnapshot::default().resource_throttle();
     for resource in 0..3 {
         let (high, resume) = match resource {
@@ -48,15 +40,7 @@ fn sustained_pressure_holds_until_below_resume_for_each_resource() {
     }
 }
 
-#[test]
 fn stale_invalid_disabled_and_observation_gaps_fail_open() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "stale_invalid_disabled_and_observation_gaps_fail_open",
-    ) {
-        return;
-    }
-
     let mut settings = ConfigSnapshot::default().resource_throttle();
     let mut evaluator = ResourcePressureEvaluator::default();
     let high = sample(0, Some(500.0), Some(95.0), Some(99.0));
@@ -102,16 +86,8 @@ fn stale_invalid_disabled_and_observation_gaps_fail_open() {
     }
 }
 
-#[test]
 fn config_admission_rejects_invalid_thresholds_and_exposes_overrides() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "config_admission_rejects_invalid_thresholds_and_exposes_overrides",
-    ) {
-        return;
-    }
-
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let path = dir.path().join("config.toml");
     for body in [
         "cpu_high_percent = 0",
@@ -138,15 +114,7 @@ fn config_admission_rejects_invalid_thresholds_and_exposes_overrides() {
     assert!(!config.resource_throttle().enabled);
 }
 
-#[test]
 fn disk_aggregation_keeps_all_path_hysteresis_but_reports_one_held_disk() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "disk_aggregation_keeps_all_path_hysteresis_but_reports_one_held_disk",
-    ) {
-        return;
-    }
-
     let settings = ConfigSnapshot::default().resource_throttle();
     for count in [0, 1, 22] {
         let mut evaluator = ResourcePressureEvaluator::default();
@@ -231,3 +199,12 @@ fn disk_aggregation_keeps_all_path_hysteresis_but_reports_one_held_disk() {
         assert!(!unknown.throttle);
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    sustained_pressure_holds_until_below_resume_for_each_resource_scenarios,
+    sustained_pressure_holds_until_below_resume_for_each_resource,
+    stale_invalid_disabled_and_observation_gaps_fail_open,
+    config_admission_rejects_invalid_thresholds_and_exposes_overrides,
+    disk_aggregation_keeps_all_path_hysteresis_but_reports_one_held_disk
+);

@@ -9,7 +9,7 @@ use orbit_types::policy::Role;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
 
@@ -41,7 +41,7 @@ pub(crate) fn run_tool_as_operator(
 }
 
 pub(crate) fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");

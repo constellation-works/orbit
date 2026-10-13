@@ -50,7 +50,7 @@ impl GateOn {
 
 impl Gate {
     fn new() -> Self {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let gate = Self {
             script: dir.path().join("affected-gate.sh"),
             runs: dir.path().join("affected-gate.runs"),
@@ -129,7 +129,7 @@ impl RedCheck {
     const FAILURE: &'static str = "test suite::broken";
 
     fn new() -> Self {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let check = Self {
             script: dir.path().join("red-check.sh"),
             passes: dir.path().join("passes"),
@@ -630,14 +630,7 @@ impl CleanLeaf {
     }
 }
 
-#[test]
 fn verified_no_diff_and_already_satisfied_base_complete_without_a_pr() {
-    if !isolated(
-        module_path!(),
-        "verified_no_diff_and_already_satisfied_base_complete_without_a_pr",
-    ) {
-        return;
-    }
     for (already_landed, job) in [
         (false, "task_claimed_pr_pipeline"),
         (true, "task_claimed_pr_pipeline"),
@@ -680,14 +673,7 @@ fn verified_no_diff_and_already_satisfied_base_complete_without_a_pr() {
 /// The full-code-review chore shape: a `no-diff-expected` task the follower
 /// claims, whose leaf files findings on the owner through the claimed-owner
 /// broker and hands off `NoDiff`, with no PR [ORB-14474].
-#[test]
 fn a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_a_pr() {
-    if !isolated(
-        module_path!(),
-        "a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_a_pr",
-    ) {
-        return;
-    }
     let fixture = CleanLeaf::tagged("done");
     let owner_task = fixture.pair.owner_task(&fixture.task);
     assert!(
@@ -740,80 +726,6 @@ fn a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_
     .unwrap();
     assert_eq!(fixture.pair.owner_status(&fixture.task), "done");
     fixture.assert_no_blocked();
-}
-
-/// The delivery-code-review shape that blocked on a follower: a tagged task
-/// whose implementer attaches its coverage and writes no clean-tree report.
-/// The leaf skips its clean commit as the owner does and hands off `NoDiff`;
-/// the owner settles it to the status its own `promote_no_diff` and
-/// `complete_no_diff` reach, with no commit failure or already-landed proof
-/// [ORB-14791].
-#[test]
-fn a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner",
-    ) {
-        return;
-    }
-    for (completion, job, status) in [
-        ("done", "task_claimed_pr_pipeline", "done"),
-        ("done", "task_claimed_local_pipeline", "done"),
-        ("review", "task_claimed_pr_pipeline", "review"),
-    ] {
-        let fixture = CleanLeaf::review_only(completion);
-        fixture.attach("automation-coverage.json", json!({"findings": []}));
-        let committed = fixture.action("git_commit", &fixture.input);
-        assert_eq!(
-            committed["decision"], "skipped_no_diff_expected",
-            "{committed}"
-        );
-        assert_eq!(committed["base_sha"], fixture.base, "{committed}");
-
-        let handoff = fixture.run_clean_pipeline(job);
-        let settled = fixture
-            .settle(&handoff)
-            .expect("owner settles a tagged clean base");
-        assert_eq!(settled["status"], "review", "{job}: {settled}");
-        if completion == "done" {
-            let accepted = fixture
-                .pair
-                .wire
-                .owner
-                .accepted_task_handoff(&handoff.claim_id)
-                .unwrap();
-            let landed = engine_action(
-                &fixture.pair.wire.owner,
-                "handoff_land",
-                &json!({"handoff_id": accepted.handoff_id}),
-            )
-            .unwrap();
-            assert_eq!(landed["evidence"]["external_merge"], false, "{landed}");
-        }
-        assert_eq!(
-            fixture.pair.owner_status(&fixture.task),
-            status,
-            "{job} with {completion} completion"
-        );
-        let artifacts = RuntimeHost::get_task_artifacts(&fixture.pair.wire.owner, &fixture.task)
-            .unwrap()
-            .into_iter()
-            .map(|artifact| artifact.path)
-            .collect::<Vec<_>>();
-        assert!(
-            artifacts
-                .iter()
-                .any(|path| path == "automation-coverage.json"),
-            "the coverage evidence reaches the owner: {artifacts:?}"
-        );
-        assert!(
-            !artifacts
-                .iter()
-                .any(|path| path == "already-landed.json" || path == "no-diff.json"),
-            "a review writes no clean-tree report: {artifacts:?}"
-        );
-        fixture.assert_no_blocked();
-    }
 }
 
 /// The frozen batch an owner's after-landing review consumer admits for
@@ -1116,6 +1028,16 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
         fixture.attach("automation-coverage.json", json!({"findings": []}));
         let outcome = fixture.execute_clean_pipeline(job).unwrap();
         assert!(outcome.success, "{job}: {outcome:#?}");
+        // The same matrix also pins the original ORB-14791 clean-review route.
+        let committed = &outcome.pipeline["commit"];
+        assert_eq!(committed["decision"], "skipped_no_diff_expected", "{job}");
+        assert_eq!(committed["base_sha"], fixture.base, "{job}");
+        for skipped in ["prepare_branch", "sync_base", "review", "push", "pr_open"] {
+            assert!(
+                outcome.pipeline.get(skipped).is_none(),
+                "{job}: {outcome:#?}"
+            );
+        }
         let validated = &outcome.pipeline[step];
         assert_eq!(
             validated["decision"], "skipped_no_diff_expected",
@@ -1145,6 +1067,24 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
             .expect("the owner accepts a tagged skip without logs");
         assert_eq!(settled["status"], "review", "{job}: {settled}");
         let owner = &fixture.pair.wire.owner;
+        assert_eq!(fixture.pair.owner_status(&fixture.task), "review", "{job}");
+        let artifacts = RuntimeHost::get_task_artifacts(owner, &fixture.task)
+            .unwrap()
+            .into_iter()
+            .map(|artifact| artifact.path)
+            .collect::<Vec<_>>();
+        assert!(
+            artifacts
+                .iter()
+                .any(|path| path == "automation-coverage.json"),
+            "{job}: coverage reaches the owner: {artifacts:?}"
+        );
+        assert!(
+            !artifacts
+                .iter()
+                .any(|path| path == "already-landed.json" || path == "no-diff.json"),
+            "{job}: a review writes no clean-tree report: {artifacts:?}"
+        );
         let accepted = owner.accepted_task_handoff(&handoff.claim_id).unwrap();
         if completion == "review" {
             assert!(owner.landing_start_requests().unwrap().is_empty(), "{job}");
@@ -1167,6 +1107,10 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
         )
         .expect("the owner lands a tagged skip without logs");
         assert_eq!(landed["evidence"]["delivery"], "no_diff", "{landed}");
+        assert_eq!(
+            landed["evidence"]["external_merge"], false,
+            "{job}: {landed}"
+        );
         assert_eq!(fixture.pair.owner_status(&fixture.task), "done", "{job}");
         assert_eq!(check.runs(), 0, "{job}: no host ran the required command");
         assert_eq!(
@@ -1182,14 +1126,7 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
 /// Its older leaf still pinned a log per required command for the tagged
 /// skip; the upgraded owner accepts that handoff, and still checks each log
 /// it carries, so one pinned for another run is refused.
-#[test]
 fn an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them() {
-    if !isolated(
-        module_path!(),
-        "an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them",
-    ) {
-        return;
-    }
     for forged in [false, true] {
         let check = RedCheck::new();
         let fixture = CleanLeaf::tagged_requiring("done", &check);
@@ -1246,14 +1183,7 @@ fn an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them() {
 /// A claimed tagged task hands off `NoDiff` and has no PR route for a change,
 /// so a pending diff or a commit of its own is refused by name, before the
 /// index is touched [ORB-14791].
-#[test]
 fn a_claimed_no_diff_expected_task_that_changed_the_worktree_is_refused() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_expected_task_that_changed_the_worktree_is_refused",
-    ) {
-        return;
-    }
     for committed in [false, true] {
         let fixture = CleanLeaf::review_only("done");
         let follower = &fixture.pair.follower_repo;
@@ -1281,14 +1211,7 @@ fn a_claimed_no_diff_expected_task_that_changed_the_worktree_is_refused() {
 /// The tag is the only authority a review's skip carries, and the owner's copy
 /// of the task holds it: a skip checkpoint pinned for an untagged task is
 /// refused at settlement, without blocking the task [ORB-14791].
-#[test]
 fn owner_refuses_a_no_diff_expected_skip_for_an_untagged_task() {
-    if !isolated(
-        module_path!(),
-        "owner_refuses_a_no_diff_expected_skip_for_an_untagged_task",
-    ) {
-        return;
-    }
     let fixture = CleanLeaf::new(false, "done");
     let mut handoff = fixture.prepare_handoff();
     let skip = json!({
@@ -1326,14 +1249,7 @@ fn owner_refuses_a_no_diff_expected_skip_for_an_untagged_task() {
 /// checks is one of its own tasks, and the owner records the claim and run
 /// that filed it. A finding the owner still refuses reaches it as the review
 /// task's `unfiled-findings.json`, which the handoff attaches [ORB-14792].
-#[test]
 fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest",
-    ) {
-        return;
-    }
     let mut fixture = CleanLeaf::delivery_review("done");
     let owner = fixture.pair.wire.owner.clone();
     let culprit = owner
@@ -1425,14 +1341,7 @@ fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() 
 /// the owner's summary say it was normalized, and object entries pass through
 /// untouched. A malformed entry that is not a string stays refused, and so
 /// does a malformed field other than the findings [ORB-14927].
-#[test]
 fn a_published_candidates_string_findings_are_normalized_at_handoff() {
-    if !isolated(
-        module_path!(),
-        "a_published_candidates_string_findings_are_normalized_at_handoff",
-    ) {
-        return;
-    }
     let mut fixture = CleanLeaf::delivery_review("done");
     let owner = fixture.pair.wire.owner.clone();
     let long = format!("{} and on", "A very long first sentence".repeat(8));
@@ -1490,11 +1399,7 @@ fn a_published_candidates_string_findings_are_normalized_at_handoff() {
     }
 }
 
-#[test]
 fn no_diff_retains_owner_completion_authority() {
-    if !isolated(module_path!(), "no_diff_retains_owner_completion_authority") {
-        return;
-    }
     let fixture = CleanLeaf::new(false, "review");
     let handoff = fixture.prepare_handoff();
     fixture.settle(&handoff).unwrap();
@@ -1511,14 +1416,7 @@ fn no_diff_retains_owner_completion_authority() {
     fixture.assert_no_blocked();
 }
 
-#[test]
 fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_without_blocking() {
-    if !isolated(
-        module_path!(),
-        "owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_without_blocking",
-    ) {
-        return;
-    }
     for changed in ["report", "log", "rewritten_base", "required_check"] {
         let fixture = CleanLeaf::new(false, "done");
         let mut handoff = fixture.prepare_handoff();
@@ -1584,14 +1482,7 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
     }
 }
 
-#[test]
 fn claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs() {
-    if !isolated(
-        module_path!(),
-        "claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs",
-    ) {
-        return;
-    }
     let fixture = CleanLeaf::new(false, "done");
     let mut input = fixture.input.clone();
     input["skipped_no_diff_expected"] = json!(true);
@@ -1630,14 +1521,7 @@ fn claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs() {
 /// the base the run synchronized onto, the handoff records that base rather
 /// than the new tip, and the owner accepts and completes it with no operator
 /// action, even when the base advances again before landing [ORB-15074].
-#[test]
 fn a_claimed_no_diff_chore_completes_after_its_base_advances() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_chore_completes_after_its_base_advances",
-    ) {
-        return;
-    }
     for tagged in [false, true] {
         let fixture = if tagged {
             let fixture = CleanLeaf::review_only("done");
@@ -1690,14 +1574,7 @@ fn a_claimed_no_diff_chore_completes_after_its_base_advances() {
 /// worktree carries an uncommitted tracked change or an extra commit after its
 /// commit verifier ran is refused at `claim_validate`, naming the change, and
 /// the task is not blocked [ORB-15074].
-#[test]
 fn a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name",
-    ) {
-        return;
-    }
     for (tagged, committed) in [(false, false), (false, true), (true, false), (true, true)] {
         let fixture = if tagged {
             CleanLeaf::review_only("done")
@@ -1862,14 +1739,7 @@ const NO_DIFF_ROUTES: [&str; 2] = ["task_claimed_pr_pipeline", "task_claimed_loc
 /// deferred, even when only `review.baseline_commands` names it, and attaches
 /// its log beside the required command's. Before, only the required commands
 /// ran and the deferral was silently dropped [ORB-15287].
-#[test]
 fn a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate",
-    ) {
-        return;
-    }
     for job in NO_DIFF_ROUTES {
         let mut fixture = CleanLeaf::gated("done");
         fixture.attach("automation-coverage.json", json!({"findings": []}));
@@ -1897,14 +1767,7 @@ fn a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate() {
 /// A replay that still defers on the validating host never ran the paths it
 /// was handed off for: the validation environment's failure, with no passing
 /// log attached and no handoff recorded.
-#[test]
 fn a_claimed_no_diff_replay_that_still_defers_is_refused() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_replay_that_still_defers_is_refused",
-    ) {
-        return;
-    }
     for job in NO_DIFF_ROUTES {
         let mut fixture = CleanLeaf::gated("done");
         fixture.hand_off_deferral();
@@ -1920,14 +1783,7 @@ fn a_claimed_no_diff_replay_that_still_defers_is_refused() {
 
 /// A replay that reports no executed test replayed nothing, so it cannot
 /// carry a deferral.
-#[test]
 fn a_claimed_no_diff_replay_that_ran_no_tests_is_refused() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_replay_that_ran_no_tests_is_refused",
-    ) {
-        return;
-    }
     for job in NO_DIFF_ROUTES {
         let mut fixture = CleanLeaf::gated("done");
         fixture.hand_off_deferral();
@@ -1944,14 +1800,7 @@ fn a_claimed_no_diff_replay_that_ran_no_tests_is_refused() {
 
 /// With nothing handed off, a gate named only as a baseline command stays
 /// unrun and the ordinary clean-base handoff delivers as before.
-#[test]
 fn a_claimed_no_diff_handoff_without_a_deferral_replays_nothing() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_no_diff_handoff_without_a_deferral_replays_nothing",
-    ) {
-        return;
-    }
     for job in NO_DIFF_ROUTES {
         let fixture = CleanLeaf::gated("done");
         fixture.attach("automation-coverage.json", json!({"findings": []}));
@@ -1973,14 +1822,7 @@ fn a_claimed_no_diff_handoff_without_a_deferral_replays_nothing() {
 /// that gate, because the leaf holds the owner's gates its claim captured, and
 /// `claim_validate` replays it. Before, the replica's own empty list refused
 /// every such deferral and the leaf ended held.
-#[test]
 fn a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral() {
-    if !isolated(
-        module_path!(),
-        "a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral",
-    ) {
-        return;
-    }
     for (job, seatbelt) in NO_DIFF_ROUTES.into_iter().zip([true, false]) {
         let mut fixture = CleanLeaf::gated_on("done", GateOn::OwnerOnly);
         let gate = fixture.gate.as_ref().unwrap().command();
@@ -2019,14 +1861,7 @@ fn a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral()
 /// [ORB-15622] The inverse drift: a gate only the replica lists is not one
 /// of the owner's, so a deferral of it is refused, and the refusal names the
 /// gate list it checked and that it came from the claim's admission contract.
-#[test]
 fn a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates() {
-    if !isolated(
-        module_path!(),
-        "a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates",
-    ) {
-        return;
-    }
     let checked = format!(
         "the gates checked are [`{CHECK}`] from the owner's gates captured in this claim's \
          admission contract"
@@ -2173,14 +2008,7 @@ impl RedCheck {
 /// closes its pending settlement obsolete, freeing its slot. An inconclusive
 /// owner check (here, a tool the base run lacks) still refuses while the
 /// owner holds the claim, and the follower retries it after its backoff.
-#[test]
 fn a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim() {
-    if !isolated(
-        module_path!(),
-        "a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim",
-    ) {
-        return;
-    }
     let cases = [
         (
             "passes",
@@ -2366,7 +2194,7 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
         .wire
         .owner
         .clone()
-        .with_claim_known_red_budget(Duration::from_secs(10));
+        .with_claim_known_red_budget(Duration::from_millis(500));
     let error = settle(&owner);
     assert!(
         error.contains("known_red_unverified") && error.contains("comparison deadline"),
@@ -2429,7 +2257,7 @@ impl Replay {
 
     fn new() -> Self {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let replay = Self {
             bin: dir.path().join("bin"),
             script: dir.path().join("replay.sh"),
@@ -2512,15 +2340,8 @@ impl Replay {
 /// required command's, and the owner completes the task without a PR.
 /// Before, an empty diff gave the affected-test gate nothing to run, and the
 /// task blocked until an operator ran the test by hand.
-#[test]
 #[cfg(unix)]
 fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr",
-    ) {
-        return;
-    }
     for job in NO_DIFF_ROUTES {
         let replay = Replay::new();
         let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
@@ -2575,15 +2396,8 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
 /// [ORB-15747] A named test that still fails natively fails the step with
 /// its output, before any handoff, and the leaf's settlement blocks the task
 /// on the owner with that output; the full log is on the owner's task.
-#[test]
 #[cfg(unix)]
 fn a_failing_already_resolved_replay_blocks_the_task_with_its_output() {
-    if !isolated(
-        module_path!(),
-        "a_failing_already_resolved_replay_blocks_the_task_with_its_output",
-    ) {
-        return;
-    }
     let replay = Replay::new();
     replay.fails();
     let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
@@ -2707,3 +2521,62 @@ fn an_already_resolved_claim_that_runs_no_named_test_is_refused() {
     );
     assert!(replay.runs().is_empty());
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    verified_no_diff_and_already_satisfied_base_complete_without_a_pr_scenarios,
+    verified_no_diff_and_already_satisfied_base_complete_without_a_pr,
+    a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_a_pr
+);
+
+crate::scenario_table!(
+    a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner_scenarios,
+    an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them,
+    a_claimed_no_diff_expected_task_that_changed_the_worktree_is_refused
+);
+
+crate::scenario_table!(
+    owner_refuses_a_no_diff_expected_skip_for_an_untagged_task_scenarios,
+    owner_refuses_a_no_diff_expected_skip_for_an_untagged_task,
+    a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest,
+    a_published_candidates_string_findings_are_normalized_at_handoff
+);
+
+crate::scenario_table!(
+    no_diff_retains_owner_completion_authority_scenarios,
+    no_diff_retains_owner_completion_authority,
+    owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_without_blocking,
+    claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs
+);
+
+crate::scenario_table!(
+    a_claimed_no_diff_chore_completes_after_its_base_advances_scenarios,
+    a_claimed_no_diff_chore_completes_after_its_base_advances,
+    a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name
+);
+
+crate::scenario_table!(
+    a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate_scenarios,
+    a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate,
+    a_claimed_no_diff_replay_that_still_defers_is_refused,
+    a_claimed_no_diff_replay_that_ran_no_tests_is_refused
+);
+
+crate::scenario_table!(
+    a_claimed_no_diff_handoff_without_a_deferral_replays_nothing_scenarios,
+    a_claimed_no_diff_handoff_without_a_deferral_replays_nothing,
+    a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral
+);
+
+crate::scenario_table!(
+    a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates_scenarios,
+    a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates,
+    a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr_scenarios,
+    a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr,
+    a_failing_already_resolved_replay_blocks_the_task_with_its_output
+);

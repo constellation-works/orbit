@@ -108,7 +108,7 @@ pub(super) struct ReviewedHandoff {
 
 impl ReviewedHandoff {
     pub(super) fn accept(timing: ReviewTiming) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let (owner, repo) = open_runtime(root.path(), OWNER);
         let task_id = backlog_task(&owner, &repo, "src/work.rs", None);
 

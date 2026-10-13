@@ -129,13 +129,7 @@ fn origin_ahead(workspace: &Workspace) -> (String, String) {
     (local, origin)
 }
 
-#[test]
 fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (task, _) = disjoint_tasks(&workspace);
@@ -180,13 +174,7 @@ fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
     );
 }
 
-#[test]
 fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (task, _) = disjoint_tasks(&workspace);
@@ -218,13 +206,7 @@ fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking
     assert_eq!(head(&workspace), local);
 }
 
-#[test]
 fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (overlapping, disjoint) = disjoint_tasks(&workspace);
@@ -307,13 +289,7 @@ fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
     assert!(pilot_applied(&workspace, &overlapping));
 }
 
-#[test]
 fn a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (overlapping, disjoint) = disjoint_tasks(&workspace);
@@ -372,13 +348,7 @@ fn a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry
     assert_eq!(due.batch.len(), 2, "{due:?}");
 }
 
-#[test]
 fn editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let tasks = (0..5)
@@ -475,13 +445,7 @@ fn editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it()
     assert!(pilot_applied(&workspace, edited));
 }
 
-#[test]
 fn context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures",
-    ) {
-        return;
-    }
     for instructions in [false, true] {
         let workspace = Workspace::new();
         workspace.install_pilot_job();
@@ -677,3 +641,14 @@ fn an_instruction_edit_off_every_selector_path_is_ignored_by_default() {
     assert_eq!(output["superseded_count"], 1, "{output}");
     assert_eq!(output["task_outcomes"][0]["reason"], "superseded_by_source");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags_scenarios,
+    a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags,
+    a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref,
+    a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head,
+    a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry,
+    editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it,
+    context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures
+);

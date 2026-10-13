@@ -128,14 +128,7 @@ pub(super) fn artifact<T: serde::de::DeserializeOwned>(
 /// structured external evidence, naming the CodeQL gap only in prose. The
 /// reviewer's manifest named the owed check, and the gate holds for it
 /// instead of blocking.
-#[test]
 fn a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it() {
-    if !isolated(
-        module_path!(),
-        "a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it",
-    ) {
-        return;
-    }
     let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
     assert_eq!(
         admitted["owed_evidence"],
@@ -175,14 +168,7 @@ fn a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it() {
 /// A reviewer that accepts while reporting the owed check passed — a run its
 /// host cannot perform — never ships the candidate unverified: the gate
 /// holds for the owner's run instead.
-#[test]
 fn a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping() {
-    if !isolated(
-        module_path!(),
-        "a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping",
-    ) {
-        return;
-    }
     let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
     leaf.put_report(&report(
         &admitted,
@@ -214,14 +200,7 @@ fn a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping() {
 /// A Linux leaf runs CodeQL itself, and a rule whose paths the candidate
 /// does not touch owes nothing: neither synthesizes a requirement, so a
 /// complete review passes as before.
-#[test]
 fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
-    if !isolated(
-        module_path!(),
-        "a_linux_leaf_or_an_unmatched_rule_owes_no_evidence",
-    ) {
-        return;
-    }
     for (os, paths) in [
         (HostOs::Linux, "**/*.rs"),
         (HostOs::Macos, "crates/**/*.rs"),
@@ -250,11 +229,7 @@ fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
 
 /// An open finding is a verdict on the candidate: owed evidence never turns
 /// it into a hold.
-#[test]
 fn an_open_finding_on_a_mac_leaf_still_blocks() {
-    if !isolated(module_path!(), "an_open_finding_on_a_mac_leaf_still_blocks") {
-        return;
-    }
     let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
     leaf.put_report(&report(
         &admitted,
@@ -282,14 +257,7 @@ fn an_open_finding_on_a_mac_leaf_still_blocks() {
 /// external evidence, each record `not_run`. No host-evidence rule owes them,
 /// so the reviewer's report alone holds the candidate for the owner's runs
 /// instead of blocking it.
-#[test]
 fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
-    if !isolated(
-        module_path!(),
-        "a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking",
-    ) {
-        return;
-    }
     let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
     assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
     let named = vec![
@@ -345,14 +313,7 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
 /// [ORB-15677] The owner's workspace declares no hosted check for Linux
 /// CodeQL, so the run the Mac reviewer named holds the review beside the
 /// hosted job instead of becoming the owner's.
-#[test]
 fn a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check() {
-    if !isolated(
-        module_path!(),
-        "a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit_before_landing();
     leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
     leaf.gate_input["before_landing"] = json!(true);
@@ -409,14 +370,7 @@ fn a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_chec
 
 /// A check that failed on the candidate is an answer, not an evidence gap: a
 /// later run of it on another OS cannot settle it, so the review blocks.
-#[test]
 fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
-    if !isolated(
-        module_path!(),
-        "a_mac_reviewers_failed_linux_only_check_still_blocks",
-    ) {
-        return;
-    }
     let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
     let mut reviewer_report = report(
         &admitted,
@@ -796,3 +750,23 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
         )
         .unwrap();
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it_scenarios,
+    a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it,
+    a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping,
+    a_linux_leaf_or_an_unmatched_rule_owes_no_evidence
+);
+
+crate::scenario_table!(
+    an_open_finding_on_a_mac_leaf_still_blocks_scenarios,
+    an_open_finding_on_a_mac_leaf_still_blocks,
+    a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking
+);
+
+crate::scenario_table!(
+    a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check_scenarios,
+    a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check,
+    a_mac_reviewers_failed_linux_only_check_still_blocks
+);

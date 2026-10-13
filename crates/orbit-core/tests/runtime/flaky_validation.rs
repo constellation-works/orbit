@@ -15,7 +15,7 @@ fn flaky_signatures_are_filed_once_across_runs_and_tasks() {
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let repo = root.path().join("repo");
     let workspace = repo.join(".orbit");
     let global = root.path().join("global");

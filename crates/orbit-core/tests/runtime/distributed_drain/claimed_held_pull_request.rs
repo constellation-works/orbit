@@ -138,14 +138,7 @@ fn open_pull_requests(forge: &Path) -> Vec<String> {
 /// from the branch the leaf published it to for evidence. Once the owner's
 /// result arrives, the owner's own run resumes the held candidate, publishes
 /// on its own branch, and its `pr_open` closes #41 as superseded.
-#[test]
 fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
-    if !isolated(
-        module_path!(),
-        "a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit_from(
         &format!(
             "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
@@ -298,14 +291,7 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
 /// [ORB-15635] Evidence holds bypass the failure hook. A reviewer-fixed tip
 /// must still reach the next claim if the evidence-branch push is refused,
 /// and a failed fallback must preserve the local tip rather than the PR head.
-#[test]
 fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
-    if !isolated(
-        module_path!(),
-        "a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim",
-    ) {
-        return;
-    }
     use std::os::unix::fs::PermissionsExt;
 
     for (reject_evidence, reject_carry) in [(false, false), (true, false), (true, true)] {
@@ -517,3 +503,10 @@ fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request_scenarios,
+    a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request,
+    a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim
+);

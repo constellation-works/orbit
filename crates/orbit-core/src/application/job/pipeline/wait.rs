@@ -20,6 +20,11 @@ impl PipelineWaitClock for SystemPipelineWaitClock {
     }
 
     fn sleep(&self, duration: Duration) {
+        #[cfg(feature = "test-support")]
+        if let Some(wait) = crate::runtime::pipeline_poll_wait_override() {
+            wait(duration);
+            return;
+        }
         thread::sleep(duration);
     }
 }

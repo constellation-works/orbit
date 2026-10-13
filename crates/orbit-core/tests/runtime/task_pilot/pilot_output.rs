@@ -65,13 +65,7 @@ fn result(task_id: &str, partition_index: Option<u64>) -> Value {
     result
 }
 
-#[test]
 fn host_index_applies_to_a_missing_or_wrong_partition_index() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::pilot_output::host_index_applies_to_a_missing_or_wrong_partition_index",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
 
     // A single-partition run settles with the host's index whether the pilot
@@ -146,13 +140,7 @@ fn host_index_applies_to_a_missing_or_wrong_partition_index() {
     assert_eq!(swapped["repair_count"], 2, "{swapped}");
 }
 
-#[test]
 fn missing_or_scalar_evidence_gaps_are_normalised_to_an_array() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::pilot_output::missing_or_scalar_evidence_gaps_are_normalised_to_an_array",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let cases = [
         ("missing", None, json!([])),
@@ -217,3 +205,10 @@ fn missing_or_scalar_evidence_gaps_are_normalised_to_an_array() {
     let refused = workspace.apply_results(&prepared, json!([pilot]));
     assert_eq!(refused["repair_count"], 1, "{refused}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    host_index_applies_to_a_missing_or_wrong_partition_index_scenarios,
+    host_index_applies_to_a_missing_or_wrong_partition_index,
+    missing_or_scalar_evidence_gaps_are_normalised_to_an_array
+);

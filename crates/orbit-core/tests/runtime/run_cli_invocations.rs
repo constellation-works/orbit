@@ -57,7 +57,7 @@ fn new_invocations_skip_seen_events_and_other_steps() {
     if !isolated("run_cli_invocations::new_invocations_skip_seen_events_and_other_steps") {
         return;
     }
-    let temp = TempDir::new().unwrap();
+    let temp = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let root = temp.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     write_workspace_config(

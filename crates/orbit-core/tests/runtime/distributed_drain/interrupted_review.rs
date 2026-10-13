@@ -62,14 +62,7 @@ fn reviewer_edits(repo: &Path) {
 /// attempt's findings with the released candidate; the task's next claim,
 /// on a host with its own object store, applies that repair onto its base
 /// and hands the implementer the open findings.
-#[test]
 fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
-    if !isolated(
-        module_path!(),
-        "a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim",
-    ) {
-        return;
-    }
     let (mut reviewed, worker) = ReviewedLeaf::admit_with_worker();
     let pair = &reviewed.pair;
     let (leaf, task) = (reviewed.leaf.clone(), reviewed.task.clone());
@@ -247,14 +240,7 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
 /// repair under. The task's next claim continues the published branch and
 /// its pull request, with that repair applied: no second pull request and
 /// no re-implementation from the base.
-#[test]
 fn a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candidate() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candidate",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -390,3 +376,10 @@ fn a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candi
     assert!(checkout.join(ADDED).is_file());
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]).trim(), base);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim_scenarios,
+    a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim,
+    a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candidate
+);

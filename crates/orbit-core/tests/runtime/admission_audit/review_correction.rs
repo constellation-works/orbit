@@ -68,15 +68,7 @@ fn correction(gated: &Gated, admission: &Value) -> Option<String> {
 /// source. Before settlement the host returns that typed defect, nothing is
 /// settled, and a report that moves the file to `mutation_target` settles
 /// `accept` in the same attempt of the same lineage.
-#[test]
 fn an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -126,15 +118,7 @@ fn an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt() {
 /// [ORB-14632] A mutation target spelled as an absolute path into the review
 /// worktree cannot be compared against the repository. It is a shape defect
 /// the reviewer corrects to the repository-relative path before settlement.
-#[test]
 fn an_absolute_mutation_target_is_returned_for_correction() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "an_absolute_mutation_target_is_returned_for_correction",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -162,15 +146,7 @@ fn an_absolute_mutation_target_is_returned_for_correction() {
 
 /// A failed required check is what the reviewer observed, not a shape it can
 /// correct: the report goes to settlement as it stands.
-#[test]
 fn a_defect_in_what_the_checks_observed_is_left_to_settlement() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_defect_in_what_the_checks_observed_is_left_to_settlement",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -188,15 +164,7 @@ fn a_defect_in_what_the_checks_observed_is_left_to_settlement() {
 /// to the reviewer once, with the correction its class takes: a baseline
 /// command is recorded `excluded`, and the corrected report
 /// settles in the same attempt.
-#[test]
 fn a_skipped_baseline_command_filed_as_diagnostic_is_returned_and_settles_excluded() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_skipped_baseline_command_filed_as_diagnostic_is_returned_and_settles_excluded",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(&owner_checks());
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -237,15 +205,7 @@ fn a_skipped_baseline_command_filed_as_diagnostic_is_returned_and_settles_exclud
 /// [ORB-15083] A host-required command cannot be excused by relabelling:
 /// the correction says to run it, and a corrected report that records it
 /// `excluded` is refused at settlement.
-#[test]
 fn a_host_required_command_recorded_excluded_after_correction_is_refused() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_host_required_command_recorded_excluded_after_correction_is_refused",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(&owner_checks());
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -282,15 +242,7 @@ fn a_host_required_command_recorded_excluded_after_correction_is_refused() {
 
 /// [ORB-15083] The correction is offered once: a report that still carries
 /// the `not_run` diagnostic settles `incomplete` with `validation_contradicted`.
-#[test]
 fn a_not_run_diagnostic_that_survives_the_correction_is_refused_at_settlement() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_not_run_diagnostic_that_survives_the_correction_is_refused_at_settlement",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(&owner_checks());
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -312,3 +264,14 @@ fn a_not_run_diagnostic_that_survives_the_correction_is_refused_at_settlement() 
         "{escalation}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt_scenarios,
+    an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt,
+    an_absolute_mutation_target_is_returned_for_correction,
+    a_defect_in_what_the_checks_observed_is_left_to_settlement,
+    a_skipped_baseline_command_filed_as_diagnostic_is_returned_and_settles_excluded,
+    a_host_required_command_recorded_excluded_after_correction_is_refused,
+    a_not_run_diagnostic_that_survives_the_correction_is_refused_at_settlement
+);

@@ -91,14 +91,7 @@ fn sandbox_failure() -> orbit_types::workflow::ReviewValidation {
 /// A Mac reviewer whose only blocker is its own sandbox's run of the
 /// required gate — failed, or skipped and named as host evidence — settles
 /// `accept` on the host's passing run of the same gate.
-#[test]
 fn a_sandboxed_reviewers_gate_failure_settles_on_the_hosts_pass() {
-    if !isolated(
-        module_path!(),
-        "a_sandboxed_reviewers_gate_failure_settles_on_the_hosts_pass",
-    ) {
-        return;
-    }
     let skipped = {
         let mut skipped = record("V1", CI_FAST, ValidationOutcome::NotRun);
         skipped.note = Some("a nested sandbox cannot apply here".into());
@@ -166,14 +159,7 @@ fn a_sandboxed_reviewers_gate_failure_settles_on_the_hosts_pass() {
 /// A host run that failed only tests the base fails too is known red: the
 /// reviewer's sandboxed failure of the gate settles `accept`, its record
 /// still failed and the certificate naming the host's verdict.
-#[test]
 fn a_known_red_host_gate_settles_the_reviewers_failure_as_known_red() {
-    if !isolated(
-        module_path!(),
-        "a_known_red_host_gate_settles_the_reviewers_failure_as_known_red",
-    ) {
-        return;
-    }
     let mut leaf = mac_landing_leaf("");
     let head = git(&leaf.pair.follower_repo, &["rev-parse", "HEAD"])
         .trim()
@@ -218,14 +204,7 @@ fn a_known_red_host_gate_settles_the_reviewers_failure_as_known_red() {
 /// A host run that failed on the candidate for its own reasons is the
 /// candidate's failure: the review rejects even though the reviewer passed
 /// the gate and accepted.
-#[test]
 fn a_host_gate_failure_rejects_whatever_the_reviewer_reported() {
-    if !isolated(
-        module_path!(),
-        "a_host_gate_failure_rejects_whatever_the_reviewer_reported",
-    ) {
-        return;
-    }
     let mut leaf = mac_landing_leaf("");
     host_validated(&leaf, 2, None);
     let admitted = leaf.admit_review();
@@ -245,14 +224,7 @@ fn a_host_gate_failure_rejects_whatever_the_reviewer_reported() {
 }
 
 /// A host pass never outweighs an open finding: the review still blocks.
-#[test]
 fn a_host_gate_pass_never_clears_an_open_finding() {
-    if !isolated(
-        module_path!(),
-        "a_host_gate_pass_never_clears_an_open_finding",
-    ) {
-        return;
-    }
     let mut leaf = mac_landing_leaf("");
     host_validated(&leaf, 0, None);
     let admitted = leaf.admit_review();
@@ -279,14 +251,7 @@ fn a_host_gate_pass_never_clears_an_open_finding() {
 /// Before landing it is the owner's and that check's: admission hands it
 /// over as owner-owed, the review settles `accept` without a hold, and the
 /// certificate records what the owner owes.
-#[test]
 fn a_mac_before_landing_review_records_hosted_linux_codeql_as_owner_owed() {
-    if !isolated(
-        module_path!(),
-        "a_mac_before_landing_review_records_hosted_linux_codeql_as_owner_owed",
-    ) {
-        return;
-    }
     let mut leaf = mac_landing_leaf(&hosted_codeql_rule("**/*.rs"));
     host_validated(&leaf, 0, None);
     let admitted = leaf.admit_review();
@@ -326,14 +291,7 @@ fn a_mac_before_landing_review_records_hosted_linux_codeql_as_owner_owed() {
 /// CodeQL its rule declared a hosted check runs, and refuses a certificate
 /// — as an earlier leaf build wrote for a rule without one — that owes it a
 /// check no hosted run stands in for.
-#[test]
 fn the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted() {
-    if !isolated(
-        module_path!(),
-        "the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit_from(
         &format!(
             "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
@@ -410,14 +368,7 @@ fn the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted() {
 /// check covers the standard suite: the custom query holds the review for
 /// the owner's Linux run with its record still required, and only the
 /// declared check becomes the owner's.
-#[test]
 fn a_custom_codeql_query_without_a_hosted_check_holds_a_mac_before_landing_review() {
-    if !isolated(
-        module_path!(),
-        "a_custom_codeql_query_without_a_hosted_check_holds_a_mac_before_landing_review",
-    ) {
-        return;
-    }
     const POLICY: &str = "scripts/codeql-rust-local.sh queries/company-policy.ql";
     let policy = ReviewEvidenceRequirement {
         kind: ReviewEvidenceKind::CodeQl,
@@ -491,14 +442,7 @@ fn a_custom_codeql_query_without_a_hosted_check_holds_a_mac_before_landing_revie
 /// leaf: admission hands the reviewer the rule as owed evidence, nothing is
 /// owner-owed, and the review holds for the owner's Linux run instead of
 /// accepting the check as excluded.
-#[test]
 fn a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation() {
-    if !isolated(
-        module_path!(),
-        "a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation",
-    ) {
-        return;
-    }
     let mut leaf = mac_landing_leaf(&codeql_rule("**/*.rs"));
     host_validated(&leaf, 0, None);
     let admitted = leaf.admit_review();
@@ -537,14 +481,7 @@ fn a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation() {
 
 /// A CodeQL run the Mac reviewer reports failed is an answer about the
 /// candidate, not a gap the owner fills: the review still blocks.
-#[test]
 fn a_failed_codeql_record_still_blocks_a_mac_before_landing_review() {
-    if !isolated(
-        module_path!(),
-        "a_failed_codeql_record_still_blocks_a_mac_before_landing_review",
-    ) {
-        return;
-    }
     let mut leaf = mac_landing_leaf(&hosted_codeql_rule("**/*.rs"));
     host_validated(&leaf, 0, None);
     let admitted = leaf.admit_review();
@@ -561,3 +498,21 @@ fn a_failed_codeql_record_still_blocks_a_mac_before_landing_review() {
     let refused = leaf.settle().expect_err("a failed check blocks");
     assert!(refused.contains("review_gate_blocked"), "{refused}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_sandboxed_reviewers_gate_failure_settles_on_the_hosts_pass_scenarios,
+    a_sandboxed_reviewers_gate_failure_settles_on_the_hosts_pass,
+    a_known_red_host_gate_settles_the_reviewers_failure_as_known_red,
+    a_host_gate_failure_rejects_whatever_the_reviewer_reported,
+    a_host_gate_pass_never_clears_an_open_finding,
+    a_mac_before_landing_review_records_hosted_linux_codeql_as_owner_owed,
+    the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted,
+    a_custom_codeql_query_without_a_hosted_check_holds_a_mac_before_landing_review
+);
+
+crate::scenario_table!(
+    a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation_scenarios,
+    a_workspace_without_hosted_codeql_keeps_its_linux_codeql_obligation,
+    a_failed_codeql_record_still_blocks_a_mac_before_landing_review
+);

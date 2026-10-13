@@ -24,15 +24,8 @@ fn pull(pair: &Pair, request_id: &str, os: HostOs) -> Value {
         .unwrap()
 }
 
-#[test]
 fn macos_pull_prefers_work_the_linux_owner_cannot_run() {
-    if !isolated(
-        module_path!(),
-        "macos_pull_prefers_work_the_linux_owner_cannot_run",
-    ) {
-        return;
-    }
-    let root = Arc::new(TempDir::new().unwrap());
+    let root = Arc::new(TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap());
     let (owner, repo) = open_runtime(root.path(), OWNER);
     let owner = owner.with_host_os(Some(HostOs::Linux));
     let older = backlog_task(&owner, &repo, "src/older.rs", None);
@@ -55,14 +48,7 @@ fn macos_pull_prefers_work_the_linux_owner_cannot_run() {
     assert_eq!(pair.owner_status(&older), "backlog");
 }
 
-#[test]
 fn pull_matches_local_dispatch_for_an_expiring_frozen_batch() {
-    if !isolated(
-        module_path!(),
-        "pull_matches_local_dispatch_for_an_expiring_frozen_batch",
-    ) {
-        return;
-    }
     let pair = Pair::new(3);
     let (older, expiring, distant) = (&pair.tasks[0], &pair.tasks[1], &pair.tasks[2]);
     let owner = &pair.wire.owner;
@@ -113,3 +99,10 @@ fn pull_matches_local_dispatch_for_an_expiring_frozen_batch() {
     assert_eq!(pair.owner_status(older), "backlog");
     assert_eq!(pair.owner_status(distant), "backlog");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    macos_pull_prefers_work_the_linux_owner_cannot_run_scenarios,
+    macos_pull_prefers_work_the_linux_owner_cannot_run,
+    pull_matches_local_dispatch_for_an_expiring_frozen_batch
+);

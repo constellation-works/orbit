@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn test_runtime() -> (TempDir, OrbitRuntime, std::path::PathBuf) {
-    let root = TempDir::new().expect("create tempdir");
+    let root =
+        TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");
@@ -286,7 +287,8 @@ fn dual_workspace_runtimes() -> (
     OrbitRuntime,
     std::path::PathBuf,
 ) {
-    let root = TempDir::new().expect("create tempdir");
+    let root =
+        TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
 

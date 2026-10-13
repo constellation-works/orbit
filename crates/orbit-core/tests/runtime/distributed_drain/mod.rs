@@ -134,7 +134,7 @@ fn isolated(module_path: &str, test: &str) -> bool {
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     // libtest names a test by its module path below the crate root; the
     // caller's `module_path!()` carries the concern module the test lives in.
     let qualified = format!(
@@ -156,7 +156,7 @@ fn isolated(module_path: &str, test: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
@@ -582,7 +582,7 @@ impl Pair {
     /// [`Self::new`] with `config` as the follower's global `config.toml`,
     /// where machine-wide settings such as `machine.auto_concurrency` live.
     fn with_follower_global(tasks: usize, config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join(FOLLOWER).join("global");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::write(global.join("config.toml"), config).unwrap();
@@ -600,7 +600,7 @@ impl Pair {
         crews: &[Option<&str>],
         host: impl FnOnce(OrbitRuntime) -> OrbitRuntime,
     ) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let orbit = root.path().join(OWNER).join("repo/.orbit");
         std::fs::create_dir_all(&orbit).unwrap();
         std::fs::write(orbit.join("config.toml"), owner_config).unwrap();

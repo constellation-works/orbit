@@ -103,7 +103,7 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn fixture(config: &str) -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -276,13 +276,7 @@ fn providerless_failure(class: ProviderFailureClass, detail: &str) -> String {
 /// run's crew excluded until a backoff passes; another pool member takes it
 /// meanwhile, and a second failure narrows the draw further. Any other
 /// failure still blocks.
-#[test]
 fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
-    if !isolated(
-        "provider_failure_hold::capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded",
-    ) {
-        return;
-    }
     for (class, detail) in [
         (
             ProviderFailureClass::Capacity,
@@ -362,13 +356,7 @@ fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
 
 /// When the hold excludes every crew the task could run as, the drain defers
 /// it with the reason and time; once not-before passes it is admitted again.
-#[test]
 fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
-    if !isolated(
-        "provider_failure_hold::a_hold_that_excludes_every_crew_defers_the_task_until_not_before",
-    ) {
-        return;
-    }
     let fx = fixture(CODEX_ONLY);
     let task = fx.task("sol");
     let run = fx.admit(&task, "sol");
@@ -424,13 +412,7 @@ fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
 /// A capacity failure that names no provider, on a run that resolved no crew,
 /// excludes nothing but still holds the task: admission defers it until
 /// not-before, then draws it again.
-#[test]
 fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
-    if !isolated(
-        "provider_failure_hold::a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before",
-    ) {
-        return;
-    }
     let fx = fixture(NO_CREWS);
     let task = fx.task_with_crew(None);
     let run = fx.admit_with_input(&task, json!({ "task_ids": [task] }));
@@ -723,3 +705,11 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
     job
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded_scenarios,
+    capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded,
+    a_hold_that_excludes_every_crew_defers_the_task_until_not_before,
+    a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before
+);

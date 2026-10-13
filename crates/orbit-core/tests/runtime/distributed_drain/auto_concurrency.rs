@@ -193,14 +193,7 @@ fn forecasts(pair: &Pair) -> Vec<AdmissionForecastRecord> {
 /// No request goes out while the forecast has room for nothing; once it has
 /// room, the request names what fits, and the claim the owner returns is
 /// reserved on the follower before its leaf run exists.
-#[test]
 fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
-    if !isolated(
-        module_path!(),
-        "an_enforcing_follower_requests_only_work_its_forecast_has_room_for",
-    ) {
-        return;
-    }
     let (pair, proc_root) = forecasting("enforce", 1);
     neighbour_delivery(&pair.follower);
     // 16 GiB in use plus 12 is over the 24 GiB admission may reach.
@@ -298,14 +291,7 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
 
 /// Shadow mode records what it would have sent and requests as with `off`,
 /// even with no room; `off` computes nothing and sends no list.
-#[test]
 fn shadow_and_off_followers_request_without_a_list() {
-    if !isolated(
-        module_path!(),
-        "shadow_and_off_followers_request_without_a_list",
-    ) {
-        return;
-    }
     for (mode, tasks) in [("shadow", 1), ("shadow", 0), ("off", 1)] {
         let (pair, proc_root) = forecasting(mode, tasks);
         neighbour_delivery(&pair.follower);
@@ -678,3 +664,9 @@ fn pending_pull_capacity_is_released_when_no_claim_will_execute() {
         assert!(pair.leaf_runs().is_empty());
     }
 }
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_enforcing_follower_requests_only_work_its_forecast_has_room_for_scenarios,
+    an_enforcing_follower_requests_only_work_its_forecast_has_room_for,
+    shadow_and_off_followers_request_without_a_list
+);

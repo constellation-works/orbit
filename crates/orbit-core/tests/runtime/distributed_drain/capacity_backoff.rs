@@ -32,14 +32,7 @@ fn backed_off_until(pass: &Value, crew: &str) -> DateTime<Utc> {
 /// leaf ended; once that passed, the same drain claims `sol` work again. The
 /// next failure in the window backs it off for twenty, and a drain restricted
 /// to `sol` says it admits again once that lifts.
-#[test]
 fn a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window() {
-    if !isolated(
-        module_path!(),
-        "a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol"), Some("sol"), Some("sol")]);
     let drain = pair
         .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": ["sol"]}));
@@ -101,14 +94,7 @@ fn a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_w
 
 /// Each further capacity failure in the window doubles the backoff, up to an
 /// hour: the fifth runs to sixty minutes, not 160.
-#[test]
 fn repeated_capacity_failures_lengthen_the_backoff_up_to_its_cap() {
-    if !isolated(
-        module_path!(),
-        "repeated_capacity_failures_lengthen_the_backoff_up_to_its_cap",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol"); 5]);
     let drain = pair.run_drain();
     // A pass with its one slot taken requests nothing and succeeds, so the
@@ -141,14 +127,7 @@ fn repeated_capacity_failures_lengthen_the_backoff_up_to_its_cap() {
 /// The owner's before-landing reviewer runs as `sol`. While a capacity
 /// failure backs `sol` off, the drain requests nothing and its hold names
 /// before-landing review and when the backoff lifts.
-#[test]
 fn a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts() {
-    if !isolated(
-        module_path!(),
-        "a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts",
-    ) {
-        return;
-    }
     let pair = Pair::with_owner_config(
         "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"sol\"\n",
         &[Some("sol"), Some("sol")],
@@ -188,3 +167,11 @@ fn a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts() {
         .and_then(|last| last.admission_refusal);
     assert_eq!(recorded.as_deref(), Some(refusal), "{pass}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window_scenarios,
+    a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window,
+    repeated_capacity_failures_lengthen_the_backoff_up_to_its_cap,
+    a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts
+);

@@ -15,13 +15,7 @@ use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
 
-#[test]
 fn task_starts_admit_artifacts_before_any_persistence() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::task_starts_admit_artifacts_before_any_persistence",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
         let task = fixture
@@ -127,13 +121,7 @@ fn task_starts_admit_artifacts_before_any_persistence() {
     }
 }
 
-#[test]
 fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::local_artifact_writers_cannot_forge_or_pin_review_certificates",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     let source = fixture.repo.join(".orbit/tmp/forged.json");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
@@ -286,13 +274,7 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
     assert!(landings[0].covered, "{landings:?}");
 }
 
-#[test]
 fn full_review_inventory_is_accepted_through_the_agent_artifact_tool() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::full_review_inventory_is_accepted_through_the_agent_artifact_tool",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let source = fixture.repo.join(".orbit/tmp/full-review-areas.json");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
@@ -320,13 +302,7 @@ fn full_review_inventory_is_accepted_through_the_agent_artifact_tool() {
     assert_eq!(stored.content, content);
 }
 
-#[test]
 fn normalized_reviewer_reports_are_validated_on_put_and_update() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::normalized_reviewer_reports_are_validated_on_put_and_update",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     let source = fixture.repo.join(".orbit/tmp/report.json");
@@ -391,13 +367,7 @@ fn normalized_reviewer_reports_are_validated_on_put_and_update() {
     );
 }
 
-#[test]
 fn artifact_errors_explain_the_source_file_listing_and_size_remedies() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::artifact_errors_explain_the_source_file_listing_and_size_remedies",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let scratch = fixture.repo.join(".orbit/tmp");
     std::fs::create_dir_all(&scratch).unwrap();
@@ -531,13 +501,7 @@ fn successful_reads(runtime: &OrbitRuntime) -> usize {
         .count()
 }
 
-#[test]
 fn review_preflight_fetches_only_existing_optional_artifacts() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::review_preflight_fetches_only_existing_optional_artifacts",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     let paths = read_review_evidence(&fixture);
@@ -576,3 +540,14 @@ fn review_preflight_fetches_only_existing_optional_artifacts() {
         .unwrap();
     assert_eq!(listings.len(), 2, "list exactly once per review preflight");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    task_starts_admit_artifacts_before_any_persistence_scenarios,
+    task_starts_admit_artifacts_before_any_persistence,
+    local_artifact_writers_cannot_forge_or_pin_review_certificates,
+    full_review_inventory_is_accepted_through_the_agent_artifact_tool,
+    normalized_reviewer_reports_are_validated_on_put_and_update,
+    artifact_errors_explain_the_source_file_listing_and_size_remedies,
+    review_preflight_fetches_only_existing_optional_artifacts
+);

@@ -41,7 +41,7 @@ fn lint_reads_only_repository_paths_as_path_mentions() {
     ) {
         return;
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     let lint_source = root

@@ -34,14 +34,7 @@ fn pending_keys(state: &AutomationState) -> Vec<&str> {
 /// advanced. The landing is the conflict-free merge of the reviewed change
 /// onto that base, so the after-landing consumer excludes it under the
 /// distinct `rebased_clean` assurance and queues only the unrelated landing.
-#[test]
 fn a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean() {
-    if !isolated(
-        module_path!(),
-        "a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean",
-    ) {
-        return;
-    }
     let reviewed = ReviewedHandoff::accept(ReviewTiming::BeforeLanding);
     advance_main(&reviewed, "src/other.rs", "fn other() {}\n");
     let landed = reviewed.squash_merge(42, &reviewed.candidate.commit);
@@ -76,15 +69,7 @@ fn a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_cl
 /// Neither a base change the reviewed patch conflicts with, resolved by hand
 /// at landing, nor a head pushed after the review settled is covered by the
 /// rebased-clean rule: both landings stay pending for after-landing review.
-#[test]
 fn a_conflicting_base_or_a_head_pushed_after_review_stays_pending() {
-    if !isolated(
-        module_path!(),
-        "a_conflicting_base_or_a_head_pushed_after_review_stays_pending",
-    ) {
-        return;
-    }
-
     // The base rewrote the line the reviewed patch extends; the landing is a
     // hand resolution the reviewer never saw, under the reviewed head.
     let reviewed = ReviewedHandoff::accept(ReviewTiming::BeforeLanding);
@@ -127,3 +112,10 @@ fn a_conflicting_base_or_a_head_pushed_after_review_stays_pending() {
         "later head: {state:#?}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean_scenarios,
+    a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean,
+    a_conflicting_base_or_a_head_pushed_after_review_stays_pending
+);

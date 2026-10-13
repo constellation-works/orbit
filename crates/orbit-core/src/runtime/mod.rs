@@ -46,6 +46,10 @@ pub use task::{InfraBlockedTask, StaleTaskReservation};
 pub(crate) mod tool_exec;
 pub(crate) mod upgrade_handover;
 mod worker_coordination;
+#[cfg(feature = "test-support")]
+pub(crate) use worker_coordination::pipeline_poll_wait_override;
+#[cfg(feature = "test-support")]
+pub use worker_coordination::{with_owner_read_retry_wait, with_pipeline_poll_wait};
 pub mod workspace;
 
 #[cfg(test)]

@@ -60,13 +60,7 @@ fn last_event(fixture: &Fixture) -> String {
         .clone()
 }
 
-#[test]
 fn refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_writers::refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     let source = fixture
         .repo
@@ -124,13 +118,7 @@ fn refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission() 
     assert_eq!(fixture.input["admission"]["decision"], "admitted");
 }
 
-#[test]
 fn agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_writers::agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&[COMMAND]);
     let tree = git(&fixture, &["rev-parse", "HEAD^{tree}"]);
     let planted = json!({
@@ -198,3 +186,10 @@ fn agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_
     assert_eq!(status(&fixture), TaskStatus::Backlog);
     assert_eq!(last_event(&fixture), "review_evidence_received");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission_scenarios,
+    refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission,
+    agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold
+);

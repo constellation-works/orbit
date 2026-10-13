@@ -43,7 +43,7 @@ fn detached_replay_recaptures_automatic_crews_and_preserves_explicit_choices() {
         (None, vec!["held", "replacement"], true),
         (Some("pool:medium"), vec!["replacement"], false),
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let workspace = root.path().join("repo/.orbit");
         let jobs_dir = global.join("resources/jobs");

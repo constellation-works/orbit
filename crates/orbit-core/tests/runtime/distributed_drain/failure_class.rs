@@ -76,14 +76,7 @@ fn settle_only(pair: &Pair, drain: &str) -> Value {
 /// ORB-14717: settle the actual handoff fetch error as the last failed
 /// step of a claimed leaf. A timeout releases finished work; an unknown
 /// remote ref retains the existing candidate failure and blocks the task.
-#[test]
 fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
-    if !isolated(
-        module_path!(),
-        "handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks",
-    ) {
-        return;
-    }
     for timeout in [true, false] {
         let leaf = super::claimed_review::ReviewedLeaf::admit();
         let pair = &leaf.pair;
@@ -306,14 +299,7 @@ fn sol_exclusion(pair: &Pair, drain: &str) -> Option<CrewExclusion> {
 /// excludes that crew for the drain's window, so the same task is not pulled
 /// straight back to fail the same way. A transient failure after the leaf
 /// pushed keeps the published candidate and its pull request.
-#[test]
 fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
-    if !isolated(
-        module_path!(),
-        "crew_failures_release_the_claim_and_exclude_the_crew_for_the_window",
-    ) {
-        return;
-    }
     for (error, class) in [
         (
             "[transient_failure] action pin check could not connect (status 000)",
@@ -387,14 +373,7 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
 /// interrupted at a step boundary by the same upgrade does: the task returns
 /// to the backlog rather than blocked, the pushed candidate rides on the
 /// release, and the task's next claim resumes it.
-#[test]
 fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
-    if !isolated(
-        module_path!(),
-        "an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it",
-    ) {
-        return;
-    }
     for kind in [
         "upgrade_admission_refused",
         "orbit_upgrade_admission_refused",
@@ -450,14 +429,7 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
 /// [ORB-14439] The owner's run history never holds a follower's leaf, so the
 /// owner keeps what the leaf's settlement said: a failure scan on the owner
 /// reads a follower's provider outage, typed, from the owner's own store.
-#[test]
 fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
-    if !isolated(
-        module_path!(),
-        "the_owner_lists_a_follower_leaf_release_with_its_evidence_class",
-    ) {
-        return;
-    }
     let (pair, _, _) = a_released_failure(
         "[provider_unavailable] claude provider authentication failure (HTTP 401)",
         "provider",
@@ -497,14 +469,7 @@ fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
 /// window, whatever crew a task names: the drain asks the owner for nothing
 /// more, and the owner holds every task from that drain even when its
 /// request was built before the release reached it.
-#[test]
 fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
-    if !isolated(
-        module_path!(),
-        "host_failures_release_the_claim_and_suppress_the_host_for_the_window",
-    ) {
-        return;
-    }
     for (error, class) in [
         (
             "[validation_environment] required validation 'make ci-fast' could not run: \
@@ -584,14 +549,7 @@ fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
 /// A red base is not the host's crew either: the claim is released and the
 /// crew keeps running. (`admission` covers the owner holding the task until
 /// the base turns green.)
-#[test]
 fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_red_failure_releases_the_claim_without_excluding_the_crew",
-    ) {
-        return;
-    }
     let hold = BaselineRedHold {
         base_ref: "main".into(),
         base_sha: "b0".into(),
@@ -692,14 +650,7 @@ fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
 /// kept and why. The forge refused it, not this host or the crew: the drain
 /// keeps offering the crew, and the owner hands the task straight back to it
 /// with the kept candidate, which only this host has.
-#[test]
 fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
-    if !isolated(
-        module_path!(),
-        "a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -788,11 +739,7 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
 
 /// The candidate's own failure, and a task its final recovery judged, still
 /// block the task — typed, so `orbit run show` says which.
-#[test]
 fn a_candidate_failure_still_blocks_the_task() {
-    if !isolated(module_path!(), "a_candidate_failure_still_blocks_the_task") {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -828,14 +775,7 @@ fn a_candidate_failure_still_blocks_the_task() {
 /// Cancelling one launched claimed leaf, as `orbit run cancel <leaf>` and the
 /// dashboard's cancel do, gives its claim back with the operator's reason
 /// rather than failing the task, and excludes its crew for the drain window.
-#[test]
 fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason() {
-    if !isolated(
-        module_path!(),
-        "cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
@@ -878,14 +818,7 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
 
 /// An operator who cancels a launched claimed leaf with `--block` asks for the
 /// task to stay blocked: the cancel is still typed, but it fails the claim.
-#[test]
 fn cancelling_a_launched_claimed_leaf_with_block_blocks_its_task() {
-    if !isolated(
-        module_path!(),
-        "cancelling_a_launched_claimed_leaf_with_block_blocks_its_task",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
@@ -921,14 +854,7 @@ fn cancelling_a_launched_claimed_leaf_with_block_blocks_its_task() {
 /// moving base, which excludes nothing, so the same drain pulls it again —
 /// is blocked by the third, with one comment listing every reason,
 /// including an operator's cancel.
-#[test]
 fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
-    if !isolated(
-        module_path!(),
-        "a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
@@ -1013,14 +939,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
 /// drain for the rest of its window, even when the drain's next request was
 /// built before the release reached it and so excludes no crew. Another
 /// drain may still take it.
-#[test]
 fn the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain() {
-    if !isolated(
-        module_path!(),
-        "the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain",
-    ) {
-        return;
-    }
     let (pair, _, _) = a_released_failure(
         "[validation_environment] required validation could not run: python3 lacks tomllib",
         "environment",
@@ -1063,14 +982,7 @@ fn the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain() {
 /// blocking the task. The task's next claim carries that candidate into its
 /// leaf, whose `resume_candidate` step continues it; a spec change retires
 /// it, and the claim after implements fresh.
-#[test]
 fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
-    if !isolated(
-        module_path!(),
-        "a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
@@ -1152,11 +1064,7 @@ fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
 
 /// An operator's `orbit task update --discard-candidate` retires a kept
 /// candidate: the task's next claim implements fresh.
-#[test]
 fn a_discarded_candidate_is_not_resumed() {
-    if !isolated(module_path!(), "a_discarded_candidate_is_not_resumed") {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
@@ -1193,14 +1101,7 @@ fn a_discarded_candidate_is_not_resumed() {
 /// [ORB-14257] A worker step whose call to the owner never reached it fails
 /// typed as an owner-route failure, and the leaf it ends releases its claim
 /// as `owner_route` — not as a failure of its candidate.
-#[test]
 fn a_lost_owner_route_fails_the_step_as_owner_route() {
-    if !isolated(
-        module_path!(),
-        "a_lost_owner_route_fails_the_step_as_owner_route",
-    ) {
-        return;
-    }
     struct Unreachable;
     impl orbit_tools::OwnerCoordinator for Unreachable {
         fn call(
@@ -1329,9 +1230,11 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
         .unwrap();
 
     // Two busy answers are retried through: the envelope's task load succeeds.
-    let task = bound
-        .get_task(&claim.task_id)
-        .expect("retried past the busy owner");
+    let task = orbit_core::test_support::with_owner_read_retry_wait(
+        |_| std::thread::sleep(Duration::from_millis(1)),
+        || bound.get_task(&claim.task_id),
+    )
+    .expect("retried past the busy owner");
     assert_eq!(task.id, claim.task_id);
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
@@ -1342,9 +1245,11 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
     // A lock that stays held exhausts the bounded retries.
     owner.calls.store(0, Ordering::SeqCst);
     owner.busy.store(usize::MAX, Ordering::SeqCst);
-    let error = bound
-        .get_task(&claim.task_id)
-        .expect_err("the owner stays busy");
+    let error = orbit_core::test_support::with_owner_read_retry_wait(
+        |_| std::thread::sleep(Duration::from_millis(1)),
+        || bound.get_task(&claim.task_id),
+    )
+    .expect_err("the owner stays busy");
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
         3,
@@ -1374,14 +1279,7 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
 /// third release of any other kind blocks it. [ORB-14697] The release itself
 /// excludes no crew: the follower's provider-limit store holds the reading
 /// that does, and only until it lapses (`provider_limit/gate.rs`).
-#[test]
 fn a_provider_limit_releases_the_claim_outside_the_release_budget() {
-    if !isolated(
-        module_path!(),
-        "a_provider_limit_releases_the_claim_outside_the_release_budget",
-    ) {
-        return;
-    }
     let config = "\
 [workflow]
 default_crew = \"sol\"
@@ -1563,3 +1461,28 @@ model = \"gpt-luna\"
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks_scenarios,
+    handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks,
+    crew_failures_release_the_claim_and_exclude_the_crew_for_the_window,
+    an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
+    the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
+    host_failures_release_the_claim_and_suppress_the_host_for_the_window,
+    a_baseline_red_failure_releases_the_claim_without_excluding_the_crew
+);
+
+crate::scenario_table!(
+    a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew_scenarios,
+    a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew,
+    a_candidate_failure_still_blocks_the_task,
+    cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason,
+    cancelling_a_launched_claimed_leaf_with_block_blocks_its_task,
+    a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason,
+    the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain,
+    a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it,
+    a_discarded_candidate_is_not_resumed,
+    a_lost_owner_route_fails_the_step_as_owner_route,
+    a_provider_limit_releases_the_claim_outside_the_release_budget
+);

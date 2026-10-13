@@ -29,13 +29,7 @@ impl HostResourceProbe for Fixture {
     }
 }
 
-#[test]
 fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
-    if !super::dispatch_admission::isolated(
-        "host_resources::runtime_injection_shares_hysteresis_and_reports_unknown_and_stale",
-    ) {
-        return;
-    }
     let probe = Arc::new(Fixture(Mutex::new((
         Duration::seconds(10),
         HostResourceSample {
@@ -79,7 +73,7 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
 
 #[test]
 fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let paths = vec![dir.path().join("not-created/worktrees")];
     let offset_ms = Arc::new(AtomicU64::new(0));
     let origin = std::time::Instant::now();
@@ -135,13 +129,7 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
     }
 }
 
-#[test]
 fn first_admission_in_a_fresh_process_reads_host_cpu() {
-    if !super::dispatch_admission::isolated(
-        "host_resources::first_admission_in_a_fresh_process_reads_host_cpu",
-    ) {
-        return;
-    }
     // The native probe is process-global: only a fresh child process makes
     // this runtime's first observation the host's first observation.
     let runtime = OrbitRuntime::in_memory().unwrap();
@@ -169,3 +157,10 @@ fn first_admission_in_a_fresh_process_reads_host_cpu() {
         admission.unknown
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    runtime_injection_shares_hysteresis_and_reports_unknown_and_stale_scenarios,
+    runtime_injection_shares_hysteresis_and_reports_unknown_and_stale,
+    first_admission_in_a_fresh_process_reads_host_cpu
+);

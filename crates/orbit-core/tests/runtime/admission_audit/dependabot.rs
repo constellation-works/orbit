@@ -58,15 +58,7 @@ pub(super) fn file(runtime: &OrbitRuntime, snapshot: Value, extra: Value) -> Val
         .expect("file Dependabot tasks")
 }
 
-#[test]
 fn sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields",
-    ) {
-        return;
-    }
-
     const SENTINEL: &str = "orbit-sentinel-credential-2ce944";
     let projected = orbit_tools::github_cli::project_secret_scanning_alert(&json!({
         "number": 77, "state": "open", "secret_type": "example_token",
@@ -114,15 +106,7 @@ fn sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields() 
     );
 }
 
-#[test]
 fn dependabot_alert_ecosystems_match_open_pr_branch_names() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "dependabot_alert_ecosystems_match_open_pr_branch_names",
-    ) {
-        return;
-    }
-
     let (_root, runtime, _repo) = runtime_with_workspace_layout();
     for (ecosystem, branch_ecosystem, package, manifest_path) in [
         (
@@ -171,3 +155,10 @@ fn dependabot_alert_ecosystems_match_open_pr_branch_names() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields_scenarios,
+    sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields,
+    dependabot_alert_ecosystems_match_open_pr_branch_names
+);

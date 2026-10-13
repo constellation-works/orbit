@@ -130,20 +130,7 @@ fn sentinel(dir: &Path) -> String {
 }
 
 #[cfg(unix)]
-#[test]
 fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_config_templated_write_root_outside_scratch_needs_fs_consent",
-    ) {
-        return;
-    }
-
-    if !orbit_exec::macos_sandbox_test_guard(
-        "a_config_templated_write_root_outside_scratch_needs_fs_consent",
-    ) {
-        return;
-    }
     if !super::plugin_fixture::enter_isolated_child(
         module_path!(),
         "a_config_templated_write_root_outside_scratch_needs_fs_consent",
@@ -235,20 +222,7 @@ fn write_secret_plugin(fixture: &PluginFixture, namespace: &str, golden: &str) -
 /// run delivers those — and never the host's stored value, even for the
 /// installed plugin of the same name.
 #[cfg(unix)]
-#[test]
 fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
-    ) {
-        return;
-    }
-
-    if !orbit_exec::macos_sandbox_test_guard(
-        "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
-    ) {
-        return;
-    }
     if !super::plugin_fixture::enter_isolated_child(
         module_path!(),
         "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
@@ -324,3 +298,11 @@ fn a_golden_supplying_an_undeclared_secret_is_refused() {
         "{error}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+#[cfg(unix)]
+crate::scenario_table!(
+    a_config_templated_write_root_outside_scratch_needs_fs_consent_scenarios,
+    a_config_templated_write_root_outside_scratch_needs_fs_consent,
+    goldens_supply_fixture_secrets_and_the_host_store_is_never_read
+);

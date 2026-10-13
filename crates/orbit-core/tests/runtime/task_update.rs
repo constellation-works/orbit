@@ -6,14 +6,8 @@ use orbit_types::task::{TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT};
 
-#[test]
 fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
-    if !super::dispatch_admission::isolated(
-        "task_update::activity_updates_refuse_replica_writes_and_preserve_owner_updates",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -84,14 +78,8 @@ fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
     );
 }
 
-#[test]
 fn guarded_start_and_activity_notes_redact_before_persistence() {
-    if !super::dispatch_admission::isolated(
-        "task_update::guarded_start_and_activity_notes_redact_before_persistence",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -159,14 +147,8 @@ fn guarded_start_and_activity_notes_redact_before_persistence() {
     }
 }
 
-#[test]
 fn rejected_artifacts_leave_status_document_and_history_unchanged() {
-    if !super::dispatch_admission::isolated(
-        "task_update::rejected_artifacts_leave_status_document_and_history_unchanged",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -267,14 +249,8 @@ fn rejected_artifacts_leave_status_document_and_history_unchanged() {
     );
 }
 
-#[test]
 fn automation_persists_returned_summary_crew_and_run_history_without_status_change() {
-    if !super::dispatch_admission::isolated(
-        "task_update::automation_persists_returned_summary_crew_and_run_history_without_status_change",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -319,3 +295,12 @@ fn automation_persists_returned_summary_crew_and_run_history_without_status_chan
                     == Some("persisted returned summary from run fixture-run"))
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
+    activity_updates_refuse_replica_writes_and_preserve_owner_updates,
+    guarded_start_and_activity_notes_redact_before_persistence,
+    rejected_artifacts_leave_status_document_and_history_unchanged,
+    automation_persists_returned_summary_crew_and_run_history_without_status_change
+);

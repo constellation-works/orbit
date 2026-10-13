@@ -25,7 +25,8 @@ fn enter_fake_git_install_child(test: &str) -> bool {
         return true;
     }
 
-    let temp = tempfile::tempdir().expect("fake git directory");
+    let temp = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("fake git directory");
     let git = temp.path().join("git");
     std::fs::write(
         &git,
@@ -300,3 +301,5 @@ fn upgrade_enabled(
     )
     .unwrap_or_else(|error| panic!("upgrade {name} to v{version}: {error}"))
 }
+
+// Related boundary scenarios share the isolated table fixture.

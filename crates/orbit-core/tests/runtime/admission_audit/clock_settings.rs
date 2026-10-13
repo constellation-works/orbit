@@ -1,4 +1,4 @@
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::application::routines::clock::{
     ClockSettings, load_clock_settings, save_clock_settings,
@@ -13,8 +13,10 @@ fn clock_settings_reject_symlink_escape() {
 
     use std::os::unix::fs::symlink;
 
-    let root = tempdir().expect("create global root");
-    let outside = tempdir().expect("create outside root");
+    let root =
+        tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create global root");
+    let outside =
+        tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create outside root");
     let outside_settings = outside.path().join("clock.toml");
     save_clock_settings(outside.path(), ClockSettings::default())
         .expect("write outside clock settings");

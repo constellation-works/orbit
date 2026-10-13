@@ -72,13 +72,7 @@ fn assert_child_and_sweep_succeed(workspace: &Workspace, output: &Value) {
     );
 }
 
-#[test]
 fn rejected_or_archived_ci_sweep_task_settles_superseded_without_pilot_writes() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::ci_sweep_races::rejected_or_archived_ci_sweep_task_settles_superseded_without_pilot_writes",
-    ) {
-        return;
-    }
     for (title, status) in [
         ("operator rejected", TaskStatus::Rejected),
         ("operator archived", TaskStatus::Archived),
@@ -135,13 +129,7 @@ fn rejected_or_archived_ci_sweep_task_settles_superseded_without_pilot_writes() 
     }
 }
 
-#[test]
 fn ci_sweep_excluded_by_an_active_pilot_settles_with_holder_and_holder_applies() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::ci_sweep_races::ci_sweep_excluded_by_an_active_pilot_settles_with_holder_and_holder_applies",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = filed_task(&workspace, "another pilot holds the CI finding");
     let holder_prepared = workspace.prepare(&[&task.id]);
@@ -193,13 +181,7 @@ fn ci_sweep_excluded_by_an_active_pilot_settles_with_holder_and_holder_applies()
     );
 }
 
-#[test]
 fn concurrent_pilots_of_one_ci_sweep_task_invoke_one_agent_and_the_other_settles() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::ci_sweep_races::concurrent_pilots_of_one_ci_sweep_task_invoke_one_agent_and_the_other_settles",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = filed_task(&workspace, "two pilots start together");
     let holder = workspace.live_run();
@@ -253,13 +235,7 @@ fn concurrent_pilots_of_one_ci_sweep_task_invoke_one_agent_and_the_other_settles
     assert_eq!(later_prepared["task_count"], 1, "{later_prepared}");
 }
 
-#[test]
 fn ci_sweep_task_promoted_elsewhere_settles_superseded_and_the_sweep_succeeds() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::ci_sweep_races::ci_sweep_task_promoted_elsewhere_settles_superseded_and_the_sweep_succeeds",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = filed_task(&workspace, "operator approved the CI finding");
     let prepared = workspace.prepare(&[&task.id]);
@@ -305,13 +281,7 @@ fn ci_sweep_task_promoted_elsewhere_settles_superseded_and_the_sweep_succeeds() 
     assert_child_and_sweep_succeed(&workspace, &output);
 }
 
-#[test]
 fn other_status_changes_and_missing_ci_sweep_tasks_still_fail() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::ci_sweep_races::other_status_changes_and_missing_ci_sweep_tasks_still_fail",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = filed_task(&workspace, "status change outside the benign race");
     let prepared = workspace.prepare(&[&task.id]);
@@ -370,3 +340,13 @@ fn other_status_changes_and_missing_ci_sweep_tasks_still_fail() {
     assert_eq!(missing["status"], "failed", "{missing}");
     assert_eq!(missing["task_outcomes"][0]["reason"], "task_deleted");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    rejected_or_archived_ci_sweep_task_settles_superseded_without_pilot_writes_scenarios,
+    rejected_or_archived_ci_sweep_task_settles_superseded_without_pilot_writes,
+    ci_sweep_excluded_by_an_active_pilot_settles_with_holder_and_holder_applies,
+    concurrent_pilots_of_one_ci_sweep_task_invoke_one_agent_and_the_other_settles,
+    ci_sweep_task_promoted_elsewhere_settles_superseded_and_the_sweep_succeeds,
+    other_status_changes_and_missing_ci_sweep_tasks_still_fail
+);

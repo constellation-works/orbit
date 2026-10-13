@@ -9,7 +9,7 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT}
 use orbit_store::{JobRunStepParams, TaskCreateParams};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
 
@@ -17,7 +17,7 @@ const PIPELINE_JOB: &str = "task_pr_pipeline";
 const FAILING_STEP_MESSAGE: &str = "step `implement_one` completed with success=false";
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, std::path::PathBuf) {
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");
@@ -149,15 +149,7 @@ fn failure_history_entries(
         .collect()
 }
 
-#[test]
 fn re_running_terminalization_is_idempotent_and_respects_human_recovery() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "re_running_terminalization_is_idempotent_and_respects_human_recovery",
-    ) {
-        return;
-    }
-
     let (_root, runtime, repo_root) = test_runtime();
     let task_id = create_backlog_task(&runtime, &repo_root, "idempotent");
     let run = insert_running_pipeline_run(&runtime);
@@ -198,15 +190,7 @@ fn re_running_terminalization_is_idempotent_and_respects_human_recovery() {
 /// anyway, and cleanup ran *after* the withdrawal. Blocking the task there
 /// would replace the owner's newer decision with `blocked`, so the withdrawal
 /// has to be re-applied by hand once the run finishes unwinding.
-#[test]
 fn failure_cleanup_leaves_a_newer_human_withdrawal_alone() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "failure_cleanup_leaves_a_newer_human_withdrawal_alone",
-    ) {
-        return;
-    }
-
     for withdrawn_to in [
         TaskStatus::Proposed,
         TaskStatus::Someday,
@@ -263,15 +247,7 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
 /// commit and after it moves to another failing tip, then admits it only after
 /// the clock tick records that the command passes on a new base tip; the
 /// snapshot itself never re-checks [ORB-14739].
-#[test]
 fn a_red_base_failure_holds_the_task_until_the_command_passes() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_red_base_failure_holds_the_task_until_the_command_passes",
-    ) {
-        return;
-    }
-
     let (_root, runtime, repo_root) = test_runtime();
     std::fs::write(repo_root.join(".gitignore"), "/.orbit/\n").expect("ignore");
     std::fs::write(
@@ -387,3 +363,11 @@ fn a_red_base_failure_holds_the_task_until_the_command_passes() {
     let lifted = backlog(&runtime);
     assert_eq!(lifted["task_ids"], serde_json::json!([task_id]), "{lifted}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    re_running_terminalization_is_idempotent_and_respects_human_recovery_scenarios,
+    re_running_terminalization_is_idempotent_and_respects_human_recovery,
+    failure_cleanup_leaves_a_newer_human_withdrawal_alone,
+    a_red_base_failure_holds_the_task_until_the_command_passes
+);

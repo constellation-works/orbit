@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
 
@@ -43,7 +43,7 @@ pub(crate) fn runtime_with_workspace_layout() -> (tempfile::TempDir, OrbitRuntim
 pub(crate) fn runtime_with_workspace_config(
     config_toml: Option<&str>,
 ) -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).expect("global orbit dir");

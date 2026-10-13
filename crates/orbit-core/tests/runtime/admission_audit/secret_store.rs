@@ -21,7 +21,8 @@ fn concurrent_swaps_from_one_version_apply_exactly_once() {
         return;
     }
 
-    let root = tempfile::tempdir().expect("tempdir");
+    let root =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let store = PluginSecretStore::new(root.path());
     let base = store.put("demo", "token", &value("base")).expect("put");
 
@@ -52,15 +53,11 @@ fn concurrent_swaps_from_one_version_apply_exactly_once() {
 }
 
 #[cfg(unix)]
-#[test]
 fn the_store_is_private_to_the_host_user() {
-    if !crate::admission_audit::isolate(module_path!(), "the_store_is_private_to_the_host_user") {
-        return;
-    }
-
     use std::os::unix::fs::PermissionsExt;
 
-    let root = tempfile::tempdir().expect("tempdir");
+    let root =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     std::fs::create_dir_all(root.path().join("state")).expect("state dir");
     let store = PluginSecretStore::new(root.path());
     store.put("demo", "token", &value("x")).expect("put");
@@ -78,13 +75,9 @@ fn the_store_is_private_to_the_host_user() {
 }
 
 #[cfg(unix)]
-#[test]
 fn a_symlinked_store_directory_is_refused() {
-    if !crate::admission_audit::isolate(module_path!(), "a_symlinked_store_directory_is_refused") {
-        return;
-    }
-
-    let root = tempfile::tempdir().expect("tempdir");
+    let root =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let elsewhere = root.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("elsewhere");
     std::fs::create_dir_all(root.path().join("state")).expect("state dir");
@@ -101,3 +94,11 @@ fn a_symlinked_store_directory_is_refused() {
         "nothing is written through the link"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+#[cfg(unix)]
+crate::scenario_table!(
+    the_store_is_private_to_the_host_user_scenarios,
+    the_store_is_private_to_the_host_user,
+    a_symlinked_store_directory_is_refused
+);

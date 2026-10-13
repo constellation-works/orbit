@@ -17,7 +17,8 @@ fn revert_on_red_fails_instead_of_reporting_success() {
     if !isolated("retired_stubs::revert_on_red_fails_instead_of_reporting_success") {
         return;
     }
-    let root = tempfile::tempdir().expect("tempdir");
+    let root =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).expect("global orbit dir");

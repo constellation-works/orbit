@@ -55,14 +55,7 @@ fn exclusions<'a>(pass: &'a Value, crew: &str) -> Vec<&'a Value> {
         .collect()
 }
 
-#[test]
 fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
-    if !isolated(
-        module_path!(),
-        "a_limited_provider_sits_out_the_window_only_until_its_reading_lapses",
-    ) {
-        return;
-    }
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     let drain = pair.run_drain();
     // The store keeps microseconds, so the expected reset must too.
@@ -127,14 +120,7 @@ fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
 /// for a permanent reason (preflight failure) refuses with the allowlist
 /// message even when an unrelated crew is excluded by a provider usage limit,
 /// rather than advising the operator that this drain will admit again.
-#[test]
 fn an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist() {
-    if !isolated(
-        module_path!(),
-        "an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist",
-    ) {
-        return;
-    }
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
     let resets_at = Utc::now() + Duration::hours(2);
@@ -163,14 +149,7 @@ fn an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist
 /// [ORB-14902] An allowlist-restricted drain whose permitted crew is held by a
 /// provider usage limit reports the provider limit refusal without literal
 /// whitespace padding.
-#[test]
 fn an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal() {
-    if !isolated(
-        module_path!(),
-        "an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal",
-    ) {
-        return;
-    }
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
     let resets_at = Utc::now() + Duration::hours(2);
@@ -195,3 +174,11 @@ fn an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal() {
     assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
     assert!(pair.owner_claims().is_empty());
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_limited_provider_sits_out_the_window_only_until_its_reading_lapses_scenarios,
+    a_limited_provider_sits_out_the_window_only_until_its_reading_lapses,
+    an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist,
+    an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal
+);

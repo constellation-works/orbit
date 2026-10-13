@@ -201,15 +201,7 @@ fn assert_applied(workspace: &Workspace, task_id: &str, output: &Value) {
     );
 }
 
-#[test]
 fn meaning_edits_name_the_drifted_component_and_write_nothing() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "meaning_edits_name_the_drifted_component_and_write_nothing",
-    ) {
-        return;
-    }
-
     let workspace = workspace(None);
     let cases = [
         ("title", "title"),
@@ -288,15 +280,7 @@ fn edit_params(label: &str) -> TaskUpdateParams {
     }
 }
 
-#[test]
 fn context_files_outside_freshness_stay_context_files_changed() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "context_files_outside_freshness_stay_context_files_changed",
-    ) {
-        return;
-    }
-
     let workspace = workspace(Some(
         "[workflow.task_pilot_freshness]\nmaterial_fields = [\"title\", \"description\", \"criteria\", \"plan\"]\n",
     ));
@@ -325,15 +309,7 @@ fn context_files_outside_freshness_stay_context_files_changed() {
     );
 }
 
-#[test]
 fn task_prepared_in_progress_is_not_rewritten() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "task_prepared_in_progress_is_not_rewritten",
-    ) {
-        return;
-    }
-
     let workspace = workspace(None);
     let task = add_task(&workspace.runtime, "active", TaskStatus::Backlog);
     workspace
@@ -361,12 +337,7 @@ fn task_prepared_in_progress_is_not_rewritten() {
     );
 }
 
-#[test]
 fn proposed_to_backlog_still_applies() {
-    if !crate::admission_audit::isolate(module_path!(), "proposed_to_backlog_still_applies") {
-        return;
-    }
-
     let workspace = workspace(None);
     let task = add_task(&workspace.runtime, "promote", TaskStatus::Proposed);
     let prepared = prepare(&workspace, &task.id);
@@ -390,15 +361,7 @@ fn proposed_to_backlog_still_applies() {
     );
 }
 
-#[test]
 fn malformed_component_map_fails_apply_without_writing() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "malformed_component_map_fails_apply_without_writing",
-    ) {
-        return;
-    }
-
     let workspace = workspace(None);
     let task = add_task(&workspace.runtime, "malformed", TaskStatus::Backlog);
     let before = workspace.runtime.get_task(&task.id).expect("task");
@@ -430,15 +393,7 @@ const CREW_AND_DEPENDENCIES: &str = "\
 material_fields = [\"title\", \"description\", \"criteria\", \"plan\", \"selectors\", \"crew\", \"dependencies\"]
 ";
 
-#[test]
 fn configured_crew_and_dependency_meaning_drift_are_named() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "configured_crew_and_dependency_meaning_drift_are_named",
-    ) {
-        return;
-    }
-
     let workspace = workspace(Some(CREW_AND_DEPENDENCIES));
     let task = workspace
         .runtime
@@ -513,15 +468,7 @@ fn configured_crew_and_dependency_meaning_drift_are_named() {
     );
 }
 
-#[test]
 fn dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit",
-    ) {
-        return;
-    }
-
     let workspace = workspace(Some(CREW_AND_DEPENDENCIES));
     let dependency = add_task(&workspace.runtime, "status dependency", TaskStatus::Backlog);
     let main = workspace
@@ -600,3 +547,15 @@ fn dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit() {
         &format!("{MATERIAL_DETAIL}: title"),
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    meaning_edits_name_the_drifted_component_and_write_nothing_scenarios,
+    meaning_edits_name_the_drifted_component_and_write_nothing,
+    context_files_outside_freshness_stay_context_files_changed,
+    task_prepared_in_progress_is_not_rewritten,
+    proposed_to_backlog_still_applies,
+    malformed_component_map_fails_apply_without_writing,
+    configured_crew_and_dependency_meaning_drift_are_named,
+    dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit
+);
