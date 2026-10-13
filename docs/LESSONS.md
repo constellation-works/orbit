@@ -8,7 +8,7 @@ last_validated: 2026-10-09
 
 **Status:** Draft
 **Owner:** Daniel
-**Last updated:** 2026-10-09
+**Last updated:** 2026-10-12
 
 I am dedicating this place to record some of the lessons we learned along the way. These lessons may not apply to everyone or in every case, but they shaped some of the decisions we made.
 
@@ -66,8 +66,8 @@ repeated test executions. The task itself was already done, but its pipeline
 run remained alive for about 113 minutes.
 
 The command responsible was not in the compiler-cache operator script. It was
-an owner-process fixture in
-`crates/orbit-core/src/application/tests/job_pipeline.rs` (since removed):
+a now-removed owner-process fixture formerly in
+`crates/orbit-core/src/application/tests/job_pipeline.rs`:
 
 ```sh
 while [ ! -f "$ORBIT_TEST_OWNER_RELEASE" ]; do sleep 0.01; done

@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-10-09
+last_validated: 2026-10-12
 ---
 # RAII Guard Pattern
 
@@ -141,20 +141,24 @@ Patterns to copy:
 
 ## Reference: `FileLockGuard` — resource held until `Drop`
 
-From `crates/orbit-store/src/fs/lock/mod.rs`:
+From `crates/orbit-common/src/fs/file_lock.rs`:
 
 ```rust
 #[must_use = "the advisory lock is released as soon as the guard is dropped"]
-pub(crate) struct FileLockGuard {
-    _file: File,
+pub struct FileLockGuard {
+    file: File,
+    clear_holder_on_drop: bool,
+    shared_record: Option<PathBuf>,
+    hold: Option<HoldReport>,
 }
 ```
 
 Patterns to copy:
 
 - **Hold the resource in a field.** `FileLockGuard` keeps the locked `File`
-  alive in `_file`; dropping the file releases the OS advisory lock. There is
-  no separate explicit release path to call or duplicate.
+  alive in `file`; `Drop` clears holder metadata and reports a long hold before
+  dropping the file releases the OS advisory lock. There is no separate
+  explicit release path to call or duplicate.
 
 ---
 
