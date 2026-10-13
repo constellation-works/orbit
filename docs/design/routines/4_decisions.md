@@ -1,8 +1,8 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-09-20
-last_validated: 2026-10-08
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Accepted
 feature: routines
 doc_role: decisions
@@ -149,7 +149,7 @@ Routine YAML definitions live in routine-source workspaces and converge via git 
 ## Default routines seed per-workspace at init with host and name resolved at seed time
 
 **Recorded:** 2026-07-11 21:51:20.761360Z · [ORB-10129], [ORB-10207]
-**Paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/src/command/routine.rs`, `crates/orbit-core/src/command/init.rs`
+**Current code paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/src/application/routines/seed.rs`, `crates/orbit-core/src/application/routines/materialize.rs`, `crates/orbit-core/src/bootstrap/init.rs`
 **Superseded in part by:** [Definitions carry no host pin: every owner checkout is an independent schedule](#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule) (no `__ORBIT_HOST_ID__` resolution; seeded bytes become machine-independent) and [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) (`auto_task_scheduler` leaves the default set). The workspace-name suffix rule below is unchanged.
 
 ### Context
