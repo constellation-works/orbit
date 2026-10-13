@@ -4,7 +4,7 @@
 //! tool contract. These operations have no derived CLI or dashboard surface.
 
 use crate::governance::operation::{
-    Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
+    CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
     ToolOnlyRegistration, operation_registry,
 };
 
@@ -42,6 +42,7 @@ const ACQUIRE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     tool_name: "orbit.workspace.claim.acquire",
     tool_description: "Take the exclusive, TTL-bounded workspace claim required to dispatch workflow runs while another operator holds one, and return the claim token to present on subsequent dispatches. Contention rejects with the current holder and expiry.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         ParamSpec {
@@ -93,6 +94,7 @@ const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     tool_name: "orbit.workspace.claim.release",
     tool_description: "Release the workspace claim with its token, or force-release it.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         param(
@@ -132,6 +134,7 @@ const SHOW: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     tool_name: "orbit.workspace.claim.show",
     tool_description: "Report the active workspace claim — holder, expiry, and diagnostics — or that the workspace is unclaimed.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[]],
     at_least_one_of: &[],

@@ -10,10 +10,43 @@ use orbit_types::task::{
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskLintReport, task_record_json, task_show_field_json};
+use crate::application::task::{
+    FinalRecoveryRecord, TaskLintReport, task_record_json, task_show_field_json,
+};
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
     serialize_task_record(runtime, task, true)
+}
+
+/// The full `orbit.task.show` record: [`serialize_task`] plus the operator
+/// guidance only a single-task readout carries. `next_step` says what to do
+/// about a task a failed run left `blocked`; `final_recovery` is the last
+/// automated final-recovery decision. Each is present only when it applies.
+pub(super) fn serialize_task_show(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<Value, OrbitError> {
+    let status_by_id = task_reference_status_index(runtime, task)?;
+    let row = runtime.task_row_with_sidecars(task.clone())?;
+    let mut object = task_record_json(runtime, &row, &status_by_id)?;
+    if let Some(next) = runtime.blocked_next_step(task, &row.history) {
+        object.insert(
+            "next_step".to_string(),
+            serde_json::to_value(next).map_err(serialize_error("next_step"))?,
+        );
+    }
+    if let Some(record) = FinalRecoveryRecord::last(&row.history, &row.comments) {
+        object.insert(
+            "final_recovery".to_string(),
+            serde_json::json!({
+                "run_id": record.run_id,
+                "decision": record.decision,
+                "outcome": record.outcome,
+                "at": record.at,
+            }),
+        );
+    }
+    Ok(Value::Object(object))
 }
 
 /// Serialize a task returned by a mutating tool.

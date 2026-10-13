@@ -12,6 +12,7 @@ mod input;
 mod json;
 mod pipeline_tools;
 mod search_tools;
+mod task_operation_tools;
 mod task_tools;
 pub(crate) mod worker_tools;
 mod workflow_tools;

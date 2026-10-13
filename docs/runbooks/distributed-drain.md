@@ -6,6 +6,7 @@ paths:
   - "crates/orbit-tools/src/builtin/orbit/drain/**"
   - "crates/orbit-core/src/application/distributed/**"
   - "crates/orbit-cli/src/command/task/lint.rs"
+  - "crates/orbit-core/src/application/task/context_repair.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
 related_artifacts: [ORB-15639, ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]

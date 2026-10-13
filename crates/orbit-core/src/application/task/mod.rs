@@ -3,6 +3,7 @@
 mod add;
 mod baseline_hold;
 mod baseline_repair;
+mod blocked_next_step;
 mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
@@ -39,6 +40,7 @@ pub(crate) mod validation_tools;
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
+pub use blocked_next_step::BlockedNextStep;
 pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };
@@ -48,7 +50,9 @@ pub use blocked_recovery::{
     MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, episode_disposition,
 };
 pub use contention::{LockContentionHotspot, LockContentionReport};
-pub use context_repair::ContextFileRestoration;
+pub use context_repair::{
+    CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
+};
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,

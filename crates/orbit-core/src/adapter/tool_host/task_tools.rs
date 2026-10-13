@@ -4,25 +4,22 @@ use orbit_common::protocol::tool_input::{
     optional_string_list_alias, required_string,
 };
 use orbit_types::task::{
-    TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, is_task_show_projection_field,
-    task_base_json, unknown_task_show_field_message, validate_relative_artifact_path,
+    TaskPriority, TaskStatus, is_task_show_projection_field, unknown_task_show_field_message,
+    validate_relative_artifact_path,
 };
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskEligibilityQuery,
-    TaskUpdateParams, TaskWriteScreen, is_operator_rescue_close,
+    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskUpdateParams,
+    TaskWriteScreen, is_operator_rescue_close,
 };
 
 use super::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
     parse_relations, parse_task_priority, parse_task_status, parse_task_type,
 };
-use super::json::{
-    serialize_error, serialize_task, serialize_task_artifact_read, serialize_task_lint_report,
-    serialize_task_write_response, task_fields_to_json,
-};
+use super::json::{serialize_task_artifact_read, serialize_task_write_response};
 
 /// The persisted identity travels beside the caller's response projection so
 /// redaction audit attribution does not depend on which fields were requested.
@@ -115,148 +112,6 @@ pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
     Ok(json!({ "id": id, "deleted": true }))
 }
 
-/// `orbit.task.eligible`: candidates whose lock surface overlaps no
-/// `in-progress` / `review` task's surface. `conflicting` is present only with
-/// `explain`.
-pub(super) fn eligible(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let statuses = optional_csv_or_string_list_alias(&input, &["status"])?
-        .unwrap_or_default()
-        .into_iter()
-        .map(|value| parse_task_status("status", &value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let path = optional_string(&input, "path")?;
-    let limit = super::input::task_list_limit(&input)?;
-    let explain = optional_bool_alias(&input, &["explain"])?.unwrap_or(false);
-    let eligibility = runtime.task_eligibility(&TaskEligibilityQuery {
-        statuses,
-        path,
-        limit,
-    })?;
-    let mut payload = serde_json::Map::new();
-    payload.insert(
-        "tasks".to_string(),
-        eligibility
-            .eligible
-            .iter()
-            .map(eligible_task_json)
-            .collect(),
-    );
-    payload.insert("total".to_string(), json!(eligibility.total));
-    payload.insert(
-        "truncated".to_string(),
-        json!(eligibility.eligible.len() < eligibility.total),
-    );
-    if explain {
-        let conflicting = eligibility
-            .conflicting
-            .iter()
-            .map(|conflict| {
-                let mut row = eligible_task_json(&conflict.task);
-                row["conflicts"] = conflict
-                    .overlaps
-                    .iter()
-                    .map(|overlap| {
-                        json!({
-                            "requested_file": overlap.requested_file,
-                            "locking_task_id": overlap.locking_task_id,
-                        })
-                    })
-                    .collect();
-                row
-            })
-            .collect();
-        payload.insert("conflicting".to_string(), conflicting);
-    }
-    Ok(Value::Object(payload))
-}
-
-fn eligible_task_json(task: &orbit_types::task::Task) -> Value {
-    json!({
-        "id": task.id,
-        "title": task.title,
-        "type": task.task_type.to_string(),
-        "status": task.status.to_string(),
-        "priority": task.priority.to_string(),
-        "complexity": task.complexity.map(|value| value.to_string()),
-    })
-}
-
-pub(super) fn lint(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    serialize_task_lint_report(&runtime.lint_task(&id)?)
-}
-
-pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let statuses = optional_csv_or_string_list_alias(&input, &["status"])?
-        .map(|values| {
-            values
-                .into_iter()
-                .map(|value| parse_task_status("status", &value))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .filter(|values| !values.is_empty());
-    let task_type = optional_string_alias(&input, &["type", "task_type", "taskType"])?
-        .map(|value| parse_task_type("type", &value))
-        .transpose()?;
-    let parent_id = optional_string_alias(&input, &["parent_id", "parent", "parentId"])?;
-    let job_run_id = optional_string(&input, "job_run_id")?;
-    let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default();
-    let ready = optional_bool_alias(&input, &["ready"])?;
-    let path = optional_string(&input, "path")?;
-    let limit = super::input::task_list_limit(&input)?;
-    // Validated before the query so an unknown field is refused even when no
-    // task matches, instead of only surfacing on the first listed task.
-    let fields = write_response_fields(&input)?.filter(|fields| !fields.is_empty());
-    let page = runtime.query_task_rows_status_aware(&crate::application::task::TaskListQuery {
-        filter: crate::application::task::TaskListFilter {
-            statuses,
-            task_type,
-            parent_id,
-            job_run_id,
-            tags,
-            ..Default::default()
-        },
-        ready: ready == Some(true),
-        path,
-        limit,
-    })?;
-    let status_by_id = page.status_by_id;
-    let tasks = page
-        .items
-        .into_iter()
-        .map(|row| match &fields {
-            None => Ok(Value::Object(task_base_json(&row.task, &status_by_id))),
-            Some(fields) => project_listed_task(runtime, &row.task, fields),
-        })
-        .collect::<Result<Vec<_>, OrbitError>>()?;
-    let total = page.total;
-    let truncated = tasks.len() < total;
-    Ok(json!({
-        "tasks": tasks,
-        "total": total,
-        "truncated": truncated,
-    }))
-}
-
-/// One listed task reduced to the requested fields, always as an object keyed by
-/// field name (`orbit.task.show` returns a bare value for a single field, which
-/// would make the list's element shape depend on how many fields were asked for).
-fn project_listed_task(
-    runtime: &OrbitRuntime,
-    task: &orbit_types::task::Task,
-    fields: &[String],
-) -> Result<Value, OrbitError> {
-    let mut projected = serde_json::Map::new();
-    for field in fields {
-        projected.insert(
-            field.clone(),
-            task_fields_to_json(runtime, task, std::slice::from_ref(field))?,
-        );
-    }
-    Ok(Value::Object(projected))
-}
-
 pub(super) fn reject(
     runtime: &OrbitRuntime,
     input: Value,
@@ -277,54 +132,6 @@ pub(super) fn reject(
         response: serialize_task_write_response(runtime, &task, response_fields.as_deref())?,
         persisted_id: task.id,
     })
-}
-
-pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let fields = optional_csv_or_string_list_alias(&input, &["fields", "field"])?;
-    let wants_delivery = fields
-        .as_ref()
-        .is_some_and(|fields| fields.iter().any(|field| field == TASK_SHOW_DELIVERY_FIELD));
-    if wants_delivery {
-        return delivery(runtime, &id, fields.as_deref().unwrap_or_default(), &input);
-    }
-    if input.get("run_id").is_some() {
-        return Err(OrbitError::InvalidInput(format!(
-            "`run_id` selects a delivery run and requires `field: \"{TASK_SHOW_DELIVERY_FIELD}\"`"
-        )));
-    }
-    let task = runtime.get_task(&id)?;
-    let value = if let Some(fields) = &fields {
-        let projected = task_fields_to_json(runtime, &task, fields)?;
-        if fields.len() == 1 && fields[0] == "terminal" {
-            json!({ fields[0].clone(): projected })
-        } else {
-            projected
-        }
-    } else {
-        serialize_task(runtime, &task)?
-    };
-    Ok(value)
-}
-
-/// [ORB-13744] The bounded public delivery observation: typed host evidence
-/// only, so it carries nothing to redact and nothing an agent wrote. It is a
-/// response of its own rather than a task field, so it cannot be mixed with
-/// record projections.
-fn delivery(
-    runtime: &OrbitRuntime,
-    id: &str,
-    fields: &[String],
-    input: &Value,
-) -> Result<Value, OrbitError> {
-    if fields.len() != 1 {
-        return Err(OrbitError::InvalidInput(format!(
-            "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields"
-        )));
-    }
-    let run_id = optional_string(input, "run_id")?;
-    let observation = runtime.observe_task_delivery(id, run_id.as_deref())?;
-    serde_json::to_value(observation).map_err(serialize_error("serialize task delivery"))
 }
 
 /// Read one stored artifact's bytes through the task's own artifact owner.

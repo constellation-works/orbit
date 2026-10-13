@@ -14,7 +14,7 @@
 
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskHistoryEntry};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 
 use super::TaskRecordUpdateParams;
 use super::paths::{
@@ -46,7 +46,79 @@ impl ContextFileRestoration {
     }
 }
 
+/// Statuses the context repair sweep reads when the caller names none.
+///
+/// Done / Archived / Rejected tasks are intentionally skipped — they are
+/// historical records and re-saving them would mutate audit trails for tasks
+/// nobody is going to execute again.
+pub const CONTEXT_REPAIR_SWEEP_STATUSES: &[TaskStatus] = &[
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::Someday,
+    TaskStatus::InProgress,
+    TaskStatus::Blocked,
+    TaskStatus::Review,
+];
+
+/// One task the context repair sweep reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextRepairCandidate {
+    pub status: TaskStatus,
+    /// The task declares no usable context selector at all.
+    pub empty_surface: bool,
+    /// Declarations that cannot be canonicalized, verbatim as stored.
+    pub invalid: Vec<String>,
+    pub restoration: ContextFileRestoration,
+}
+
 impl OrbitRuntime {
+    /// Sweep tasks for context declarations that need repair before they can
+    /// hold context locks: an empty or unusable surface, or selectors an
+    /// earlier prune removed and recorded ([ORB-12490]).
+    ///
+    /// `statuses` narrows the sweep; empty means
+    /// [`CONTEXT_REPAIR_SWEEP_STATUSES`]. With `restore`, each recorded
+    /// restoration is written; without it the sweep only plans.
+    ///
+    /// Nothing here deletes a declaration. The sweep that used to drop
+    /// selectors whose target had disappeared is retired: a missing target is
+    /// a valid declaration for work that will create it, and pruning it
+    /// silently shrank the footprint the task's locks protect.
+    pub fn sweep_context_repairs(
+        &self,
+        statuses: &[TaskStatus],
+        restore: bool,
+    ) -> Result<Vec<ContextRepairCandidate>, OrbitError> {
+        let statuses = if statuses.is_empty() {
+            CONTEXT_REPAIR_SWEEP_STATUSES
+        } else {
+            statuses
+        };
+        let mut candidates = Vec::new();
+        for task in self.list_tasks()? {
+            if !statuses.contains(&task.status) {
+                continue;
+            }
+            let restoration = if restore {
+                self.restore_pruned_context_files(&task.id)?.1
+            } else {
+                self.plan_context_file_restore(&task.id)?
+            };
+            let declared = self.declared_context_surface(&task);
+            let empty_surface = declared.retained.is_empty();
+            if restoration.is_empty() && declared.invalid.is_empty() && !empty_surface {
+                continue;
+            }
+            candidates.push(ContextRepairCandidate {
+                status: task.status,
+                empty_surface,
+                invalid: declared.invalid,
+                restoration,
+            });
+        }
+        Ok(candidates)
+    }
+
     /// Report the history-backed restoration available for one task without
     /// writing anything.
     pub fn plan_context_file_restore(

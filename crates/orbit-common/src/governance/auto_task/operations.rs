@@ -13,8 +13,12 @@
 //! are the MCP wire; CLI flag spellings and help text are the argv surface.
 
 use crate::governance::operation::{
-    CliArgKind, CliBinding, Description, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, Redaction, operation_registry,
+    CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
+    Redaction, both, cli_only, defaulted, free_text, mcp_only, operation_registry, preserve_empty,
+    required,
+};
+use crate::governance::task::{
+    TASK_COMPLEXITY_VALUES, TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES,
 };
 use orbit_types::tool::McpToolScope;
 
@@ -85,71 +89,6 @@ pub const DEDUPE_VALUES: &[EnumValue] = &[
     ),
 ];
 
-/// `TaskType` as the CLI offers it.
-pub const TASK_TYPE_VALUES: &[EnumValue] = &[
-    EnumValue::plain("feature"),
-    EnumValue::helped(
-        "bug",
-        "An attributable defect; lineage is recorded through typed task relations",
-    ),
-    EnumValue::plain("refactor"),
-    EnumValue::plain("chore"),
-];
-
-/// `TaskPriority` as the CLI offers it.
-pub const TASK_PRIORITY_VALUES: &[EnumValue] = &[
-    EnumValue::plain("low"),
-    EnumValue::plain("medium"),
-    EnumValue::plain("high"),
-    EnumValue::plain("critical"),
-];
-
-/// The assessable `TaskComplexity` values, as the CLI offers them.
-pub const TASK_COMPLEXITY_VALUES: &[EnumValue] = &[
-    EnumValue::plain("low"),
-    EnumValue::plain("medium"),
-    EnumValue::plain("hard"),
-    EnumValue::helped(
-        "xhard",
-        "Reserved top tier for the most capable (and most expensive) crews. Spelled `xhard` everywhere, so neither serde's snake_case rename nor clap's kebab-case value naming may split it into `x_hard`/`x-hard`",
-    ),
-];
-
-/// `TaskStatus` as the CLI offers it.
-pub const TASK_STATUS_VALUES: &[EnumValue] = &[
-    EnumValue::helped(
-        "proposed",
-        "Awaiting human approval before entering the backlog",
-    ),
-    EnumValue::helped("backlog", "Approved and queued for work; not yet started"),
-    EnumValue {
-        name: "in-progress",
-        help: Some("Actively being worked on"),
-        aliases: &["in_progress"],
-    },
-    EnumValue::helped("review", "Implementation complete; awaiting review/merge"),
-    EnumValue::helped(
-        "done",
-        "Accepted and closed. May be reopened by an explicit status edit",
-    ),
-    EnumValue::helped(
-        "blocked",
-        "Temporarily paused (waiting on a dependency or decision)",
-    ),
-    EnumValue::helped(
-        "archived",
-        "Soft-deleted. Can be restored to any other status",
-    ),
-    EnumValue::helped(
-        "rejected",
-        "Declined. Can be reclassified to any other status",
-    ),
-    EnumValue::helped(
-        "someday",
-        "Future-scoped — wanted but not yet actionable. Agents skip someday tasks",
-    ),
-];
-
 const TOGGLE_STATE_VALUES: &[EnumValue] = &[
     EnumValue::helped("on", "Enable the definition"),
     EnumValue::helped("off", "Disable the definition (preserved, not deleted)"),
@@ -163,6 +102,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.add",
     tool_description: "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     cli_about: "Create a new auto-task definition",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         required(both(
@@ -255,6 +195,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
                 aliases: &["required-tool"],
                 visible_aliases: &[],
                 value_name: None,
+                multiple: false,
             },
             "Exact canonical tool names copied to every minted task",
         ),
@@ -311,6 +252,7 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.list",
     tool_description: "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
     cli_about: "List every auto-task definition in this workspace",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
         cli_only(
@@ -335,6 +277,7 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
                 aliases: &[],
                 visible_aliases: &["all"],
                 value_name: None,
+                multiple: false,
             },
             "Also list definitions seeded by a plugin that is switched off in this workspace or on the host, marked inactive with the reason",
         ),
@@ -357,6 +300,7 @@ const SHOW: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.show",
     tool_description: "Show a single auto-task definition and persisted delivery diagnostics by name.",
     cli_about: "Show a single definition by name",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
         NAME_PARAM,
@@ -380,6 +324,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.update",
     tool_description: "Update an existing auto-task definition (present fields only), including enabling or disabling it.",
     cli_about: "Update an existing definition (present fields only)",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         mcp_only(
@@ -500,6 +445,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
                 aliases: &[],
                 visible_aliases: &[],
                 value_name: Some("WAIVE_BATCH"),
+                multiple: false,
             },
             "Waive a settled failed delivery batch, retaining its coverage gap",
         ),
@@ -549,6 +495,7 @@ const TOGGLE: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.toggle",
     tool_description: "Enable or disable an auto-task definition (the kill-switch; not a delete).",
     cli_about: "Enable or disable a definition (the kill-switch; not a delete)",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         NAME_PARAM,
@@ -572,6 +519,7 @@ const DELETE: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.delete",
     tool_description: "Delete an auto-task definition with its scheduler cursor and delivery consumer state; a deleted shipped default stays out of later reseeds. Refused while a minted task is open unless `force` is true.",
     cli_about: "Delete a definition with its scheduler cursor and delivery consumer state; a deleted shipped default stays out of later reseeds",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         NAME_PARAM,
@@ -602,6 +550,7 @@ const RESTORE: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.restore",
     tool_description: "Reinstate a deleted shipped auto-task default with its shipped content, disabled as shipped.",
     cli_about: "Reinstate a deleted shipped default with its shipped content",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[required(both(
         "name",
@@ -621,6 +570,7 @@ const MINT: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.mint",
     tool_description: "Mint one task now from an auto-task definition. Unconditional: the schedule, dedupe policy, and enabled flag are ignored, and the scheduler's own cursor is left untouched.",
     cli_about: "Mint a task from a definition now (ignores schedule, dedupe, and `enabled`; leaves the scheduler cursor untouched)",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         NAME_PARAM,
@@ -646,6 +596,7 @@ const RECOVER: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.recover",
     tool_description: "Preview or apply the audited recovery for a delivery consumer stalled by a settings change or a rebased branch. Retains all coverage debt; without `reason` it only previews.",
     cli_about: "Preview or apply the audited recovery for a delivery consumer stalled by a settings change (retains all coverage debt)",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         NAME_PARAM,
@@ -689,6 +640,7 @@ const RESET: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.reset",
     tool_description: "Preview or apply the audited reset of a delivery consumer: forget its coverage debt and re-baseline at the branch head. Without `reason` it only previews.",
     cli_about: "Preview or apply the audited reset of a delivery consumer: forget its coverage debt and re-baseline at the branch head",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         NAME_PARAM,
@@ -720,81 +672,3 @@ const NAME_PARAM: ParamSpec = required(both(
     CliArgKind::Positional,
     "Definition name",
 ));
-
-/// A parameter on both MCP and the CLI.
-const fn both(
-    name: &'static str,
-    param_type: ParamType,
-    mcp_description: &'static str,
-    kind: CliArgKind,
-    cli_help: &'static str,
-) -> ParamSpec {
-    let mut param = mcp_only(name, param_type, mcp_description);
-    param.cli = Some(CliBinding {
-        kind,
-        help: Description::Static(cli_help),
-    });
-    param
-}
-
-/// A parameter the tool accepts and the CLI does not bind.
-const fn mcp_only(
-    name: &'static str,
-    param_type: ParamType,
-    mcp_description: &'static str,
-) -> ParamSpec {
-    ParamSpec {
-        name,
-        aliases: &[],
-        param_type,
-        required: false,
-        preserve_empty: false,
-        default: None,
-        redact: Redaction::None,
-        mcp_description: Some(Description::Static(mcp_description)),
-        cli: None,
-    }
-}
-
-/// A CLI-only flag the CLI surface table consumes before the call.
-const fn cli_only(
-    name: &'static str,
-    param_type: ParamType,
-    kind: CliArgKind,
-    help: &'static str,
-) -> ParamSpec {
-    ParamSpec {
-        name,
-        aliases: &[],
-        param_type,
-        required: false,
-        preserve_empty: false,
-        default: None,
-        redact: Redaction::None,
-        mcp_description: None,
-        cli: Some(CliBinding {
-            kind,
-            help: Description::Static(help),
-        }),
-    }
-}
-
-const fn required(mut param: ParamSpec) -> ParamSpec {
-    param.required = true;
-    param
-}
-
-const fn defaulted(mut param: ParamSpec, default: &'static str) -> ParamSpec {
-    param.default = Some(default);
-    param
-}
-
-const fn free_text(mut param: ParamSpec) -> ParamSpec {
-    param.redact = Redaction::FreeText;
-    param
-}
-
-const fn preserve_empty(mut param: ParamSpec) -> ParamSpec {
-    param.preserve_empty = true;
-    param
-}

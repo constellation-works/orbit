@@ -173,5 +173,5 @@ pub(super) fn execute_core_tool(
             context,
         )?
         .value;
-    crate::command::task::show::attach_bound_workspace_identity(name, &input, owner, output)
+    crate::command::task::support::attach_bound_workspace_identity(name, &input, owner, output)
 }

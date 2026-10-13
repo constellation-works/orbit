@@ -9,9 +9,9 @@ doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937]
 ---
 
 # Operations as Data — Decisions
@@ -38,8 +38,9 @@ the same day. They govern kernel v2 and the migration plan in
 - **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
 - **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted; followed by friction since [ORB-15932].
 - **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation built in warn mode ([ORB-15933]).
-- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted; built on auto-task in [ORB-15935].
+- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted; built on auto-task in [ORB-15935] and the task reads in [ORB-15937].
 - **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
+- **[ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec)** — Accepted in [ORB-15937].
 
 ## Split spec/handler table joined by a typed verb enum
 
@@ -421,7 +422,7 @@ drift the tool entry does not.
 
 ## Migrated CLI verbs execute through the tool path
 
-**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935]
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935] and the task reads in [ORB-15937]
 **Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs`, `crates/orbit-cli/src/command/task/add.rs`, `crates/orbit-core/src/adapter/tool_host/task_tools.rs`
 
 ### Context
@@ -508,6 +509,43 @@ fixture run of every verb with and without `ORBIT_OPERATOR=1`:
   every surface, so a refused tool name no longer leaves a definition behind
   over MCP.
 
+**Task reads outcome ([ORB-15937]).** `show`, `list`, `eligible` and `lint`
+execute through `run_tool`; `orbit.task.lint` is a CLI-only tool
+(`mcp_scope: None`, registered inactive as before). None is governed. The
+Step 0 baseline ran 74 argv cases (text and `--json`, every flag and the
+refusals) on one fixture with the old and new binaries, then on a fixture
+the new binary built, because a binary that joins another binary's store
+generation skips its CLI audit row. Standard output was identical in every
+case except `lint`'s elapsed milliseconds. The measured and reviewed
+differences:
+
+- **Audit rows.** The CLI rows keep their subcommand labels and target IDs;
+  `list` and `eligible` rows now carry target type `task`, as `show` and
+  `lint` did.
+- **Usage errors.** `lint <ID> --status …` and `list`/`eligible --limit 0`
+  were clap usage errors (exit 2, no audit row). The handler now refuses them
+  (exit 1, `invalid input`, a failed audit row). The `lint` message is
+  "`status` narrows the sweep and cannot be combined with `id`".
+- **One answer on every surface.** The MCP and `orbit tool run` `show` full
+  record gains the `next_step` and `final_recovery` the CLI printed. `list`
+  accepts `external_ref` and `has_ref`, and applies `priority` outside the
+  bounded view, which it previously ignored. An empty `list` page reports
+  `unindexed_bundle_count`, which the CLI turns into its existing reindex
+  error. The CLI `show` resolves relation targets through the bounded status
+  index MCP uses, so a cross-workspace reference gets the same status label on
+  both.
+- **Field selection.** CLI `show --fields delivery` now returns the delivery
+  observation, as the tool always did. A blank `--fields ''` is dropped, which
+  shows the full record, instead of being refused; an empty selector over MCP
+  is still refused, with the message "task show field selectors must not be
+  empty".
+- **Unknown fields.** `orbit.task.eligible` used to refuse an unknown field;
+  like every migrated verb it now warns and audits it in warn mode (§4).
+- **Input.** Optional strings are trimmed, as for every registry-derived CLI.
+- **Schemas.** The MCP snapshot moved only for `orbit.task.list` (the
+  `external_ref` and `has_ref` filters and the `priority` wording). The
+  inactive `orbit.task.lint` schema now matches its spec.
+
 ## Migrate the remaining nouns on a plan, not on contact
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
@@ -548,6 +586,55 @@ only; the migration is still incremental, one noun at a time.
 - Cost: migration tasks compete with feature work for drain capacity, and a
   phase runs even when no feature currently needs that noun.
 
+## ID routing is keyed by tool name in the MCP rule tables, not declared in the spec
+
+**Recorded:** 2026-10-13 · [ORB-15937]
+**Code anchors:** `crates/orbit-cli/src/command/operation/spec.rs::task_operation`, `crates/orbit-cli/src/command/host_route.rs::routed_command_id`, `crates/orbit-tools/src/mcp_rules.rs::ID_ROUTED_TASK_TOOLS`
+
+### Context
+
+ID routing is a cross-surface fact: `orbit task show` and `orbit.task.show`
+over MCP both follow a task ID to the host its prefix names and the workspace
+that owns it. Under
+[The spec holds cross-surface facts](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface),
+that points at a spec field. But two tool-name lists already hold it for
+every task-ID tool, migrated or not: `ID_ROUTED_TASK_TOOLS` (host prefix
+routing: `show`, `update`, `reject`, `delete`, `artifact get`/`put`, the
+review tools) with `NOT_ID_ROUTED_TOOLS` giving the reason a tool such as
+`orbit.task.lint` does not route, and `ID_RESOLVED_WORKSPACE_TOOLS` (owner
+workspace binding: `show` and `artifact get`). The federated MCP, the MCP
+server, `orbit tool run` and the CLI host preflight read them by tool name.
+Phase 3a migrated only `show` of those tools.
+
+### Decision
+
+ID routing stays keyed by tool name in those lists. A migrated verb's CLI
+derives its routing from them by its spec's `tool_name`, as `task_operation`
+and the host preflight do, and writes no routing of its own. Revisit when
+every tool in the lists has a spec: a `routing` field could then replace them
+without leaving a second home behind.
+
+### Rejected alternatives
+
+- **A `routing` field on `OperationSpec`.** Until the last task-ID tool
+  migrates, the fact would live in the field for migrated verbs and in the
+  lists for the rest, two homes for one fact. The lists also record the
+  negative case with its reason, which a field on migrated specs alone would
+  not cover.
+- **A CLI override per verb, as before.** The hand-wired task arm restated
+  the owner binding for `show` beside the shared list; that copy is the kind
+  of drift the shared list was introduced to stop ([ORB-12263]).
+
+### Consequences
+
+- Every surface routes a task ID from the same two lists, and the routing
+  tests (`global_artifacts_and_workspace_selectors`, the `host_routing` and
+  `workspace_selector` suites) guard them.
+- Cost: the lists are strings, not compiler-checked against the registry. A
+  renamed tool silently loses its routing until a routing test fails, and a
+  new task-ID verb has to be added to a list by hand rather than being
+  prompted by a compile error.
+
 ## Task References
 
 - [ORB-15932], [ORB-15933], [ORB-15935] — first applications of the 2026-10-12
@@ -561,5 +648,9 @@ only; the migration is still incremental, one noun at a time.
   with `aliases`, `retired_fields` and `at_least_one_of` in the spec.
 - [ORB-15935] — migrated auto-task through the tool path, governing its
   destructive CLI-only verbs.
+- [ORB-15937] — migrated the task read verbs through the tool path and kept ID
+  routing keyed by tool name.
+- [ORB-12263] — made `orbit tool run` and `orbit task artifact get` share the
+  owner-workspace list with MCP instead of keeping their own.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

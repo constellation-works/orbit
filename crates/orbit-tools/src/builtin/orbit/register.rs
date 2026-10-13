@@ -1,6 +1,7 @@
 use orbit_common::governance::auto_task::AUTO_TASK;
 use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::friction::FRICTION;
+use orbit_common::governance::task::TASK;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
 
@@ -41,7 +42,6 @@ pub fn register(registry: &mut ToolRegistry) {
     );
     // Destructive administration remains reachable through non-MCP surfaces.
     registry.register_inactive(task::delete::OrbitTaskDeleteTool);
-    registry.register_inactive(task::lint::OrbitTaskLintTool);
     registry.register_inactive(task::locks::list::OrbitTaskLocksTool);
     registry.register_inactive(task::locks::reserve::OrbitTaskLocksReserveTool);
     registry.register_inactive(task::locks::release::OrbitTaskLocksReleaseTool);
@@ -67,18 +67,9 @@ pub fn register(registry: &mut ToolRegistry) {
         task::review_reset::OrbitTaskReviewResetTool,
         McpToolScope::WorkspaceRequired,
     );
-    registry.register_mcp(
-        task::show::OrbitTaskShowTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        task::list::OrbitTaskListTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        task::eligible::OrbitTaskEligibleTool,
-        McpToolScope::WorkspaceRequired,
-    );
+    // The migrated task reads (`list`, `eligible`, `show`, `lint`) come from
+    // the shared operation registry; the other task tools are hand-wired.
+    operation::register_noun(registry, &TASK);
     registry.register_mcp(
         task::update::OrbitTaskUpdateTool,
         McpToolScope::WorkspaceRequired,

@@ -21,8 +21,9 @@ use super::host::ServerMcpHost;
 /// `workspace` as an optional filter, and behavior must agree.
 ///
 /// `pub(crate)` and re-exported through `command::mcp` so the CLI path in
-/// `command/tool/run.rs` (and `command/operation/registry.rs`'s task-artifact routing)
-/// share this single list instead of keeping a second one that can drift
+/// `command/tool/run.rs`, `command/operation/registry.rs`'s task-artifact
+/// routing and `command/operation/spec.rs`'s registry-derived task verbs share
+/// this single list instead of keeping a second one that can drift
 /// [ORB-12263].
 pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =
     &["orbit.task.show", "orbit.task.artifact.get"];

@@ -1,0 +1,54 @@
+Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors
+
+Usage: orbit task lint [OPTIONS] [ID]
+
+Arguments:
+  [ID]
+          Task ID. Omit to sweep all active tasks for `context_files` that need repair
+
+Options:
+      --restore-pruned
+          Re-declare `context_files` entries that an earlier prune recorded in task history
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --status <STATUSES>
+          Restrict the sweep to specific statuses (repeatable; sweep mode only)
+
+          Possible values:
+          - proposed:    Awaiting human approval before entering the backlog
+          - backlog:     Approved and queued for work; not yet started
+          - in-progress: Actively being worked on
+          - review:      Implementation complete; awaiting review/merge
+          - done:        Accepted and closed. May be reopened by an explicit status edit
+          - blocked:     Temporarily paused (waiting on a dependency or decision)
+          - archived:    Soft-deleted. Can be restored to any other status
+          - rejected:    Declined. Can be reclassified to any other status
+          - someday:     Future-scoped — wanted but not yet actionable. Agents skip someday tasks
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit task lint <TASK_ID>                   # findings for one task
+  orbit task lint                             # sweep active tasks for context that needs repair
+  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded
+  orbit task lint --restore-pruned            # apply the restoration across the sweep
+  orbit task lint --status review

@@ -1207,7 +1207,15 @@
         },
         "priority": {
           "type": "string",
-          "description": "Bounded view priority filter"
+          "description": "Optional task priority filter"
+        },
+        "external_ref": {
+          "type": "string",
+          "description": "Optional exact external reference filter in `system:id` form"
+        },
+        "has_ref": {
+          "type": "string",
+          "description": "Optional external reference system filter: keep tasks with any reference in this system"
         },
         "agent": {
           "type": "string",

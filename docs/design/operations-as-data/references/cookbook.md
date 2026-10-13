@@ -9,9 +9,9 @@ doc_role: reference
 type: design
 summary: Step-by-step procedure for migrating a noun to the operation registry under kernel v2, and for adding a verb to an already-migrated noun.
 tags: [operations-as-data, architecture, adr-0209, cookbook]
-paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs"]
+paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -24,8 +24,10 @@ the `operation_registry!` macro and the generic adapters. Phase 0b built input
 validation at the tool entry in warn mode ([ORB-15933]): `parse_input`,
 `aliases`, `at_least_one_of` and `retired_fields`. Phase 1 (auto-task,
 [ORB-15935]) built the `Switch`, `Enum`, `Object` and CLI-only parameter
-kinds, `default`, and flag aliases and value names. A nested `cli_path` is
-still planned; a noun that needs it, or another kind the kernel lacks, extends
+kinds, `default`, and flag aliases and value names. Phase 3a (task reads,
+[ORB-15937]) built `EnumList`, multi-value flags, optional positionals and
+`CliHelp` (long description, after-help examples, flag order), and showed how
+to migrate part of a noun. A nested `cli_path` is still planned; a noun that needs it, or another kind the kernel lacks, extends
 the kernel first. Two recipes: migrating a noun that is still hand-wired, and
 adding a verb to a noun that is already migrated.
 
@@ -216,6 +218,16 @@ noun spec and `cli_path`). Keep any input-dependent override, such as `governed_
 flag that needs the full runtime, around the helper, and check the derived audit
 labels against the old arm.
 
+**Migrating part of a noun.** When only some verbs move (task reads), keep
+the hand-wired subcommands and add one flattened variant,
+`#[command(flatten)] Operation(Invocation<<Noun>Verb>)`, to the existing
+subcommand enum. Comment it with `//`: a `///` doc comment on a flattened
+variant becomes help text and moves the goldens. The noun's registry arm
+matches that variant first and returns the generic helper (task wraps it as
+`task_operation`); the hand-wired arms stay below it. Facts the old arm held
+that are not in the spec, such as owner-workspace binding, come from the
+shared tables that already hold them, not from a new per-verb override.
+
 Now cash in Step 0: commit the captured help files as
 `crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`
 in `crates/orbit-cli/tests/output/help_goldens.rs`.
@@ -297,6 +309,17 @@ runtime need all come from the spec.
 - **`value_name` does not need interning.** The workspace enables clap's
   `string` feature, so the adapter passes the owned SCREAMING_SNAKE `String`.
   The friction pilot `Box::leak`ed it before anyone noticed.
+- **A baseline binary must build its own fixture before comparing audit
+  rows.** A binary that joins a store generation another binary created
+  skips its CLI audit row, so an old-versus-new run on one shared fixture
+  shows the new binary writing no audit at all. Compare output on the shared
+  fixture and audit rows on a fixture each binary built (task reads,
+  [ORB-15937]).
+- **Run in-process CLI tests outside a managed run's environment.** A
+  delivery shell carries the managed-worker variables (`ORBIT_MANAGED_RUN_CONTEXT`,
+  `ORBIT_WORKER_CONTEXT_REQUIRED` and the task and run IDs), and tests that
+  open a runtime refuse with "managed worker runtime binding unavailable".
+  Unset them for focused local runs.
 - **Test layout.** Sibling `tests/` mirroring source filenames, per
   [test_layout.md](../../../design-patterns/test_layout.md), not a nested
   `<module>/tests.rs` child.
@@ -307,5 +330,9 @@ runtime need all come from the spec.
 - [ORB-15932] — built kernel v2's structure on friction.
 - [ORB-15933] — built input validation at the tool entry on friction, in warn
   mode.
+- [ORB-15935] — migrated auto-task, building the switch, enum, object and
+  CLI-only parameter kinds.
+- [ORB-15937] — migrated the task read verbs, building enum lists, multi-value
+  flags, optional positionals and `CliHelp`, and the part-migrated noun shape.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

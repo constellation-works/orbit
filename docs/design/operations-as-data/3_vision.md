@@ -1,17 +1,17 @@
 ---
 title: Operations as Data — Vision
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
 doc_role: vision
 type: design
-summary: Questions kernel v2 leaves open — typed requests and responses, derived routes, ID routing, the knowledge/execution split — and what the registry could enable beyond deduplication.
+summary: Questions kernel v2 leaves open — typed requests and responses, derived routes, the knowledge/execution split — and what the registry could enable beyond deduplication; ID routing was answered by phase 3a.
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358]
+related_artifacts: [ORB-10358, ORB-15937]
 ---
 
 # Operations as Data — Vision
@@ -51,10 +51,14 @@ records what this doc used to leave open:
    *default* route shape per effect (GET for `Read`, POST for `Write`),
    overridable per noun — might capture most of the value without pretending
    HTTP is generated. Untested.
-4. **Is ID-addressed routing a spec field?** `task show` and `task artifact get`
-   route to the task's owning workspace by ID on both the CLI and MCP. Phase 3
-   decides whether that becomes a `routing` field on the spec or stays a CLI
-   override; drain and workflow-run IDs may need the same answer.
+4. **Is ID-addressed routing a spec field?** *Answered by phase 3a
+   ([ORB-15937]): no, for now.* ID routing stays keyed by tool name in the MCP
+   rule tables (`ID_ROUTED_TASK_TOOLS`, `NOT_ID_ROUTED_TOOLS`) and
+   `ID_RESOLVED_WORKSPACE_TOOLS`, and the migrated task verbs' CLI derives its
+   owner binding and host preflight from them; see
+   [ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](./4_decisions.md#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec).
+   Run IDs are host-local and friction IDs workspace-local, so neither routes.
+   The question reopens when the last task-ID tool has a spec.
 5. **Does the split table survive bearing 2?** Bearing 2 of the north-star
    decision (knowledge/execution split) would move the knowledge nouns' handlers
    away from the current `OrbitRuntime`. If handlers end up in a crate that can
@@ -136,5 +140,6 @@ decisions that deserve to be made case by case.
 ## Task References
 
 - [ORB-10358] — the friction pilot that produced the questions above.
+- [ORB-15937] — phase 3a, which answered question 4.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

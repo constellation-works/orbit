@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use orbit_common::governance::operation::{Effect, OperationVerb};
+use orbit_common::governance::task::TaskVerb;
 use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -289,6 +290,29 @@ pub(super) fn registry_operation<V: OperationVerb>(
         None,
         dispatch,
     )
+}
+
+/// The operation for a registry-derived task verb: [`registry_operation`],
+/// plus the two facts the task spec does not hold.
+///
+/// A tool in `ID_RESOLVED_WORKSPACE_TOOLS` binds the workspace that owns the
+/// task id, as `orbit tool run` and MCP do for the same tool; `lint` writes
+/// only with `--restore-pruned`, so without it it opens the read-only runtime.
+pub(super) fn task_operation(
+    invocation: &Invocation<TaskVerb>,
+    dispatch: CommandDispatch,
+) -> CommandOperation {
+    let mut operation = registry_operation(invocation, dispatch);
+    if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&invocation.spec.tool_name) {
+        operation = operation.with_task_owner_id(invocation.target_id().map(ToOwned::to_owned));
+    }
+    match invocation.spec.verb {
+        TaskVerb::Lint if invocation.input.get("restore_pruned") != Some(&Value::Bool(true)) => {
+            operation.runtime_need = RuntimeNeed::ReadOnly;
+        }
+        TaskVerb::Lint | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show => {}
+    }
+    operation
 }
 
 pub(super) fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {

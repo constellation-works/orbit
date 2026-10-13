@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
 
@@ -102,19 +103,18 @@ pub enum OrbitBuiltinAction {
     PipelineInvoke,
     PipelineWait,
     Search,
+    /// The migrated task verbs. Task verbs not yet migrated keep their own
+    /// variants below until their slice of the migration lands.
+    Task(TaskVerb),
     TaskAdd,
     TaskArtifactGet,
     TaskDelete,
-    TaskEligible,
-    TaskLint,
-    TaskList,
     TaskLocks,
     TaskLocksRelease,
     TaskLocksReserve,
     TaskReject,
     TaskReconcileReview,
     TaskReviewReset,
-    TaskShow,
     TaskUpdate,
     WorkflowRunList,
     WorkflowRunResume,
@@ -139,6 +139,12 @@ impl From<WorkspaceClaimVerb> for OrbitBuiltinAction {
 impl From<AutoTaskVerb> for OrbitBuiltinAction {
     fn from(verb: AutoTaskVerb) -> Self {
         Self::AutoTask(verb)
+    }
+}
+
+impl From<TaskVerb> for OrbitBuiltinAction {
+    fn from(verb: TaskVerb) -> Self {
+        Self::Task(verb)
     }
 }
 

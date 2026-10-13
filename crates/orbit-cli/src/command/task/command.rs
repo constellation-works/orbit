@@ -1,24 +1,22 @@
 use clap::{Args, Subcommand};
+use orbit_common::governance::task::{TASK, TASK_HOST_HELP, TaskVerb};
 use orbit_core::OrbitRuntime;
 
+use super::super::operation_args::Invocation;
 use crate::command::locks::LocksCommand;
 use crate::command::{CommandOut, Execute};
 
 use super::add::TaskAddArgs;
 use super::archive::TaskArchiveArgs;
 use super::artifact::TaskArtifactCommand;
-use super::eligible::TaskEligibleArgs;
 use super::export::TaskExportArgs;
 use super::flow::TaskFlowArgs;
 use super::import::TaskImportArgs;
-use super::lint::TaskLintArgs;
-use super::list::TaskListArgs;
 use super::publication::TaskPublicationCommand;
 use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reconcile_review::TaskReconcileReviewCommand;
 use super::reindex::TaskReindexArgs;
 use super::review_reset::TaskReviewResetArgs;
-use super::show::TaskShowArgs;
 use super::update::TaskUpdateArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
@@ -71,7 +69,7 @@ Run `orbit task <COMMAND> --help` for a command's own options and examples.";
 
 #[derive(Args)]
 #[command(
-    about = "Create, update, and manage tasks",
+    about = TASK.cli_about,
     override_usage = "orbit task <COMMAND>",
     help_template = TASK_HELP_TEMPLATE,
     after_help = TASK_AFTER_HELP
@@ -84,11 +82,7 @@ pub struct TaskCommand {
 /// Host selection shared by task commands that can deliver a tool call.
 #[derive(Args)]
 pub(crate) struct TaskHostArgs {
-    /// Host that `--workspace` names, by registered host name or `machine_id`
-    /// (see `orbit host list`). Orbit reads that host's live workspace list and
-    /// uses the selector it lists for the workspace. Without it, a task id goes
-    /// to the host its prefix names.
-    #[arg(long, global = true, value_name = "HOST")]
+    #[arg(long, global = true, value_name = "HOST", help = TASK_HOST_HELP)]
     pub host: Option<String>,
 }
 
@@ -107,24 +101,12 @@ pub enum TaskSubcommand {
     Update(TaskUpdateArgs),
     /// Archive a task
     Archive(TaskArchiveArgs),
-    /// List tasks with optional filters
-    List(TaskListArgs),
-    /// List backlog/proposed tasks you can pick up without colliding with work
-    /// in flight
-    ///
-    /// A task is eligible when its context-file lock surface overlaps no
-    /// in-progress or review task's surface — the same lock test automatic
-    /// dispatch applies. Nothing else is checked: not dependencies, complexity,
-    /// groups or crew, and candidates are not checked against each other.
-    /// Read-only: nothing is reserved, reconciled or changed.
-    Eligible(TaskEligibleArgs),
-    /// Show detailed information about a task, found by ID with an optional
-    /// workspace filter
-    Show(TaskShowArgs),
+    // `list`, `eligible`, `show` and `lint`, derived from the task operation
+    // registry.
+    #[command(flatten)]
+    Operation(Invocation<TaskVerb>),
     /// Manage task artifact files
     Artifact(TaskArtifactCommand),
-    /// Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors
-    Lint(TaskLintArgs),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),
     /// Inspect, reserve, and release task file locks
@@ -153,11 +135,8 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Add(args) => args.execute(runtime),
             TaskSubcommand::Update(args) => args.execute(runtime),
             TaskSubcommand::Archive(args) => args.execute(runtime),
-            TaskSubcommand::List(args) => args.execute(runtime),
-            TaskSubcommand::Eligible(args) => args.execute(runtime),
-            TaskSubcommand::Show(args) => args.execute(runtime),
+            TaskSubcommand::Operation(invocation) => super::operation::execute(invocation, runtime),
             TaskSubcommand::Artifact(cmd) => cmd.execute(runtime),
-            TaskSubcommand::Lint(args) => args.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::Locks(cmd) => cmd.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),

@@ -16,9 +16,11 @@
 //! These builders reproduce what clap's derive macro generates for an
 //! equivalent struct: arg id is the wire field name, value name is that name in
 //! SCREAMING_SNAKE, `Vec`-shaped params append with a value delimiter, and args
-//! are added in declaration order so `--help` display order is preserved. That
-//! fidelity is what lets a hand-written command move to a registry without
-//! moving its shipped argv surface.
+//! are added in `--help` order (declaration order unless the spec's
+//! [`CliHelp::flag_order`](orbit_common::governance::operation::CliHelp::flag_order)
+//! says otherwise) so display order is preserved. That fidelity is what lets a
+//! hand-written command move to a registry without moving its shipped argv
+//! surface.
 
 use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::error::ErrorKind;
@@ -148,7 +150,13 @@ fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
         spec.tool_name
     );
     let mut cmd = Command::new(spec.cli_path.join("-")).about(spec.cli_about);
-    for (param, binding) in spec.cli_params() {
+    if let Some(long_about) = spec.cli_help.long_about {
+        cmd = cmd.long_about(long_about);
+    }
+    if let Some(after_help) = spec.cli_help.after_help {
+        cmd = cmd.after_help(after_help);
+    }
+    for (param, binding) in spec.cli_params_in_help_order() {
         cmd = cmd.arg(arg_for(param, binding));
     }
     cmd
@@ -169,6 +177,7 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
         aliases,
         visible_aliases,
         value_name: _,
+        multiple,
     } = binding.kind
     {
         delimiter = flag_delimiter;
@@ -176,6 +185,9 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
             .long(long)
             .aliases(aliases.iter().copied())
             .visible_aliases(visible_aliases.iter().copied());
+        if multiple {
+            arg = arg.num_args(1..);
+        }
     }
     match param.param_type {
         // A presence flag takes no value, so it has no value name.
@@ -187,6 +199,12 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
         ParamType::Boolean => arg = arg.value_parser(clap::value_parser!(bool)),
         ParamType::Enum(values) => {
             arg = arg.value_parser(PossibleValuesParser::new(values.iter().map(possible_value)))
+        }
+        ParamType::EnumList(values) => {
+            arg = arg
+                .action(ArgAction::Append)
+                .value_delimiter(delimiter)
+                .value_parser(PossibleValuesParser::new(values.iter().map(possible_value)))
         }
     }
     arg.value_name(param.cli_value_name())
@@ -275,6 +293,17 @@ fn input_from_matches<V: 'static>(
                         param.name.to_string(),
                         Value::String(canonical_enum_value(values, value)),
                     );
+                }
+            }
+            ParamType::EnumList(values) => {
+                let values = matches
+                    .get_many::<String>(param.name)
+                    .into_iter()
+                    .flatten()
+                    .map(|value| Value::String(canonical_enum_value(values, value)))
+                    .collect::<Vec<_>>();
+                if !values.is_empty() {
+                    input.insert(param.name.to_string(), Value::Array(values));
                 }
             }
             // A JSON argument. Text that does not parse is passed as a string

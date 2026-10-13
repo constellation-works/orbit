@@ -1,0 +1,51 @@
+List backlog/proposed tasks you can pick up without colliding with work in flight
+
+A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface — the same lock test automatic dispatch applies. Nothing else is checked: not dependencies, complexity, groups or crew, and candidates are not checked against each other. Read-only: nothing is reserved, reconciled or changed.
+
+Usage: orbit task eligible [OPTIONS]
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --status <STATUS>
+          Candidate statuses (comma-separated). Default: backlog and proposed
+          
+          [possible values: backlog, proposed]
+
+      --path <PATH>
+          Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit task list --path` matches
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --limit <LIMIT>
+          Maximum eligible tasks to list (default 50). Must be at least 1
+          
+          [default: 50]
+
+      --explain
+          Also list the held-back candidates, each with the overlapping file and the in-progress or review task holding it
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit task eligible
+  orbit task eligible --status proposed
+  orbit task eligible --path crates/orbit-cli
+  orbit task eligible --explain
+  orbit task eligible --json

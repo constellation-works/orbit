@@ -55,7 +55,9 @@ impl OrbitRuntime {
             if name == "orbit.task.update" {
                 orbit_tools::OrbitBuiltinAction::TaskUpdate
             } else {
-                orbit_tools::OrbitBuiltinAction::TaskShow
+                orbit_tools::OrbitBuiltinAction::Task(
+                    orbit_common::governance::task::TaskVerb::Show,
+                )
             },
             input,
             None,
