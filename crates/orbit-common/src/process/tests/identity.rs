@@ -162,7 +162,10 @@ mod linux {
     use std::ffi::OsString;
     use std::io::{self, ErrorKind};
 
-    use crate::process::identity::{KernelLiveness, linux_process_group_liveness_with};
+    use crate::process::identity::{
+        KernelLiveness, SignalPresence, linux_probe_process_group_liveness_with,
+        linux_process_group_liveness_with,
+    };
 
     #[derive(Clone, Copy)]
     enum Stat {
@@ -274,27 +277,74 @@ mod linux {
             ),
         ];
         for (case, entries, stats, expected) in cases {
-            let entries = entries
-                .map(|entries| {
-                    entries
-                        .into_iter()
-                        .map(|entry| entry.map(OsString::from).map_err(io::Error::from))
-                })
-                .map_err(io::Error::from);
-            let actual = linux_process_group_liveness_with(100, entries, |pid| {
-                match stats[(pid - 100) as usize] {
-                    Member(state, group) => Ok(format!(
-                        "{pid} (child) {state} 1 {group} {}7",
-                        "0 ".repeat(16)
-                    )),
-                    Error(kind) => Err(kind.into()),
-                    Malformed(text) => Ok(text.to_owned()),
-                }
-            });
             assert_eq!(
-                actual, expected,
-                "{case}: partial observations must not certify group death; cleanup may skip SIGKILL only on Exited"
+                linux_probe_process_group_liveness_with(
+                    100,
+                    |target| {
+                        assert_eq!(target, -100);
+                        SignalPresence::Missing
+                    },
+                    || panic!("{case}: kernel-proven absence must avoid even opening /proc"),
+                ),
+                Exited,
             );
+            for initial in [SignalPresence::Present, SignalPresence::Unknown] {
+                for fallback in [
+                    SignalPresence::Present,
+                    SignalPresence::Missing,
+                    SignalPresence::Unknown,
+                ] {
+                    let mut probes = 0;
+                    let mut scans = 0;
+                    let actual = linux_probe_process_group_liveness_with(
+                        100,
+                        |target| {
+                            assert_eq!(target, -100);
+                            probes += 1;
+                            if probes == 1 { initial } else { fallback }
+                        },
+                        || {
+                            scans += 1;
+                            let entries = entries
+                                .clone()
+                                .map(|entries| {
+                                    entries.into_iter().map(|entry| {
+                                        entry.map(OsString::from).map_err(io::Error::from)
+                                    })
+                                })
+                                .map_err(io::Error::from);
+                            linux_process_group_liveness_with(100, entries, |pid| {
+                                match stats[(pid - 100) as usize] {
+                                    Member(state, group) => Ok(format!(
+                                        "{pid} (child) {state} 1 {group} {}7",
+                                        "0 ".repeat(16)
+                                    )),
+                                    Error(kind) => Err(kind.into()),
+                                    Malformed(text) => Ok(text.to_owned()),
+                                }
+                            })
+                        },
+                    );
+                    let expected_liveness = expected.unwrap_or(match fallback {
+                        SignalPresence::Present => Alive,
+                        SignalPresence::Missing => Exited,
+                        SignalPresence::Unknown => Unknown,
+                    });
+                    assert_eq!(
+                        actual, expected_liveness,
+                        "{case}: partial observations must not certify group death; cleanup may skip SIGKILL only on Exited"
+                    );
+                    assert_eq!(
+                        scans, 1,
+                        "{case}: presence/permission uncertainty must scan"
+                    );
+                    assert_eq!(
+                        probes,
+                        if expected.is_some() { 1 } else { 2 },
+                        "{case}: an empty/unavailable scan requires a fresh kernel observation"
+                    );
+                }
+            }
         }
     }
 }

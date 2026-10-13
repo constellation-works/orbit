@@ -456,7 +456,7 @@ pub enum KernelLiveness {
 
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SignalPresence {
+pub(super) enum SignalPresence {
     Present,
     Missing,
     Unknown,
@@ -608,20 +608,50 @@ fn darwin_process_state(pid: u32) -> Option<(bool, libc::pid_t)> {
 /// Probe whether a process group contains at least one process that can still
 /// run. Zombie-only groups are `Exited`; failures to enumerate or inspect an
 /// existing member are `Unknown`, never evidence of death.
+/// On Linux, kernel-proven absence skips `/proc`; all other initial outcomes
+/// still scan for members, with a fresh kernel fallback if the scan is empty
+/// or unavailable. This observation does not establish ownership for signalling.
 #[cfg(unix)]
 pub fn probe_process_group_liveness(pgid: libc::pid_t) -> KernelLiveness {
     if pgid <= 1 {
         return KernelLiveness::Exited;
     }
     #[cfg(target_os = "linux")]
-    if let Some(liveness) = linux_process_group_liveness(pgid) {
+    {
+        linux_probe_process_group_liveness_with(pgid, signal_presence, || {
+            linux_process_group_liveness(pgid)
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        #[cfg(target_os = "macos")]
+        if let Some(liveness) = darwin_process_group_liveness(pgid) {
+            return liveness;
+        }
+        match signal_presence(-pgid) {
+            SignalPresence::Present => KernelLiveness::Alive,
+            SignalPresence::Missing => KernelLiveness::Exited,
+            SignalPresence::Unknown => KernelLiveness::Unknown,
+        }
+    }
+}
+
+/// Keep the scan lazy: only ESRCH proves absence, while EPERM is Present.
+/// Never reuse the initial result after scanning; a group can disappear or
+/// acquire a member during the scan. Partial scans retain their uncertainty.
+#[cfg(target_os = "linux")]
+pub(super) fn linux_probe_process_group_liveness_with(
+    pgid: libc::pid_t,
+    mut presence: impl FnMut(libc::pid_t) -> SignalPresence,
+    scan: impl FnOnce() -> Option<KernelLiveness>,
+) -> KernelLiveness {
+    if presence(-pgid) == SignalPresence::Missing {
+        return KernelLiveness::Exited;
+    }
+    if let Some(liveness) = scan() {
         return liveness;
     }
-    #[cfg(target_os = "macos")]
-    if let Some(liveness) = darwin_process_group_liveness(pgid) {
-        return liveness;
-    }
-    match signal_presence(-pgid) {
+    match presence(-pgid) {
         SignalPresence::Present => KernelLiveness::Alive,
         SignalPresence::Missing => KernelLiveness::Exited,
         SignalPresence::Unknown => KernelLiveness::Unknown,
