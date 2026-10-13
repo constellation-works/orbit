@@ -466,4 +466,8 @@ and theirs present. A missing ours or theirs stage is always false, including
 rename/delete conflicts; a missing base stage is true only for identical
 add/add sides. Distinct edits and malformed evidence are conservatively false. This is diagnostic;
 recovery still validates and resolves the stopped rebase under existing rules.
-On resume, an incomplete step retains only these two diagnostic fields outside the usable pipeline until it runs successfully; a new conflict supersedes them, and diagnostics neither skip execution nor expose failed outputs to templates.
+On resume, an incomplete step retains only these two diagnostic fields outside
+the usable pipeline until it runs successfully. A new conflict supersedes them,
+including an explicit empty list, and that supersession survives final-recovery
+invalidation of the step's pipeline entry. Diagnostics neither skip execution
+nor expose failed outputs to templates.

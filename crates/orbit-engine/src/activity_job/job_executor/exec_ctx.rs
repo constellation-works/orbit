@@ -15,9 +15,13 @@ pub(super) struct ExecCtx<'a> {
     pub(super) host: &'a dyn RuntimeHost,
     pub(super) input: Value,
     pub(super) pipeline: Arc<Mutex<PipelineSteps>>,
-    /// Allowlisted diagnostics from incomplete checkpoints. Kept outside
+    /// Latest allowlisted conflict diagnostics, keyed by step id. Kept outside
     /// the usable pipeline so they cannot satisfy templates or skip a step.
-    pub(super) resumed_diagnostics: Arc<HashMap<String, Value>>,
+    /// Nested contexts share this map. A newer conflict replaces both keys,
+    /// including explicit empty lists; final recovery clears pipeline entries
+    /// and does not clear this map, so a later success checkpoint cannot
+    /// resurrect the seed from the incomplete checkpoint.
+    pub(super) resumed_diagnostics: Arc<Mutex<HashMap<String, Value>>>,
     pub(super) recovery_activity: Option<ResolvedRecoveryActivity>,
     pub(super) failure_activity: Option<ResolvedRecoveryActivity>,
     /// [ORB-13907] The job's final recovery hook. Only the top-level context
@@ -118,6 +122,20 @@ pub(super) struct StepOutcome {
 pub(super) fn record_pipeline(ctx: &ExecCtx<'_>, key: &str, v: Value) {
     let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
     Arc::make_mut(&mut steps).insert(key.to_string(), wrap_step_output(v));
+}
+
+/// Replace the step's allowlisted conflict diagnostics with the evidence from
+/// the conflict just observed.
+///
+/// `diagnostic` carries both keys. An empty list is a present value and must
+/// win over paths resumed from an older stop. The usable pipeline is separate
+/// and may be cleared by final recovery; this map is the source a later
+/// success checkpoint reads.
+pub(super) fn record_conflict_diagnostics(ctx: &ExecCtx<'_>, step_id: &str, diagnostic: &Value) {
+    ctx.resumed_diagnostics
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(step_id.to_string(), diagnostic.clone());
 }
 
 // ---------------------------------------------------------------------------
