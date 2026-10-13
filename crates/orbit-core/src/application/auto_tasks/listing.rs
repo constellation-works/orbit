@@ -72,7 +72,8 @@ pub struct AutoTaskListing {
     /// surface can offer to show them.
     pub inactive_plugin_count: usize,
     /// Why the host cursor state could not be read. Every cron or interval
-    /// row is then `Unavailable` rather than silently never observed.
+    /// enabled row is then `Unavailable` rather than silently never observed.
+    /// Delivery schedules do not use time cursors and remain independent.
     pub cursor_state_error: Option<String>,
     /// Definition files that failed to load fail-closed.
     pub load_errors: Vec<AutoTaskLoadError>,
@@ -201,11 +202,16 @@ fn schedule_state(
     if !effective_enabled {
         return (ScheduleDisplayState::Disabled, next);
     }
-    if not_owned_here || cursor_state_unavailable {
+    if not_owned_here {
         return (ScheduleDisplayState::Unavailable, None);
     }
     match schedule {
         AutoTaskSchedule::Deliveries { .. } => (ScheduleDisplayState::Waiting, None),
+        AutoTaskSchedule::Cron { .. } | AutoTaskSchedule::Interval { .. }
+            if cursor_state_unavailable =>
+        {
+            (ScheduleDisplayState::Unavailable, None)
+        }
         AutoTaskSchedule::Cron { .. } | AutoTaskSchedule::Interval { .. } => match (cursor, next) {
             (None, _) => (ScheduleDisplayState::NeverObserved, None),
             (Some(_), Some(at)) => (ScheduleDisplayState::Scheduled, Some(at)),
