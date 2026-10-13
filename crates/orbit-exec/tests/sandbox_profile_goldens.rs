@@ -551,10 +551,14 @@ impl Fixture {
     }
 
     fn mask_targets(&self) -> Vec<PathBuf> {
-        vec![
+        let mut targets = vec![
             self.global.join("state/plugins"),
             self.global.join("state/plugin-secrets"),
-        ]
+        ];
+        if cfg!(target_os = "macos") {
+            targets.push(self.home.join(".orbit/ssh"));
+        }
+        targets
     }
 
     fn mask_files(&self) -> Vec<PathBuf> {

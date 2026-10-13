@@ -326,6 +326,104 @@ probe write-root ': > "$WRITE_ROOT/written"'
     );
 }
 
+/// A live SSH master is authority even without access to private keys.
+#[test]
+fn sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets() {
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    if !macos_sandbox_test_guard(
+        "sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets",
+    ) {
+        return;
+    }
+    let fixture = fixture_root_outside_profile_write_grants();
+    let root = fixture.path().canonicalize().expect("canonical fixture");
+    let sockets = root.join("global/ssh");
+    let write_root = root.join("worktree");
+    std::fs::create_dir_all(&sockets).expect("SSH socket directory");
+    std::fs::create_dir(&write_root).expect("write root");
+    let socket = sockets.join("master");
+    let listener = UnixListener::bind(&socket).expect("live host SSH master fixture");
+    listener.set_nonblocking(true).expect("bounded host accept");
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{}/**", root.display())],
+        modify: vec![format!("{}/**", write_root.display())],
+    };
+    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let binary = std::env::current_exe().expect("test binary");
+    let args = [
+        "--exact".to_string(),
+        "macos_sandbox::ssh_socket_probe_process".to_string(),
+        "--ignored".to_string(),
+        "--nocapture".to_string(),
+    ];
+    // A host connection succeeds before and after confinement. The unmasked
+    // sandbox control also connects, proving file-write denial alone does
+    // not protect a socket outside the profile's write grants.
+    for denied in [false, true] {
+        let host = UnixStream::connect(&socket).expect("host can connect to SSH master");
+        listener.accept().expect("accept host control");
+        drop(host);
+        if denied {
+            append_macos_subpath_mask(&mut profile_text, std::slice::from_ref(&sockets));
+        }
+        let env = [
+            (
+                "ORBIT_TEST_SSH_DIR".to_string(),
+                sockets.display().to_string(),
+            ),
+            ("ORBIT_TEST_SSH_DENIED".to_string(), denied.to_string()),
+        ];
+        let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: binary.to_str().expect("UTF-8 test binary path"),
+            args: &args,
+            env: &env,
+            cwd: Some(&write_root),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn SSH socket probe under sandbox-exec");
+        wait_bounded(child);
+        if !denied {
+            listener.accept().expect("accept unmasked sandbox control");
+        }
+    }
+    let host = UnixStream::connect(&socket).expect("host still connects after sandbox denial");
+    listener.accept().expect("accept final host control");
+    drop(host);
+}
+
+#[test]
+#[ignore = "spawned under Seatbelt by the SSH socket boundary test"]
+fn ssh_socket_probe_process() {
+    use std::os::unix::net::UnixStream;
+
+    let sockets = PathBuf::from(std::env::var_os("ORBIT_TEST_SSH_DIR").expect("SSH fixture"));
+    let listing = std::fs::read_dir(&sockets);
+    let connection = UnixStream::connect(sockets.join("master"));
+    if std::env::var("ORBIT_TEST_SSH_DENIED").as_deref() == Ok("true") {
+        assert_eq!(
+            listing
+                .expect_err("sandbox must refuse listing SSH sockets")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            connection
+                .expect_err("sandbox must refuse connecting to SSH master")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    } else {
+        listing.expect("unmasked sandbox can list SSH sockets");
+        connection.expect("unmasked sandbox can connect outside its write grants");
+    }
+}
+
 /// Recovery uses the prepared-root case. Seatbelt must also enforce the
 /// original absent-root deny dynamically, rather than silently dropping it.
 #[test]
