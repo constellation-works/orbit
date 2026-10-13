@@ -3,11 +3,11 @@
 //!
 //! The command runs in a fresh detached worktree of the candidate commit, so
 //! nothing the checkout holds beyond that commit can reach it and nothing the
-//! run writes reaches the checkout. Its Cargo target directory is the one the
-//! caller names unless the validation environment names one: a claimed leaf
-//! shares its checkout's, so a single test target does not rebuild every
-//! dependency; a Linux owner fulfilling a hold [ORB-14334] uses one of its
-//! own, never the operator checkout's. On macOS
+//! run writes reaches the checkout. On Linux its Cargo target follows the
+//! required-validation rule: host-owned output keyed by the detached source
+//! checkout, never the caller's potentially sandbox-built target. Elsewhere
+//! it uses the caller's target unless the validation environment names one.
+//! On macOS
 //! `ORBIT_REQUIRE_SANDBOX_EXEC=1` turns a Seatbelt test's visible skip into a
 //! failure, which the judgement then names as the host's condition.
 //!
@@ -29,7 +29,9 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::baseline::in_detached_worktree;
-use super::required_command::{VALIDATION_TIMEOUT_MS, capture, environment_record, missing_tool};
+use super::required_command::{
+    VALIDATION_TIMEOUT_MS, capture, environment_record, host_validation_target, missing_tool,
+};
 use super::worktree::scratch_checkout_path;
 
 /// Name prefix of a host-evidence checkout under the managed worktree root.
@@ -67,7 +69,8 @@ impl HostEvidenceRun {
 }
 
 /// Run `command` at `candidate`, in a worktree of `workspace_path`'s
-/// repository building into `target_dir`, and judge it. Only call this with a
+/// repository, and judge it. Linux uses host-owned output for that source
+/// checkout; elsewhere `target_dir` supplies the default target. Only call this with a
 /// command [`HostSandboxCommand::admit`] admitted: it runs on the host,
 /// outside any agent sandbox.
 pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
@@ -120,7 +123,21 @@ fn execute<H: RuntimeHost + ?Sized>(
     host_command: &str,
 ) -> HostEvidenceRun {
     let mut environment = host.validation_subprocess_environment();
-    if !environment
+    if cfg!(target_os = "linux") {
+        let target = match host_validation_target(checkout) {
+            Ok(target) => target,
+            Err(error) => {
+                return HostEvidenceRun::refused(HostEvidenceReason::RunFailed, error.to_string());
+            }
+        };
+        environment
+            .env
+            .retain(|(name, _)| name != "CARGO_TARGET_DIR");
+        environment.env.push((
+            "CARGO_TARGET_DIR".into(),
+            target.to_string_lossy().into_owned(),
+        ));
+    } else if !environment
         .env
         .iter()
         .any(|(name, value)| name == "CARGO_TARGET_DIR" && !value.is_empty())

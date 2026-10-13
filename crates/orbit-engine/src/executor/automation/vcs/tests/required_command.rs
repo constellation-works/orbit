@@ -103,6 +103,18 @@ impl crate::test_support::NullRuntimeHost for CaptureHost {}
 #[test]
 fn oversized_stdout_keeps_the_stderr_tail_and_names_the_missing_tool() {
     let dir = tempfile::tempdir().expect("temp dir");
+    // Required validation runs in a Git checkout so its host-owned Cargo
+    // target can be isolated from sandbox artifacts [F2026-10-343].
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(dir.path())
+        .output()
+        .expect("initialize validation checkout");
+    assert!(
+        init.status.success(),
+        "initialize validation checkout: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
     let under_cap = run_in(
         dir.path(),
         "printf '%s\\n' hello; printf '%s\\n' 'make: rg: No such file or directory' >&2; exit 2",
