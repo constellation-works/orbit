@@ -49,6 +49,7 @@ use orbit_types::workflow::{
 };
 use orbit_types::workspace::WorkspacePaths;
 
+use super::super::super::wait::{sleep_until_worker_exit, worker_exits_seen};
 use super::super::command::WorkerCommandConfig;
 use super::super::supervisor::{PipelineRunHost, PipelineWorkerSupervisor};
 use crate::runtime::event_bus::EventLog;
@@ -382,6 +383,7 @@ sys.exit(7)
         let (finished, completion) = mpsc::sync_channel(1);
         let child = cleanup.child.take().unwrap();
         let run_id = run.run_id.clone();
+        let exits = worker_exits_seen();
         cleanup.observer = Some(thread::spawn(move || {
             finished
                 .send(supervisor.monitor_startup(&run_id, child, &log_path, log_reader, None))
@@ -428,12 +430,25 @@ sys.exit(7)
                 "settlement needs fresh state even after the child is reaped"
             );
         }
+        assert_eq!(
+            worker_exits_seen(),
+            exits,
+            "a wait must not be woken before the observer reaps and settles its worker"
+        );
         cleanup.recover.send(()).unwrap();
         completion
             .recv_timeout(Duration::from_secs(30))
             .unwrap()
             .unwrap();
         cleanup.observer.take().unwrap().join().unwrap();
+        // A wait that read the count before this exit, even one whose sleep
+        // starts only now, returns at once; the interval only bounds failure.
+        sleep_until_worker_exit(exits, Duration::from_secs(30));
+        assert_eq!(
+            worker_exits_seen(),
+            exits + 1,
+            "one reaped worker, one wake"
+        );
         let settled = runs.get_job_run(&run.run_id).unwrap().unwrap();
         assert_eq!(
             settled.state,

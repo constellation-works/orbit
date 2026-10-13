@@ -173,7 +173,7 @@ impl PipelineWaitClock for FakeClock<'_> {
         self.elapsed.get()
     }
 
-    fn sleep(&self, duration: Duration) {
+    fn sleep(&self, duration: Duration, _exits_seen: u64) {
         (self.on_sleep)(self.elapsed.get());
         self.elapsed.set(self.elapsed.get() + duration);
     }
