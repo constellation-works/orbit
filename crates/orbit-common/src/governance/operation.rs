@@ -160,7 +160,7 @@ impl Description {
 }
 
 /// How a parameter appears on the command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum CliArgKind {
     /// A positional argument, optional (`[ID]`) when its parameter is.
     Positional,
@@ -185,6 +185,31 @@ pub enum CliArgKind {
         /// for list parameters.
         multiple: bool,
     },
+    /// A multiplexed operation's action selector, as one subcommand per
+    /// action. Each subcommand sends its action's value for this parameter
+    /// and takes the arguments the action declares; the operation's other
+    /// command-line arguments are inherited by every action.
+    Actions(&'static [CliAction]),
+}
+
+/// One subcommand of a [`CliArgKind::Actions`] selector
+/// (`orbit task reconcile-review submit`).
+///
+/// This is the command line's view of a multiplexed tool only. Which fields
+/// an action accepts stays with the handler that serves it, as for every
+/// other surface.
+#[derive(Debug, Clone, Copy)]
+pub struct CliAction {
+    /// The subcommand name (`accept-baseline`).
+    pub name: &'static str,
+    /// The selector value the subcommand sends (`accept_baseline`).
+    pub value: &'static str,
+    /// `--help` summary for the subcommand.
+    pub cli_about: &'static str,
+    /// The subcommand's own arguments, in `--help` order. Each is bound to
+    /// the operation's wire parameter of the same name, so it carries no MCP
+    /// description of its own.
+    pub params: &'static [ParamSpec],
 }
 
 impl CliArgKind {
@@ -926,6 +951,18 @@ pub(crate) const fn cli_only(
             required: false,
         }),
     }
+}
+
+/// Bind a multiplexed operation's selector to the command line as one
+/// subcommand per action. A subcommand is required, so the binding is too;
+/// each action's own help replaces the selector's.
+pub(crate) const fn cli_actions(mut param: ParamSpec, actions: &'static [CliAction]) -> ParamSpec {
+    param.cli = Some(CliBinding {
+        kind: CliArgKind::Actions(actions),
+        help: Description::Static(""),
+        required: true,
+    });
+    param
 }
 
 /// Mark a parameter required.

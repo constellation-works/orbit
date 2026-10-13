@@ -1,9 +1,10 @@
-//! The task operation registry — the migrated task verbs, declared once.
+//! The task operation registry — every task tool, declared once.
 //!
-//! The read verbs (`list`, `eligible`, `show`, `lint`) are declared here and
-//! the write verbs (`add`, `update`) in `write_operations.rs`; the other
-//! task verbs are hand-wired until their migration slice lands, and the CLI's
-//! `orbit task` mixes the two.
+//! The read verbs (`list`, `eligible`, `show`, `lint`) are declared here, the
+//! write verbs (`add`, `update`) in `write_operations.rs`, the artifact and
+//! lock verbs in `nested_operations.rs`, and the review and lifecycle verbs
+//! in `lifecycle_operations.rs`. Every task tool is declared; the CLI's
+//! `orbit task` mixes them with subcommands that have no tool.
 //!
 //! The CLI and MCP shapes of a verb may differ. `show` takes `--host`, which
 //! the CLI resolves before any runtime opens, and `list` takes the CLI-only
@@ -17,6 +18,7 @@
 use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
 use orbit_types::tool::McpToolScope;
 
+use super::lifecycle_operations::{DELETE, RECONCILE_REVIEW, REJECT, REVIEW_RESET};
 use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
 };
@@ -29,13 +31,13 @@ use crate::governance::operation::{
 
 operation_registry! {
     noun: TASK;
-    /// Every migrated verb of the task noun.
+    /// Every verb of the task noun: one per task tool.
     ///
     /// The join between the spec table here and the handler table in
     /// `orbit-core`: a new variant fails to compile in every exhaustive
     /// surface table until the verb is wired.
     pub enum TaskVerb;
-    /// The migrated task operations. `orbit task --help` lists every task
+    /// The task operations. `orbit task --help` lists every task
     /// command from its own template, so this order is not `--help` order.
     /// Within a spec, parameter order is the MCP tool schema order.
     pub const TASK_OPERATIONS;
@@ -62,6 +64,14 @@ operation_registry! {
         LocksReserve => LOCKS_RESERVE,
         /// Release a reservation.
         LocksRelease => LOCKS_RELEASE,
+        /// Renew one review lineage's budget, as an operator decision.
+        ReviewReset => REVIEW_RESET,
+        /// Validate and review a recovered delivery's changed merged head.
+        ReconcileReview => RECONCILE_REVIEW,
+        /// Reject a task.
+        Reject => REJECT,
+        /// Permanently delete a task.
+        Delete => DELETE,
     }
 }
 

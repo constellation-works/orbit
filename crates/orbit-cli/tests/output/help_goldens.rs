@@ -77,6 +77,24 @@ const CASES: &[(&[&str], &str)] = &[
     ),
     (&["task", "locks", "reserve"], "task/locks-reserve.txt"),
     (&["task", "locks", "release"], "task/locks-release.txt"),
+    (&["task", "review-reset"], "task/review-reset.txt"),
+    (&["task", "reconcile-review"], "task/reconcile-review.txt"),
+    (
+        &["task", "reconcile-review", "inspect"],
+        "task/reconcile-review-inspect.txt",
+    ),
+    (
+        &["task", "reconcile-review", "submit"],
+        "task/reconcile-review-submit.txt",
+    ),
+    (
+        &["task", "reconcile-review", "status"],
+        "task/reconcile-review-status.txt",
+    ),
+    (
+        &["task", "reconcile-review", "accept-baseline"],
+        "task/reconcile-review-accept-baseline.txt",
+    ),
     (&["plugin"], "plugin/root.txt"),
     (&["plugin", "upgrade"], "plugin/upgrade.txt"),
     (&["plugin", "remove"], "plugin/remove.txt"),

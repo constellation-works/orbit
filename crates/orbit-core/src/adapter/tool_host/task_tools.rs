@@ -1,52 +1,20 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
-use orbit_common::protocol::tool_input::{
-    optional_csv_or_string_list_alias, optional_string, required_string,
-};
+use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_types::task::{
     is_task_show_projection_field, unknown_task_show_field_message, validate_relative_artifact_path,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::OrbitRuntime;
 
-use super::input::optional_bool_alias;
-use super::json::{serialize_task_artifact_read, serialize_task_write_response};
+use super::json::serialize_task_artifact_read;
 
 /// The persisted identity travels beside the caller's response projection so
 /// redaction audit attribution does not depend on which fields were requested.
 pub(super) struct TaskWriteOutput {
     pub response: Value,
     pub persisted_id: String,
-}
-
-pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let force = optional_bool_alias(&input, &["force"])?.unwrap_or(false);
-    runtime.delete_task_guarded(&id, force)?;
-    Ok(json!({ "id": id, "deleted": true }))
-}
-
-pub(super) fn reject(
-    runtime: &OrbitRuntime,
-    input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-) -> Result<TaskWriteOutput, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let note = required_string(&input, &["note"], "note")?;
-    let response_fields = write_response_fields(&input)?;
-    let task = runtime.reject_task_with_identity(
-        &id,
-        note,
-        optional_string(&input, "comment")?,
-        agent,
-        model,
-    )?;
-    Ok(TaskWriteOutput {
-        response: serialize_task_write_response(runtime, &task, response_fields.as_deref())?,
-        persisted_id: task.id,
-    })
 }
 
 /// Read one stored artifact's bytes through the task's own artifact owner.

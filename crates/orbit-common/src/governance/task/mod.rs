@@ -1,9 +1,10 @@
 //! The task operation registry.
 //!
-//! [`operations`] is the single declaration site for every migrated task
-//! verb. CLI, MCP and runtime handler wiring derive from it; the task verbs
-//! not yet migrated stay hand-wired beside them.
+//! [`operations`] is the single declaration site for every task tool. CLI,
+//! MCP and runtime handler wiring derive from it; the task subcommands with
+//! no tool stay hand-wired beside them.
 
+mod lifecycle_operations;
 mod nested_operations;
 pub mod operations;
 mod write_operations;

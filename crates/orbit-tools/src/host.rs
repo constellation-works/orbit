@@ -103,13 +103,8 @@ pub enum OrbitBuiltinAction {
     PipelineInvoke,
     PipelineWait,
     Search,
-    /// The migrated task verbs. Task verbs not yet migrated keep their own
-    /// variants below until their slice of the migration lands.
+    /// Task verbs, one per task tool.
     Task(TaskVerb),
-    TaskDelete,
-    TaskReject,
-    TaskReconcileReview,
-    TaskReviewReset,
     /// Workflow-run verbs: ship, run reads and resume, and the auto-drain
     /// control.
     Workflow(WorkflowVerb),
