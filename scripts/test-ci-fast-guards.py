@@ -141,12 +141,13 @@ else:
         workflow.write_text(workflow.read_text().replace(
             "cargo test -p orbit-types fixture_test", command))
 
-    def run_guard(self, name, *arguments):
+    def run_guard(self, name, *arguments, env_overrides=None):
         for call in self.guard_calls.iterdir():
             call.unlink()
         shutil.copy2(SCRIPTS / name, self.scripts / name)
         return subprocess.run(["/bin/bash", str(self.scripts / name), *arguments],
-                              env=self.env, text=True, capture_output=True)
+                              env=dict(self.env, **(env_overrides or {})),
+                              text=True, capture_output=True)
 
     def prepare_ci(self):
         source = (SCRIPTS / "ci-guardrails.sh").read_text()
@@ -553,6 +554,18 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     for name, manifest in manifests.items()]
         self.metadata.write_text(json.dumps(dict(workspace_members=list(manifests), packages=packages)))
         return self.run_guard("check-dependency-direction.sh")
+
+    def test_dependency_direction_fails_when_ripgrep_is_missing(self):
+        without_rg = self.root / "without-rg"
+        without_rg.mkdir()
+        shutil.copy2(shutil.which("dirname"), without_rg / "dirname")
+
+        result = self.run_guard("check-dependency-direction.sh",
+                                env_overrides={"PATH": str(without_rg)})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ripgrep (rg) is required; install it before running", result.stderr)
+        self.assertNotIn("dependency direction guard passed", result.stdout)
 
     def test_allowed_dependency_on_native_bash(self):
         result = self.dependency_result("orbit-common", "orbit-types")

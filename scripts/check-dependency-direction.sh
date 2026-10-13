@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "check-dependency-direction: ripgrep (rg) is required; install it before running" >&2
+  exit 1
+fi
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 fail=0
