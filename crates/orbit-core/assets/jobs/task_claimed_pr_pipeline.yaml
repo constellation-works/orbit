@@ -512,7 +512,9 @@ spec:
     # No branch publication, PR or reviewer is needed for a verified clean base.
     # [ORB-14791] A `no-diff-expected` review reaches here with no report: the
     # commit step pins the tag's skip to this run and base instead, and refuses
-    # a changed worktree, since this route cannot deliver code.
+    # a changed worktree, since this route cannot deliver code. [ORB-15764]
+    # That skip runs no required command or replay here, as the owner's own
+    # pipeline skips `validate` for the tag; a verified report still does.
     - id: validate_no_diff
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_validate
@@ -522,8 +524,8 @@ spec:
         base_sha: "{{ steps.worktree.output.base_sha }}"
         skipped_no_diff_expected: true
         already_landed_checkpoint: "{{ steps.commit.output }}"
-        # ORB-15287: the clean base replays a gate the implementer's sandbox
-        # deferred, as the ordinary route does.
+        # ORB-15287: a verified clean base replays a gate the implementer's
+        # sandbox deferred, as the ordinary route does.
         implementation: "{{ steps.implement_one.output }}"
 
     - id: handoff_no_diff

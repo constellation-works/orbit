@@ -25,7 +25,8 @@ impl TaskCommitBoundary {
     ) -> Result<(), OrbitError> {
         use HandoffReviewRefusal as R;
         // No candidate or PR exists to review. The owner independently
-        // verifies the clean-base report and required validation instead.
+        // verifies the clean-base report and, unless it is a
+        // `no-diff-expected` skip, required validation instead.
         if matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }) {
             if handoff.review != HandoffReview::not_required() {
                 return Err(review_refused(

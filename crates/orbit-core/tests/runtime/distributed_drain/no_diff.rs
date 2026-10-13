@@ -216,23 +216,19 @@ impl CleanLeaf {
         )
     }
 
-    /// A tagged review whose follower names a baseline gate beside the
+    /// A verified clean leaf whose follower names a baseline gate beside the
     /// required command, as `make ci-test-affected` is in the shipped
     /// configuration. The implementer may hand its Bubblewrap deferrals off
     /// by setting `implementation.deferred_sandbox_validation` [ORB-15287].
+    /// A `no-diff-expected` skip replays nothing [ORB-15764], so the leaf
+    /// proves its clean tree with `no-diff.json`.
     fn gated(completion: &str) -> Self {
         Self::gated_on(completion, GateOn::Both)
     }
 
     /// [`Self::gated`], with the gate named only where `on` says.
     fn gated_on(completion: &str, on: GateOn) -> Self {
-        Self::build_with(
-            false,
-            completion,
-            &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
-            false,
-            Some(on),
-        )
+        Self::build_with(false, completion, &[], true, Some(on))
     }
 
     fn build(already_landed: bool, completion: &str, tags: &[&str], report: bool) -> Self {
@@ -249,16 +245,23 @@ impl CleanLeaf {
         Self::build_requiring(already_landed, completion, tags, report, gated, CHECK, "")
     }
 
-    /// A tagged clean leaf whose owner and follower require `red`'s command
+    /// A verified clean leaf whose owner and follower require `red`'s command
     /// instead of [`CHECK`] [ORB-15427].
     fn red(red: &RedCheck) -> Self {
+        Self::build_requiring(false, "done", &[], true, None, &red.command(), "")
+    }
+
+    /// A tagged review whose owner and follower require `check`'s command and
+    /// name the [`Gate`] as a baseline command: the skip must run neither
+    /// [ORB-15764].
+    fn tagged_requiring(completion: &str, check: &RedCheck) -> Self {
         Self::build_requiring(
             false,
-            "done",
+            completion,
             &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
             false,
-            None,
-            &red.command(),
+            Some(GateOn::Both),
+            &check.command(),
             "",
         )
     }
@@ -809,6 +812,160 @@ fn a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner() {
                 .any(|path| path == "already-landed.json" || path == "no-diff.json"),
             "a review writes no clean-tree report: {artifacts:?}"
         );
+        fixture.assert_no_blocked();
+    }
+}
+
+/// [ORB-15764] A claimed `no-diff-expected` review compiles nothing, as the
+/// owner's own pipelines skip `validate` for the tag: its leaf runs no
+/// required command and replays no deferred gate on its clean base, and hands
+/// off `NoDiff` with no validation logs. The owner accepts, approves and lands
+/// that handoff without running them either. The required command here fails
+/// whenever it runs, and both it and the gate count every run.
+#[test]
+fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
+    use orbit_core::application::review::ExpectedCandidate;
+
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it",
+    ) {
+        return;
+    }
+    for (job, step, completion) in [
+        ("task_claimed_pr_pipeline", "validate_no_diff", "done"),
+        ("task_claimed_local_pipeline", "validate", "done"),
+        ("task_claimed_pr_pipeline", "validate_no_diff", "review"),
+    ] {
+        let check = RedCheck::new();
+        let mut fixture = CleanLeaf::tagged_requiring(completion, &check);
+        fixture.hand_off_deferral();
+        fixture.attach("automation-coverage.json", json!({"findings": []}));
+        let outcome = fixture.execute_clean_pipeline(job).unwrap();
+        assert!(outcome.success, "{job}: {outcome:#?}");
+        let validated = &outcome.pipeline[step];
+        assert_eq!(
+            validated["decision"], "skipped_no_diff_expected",
+            "{job}: {validated:#}"
+        );
+        assert_eq!(validated["validation"], json!([]), "{job}");
+        let ClaimMutation::AcceptHandoff(handoff) =
+            fixture.pair.admission(&fixture.leaf).settlement.unwrap()
+        else {
+            panic!("{job}: typed handoff required")
+        };
+        assert!(
+            matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }),
+            "{job}"
+        );
+        assert!(handoff.validation.is_empty(), "{job}: {handoff:?}");
+        assert!(
+            handoff
+                .execution_summary
+                .contains("no-diff-expected and changed nothing"),
+            "{job}: {}",
+            handoff.execution_summary
+        );
+
+        let settled = fixture
+            .settle(&handoff)
+            .expect("the owner accepts a tagged skip without logs");
+        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        let owner = &fixture.pair.wire.owner;
+        let accepted = owner.accepted_task_handoff(&handoff.claim_id).unwrap();
+        if completion == "review" {
+            assert!(owner.landing_start_requests().unwrap().is_empty(), "{job}");
+            owner
+                .approve_handoff_as_operator(
+                    &accepted.handoff_id,
+                    &ExpectedCandidate {
+                        candidate_commit: fixture.base.clone(),
+                        base_commit: fixture.base.clone(),
+                    },
+                    "operator",
+                    "approve-no-diff-expected",
+                )
+                .expect("the operator approves a tagged skip without logs");
+        }
+        let landed = engine_action(
+            owner,
+            "handoff_land",
+            &json!({"handoff_id": accepted.handoff_id}),
+        )
+        .expect("the owner lands a tagged skip without logs");
+        assert_eq!(landed["evidence"]["delivery"], "no_diff", "{landed}");
+        assert_eq!(fixture.pair.owner_status(&fixture.task), "done", "{job}");
+        assert_eq!(check.runs(), 0, "{job}: no host ran the required command");
+        assert_eq!(
+            fixture.gate.as_ref().unwrap().runs(),
+            0,
+            "{job}: no host replayed the deferred gate"
+        );
+        fixture.assert_no_blocked();
+    }
+}
+
+/// [ORB-15764] A claim admitted before the owner upgraded can settle after it.
+/// Its older leaf still pinned a log per required command for the tagged
+/// skip; the upgraded owner accepts that handoff, and still checks each log
+/// it carries, so one pinned for another run is refused.
+#[test]
+fn an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them() {
+    if !isolated(
+        module_path!(),
+        "an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them",
+    ) {
+        return;
+    }
+    for forged in [false, true] {
+        let check = RedCheck::new();
+        let fixture = CleanLeaf::tagged_requiring("done", &check);
+        let mut handoff = fixture.prepare_handoff();
+        assert!(handoff.validation.is_empty(), "{handoff:?}");
+        let log = HandoffValidationLog {
+            schema_version: 1,
+            workspace_id: handoff.workspace_id.clone(),
+            task_id: handoff.task_id.clone(),
+            claim_id: handoff.claim_id.clone(),
+            machine_id: handoff.machine_id.clone(),
+            run_id: if forged {
+                "another-run".into()
+            } else {
+                handoff.run_id.clone()
+            },
+            candidate: handoff.candidate.clone(),
+            tested_head: handoff.candidate.candidate.commit.clone(),
+            command: check.command(),
+            exit_code: 0,
+            output: "test suite::broken ... ok".into(),
+            known_red: None,
+            flaky: None,
+        };
+        let path = format!("validation/{}/0.json", handoff.claim_id);
+        let content = serde_json::to_vec(&log).unwrap();
+        fixture
+            .bound
+            .attach_claim_validation_log(&path, content.clone())
+            .unwrap();
+        handoff.validation.push(HandoffArtifactRef {
+            path,
+            sha256: sha256_hex(&content),
+        });
+        let settled = fixture.settle(&handoff);
+        if forged {
+            let error = settled.expect_err("a log for another run is refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains("validation must pass for the exact claim/run/candidate/base"),
+                "{error}"
+            );
+            assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+        } else {
+            let settled = settled.expect("the owner accepts the older leaf's logs");
+            assert_eq!(settled["status"], "review", "{settled}");
+        }
+        assert_eq!(check.runs(), 0, "forged={forged}");
         fixture.assert_no_blocked();
     }
 }
