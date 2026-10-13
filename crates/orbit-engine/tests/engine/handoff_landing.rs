@@ -14,6 +14,7 @@
 //! Evidence that cannot be read decides none of those and spends nothing,
 //! and a branch update is verified against the base as the provider merged
 //! it, not as the owner last fetched it [ORB-15970].
+//! A cached updated head cannot bypass a failed initial fetch [ORB-15976].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1210,6 +1211,90 @@ fn a_branch_update_is_verified_against_the_base_it_merged() {
             assert!(forge.sent("pr.merge").is_empty(), "{shape:?}");
         }
     }
+}
+
+/// [ORB-15976] An earlier provider update and its base are already cached
+/// locally, but origin becomes unreachable before landing starts. Cached
+/// containment cannot authorize adoption: stop without spending recovery.
+/// Restoring origin with the same objects lets the same head land.
+#[test]
+fn a_cached_branch_update_requires_a_fresh_landing_base() {
+    super::git_fixture::isolated(
+        module_path!(),
+        "a_cached_branch_update_requires_a_fresh_landing_base",
+        || {
+            let sandbox = tempdir().unwrap();
+            let remote = tempdir().unwrap();
+            let mut forge = FakeForge::new(sandbox.path(), true);
+            let candidate = forge.context.candidate.candidate.commit.clone();
+            forge.publish(remote.path());
+            let head = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
+            git(&forge.repo, &["fetch", "-q", "origin"]);
+            let base = git(&forge.repo, &["rev-parse", "origin/main"]);
+            assert_eq!(
+                git(&forge.repo, &["rev-list", "--parents", "-n", "1", &head]),
+                format!("{head} {candidate} {base}"),
+                "the genuine updated head and its base are cached before fetch fails"
+            );
+            forge.state.lock().unwrap().head = head.clone();
+            forge.job(&head, passed(1, 11));
+            let unreachable = remote.path().join("unreachable.git");
+            git(
+                &forge.repo,
+                &[
+                    "remote",
+                    "set-url",
+                    "origin",
+                    &unreachable.to_string_lossy(),
+                ],
+            );
+
+            land_with(&forge, json!({"max_wait_seconds": 0}))
+                .expect_err("a cached branch update cannot land after the initial fetch fails");
+
+            assert_eq!(
+                forge.steps(),
+                vec![HandoffLandingStep::Stop { repairable: false }]
+            );
+            for operation in ["ci.rerun_failed", "pr.update_branch", "pr.merge"] {
+                assert!(
+                    forge.sent(operation).is_empty(),
+                    "unreachable origin sent {operation}"
+                );
+            }
+            assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
+            assert_eq!(forge.state.lock().unwrap().head, head);
+
+            git(
+                &forge.repo,
+                &[
+                    "remote",
+                    "set-url",
+                    "origin",
+                    &remote.path().to_string_lossy(),
+                ],
+            );
+            forge.ops.lock().unwrap().clear();
+            forge.updates.lock().unwrap().clear();
+
+            let outcome = land_with(&forge, json!({"max_wait_seconds": 0}))
+                .expect("the identical cached head lands once origin is reachable");
+
+            assert_eq!(outcome["phase"], "landed");
+            assert_eq!(forge.sent("pr.merge").len(), 1);
+            assert_eq!(
+                forge.sent("pr.merge")[0]["reviewed_head_sha"],
+                head.as_str()
+            );
+            assert!(forge.sent("ci.rerun_failed").is_empty());
+            assert!(forge.sent("pr.update_branch").is_empty());
+            assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
+            let evidence: Value = serde_json::from_str(&forge.last_evidence()).unwrap();
+            assert_eq!(evidence["updated_head"], head.as_str());
+            assert!(evidence.get("check_recovery").is_none());
+            assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+        },
+    );
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
