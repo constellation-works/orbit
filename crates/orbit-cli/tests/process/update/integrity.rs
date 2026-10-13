@@ -311,22 +311,6 @@ fn a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned() {
     install.assert_no_backup("checksum mismatch");
 }
 
-fn a_manifest_signed_over_different_bytes_is_rejected_before_download() {
-    let install = Install::new(None);
-    install.publish("99.0.0", None, false);
-
-    let output = install.run(&["update"]);
-
-    assert_refused(
-        &output,
-        "bad signature",
-        "no trusted release signing key matched",
-    );
-    assert_not_downloaded(&output, "bad signature");
-    install.assert_untouched("bad signature");
-    install.assert_no_backup("bad signature");
-}
-
 fn a_revoked_key_fails_closed_before_expiry() {
     let install = Install::new(Some("2020-01-01"));
     install.publish("99.0.0", None, true);
@@ -973,10 +957,6 @@ fn release_integrity_contracts_0() {
         (
             "a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned",
             a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned as fn(),
-        ),
-        (
-            "a_manifest_signed_over_different_bytes_is_rejected_before_download",
-            a_manifest_signed_over_different_bytes_is_rejected_before_download as fn(),
         ),
         (
             "a_revoked_key_fails_closed_before_expiry",

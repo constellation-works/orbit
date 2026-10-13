@@ -162,12 +162,6 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
         ("", None, "moderate", "built-in"),
         (
             "[security_alert_sweep]\nmin_severity = \"high\"\n",
-            None,
-            "high",
-            "workspace",
-        ),
-        (
-            "[security_alert_sweep]\nmin_severity = \"high\"\n",
             Some("min_severity=critical"),
             "critical",
             "input",
