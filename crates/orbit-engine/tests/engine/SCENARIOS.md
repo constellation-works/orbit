@@ -622,3 +622,7 @@ Each named row keeps a fresh disposable home, temporary directory, cwd, authorit
 - `a_forged_admission_value_does_not_admit_the_mode`
 - `an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox`
 - `distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit`
+
+## QA required selector reconciliation
+
+The workflow-process-boundary inventory now requires the surviving families above. Its two old required selectors `v2_runtime::deterministic_reference_dispatches_and_persists_audit_events` and `v2_runtime::parallel_join_policy_decides_the_block_from_its_branches` both execute in `v2_runtime::runtime_contracts_1`; the inventory requires that family once because duplicate required selectors are invalid. Both behavioral rows and their assertions remain required inside that family. The other eight old required selectors each map to the family listed above. No surface, behavior class or assertion entry was removed.
