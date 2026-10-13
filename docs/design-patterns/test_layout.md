@@ -175,3 +175,14 @@ those cases under `src/tests/` would not expose a private seam that the public
 boundary needs. Keep `src/<module>/tests/` for admitted private logic,
 deterministic interleavings, fault injection and platform behavior that the
 crate-root boundary cannot reach economically.
+
+
+Orbit-store's public persistence cases are grouped by boundary in
+`tests/file_store.rs`, `tests/task_mutations.rs`, `tests/migration_freeze.rs`,
+`tests/task_registry_ledger.rs` and `tests/publication.rs`, with supporting modules
+under matching directories. `tests/support/mod.rs` supplies isolated child
+execution and the shared task-creation fixture. Disk snapshots used as fixture
+evidence deserialize exported persisted types; they do not copy the private
+bundle reader. Private builders, ledger prefixes, counters and publication stage
+hooks remain beside their source as documented in the
+[per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json).

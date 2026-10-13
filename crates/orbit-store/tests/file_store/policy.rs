@@ -1,6 +1,6 @@
-use super::super::policy_def_store::PolicyDefFileStore;
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_store::compose::global_policy_def_store;
 use orbit_types::policy::PolicyDef;
 use std::collections::HashMap;
 use tempfile::tempdir;
@@ -20,8 +20,11 @@ fn baseline_def(name: &str) -> PolicyDef {
 
 #[test]
 fn rejects_traversal_policy_name_without_external_write() {
+    if !crate::support::isolated("policy::rejects_traversal_policy_name_without_external_write") {
+        return;
+    }
     let dir = tempdir().expect("tempdir");
-    let store = PolicyDefFileStore::new(dir.path().join("policies"));
+    let store = global_policy_def_store(dir.path().join("policies"));
 
     let err = store
         .upsert_policy_def(&baseline_def("../x"))
@@ -37,6 +40,9 @@ fn rejects_traversal_policy_name_without_external_write() {
 
 #[test]
 fn rejects_traversal_policy_metadata_name_when_loading() {
+    if !crate::support::isolated("policy::rejects_traversal_policy_metadata_name_when_loading") {
+        return;
+    }
     let dir = tempdir().expect("tempdir");
     let policies_dir = dir.path().join("policies");
     std::fs::create_dir_all(&policies_dir).expect("mkdir");
@@ -46,7 +52,7 @@ fn rejects_traversal_policy_metadata_name_when_loading() {
     )
     .expect("seed");
 
-    let store = PolicyDefFileStore::new(policies_dir);
+    let store = global_policy_def_store(policies_dir);
     let err = store
         .list_policy_defs()
         .expect_err("traversal metadata name must fail");

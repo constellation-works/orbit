@@ -5,8 +5,8 @@ use std::fs;
 use orbit_types::task::{TaskRelation, TaskRelationType, TaskStatus};
 use tempfile::TempDir;
 
-use super::super::{RegisterWorkspaceParams, TaskRegistryStore};
-use super::{envelope, store};
+use super::*;
+use orbit_store::maintenance::task_registry::RegisterWorkspaceParams;
 
 /// Relation validation reads a reachable subgraph rather than the whole
 /// relation table, and the walk has to cross workspace boundaries: a relation
@@ -15,8 +15,11 @@ use super::{envelope, store};
 /// write.
 #[test]
 fn relation_cycle_through_another_workspace_is_rejected() {
+    if !isolated("relations::relation_cycle_through_another_workspace_is_rejected") {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
-    let store = store(&temp);
+    let store = TaskRegistryStore::open(&task_registry_path(temp.path())).unwrap();
     let first = store
         .register_workspace(RegisterWorkspaceParams {
             partition_id: "logical-first-aaaaaa".into(),
@@ -115,4 +118,40 @@ fn register_indexed_task(
         )
         .expect("index task");
     task_id
+}
+
+use chrono::{TimeZone, Utc};
+use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskType};
+fn envelope(
+    task_id: &str,
+    status: TaskStatus,
+    tags: Vec<String>,
+    relations: Vec<TaskRelation>,
+) -> TaskEnvelopeV2 {
+    let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
+    TaskEnvelopeV2 {
+        job_run_machine: None,
+        schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+        id: task_id.to_string(),
+        title: format!("Task {task_id}"),
+        status,
+        task_type: TaskType::Feature,
+        priority: TaskPriority::High,
+        complexity: None,
+        pr_status: None,
+        job_run_id: None,
+        crew: None,
+        crew_source: None,
+        orchestrator: None,
+        relations,
+        tags,
+        required_tools: Vec::new(),
+        context_files: Vec::new(),
+        external_refs: Vec::new(),
+        created_by: Some("codex:gpt-5.5".to_string()),
+        planned_by: None,
+        implemented_by: None,
+        created_at: now,
+        updated_at: now,
+    }
 }

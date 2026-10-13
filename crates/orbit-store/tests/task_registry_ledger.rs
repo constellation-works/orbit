@@ -505,3 +505,6 @@ fn a_newer_registry_is_decided_from_its_compatibility_record() {
         assert!(error.contains("newer_registry_change"), "{error}");
     }
 }
+
+#[path = "task_registry/relations.rs"]
+mod relations;

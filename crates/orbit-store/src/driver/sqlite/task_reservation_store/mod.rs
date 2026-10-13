@@ -9,7 +9,3 @@ mod workspace_claim;
 
 pub(super) use rows::reserve_files_in_tx;
 use rows::{expire_reservations_in_scope, reservation_scope_clause, unique_row_id};
-
-#[cfg(test)]
-#[cfg(test)]
-mod tests;

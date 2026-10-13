@@ -1,8 +1,9 @@
 //! [ORB-10709] The persisted workspace claim carries a bearer token, so its
 //! file must stay private to the owning user.
 
-use crate::Store;
-use crate::WorkspaceClaimAcquireParams;
+use super::*;
+use orbit_store::Store;
+use orbit_store::contracts::WorkspaceClaimAcquireParams;
 
 fn acquire_params(actor: &str) -> WorkspaceClaimAcquireParams {
     WorkspaceClaimAcquireParams {
@@ -18,6 +19,11 @@ fn acquire_params(actor: &str) -> WorkspaceClaimAcquireParams {
 #[cfg(unix)]
 #[test]
 fn persisted_workspace_claim_is_not_group_or_world_readable() {
+    if !support::isolated(
+        "workspace_claim::persisted_workspace_claim_is_not_group_or_world_readable",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().expect("tempdir");

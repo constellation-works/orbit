@@ -1,22 +1,30 @@
 //! Publication transport is a separate workflow area. Its security fixture
 //! owns a child process with a private PATH so no real transport can run.
 
-#![cfg(unix)]
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use orbit_common::{process, test_env};
+#[cfg(unix)]
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+#[cfg(unix)]
 use orbit_store::workflow::task::{
     PublicationInspectRequest, PublicationRestoreMode, PublicationRestoreRequest,
     inspect_publication, restore_publication,
 };
 
+#[cfg(unix)]
 #[test]
 fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
     const TEST: &str = "inspect_and_restore_refuse_credentials_before_git_or_cache_writes";
@@ -117,6 +125,7 @@ fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
     }
 }
 
+#[cfg(unix)]
 fn request(remote: &str, cache: &Path) -> PublicationInspectRequest {
     PublicationInspectRequest {
         workspace_id: "ws_consumer".into(),
@@ -129,3 +138,14 @@ fn request(remote: &str, cache: &Path) -> PublicationInspectRequest {
         commit: None,
     }
 }
+
+#[path = "publication/inspect.rs"]
+mod inspect;
+mod support;
+
+#[path = "publication/pending.rs"]
+mod pending;
+
+#[cfg(unix)]
+#[path = "publication/archive.rs"]
+mod archive;

@@ -1,6 +1,6 @@
-use super::super::executor_def_store::ExecutorDefFileStore;
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_store::compose::global_executor_def_store;
 use orbit_types::workflow::ExecutorDef;
 use orbit_types::workflow::ExecutorType;
 use std::collections::HashMap;
@@ -28,8 +28,12 @@ fn baseline_def(name: &str) -> ExecutorDef {
 
 #[test]
 fn rejects_traversal_executor_name_without_external_write() {
+    if !crate::support::isolated("executor::rejects_traversal_executor_name_without_external_write")
+    {
+        return;
+    }
     let dir = tempdir().expect("tempdir");
-    let store = ExecutorDefFileStore::new(dir.path().join("executors"));
+    let store = global_executor_def_store(dir.path().join("executors"));
 
     let err = store
         .upsert_executor_def(&baseline_def("../x"))
@@ -45,6 +49,10 @@ fn rejects_traversal_executor_name_without_external_write() {
 
 #[test]
 fn rejects_traversal_executor_metadata_name_when_loading() {
+    if !crate::support::isolated("executor::rejects_traversal_executor_metadata_name_when_loading")
+    {
+        return;
+    }
     let dir = tempdir().expect("tempdir");
     let executors_dir = dir.path().join("executors");
     std::fs::create_dir_all(&executors_dir).expect("mkdir");
@@ -54,7 +62,7 @@ fn rejects_traversal_executor_metadata_name_when_loading() {
         )
         .expect("seed");
 
-    let store = ExecutorDefFileStore::new(executors_dir);
+    let store = global_executor_def_store(executors_dir);
     let err = store
         .list_executor_defs()
         .expect_err("traversal metadata name must fail");

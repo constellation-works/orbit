@@ -8,7 +8,7 @@ use orbit_types::task::{
 };
 
 use super::*;
-use crate::contracts::{
+use orbit_store::contracts::{
     AtomicTaskMutationOutcome, AtomicTaskMutationParams, DesktopTaskMutationParams,
     TaskDocumentUpdateParams,
 };
@@ -24,37 +24,53 @@ fn scope(selectors: &[&str]) -> Vec<String> {
         .collect()
 }
 
-fn granted_task(store: &TaskV2Store, context_files: &[&str], authorize: &[&str]) -> String {
+fn granted_task(
+    store: &WorkspaceTaskBackends,
+    context_files: &[&str],
+    authorize: &[&str],
+) -> String {
     let mut params = create_params("Grant", TaskStatus::Proposed);
     params.context_files = scope(context_files);
     params.context_creation = scope(authorize);
-    store.create_task(params).expect("create task").id
+    store.task.create_task(params).expect("create task").id
 }
 
-fn state(store: &TaskV2Store, id: &str) -> ContextCreationState {
-    creation_state(&store.bundle_store.read_bundle(id).expect("read bundle"))
+fn state(_store: &WorkspaceTaskBackends, id: &str) -> ContextCreationState {
+    creation_state(&snapshot(id))
 }
 
-fn old_client_rescope(store: &TaskV2Store, id: &str, context_files: &[&str]) {
-    store
-        .with_task_lock(id, || {
-            let mut bundle = store.bundle_store.read_bundle(id)?;
-            bundle.envelope.context_files = scope(context_files);
-            bundle.envelope.updated_at += chrono::Duration::seconds(1);
-            store.bundle_store.rewrite_envelope(id, &bundle.envelope)
-        })
-        .expect("old client envelope update");
+fn old_client_rescope(_store: &WorkspaceTaskBackends, id: &str, context_files: &[&str]) {
+    let mut envelope = snapshot(id).envelope;
+    envelope.context_files = scope(context_files);
+    envelope.updated_at += chrono::Duration::seconds(1);
+    std::fs::write(
+        bundle_path(id).join(TASK_ENVELOPE_FILE_NAME),
+        serde_yaml::to_string(&envelope).unwrap(),
+    )
+    .unwrap();
+}
+
+fn creation_state(bundle: &Snapshot) -> ContextCreationState {
+    ContextCreationState::resolve(
+        &bundle.envelope.id,
+        &bundle.envelope.context_files,
+        bundle.envelope.updated_at,
+        bundle
+            .events
+            .iter()
+            .map(|event| (event.event_type.as_str(), event.note.as_deref())),
+    )
 }
 
 fn rescope(
-    store: &TaskV2Store,
+    store: &WorkspaceTaskBackends,
     id: &str,
     context_files: &[&str],
     authorize: &[&str],
 ) -> Result<(), OrbitError> {
-    store.update_task_document(
+    store.document.update_task_document(
         id,
-        &TaskDocumentUpdateParams {
+        TaskDocumentUpdateParams {
             actor: "operator".to_string(),
             context_files: Some(scope(context_files)),
             context_creation: scope(authorize),
@@ -64,13 +80,14 @@ fn rescope(
 }
 
 fn pilot_write(
-    store: &TaskV2Store,
+    store: &WorkspaceTaskBackends,
     id: &str,
     expected: Option<String>,
     context_files: &[&str],
 ) -> AtomicTaskMutationOutcome {
-    let bundle = store.bundle_store.read_bundle(id).expect("read bundle");
+    let bundle = snapshot(id);
     store
+        .task
         .apply_atomic_task_mutation(
             id,
             &AtomicTaskMutationParams {
@@ -105,14 +122,19 @@ fn pilot_write(
 /// back with the scope.
 #[test]
 fn a_failed_scope_write_leaves_neither_its_scope_nor_its_grant() {
+    if !support::isolated(
+        "creation_grant::a_failed_scope_write_leaves_neither_its_scope_nor_its_grant",
+    ) {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
-    let before = store.bundle_store.read_bundle(&id).expect("read bundle");
+    let before = snapshot(&id);
 
-    let failed = store.update_task_document(
+    let failed = store.document.update_task_document(
         &id,
-        &TaskDocumentUpdateParams {
+        TaskDocumentUpdateParams {
             actor: "operator".to_string(),
             context_files: Some(scope(&[EXISTING, NEW, OTHER_NEW])),
             context_creation: scope(&[OTHER_NEW]),
@@ -127,7 +149,7 @@ fn a_failed_scope_write_leaves_neither_its_scope_nor_its_grant() {
         failed.is_err(),
         "the fixture write must fail after the grant append"
     );
-    let after = store.bundle_store.read_bundle(&id).expect("read bundle");
+    let after = snapshot(&id);
     assert_eq!(after.events, before.events);
     assert_eq!(after.envelope.context_files, before.envelope.context_files);
     assert_eq!(state(&store, &id).selectors(), [NEW]);
@@ -141,6 +163,9 @@ fn a_failed_scope_write_leaves_neither_its_scope_nor_its_grant() {
 /// returns the scope a voided grant was bound to.
 #[test]
 fn revoked_or_voided_grants_never_revive() {
+    if !support::isolated("creation_grant::revoked_or_voided_grants_never_revive") {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
@@ -170,6 +195,11 @@ fn revoked_or_voided_grants_never_revive() {
 
 #[test]
 fn maintained_document_edits_rebind_creation_intent_to_the_new_revision() {
+    if !support::isolated(
+        "creation_grant::maintained_document_edits_rebind_creation_intent_to_the_new_revision",
+    ) {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
@@ -179,9 +209,10 @@ fn maintained_document_edits_rebind_creation_intent_to_the_new_revision() {
     let before = before_grant.identity();
 
     store
+        .document
         .update_task_document(
             &id,
-            &TaskDocumentUpdateParams {
+            TaskDocumentUpdateParams {
                 actor: "operator".to_string(),
                 title: Some("renamed task".to_string()),
                 ..Default::default()
@@ -201,16 +232,25 @@ fn maintained_document_edits_rebind_creation_intent_to_the_new_revision() {
 
 #[test]
 fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
+    if !support::isolated(
+        "creation_grant::desktop_comment_refreshes_the_revision_seal_without_changing_intent",
+    ) {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
     let ContextCreationState::Current(before_grant) = state(&store, &id) else {
         panic!("authorized task has a current grant");
     };
-    let revision = store.desktop_task_revision(&id).expect("desktop revision");
+    let revision = store
+        .task
+        .desktop_task_revision(&id)
+        .expect("desktop revision");
 
     assert_eq!(
         store
+            .task
             .apply_desktop_task_mutation(
                 &id,
                 &DesktopTaskMutationParams {
@@ -242,21 +282,21 @@ fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
 /// retained and re-bound to the pilot's scope.
 #[test]
 fn the_atomic_pilot_write_compares_and_carries_the_grant() {
+    if !support::isolated("creation_grant::the_atomic_pilot_write_compares_and_carries_the_grant") {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
     let identity = state(&store, &id).identity();
     assert!(identity.is_some());
 
-    let events = store.bundle_store.read_bundle(&id).expect("read").events;
+    let events = snapshot(&id).events;
     assert_eq!(
         pilot_write(&store, &id, None, &[EXISTING, NEW]),
         AtomicTaskMutationOutcome::Stale
     );
-    assert_eq!(
-        store.bundle_store.read_bundle(&id).expect("read").events,
-        events
-    );
+    assert_eq!(snapshot(&id).events, events);
 
     assert_eq!(
         pilot_write(
@@ -280,6 +320,11 @@ fn the_atomic_pilot_write_compares_and_carries_the_grant() {
 /// an assessment made before revoke + reauthorize must not pass the store CAS.
 #[test]
 fn revoke_and_same_scope_reauthorization_changes_the_pilot_generation() {
+    if !support::isolated(
+        "creation_grant::revoke_and_same_scope_reauthorization_changes_the_pilot_generation",
+    ) {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
@@ -302,19 +347,26 @@ fn revoke_and_same_scope_reauthorization_changes_the_pilot_generation() {
 /// Only scope writes record a grant; a caller-supplied history row cannot.
 #[test]
 fn a_history_append_cannot_forge_a_grant() {
+    if !support::isolated("creation_grant::a_history_append_cannot_forge_a_grant") {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[]);
-    let task = store.get_task(&id).expect("get task").expect("task exists");
+    let task = store
+        .task
+        .get_task(&id)
+        .expect("get task")
+        .expect("task exists");
     let forged = orbit_types::task::ContextCreationGrant::new(
         &id,
         scope(&[NEW]),
         &scope(&[EXISTING, NEW]),
         task.updated_at,
     );
-    let refused = store.update_task_history(
+    let refused = store.history.update_task_history(
         &id,
-        &TaskHistoryUpdateParams {
+        TaskHistoryUpdateParams {
             actor: "agent".to_string(),
             append_history: vec![TaskHistoryEntry {
                 at: Utc::now(),
@@ -337,6 +389,11 @@ fn a_history_append_cannot_forge_a_grant() {
 /// commits last leaves a grant bound to the scope it stored.
 #[test]
 fn concurrent_scope_writes_leave_a_grant_bound_to_the_final_scope() {
+    if !support::isolated(
+        "creation_grant::concurrent_scope_writes_leave_a_grant_bound_to_the_final_scope",
+    ) {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
@@ -355,7 +412,7 @@ fn concurrent_scope_writes_leave_a_grant_bound_to_the_final_scope() {
             });
         }
     });
-    let bundle = store.bundle_store.read_bundle(&id).expect("read bundle");
+    let bundle = snapshot(&id);
     let ContextCreationState::Current(grant) = creation_state(&bundle) else {
         panic!("a maintained write never leaves the grant void");
     };

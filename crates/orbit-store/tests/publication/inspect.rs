@@ -2,9 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{
+use orbit_store::workflow::task::{
     PublicationInspectRequest, PublicationRestoreMode, PublicationRestoreRequest,
-    inspect_publication, open_registry, restore_publication,
+    inspect_publication, restore_publication,
 };
 
 /// Bytes that exist only in the host file a publication symlink names.
@@ -130,6 +130,11 @@ impl Fixture {
 /// must not show up in the error or the canonical store.
 #[test]
 fn publication_consume_refuses_symlink_before_reading_the_target() {
+    if !super::support::isolated(
+        "inspect::publication_consume_refuses_symlink_before_reading_the_target",
+    ) {
+        return;
+    }
     for planted in [PlantedLink::Envelope, PlantedLink::Description] {
         let fixture = Fixture::plant(planted);
         let inspected = inspect_publication(fixture.request())
@@ -257,4 +262,9 @@ fn assert_tree_excludes(root: &Path, sentinel: &str) {
             }
         }
     }
+}
+
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+fn open_registry(global: &Path) -> TaskRegistryStore {
+    TaskRegistryStore::open(&task_registry_path(global)).unwrap()
 }

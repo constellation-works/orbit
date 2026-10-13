@@ -4,33 +4,15 @@ use std::fs;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-#[cfg(unix)]
-use orbit_common::fs::io::create_dir_symlink;
 
 use crate::contracts::MigrationCompatibility;
 
 use super::current_layout_version;
-use super::registry::{LAYOUT_MIGRATIONS, LayoutMigration};
+use super::registry::LayoutMigration;
 use super::upgrade::upgrade_with;
 
 fn temp_orbit_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("create temp .orbit dir")
-}
-
-#[cfg(unix)]
-#[test]
-fn legacy_cleanup_does_not_follow_a_symlinked_tasks_parent() {
-    let temp = temp_orbit_dir();
-    let outside = tempfile::tempdir().expect("outside tempdir");
-    let target = outside.path().join("ORB-00001");
-    fs::create_dir(&target).expect("create outside entry");
-    create_dir_symlink(outside.path(), &temp.path().join("tasks"))
-        .expect("create symlinked parent");
-
-    (LAYOUT_MIGRATIONS[2].apply)(temp.path()).expect("cleanup symlinked parent");
-
-    assert!(temp.path().join("tasks").is_symlink());
-    assert!(target.is_dir());
 }
 
 // ── test-only v2 registry: exercises a real layout change end to end ──
