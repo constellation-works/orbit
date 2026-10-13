@@ -135,3 +135,156 @@ fn direct_rusage(pid: u32) -> DirectRusage {
         lifetime_max: info.ri_lifetime_max_phys_footprint,
     }
 }
+
+/// Kernel-call interleavings must never attribute a replacement process's
+/// usage or descendants to the tree the walk started from.
+#[test]
+fn tree_walk_omits_reused_pids_and_reparented_children() {
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+
+    use crate::process::ancestry::ProcessStartKey;
+    use crate::process::ancestry::darwin_tree::{ReadError, read_process_with, snapshot_with};
+
+    // Usage is charged to one identity only if the start key and parent read
+    // around it agree. Reuse or reparenting reads as an exit; a refused read
+    // fails closed.
+    for (name, second_start, rusage_denied, expected) in [
+        ("stable", Ok((20, 1)), false, Ok(1)),
+        (
+            "pid reused during usage read",
+            Ok((21, 1)),
+            false,
+            Err("gone"),
+        ),
+        (
+            "reparented during usage read",
+            Ok((20, 9)),
+            false,
+            Err("gone"),
+        ),
+        ("identity reread denied", Err(()), false, Err("unreadable")),
+        ("usage read denied", Ok((20, 1)), true, Err("unreadable")),
+    ] {
+        let reads = Cell::new(0);
+        let measured = read_process_with(
+            2,
+            |_| {
+                reads.set(reads.get() + 1);
+                match (reads.get(), second_start) {
+                    (1, _) => Ok((20, 1)),
+                    (_, Ok(start)) => Ok(start),
+                    (_, Err(())) => Err(ReadError::Unreadable),
+                }
+            },
+            |_| {
+                if rusage_denied {
+                    Err(ReadError::Unreadable)
+                } else {
+                    Ok((900_000_000, 4096))
+                }
+            },
+        );
+        match (measured, expected) {
+            (Ok((process, parent)), Ok(expected_parent)) => {
+                assert_eq!(
+                    process.key,
+                    ProcessStartKey {
+                        pid: 2,
+                        starttime: 20
+                    },
+                    "{name}"
+                );
+                assert_eq!(process.cpu_time_ns, 900_000_000, "{name}");
+                assert_eq!(parent, expected_parent, "{name}");
+            }
+            (Err(ReadError::Gone), Err("gone"))
+            | (Err(ReadError::Unreadable), Err("unreadable")) => {}
+            (measured, _) => panic!("{name}: {measured:?}"),
+        }
+    }
+
+    // Tree 1 -> 2 -> 3, each start key `pid * 10`. Every fault lands at one
+    // kernel-call boundary of the walk.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Fault {
+        None,
+        RootGone,
+        ChildGone,
+        ChildReparented,
+        ChildListingGone,
+        RootReplacedDuringListing,
+        ParentReplacedBeforeChildRead,
+        ChildReplacedDuringListing,
+        ParentReadDenied,
+    }
+    for (fault, expected) in [
+        (Fault::None, Some(vec![1, 2, 3])),
+        (Fault::RootGone, None),
+        (Fault::ChildGone, Some(vec![1])),
+        (Fault::ChildReparented, Some(vec![1])),
+        (Fault::ChildListingGone, Some(vec![1, 2])),
+        (Fault::RootReplacedDuringListing, None),
+        (Fault::ParentReplacedBeforeChildRead, Some(vec![1])),
+        (Fault::ChildReplacedDuringListing, Some(vec![1, 2])),
+        (Fault::ParentReadDenied, None),
+    ] {
+        let listed = RefCell::new(Vec::new());
+        let start_reads = RefCell::new(HashMap::<u32, u32>::new());
+        let original = |pid: u32| (u64::from(pid) * 10, pid.saturating_sub(1));
+        let tree = snapshot_with(
+            1,
+            |pid| {
+                if fault == Fault::RootGone && pid == 1 || fault == Fault::ChildGone && pid == 2 {
+                    return Err(ReadError::Gone);
+                }
+                let (starttime, mut parent) = original(pid);
+                if fault == Fault::ChildReparented && pid == 2 {
+                    parent = 9;
+                }
+                Ok((
+                    ProcessTreeProcess {
+                        key: ProcessStartKey { pid, starttime },
+                        cpu_time_ns: u64::from(pid) * 1_000,
+                        phys_footprint: u64::from(pid) * 4_096,
+                    },
+                    parent,
+                ))
+            },
+            |pid| {
+                listed.borrow_mut().push(pid);
+                match pid {
+                    2 if fault == Fault::ChildListingGone => Err(ReadError::Gone),
+                    1 | 2 => Ok(vec![pid + 1]),
+                    _ => Ok(Vec::new()),
+                }
+            },
+            |pid| {
+                let reads = {
+                    let mut counts = start_reads.borrow_mut();
+                    let count = counts.entry(pid).or_default();
+                    *count += 1;
+                    *count
+                };
+                let after_listing = listed.borrow().contains(&pid);
+                let (starttime, parent) = original(pid);
+                let replaced = Ok((starttime + 1, parent));
+                match (fault, pid) {
+                    (Fault::RootReplacedDuringListing, 1) if after_listing => replaced,
+                    (Fault::ChildReplacedDuringListing, 2) if after_listing => replaced,
+                    // The root's first reread follows its own listing; the
+                    // second is the ownership check for its queued child.
+                    (Fault::ParentReplacedBeforeChildRead, 1) if reads > 1 => replaced,
+                    (Fault::ParentReadDenied, 1) if reads > 1 => Err(ReadError::Unreadable),
+                    _ => Ok((starttime, parent)),
+                }
+            },
+        );
+        let pids = tree.map(|tree| {
+            tree.iter()
+                .map(|process| process.key.pid)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(pids, expected, "{fault:?}");
+    }
+}

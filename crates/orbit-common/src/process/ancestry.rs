@@ -135,23 +135,25 @@ pub struct ProcessTreeProcess {
 ///
 /// `None` when the tree cannot be read: the root itself is unreadable, a
 /// descendant listing is denied or truncated, or a process that is still
-/// listed cannot be measured. A descendant that exits during the walk is
-/// omitted. That is a snapshot, not an error. Callers that sum CPU across
-/// snapshots must tolerate processes appearing and disappearing.
+/// listed cannot be measured. A descendant that exits, is replaced, or is
+/// reparented during the walk is omitted. That is a snapshot, not an error.
+/// Callers that sum CPU across snapshots must tolerate processes appearing
+/// and disappearing.
 #[cfg(target_os = "macos")]
 pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
     darwin_tree::snapshot(root)
 }
 
 #[cfg(target_os = "macos")]
-mod darwin_tree {
+pub(super) mod darwin_tree {
     use std::collections::{HashSet, VecDeque};
     use std::io::Error;
     use std::mem::{MaybeUninit, size_of};
 
     use super::{ProcessStartKey, ProcessTreeProcess};
 
-    enum ReadError {
+    #[derive(Debug)]
+    pub(in crate::process) enum ReadError {
         /// The process is gone. A descendant may be skipped; the root may not.
         Gone,
         /// The kernel refused or truncated the read. The snapshot is unusable.
@@ -159,41 +161,90 @@ mod darwin_tree {
     }
 
     pub(super) fn snapshot(root: u32) -> Option<Vec<ProcessTreeProcess>> {
+        snapshot_with(root, read_process, child_pids, read_start)
+    }
+
+    // Kernel reads are injected so exit and reuse between them can be tested
+    // without exhausting PIDs or generating host load.
+    pub(in crate::process) fn snapshot_with(
+        root: u32,
+        mut read_process: impl FnMut(u32) -> Result<(ProcessTreeProcess, u32), ReadError>,
+        mut child_pids: impl FnMut(u32) -> Result<Vec<u32>, ReadError>,
+        mut read_start: impl FnMut(u32) -> Result<(u64, u32), ReadError>,
+    ) -> Option<Vec<ProcessTreeProcess>> {
         let mut found = Vec::new();
         let mut seen = HashSet::from([root]);
-        let mut queue = VecDeque::from([root]);
-        let mut root_pending = true;
-        while let Some(pid) = queue.pop_front() {
-            let process = match read_process(pid) {
-                Ok(process) => process,
-                Err(ReadError::Gone) if !root_pending => continue,
+        // Each queued child carries the identity of the parent that listed it.
+        let mut queue = VecDeque::from([(root, None::<ProcessStartKey>)]);
+        while let Some((pid, owner)) = queue.pop_front() {
+            let is_root = owner.is_none();
+            let (process, parent) = match read_process(pid) {
+                Ok(read) => read,
+                Err(ReadError::Gone) if !is_root => continue,
                 Err(ReadError::Gone | ReadError::Unreadable) => return None,
             };
-            match child_pids(pid) {
-                Ok(children) => {
-                    for child in children {
-                        if seen.insert(child) {
-                            queue.push_back(child);
-                        }
-                    }
+            if let Some(owner) = owner {
+                // A listed PID may now name an unrelated process, and a parent
+                // PID alone also matches a replacement of that parent.
+                if parent != owner.pid {
+                    continue;
                 }
-                Err(ReadError::Gone) if !root_pending => {}
-                Err(ReadError::Gone | ReadError::Unreadable) => return None,
+                match read_start(owner.pid) {
+                    Ok((start, _)) if start == owner.starttime => {}
+                    Ok(_) | Err(ReadError::Gone) => continue,
+                    Err(ReadError::Unreadable) => return None,
+                }
             }
             found.push(process);
-            root_pending = false;
+            let children = match child_pids(pid) {
+                Ok(children) => children,
+                Err(ReadError::Gone) if !is_root => continue,
+                Err(ReadError::Gone | ReadError::Unreadable) => return None,
+            };
+            // The listing names the children of whichever process held `pid`
+            // at that moment. Walk them only if it was still the one measured,
+            // in the same place in the tree.
+            match read_start(pid) {
+                Ok(current) if current == (process.key.starttime, parent) => {}
+                Ok(_) | Err(ReadError::Gone) if !is_root => continue,
+                Ok(_) | Err(ReadError::Gone | ReadError::Unreadable) => return None,
+            }
+            for child in children {
+                if seen.insert(child) {
+                    queue.push_back((child, Some(process.key)));
+                }
+            }
         }
         Some(found)
     }
 
-    fn read_process(pid: u32) -> Result<ProcessTreeProcess, ReadError> {
-        let (starttime, _parent) = read_start(pid)?;
+    fn read_process(pid: u32) -> Result<(ProcessTreeProcess, u32), ReadError> {
+        read_process_with(pid, read_start, read_rusage)
+    }
+
+    pub(in crate::process) fn read_process_with(
+        pid: u32,
+        mut read_start: impl FnMut(u32) -> Result<(u64, u32), ReadError>,
+        mut read_rusage: impl FnMut(u32) -> Result<(u64, u64), ReadError>,
+    ) -> Result<(ProcessTreeProcess, u32), ReadError> {
+        let before = read_start(pid)?;
         let (cpu_time_ns, phys_footprint) = read_rusage(pid)?;
-        Ok(ProcessTreeProcess {
-            key: ProcessStartKey { pid, starttime },
-            cpu_time_ns,
-            phys_footprint,
-        })
+        // Bind usage to one identity across both calls. Reparenting means the
+        // process left the tree while measured and is omitted like an exit.
+        if read_start(pid)? != before {
+            return Err(ReadError::Gone);
+        }
+        Ok((
+            ProcessTreeProcess {
+                key: ProcessStartKey {
+                    pid,
+                    starttime: before.0,
+                },
+                cpu_time_ns,
+                phys_footprint,
+            },
+            before.1,
+        ))
     }
 
     fn read_start(pid: u32) -> Result<(u64, u32), ReadError> {
