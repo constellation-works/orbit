@@ -805,30 +805,12 @@
     },
     "orbit-tools": {
       "test_function_paths": [
-        "builtin/orbit/task/tests/artifact_put.rs::a_review_report_is_validated_on_attach_naming_the_mismatched_field",
-        "builtin/orbit/task/tests/artifact_put.rs::remote_agent_session_cannot_attach_a_host_secret_outside_the_workspace",
-        "builtin/orbit/tests/command.rs::working_directory_symlink_that_escapes_is_refused",
-        "builtin/orbit/tests/domain_control.rs::domain_operator_modes_never_dispatch_from_a_managed_run",
-        "builtin/orbit/tests/domain_control.rs::trusted_child_admission_preserves_internal_pipeline_invocation",
         "builtin/proc/tests/git_config.rs::config_writes_are_refused_in_flag_and_subcommand_form",
-        "builtin/proc/tests/spawn.rs::disallow_mode_checks_canonical_symlink_target",
-        "plugin/tests/backend/brokered.rs::an_unsandboxed_backend_is_refused_to_an_agent_but_still_runs_for_the_operator",
-        "plugin/tests/backend/confinement.rs::a_call_time_write_tail_below_a_state_symlink_is_refused_before_creation",
-        "plugin/tests/backend/confinement.rs::call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state",
-        "plugin/tests/backend/confinement.rs::env_pass_cannot_forward_a_privilege_bearing_orbit_name_even_if_requested",
-        "plugin/tests/backend/state_isolation.rs::a_profile_denies_the_state_tree_and_re_allows_only_its_own_namespace",
-        "plugin/tests/build/env.rs::a_build_environment_never_carries_a_denied_or_ambient_name",
-        "plugin/tests/build/install.rs::only_physical_declared_outputs_cross_back_into_the_install",
-        "plugin/tests/build/install.rs::oversized_build_outputs_are_refused_before_copying",
-        "plugin/tests/build/plan.rs::a_build_plan_escapes_terminal_controls_in_repository_values",
-        "plugin/tests/build/plan.rs::a_linked_toolchain_root_is_refused_before_a_build",
         "plugin/tests/callback/credential.rs::a_forged_record_on_the_callback_descriptor_is_not_a_credential",
         "plugin/tests/envelope.rs::a_delivered_value_in_an_update_name_cannot_reach_diagnostics_or_audit",
-        "plugin/tests/envelope.rs::two_updates_from_the_same_version_apply_exactly_one",
         "plugin/tests/source.rs::a_compression_bomb_is_bounded_by_its_unpacked_size",
         "plugin/tests/source.rs::a_tar_member_that_traverses_out_of_the_root_is_refused",
-        "plugin/tests/source.rs::first_party_source_verifies_only_the_repository_git_would_fetch",
-        "plugin/tests/source.rs::unsafe_git_sources_are_refused_before_git_is_spawned"
+        "plugin/tests/source.rs::first_party_source_verifies_only_the_repository_git_would_fetch"
       ]
     },
     "orbit-types": {

@@ -184,6 +184,34 @@ Before deleting a test, check whether it is the only coverage of a security or i
 - **Do not add e2e tests for every branch.** E2E covers critical flows. Branches belong in integration tests or table-driven unit tests.
 - **Do not reach around this rule by widening visibility** so that an integration test can call internals. Test the public surface, or admit a unit test under the criteria.
 
+## orbit-tools admission audit reconciliation
+
+The 2026-10-12 audit's 18 moves now live in the existing crate-root `tools`
+integration binary. Artifact validation and managed domain controls dispatch
+through `ToolRegistry`; program symlink denial dispatches `proc.spawn`.
+Working-directory confinement uses the exported `confine_workspace_cwd`
+helper. `plugin_build` calls exported planning, environment and installation
+helpers directly, and `plugin_admission` calls exported backend profiles,
+child-environment construction and `PluginTool::execute`. Unsafe Git sources
+retain their isolated fake-Git child fixture under `plugin_source_admission`.
+No production access is widened for these tests.
+
+The rotation race retains its barrier, same-version updates, compare-and-swap
+store and winner/refusal assertions. Two tiny exec backend replies carry the
+existing updates through the public tool response boundary instead of calling
+private `apply_secret_updates`; no live provider or build sandbox is needed.
+The oversized-output fixture retains the production 256 MiB bound as a sparse
+file, because that private constant is not an exported API.
+
+Six unit identities remain on the pinned audit keep list: the Git config-write lexer table
+(criterion 1), forged callback descriptor identity (criterion 3), secret-valued
+update-name diagnostics before public masking (criterion 3), archive traversal
+refusal and decompression with lowered private limits (criterion 3), and the
+first-party Git-source spelling table (criterion 1). Their private fixtures and
+isolated diagnostic child entry point remain under `src`. The first-party
+classifier is currently exported; this slice preserves its pinned keep
+identity rather than expanding the audit's 18-move mandate.
+
 ## CLI admission audit reconciliation
 
 The CLI is a binary crate, so `pub` inside its command modules is not an

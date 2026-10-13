@@ -8,8 +8,7 @@ use serde_json::json;
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
-use super::super::artifact_put::OrbitTaskArtifactPutTool;
-use crate::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, Tool, ToolContext};
+use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ToolContext, ToolRegistry};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Default)]
@@ -24,7 +23,7 @@ impl OrbitToolHost for RecordingHost {
         _input: serde_json::Value,
         _agent: Option<String>,
         _model: Option<String>,
-        _reservation_owner: Option<crate::ReservationOwnerContext>,
+        _reservation_owner: Option<orbit_tools::ReservationOwnerContext>,
     ) -> Result<serde_json::Value, OrbitError> {
         *self.calls.lock().expect("record call") += 1;
         Ok(json!({ "ok": true }))
@@ -65,8 +64,9 @@ fn remote_agent_session_cannot_attach_a_host_secret_outside_the_workspace() {
         ..ToolContext::default()
     };
 
-    let error = OrbitTaskArtifactPutTool
+    let error = registry()
         .execute(
+            "orbit.task.artifact.put",
             &ctx,
             json!({
                 "id": "ORB-00001",
@@ -94,7 +94,8 @@ fn a_review_report_is_validated_on_attach_naming_the_mismatched_field() {
     let source = workspace.path().join("report.json");
     let put = |report: serde_json::Value| {
         std::fs::write(&source, report.to_string()).expect("write report");
-        OrbitTaskArtifactPutTool.execute(
+        registry().execute(
+            "orbit.task.artifact.put",
             &ctx,
             json!({"id": "ORB-00001", "source_path": source, "path": "review-report.json"}),
         )
@@ -120,4 +121,10 @@ fn a_review_report_is_validated_on_attach_naming_the_mismatched_field() {
     }))
     .expect("benign drift attaches");
     assert_eq!(*host.calls.lock().expect("host call"), 1);
+}
+
+fn registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    registry
 }

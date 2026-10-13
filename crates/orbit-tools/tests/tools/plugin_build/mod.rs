@@ -1,12 +1,5 @@
-//! The two security invariants of a build the install boundary cannot reach
-//! without a working build sandbox: what environment a phase receives, and
-//! what a hostile build directory can make Orbit install.
-
+//! Plugin build planning and installation through exported helpers.
 use orbit_types::plugin::{PluginBuildOutput, PluginBuildSpec};
-
-mod env;
-mod install;
-mod plan;
 
 fn spec(outputs: &[(&str, &str)]) -> PluginBuildSpec {
     PluginBuildSpec {
@@ -23,3 +16,7 @@ fn spec(outputs: &[(&str, &str)]) -> PluginBuildSpec {
         timeout_ms: None,
     }
 }
+
+mod env;
+mod install;
+mod plan;

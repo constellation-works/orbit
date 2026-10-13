@@ -1,6 +1,6 @@
-use super::super::super::build::{PluginBuildHostEnv, plan_plugin_build};
-use super::super::super::source::ResolvedCommit;
 use super::spec;
+use orbit_tools::plugin::ResolvedCommit;
+use orbit_tools::plugin::{PluginBuildHostEnv, plan_plugin_build};
 
 /// A repository-controlled argv must stay one visible plan line even when it
 /// contains terminal controls; the same escaping is used for output paths.

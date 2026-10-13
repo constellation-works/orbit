@@ -1,37 +1,12 @@
-//! Shared fixtures for the plugin backend tests: a stub `exec` backend, a
-//! spec with chosen grants, and the availability assertion for tests that
-//! exercise a live sandbox.
+//! Spec and tracing fixtures for the admitted private diagnostic test.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use orbit_common::OrbitError;
-
+use super::super::backend::PluginBackendSpec;
 use orbit_types::plugin::{
-    PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions, PluginProvenance,
-    PluginSandbox,
+    PluginGrant, PluginGrantSet, PluginPermissions, PluginProvenance, PluginSandbox,
 };
-use serde_json::Value;
-
-use super::super::backend::{
-    DeliveredPluginSecret, PluginBackendSpec, PluginSecretRotation, PluginSecretSource,
-};
-use super::super::schema::CompiledSchema;
-use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
-use crate::ToolContext;
-
-pub(super) fn stub_backend(dir: &Path, script: &str) -> PathBuf {
-    let path = dir.join("backend.sh");
-    std::fs::write(&path, script).expect("write backend");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path
-}
 
 pub(super) fn spec(
     command: PathBuf,
@@ -77,106 +52,6 @@ pub(super) fn scoped_spec(
         grants,
         secrets: Default::default(),
     })
-}
-
-pub(super) fn tool(spec: Arc<PluginBackendSpec>, output_schema: Option<Value>) -> PluginTool {
-    PluginTool {
-        name: "demo.hello".into(),
-        verb: "hello".into(),
-        description: "demo".into(),
-        parameters: vec![],
-        input_schema: None,
-        execution_kind: PluginExecutionKind::ReadOnly,
-        output_schema: output_schema
-            .map(|schema| CompiledSchema::compile(schema).expect("compile output_schema")),
-        binding: Arc::new(PluginToolBinding {
-            provenance: spec.provenance.clone(),
-            execution_kind: PluginExecutionKind::ReadOnly,
-            diagnostic: None,
-        }),
-        backend: PluginBackend::Exec(spec),
-    }
-}
-
-pub(super) fn context(cwd: &Path) -> ToolContext {
-    ToolContext {
-        cwd: Some(cwd.to_string_lossy().into_owned()),
-        ..ToolContext::default()
-    }
-}
-
-/// An in-memory secret store with the host store's compare-and-swap: a check
-/// and write under one lock, and a fresh version on every applied write.
-#[derive(Default)]
-pub(super) struct CasSource {
-    pub(super) values: Mutex<BTreeMap<String, DeliveredPluginSecret>>,
-    writes: AtomicUsize,
-}
-
-impl CasSource {
-    pub(super) fn holding(values: &[(&str, &str, &str)]) -> Arc<Self> {
-        let source = Self::default();
-        {
-            let mut stored = source.values.lock().expect("values");
-            for (name, value, version) in values {
-                stored.insert(
-                    (*name).to_string(),
-                    DeliveredPluginSecret {
-                        value: (*value).to_string(),
-                        version: (*version).to_string(),
-                    },
-                );
-            }
-        }
-        Arc::new(source)
-    }
-
-    pub(super) fn stored(&self, name: &str) -> Option<(String, String)> {
-        self.values
-            .lock()
-            .expect("values")
-            .get(name)
-            .map(|secret| (secret.value.clone(), secret.version.clone()))
-    }
-}
-
-impl PluginSecretSource for CasSource {
-    fn read(
-        &self,
-        names: &[String],
-    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
-        let values = self.values.lock().expect("values");
-        Ok(names
-            .iter()
-            .filter_map(|name| {
-                values
-                    .get(name)
-                    .map(|secret| (name.clone(), secret.clone()))
-            })
-            .collect())
-    }
-
-    fn compare_and_swap(
-        &self,
-        name: &str,
-        value: &str,
-        expected_version: Option<&str>,
-    ) -> Result<PluginSecretRotation, OrbitError> {
-        let mut values = self.values.lock().expect("values");
-        if values.get(name).map(|secret| secret.version.as_str()) != expected_version {
-            return Ok(PluginSecretRotation::Stale);
-        }
-        let write = self.writes.fetch_add(1, Ordering::SeqCst);
-        let version = format!("rotated-{write}");
-        values.insert(
-            name.to_string(),
-            DeliveredPluginSecret {
-                value: value.to_string(),
-                version: version.clone(),
-            },
-        );
-        Ok(PluginSecretRotation::Applied { version })
-    }
 }
 
 /// Run `f` synchronously with this thread's `tracing` events at `INFO` and

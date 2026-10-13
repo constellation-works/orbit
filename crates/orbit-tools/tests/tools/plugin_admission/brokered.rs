@@ -9,9 +9,9 @@ use orbit_types::plugin::{
 use orbit_types::policy::ResolvedFsProfile;
 use serde_json::json;
 
-use super::super::super::backend::{BrokeredCaller, PluginBackendSpec};
-use super::super::support::{context, spec, stub_backend, tool};
-use crate::{Tool, ToolContext};
+use super::support::{context, spec, stub_backend, tool};
+use orbit_tools::plugin::{BrokeredCaller, PluginBackendSpec};
+use orbit_tools::{Tool, ToolContext};
 
 /// A checkout, a plugin whose grants reach into it, and a synthetic agent
 /// profile that excludes part of what the plugin was granted.
