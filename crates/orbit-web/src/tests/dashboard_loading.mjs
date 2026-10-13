@@ -122,6 +122,7 @@ function fixture(url) {
       }));
       const totals = (all) => ({ all, low: stats(6, 1200000), medium: null, hard: stats(6, 1800000), xhard: null, unset: null });
       return {
+        outcome: url.searchParams.get("outcome") || "succeeded",
         window: metricsWindow(url),
         truncated: false,
         buckets,

@@ -36,11 +36,11 @@ function trendWindow(key) {
 }
 
 // Hard runs dip in bucket 5 to a single run; bucket 9 has none at all.
-function durations(key) {
+function durations(key, outcome = 'succeeded') {
   const { count, window, start } = trendWindow(key);
   if (key === '1h') {
     return {
-      window, truncated: false,
+      window, outcome, truncated: false,
       buckets: Array.from({ length: count }, (_, i) => ({ start: start(i), all: null, low: null, medium: null, hard: null, other_runs: 0 })),
       current: { all: null, low: null, medium: null, hard: null, xhard: null, unset: null },
       previous: { all: stats(3, 20), low: null, medium: null, hard: null, xhard: null, unset: null },
@@ -55,9 +55,12 @@ function durations(key) {
       hard: i === 5 ? stats(1, 8) : stats(3, 45 + i), other_runs: i === 5 ? 2 : 0,
     };
   });
+  if (outcome === 'all') {
+    buckets[5] = { ...buckets[5], all: stats(19, 12), hard: stats(11, 3) };
+  }
   return {
-    window, truncated: false, buckets,
-    current: { all: stats(200, 43.9), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
+    window, outcome, truncated: false, buckets,
+    current: { all: outcome === 'all' ? stats(210, 30) : stats(200, 43.9), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
     previous: { all: stats(180, 30.1), low: stats(50, 24.3), medium: stats(60, 31), hard: stats(55, 35), xhard: null, unset: null },
     actors: [
       { actor: 'codex / gpt-6.1-sol', ...stats(126, 42.1), previous_avg: minutes(23.9), trend: buckets.map((_, i) => (i === 9 ? null : minutes(35 + i))) },
@@ -65,6 +68,7 @@ function durations(key) {
       { actor: 'gemini / gemini-3.8-flash-high', ...stats(3, 25), previous_avg: null, trend: buckets.map(() => null) },
     ],
     slowest: [
+      ...(outcome === 'all' ? [{ ts: start(5), actor: 'codex / gpt-6.1-sol', complexity: 'hard', duration_ms: minutes(300), task_id: 'ORB-15702' }] : []),
       { ts: start(3), actor: 'claude / claude-opus-5-5', complexity: 'hard', duration_ms: minutes(185), task_id: 'ORB-15700' },
       { ts: start(7), actor: 'codex / gpt-6.1-sol', complexity: 'medium', duration_ms: minutes(140), task_id: 'ORB-15701' },
     ],
@@ -99,7 +103,8 @@ function payloadFor(url) {
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one':
       requests.push(`implement_one?since=${url.searchParams.get('since')}`);
-      return durations(url.searchParams.get('since'));
+      requests.push(`outcome=${url.searchParams.get('outcome')}`);
+      return durations(url.searchParams.get('since'), url.searchParams.get('outcome'));
     case '/api/diagnostics/completions':
       requests.push(`completions?since=${url.searchParams.get('since')}`);
       return completions(url.searchParams.get('since'));
@@ -261,7 +266,7 @@ try {
   assert.ok(requests.includes('implement_one?since=7d') && requests.includes('completions?since=7d'));
   assert.match(await body.locator('.mx-sc-sub').first().textContent(), /vs prev 7d/);
   assert.equal(await body.locator('.mx-volume .mx-vol-col').count(), 29, '6-hour buckets');
-  assert.match(await body.locator('.mx-notes').textContent(), /6-hour buckets/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /6-hour buckets/);
   pass('window change');
 
   // An empty window offers the next wider one.
@@ -272,6 +277,42 @@ try {
   await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 24h'));
   assert.equal(await page.locator('#metrics-window-selector [data-window="24h"]').getAttribute('aria-selected'), 'true');
   pass('empty window widens');
+
+  // Outcome selection fetches the whole duration payload and survives navigation/reload.
+  const outcomeButtons = body.getByRole('group', { name: 'Run outcome' });
+  assert.equal(await outcomeButtons.getByRole('button', { name: 'Succeeded', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.match(await body.locator('.mx-trend-view > .mx-notes').textContent(), /successful runs with a committed candidate/);
+  const succeededHardBar = await body.locator('.mx-volume .mx-vol-col').nth(5).locator('.mx-s-hard').evaluate(node => node.style.height);
+  await outcomeButtons.getByRole('button', { name: 'All', exact: true }).click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs'));
+  assert.ok(requests.includes('outcome=all'));
+  assert.equal(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('outcome'), 'all');
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '30.0m');
+  assert.equal(await body.locator('.mx-slow-dur').first().textContent(), '5h 00m');
+  const allHardBar = await body.locator('.mx-volume .mx-vol-col').nth(5).locator('.mx-s-hard').evaluate(node => node.style.height);
+  assert.ok(parseFloat(allHardBar) > parseFloat(succeededHardBar), 'run bars use filtered bucket counts');
+  assert.match(await body.locator('.mx-trend-view > .mx-notes').textContent(), /all implement_one invocations/);
+  await body.locator('.mx-hover-col').nth(5).hover();
+  assert.match(await body.locator('.mx-tip').textContent(), /All runs×19/);
+  await page.mouse.move(5, 5);
+  await body.getByRole('button', { name: 'Table', exact: true }).click();
+  assert.match(await body.locator('.mx-trend-view tbody tr').nth(19).textContent(), /3\.0m \(11\)/);
+  await page.locator('#metrics-window-selector [data-window="7d"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs') && document.getElementById('metrics-count').textContent.includes('window 7d'));
+  assert.equal(await outcomeButtons.getByRole('button', { name: 'All', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.locator('#metrics-window-selector [data-window="24h"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs') && document.getElementById('metrics-count').textContent.includes('window 24h'));
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs'));
+  assert.equal(await outcomeButtons.getByRole('button', { name: 'All', exact: true }).getAttribute('aria-pressed'), 'true');
+  await outcomeButtons.getByRole('button', { name: 'Succeeded', exact: true }).click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('200 runs'));
+  await page.goBack();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs'));
+  await page.goForward();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('200 runs'));
+  assert.equal(await body.locator('.mx-slow-dur').first().textContent(), '3h 05m');
+  pass('outcome toggle, filtered values, URL reload and history');
 
   // Phone width: no sideways page scroll, tables scroll inside their cards.
   await page.setViewportSize({ width: 390, height: 1400 });

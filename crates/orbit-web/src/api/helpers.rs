@@ -23,6 +23,8 @@ pub(super) struct LimitQuery {
 #[derive(Deserialize)]
 pub(super) struct DiagnosticsQuery {
     #[serde(default)]
+    pub(super) outcome: Option<String>,
+    #[serde(default)]
     pub(super) since: Option<String>,
     #[serde(default)]
     pub(super) month: Option<String>,

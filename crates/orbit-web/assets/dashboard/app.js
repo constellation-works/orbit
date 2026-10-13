@@ -1847,7 +1847,9 @@ setScopeChangeListener(() => {
   syncWindowSelectors();
   if (activeTab === "diagnostics") {
     const url = new URL(window.location.href);
+    const outcome = new URLSearchParams(url.hash.split("?")[1] || "").get("outcome");
     url.hash = `diagnostics/${activeDiagSubtab}?window=${encodeURIComponent(getWindow())}`;
+    if (activeDiagSubtab === "metrics") url.hash += `&outcome=${outcome === "all" ? "all" : "succeeded"}`;
     if (url.href !== window.location.href) history.replaceState(null, "", url);
   } else if (activeTab === "audit") {
     const next = buildAuditHash();
