@@ -41,7 +41,7 @@ pub(super) fn wait_for_run(
     let wait = runtime.wait_pipeline_runs(
         &[run_id.to_string()],
         timeout_seconds,
-        OrbitRuntime::normalize_pipeline_wait_poll_interval(None),
+        OrbitRuntime::normalize_pipeline_wait_poll_interval(Some(1)),
         None,
     )?;
     let mut entry = wait
