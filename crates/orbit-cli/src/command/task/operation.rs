@@ -1,9 +1,10 @@
 //! The task verbs derived from the task operation registry.
 //!
-//! Task reads, writes, artifacts and locks are declared once in
-//! `orbit_common::governance::task`; the clap tree is the noun-agnostic
-//! adapter in [`super::super::operation_args`], and every verb runs through
-//! the tool. The other task verbs stay hand-wired in [`super::command`].
+//! Task reads, writes, artifacts, locks and the review verbs are declared
+//! once in `orbit_common::governance::task`; the clap tree is the
+//! noun-agnostic adapter in [`super::super::operation_args`], and every verb
+//! runs through the tool. The task subcommands with no tool stay hand-wired
+//! in [`super::command`].
 //!
 //! What stays here is CLI-specific: [`prepare`] consumes the CLI-only flags,
 //! and [`render`] builds the text output from the tool's answer. Both are
@@ -151,7 +152,19 @@ fn prepare(
             )?;
             Ok(ListView::default())
         }
-        TaskVerb::LocksList | TaskVerb::Eligible | TaskVerb::Lint => Ok(ListView::default()),
+        // The review verbs act on this checkout's workspace unless `--host`
+        // routed them, which the preflight did before dispatch.
+        TaskVerb::ReviewReset | TaskVerb::ReconcileReview => {
+            input.shift_remove("host");
+            input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
+            Ok(ListView::default())
+        }
+        // Reject and delete have no command line.
+        TaskVerb::LocksList
+        | TaskVerb::Eligible
+        | TaskVerb::Lint
+        | TaskVerb::Reject
+        | TaskVerb::Delete => Ok(ListView::default()),
     }
 }
 
@@ -364,5 +377,13 @@ fn render(
         TaskVerb::Eligible => super::eligible::render(input, value),
         TaskVerb::Show => super::show::render(runtime, input, value),
         TaskVerb::Lint => super::lint::render(input, value),
+        TaskVerb::ReviewReset => {
+            Ok(Payload::detail(value, super::review_reset::REVIEW_RESET_TEXT).into())
+        }
+        TaskVerb::ReconcileReview => {
+            let text = super::reconcile_review::reconciliation_text(&value);
+            Ok(Payload::detail(value, text).into())
+        }
+        TaskVerb::Reject | TaskVerb::Delete => Ok(Payload::document(value).into()),
     }
 }

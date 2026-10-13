@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on friction, auto-task, drain, workspace claim, the task read and write verbs and the workflow-run tools, plus the planned migration of the remaining nouns.
+summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters, CLI action subcommands) as built on friction, auto-task, drain, workspace claim, every task tool and the workflow-run tools, plus the planned migration of the remaining nouns.
 tags: [operations-as-data, architecture]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15941]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
 ---
 
 # Operations as Data — Design
@@ -204,6 +204,14 @@ pub enum CliArgKind {
         value_name: Option<&'static str>,         // when not the field name
         multiple: bool,                           // `--fields id title`: one flag, many values
     },
+    Actions(&'static [CliAction]), // a multiplexed tool's action, one subcommand each
+}
+
+pub struct CliAction {
+    pub name: &'static str,          // subcommand (`accept-baseline`)
+    pub value: &'static str,         // the action value it sends (`accept_baseline`)
+    pub cli_about: &'static str,
+    pub params: &'static [ParamSpec], // the subcommand's own arguments
 }
 
 pub struct CliHelp {
@@ -249,6 +257,15 @@ What each addition is for:
   MCP must not see (`add --plan`, `--status`, `--parent`; `update --approve`,
   `--force`, `--artifact`) travel in one `cli_options` object that is a
   hidden wire field, consumed by the core handler (§9, phase 3b).
+- **`CliArgKind::Actions`** is what `orbit task reconcile-review` (phase 3d)
+  needed: one tool multiplexes four actions behind an `action` enum, and the
+  command line spells each action as a subcommand with its own arguments
+  (`reconcile-review submit <ID> --request <REQUEST>`). It is a CLI binding
+  only. The wire parameters stay one flat list, and which fields an action
+  takes stays with the handler, as
+  [the multiplexed-action decision](./4_decisions.md#a-multiplexed-tools-action-is-an-enum-parameter-per-action-rules-are-guarded-modes)
+  requires. Each action's arguments are CLI-only parameters named after the
+  wire field they fill.
 - **Enum membership is a content rule.** The tool entry checks only that an
   `Enum` value is a string; the handler (or the serde type it deserializes
   into) owns the allowed set. The CLI spells values in kebab-case
@@ -562,6 +579,15 @@ reservation's mutually exclusive `--task` and `--file` forms.
 `ParamType::Path` keeps CLI output paths verbatim while retaining the string
 wire type, so `--out` can name a file with leading or trailing whitespace.
 
+**Implemented:** a parameter bound as `CliArgKind::Actions` becomes one
+subcommand per action instead of an argument. The operation's other
+command-line arguments are global, so every action inherits them, as a
+flattened `#[command(subcommand)]` struct with `global = true` arguments did.
+The parser sends the chosen action's `value` for the parameter and projects
+that action's own arguments. Positional arguments take no display order, so a
+leaf's flags interleave with the inherited ones exactly as the hand-written
+command's did.
+
 ## 8. Dashboard adapter
 
 **Implemented.** The dashboard is the partial case, and deliberately so.
@@ -590,8 +616,8 @@ other nouns.
 
 ## 9. Migration plan
 
-**Planned**, except phase 0a, phase 0b's warn mode, phases 1–2 and phase 3's
-read and write slices, which are implemented. This replaces the touch-it-move-it ratchet; see
+**Planned**, except phase 0a, phase 0b's warn mode and phases 1–4, which are
+implemented. This replaces the touch-it-move-it ratchet; see
 [Migrate the remaining nouns on a plan, not on contact](./4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
 
 Each phase is one Orbit task tagged `operations-as-data` (large nouns split per
@@ -603,7 +629,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 0b (warn mode done) | Kernel v2 input validation on friction: `parse_input`, aliases, retired fields, `at_least_one_of`, unknown-field warnings | Moves the friction handlers onto canonical names and the warn-then-refuse rollout onto the one migrated noun |
 | 1 (done) | auto-task: 5 tools (`show` inactive), 10 CLI verbs | Second pilot. First noun whose CLI calls core directly; exercises `Enum`, `default`, parameter groups, CLI-only verbs (`toggle`, `delete`, `restore`, `recover`, `reset` with `mcp_scope: None`) and the tool-path rule |
 | 2 (done) | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
-| 3 (reads, writes, nested commands done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
+| 3 (done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
 | 4 (done) | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
 
@@ -612,7 +638,7 @@ Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
 fields after the window); phase 1
 [ORB-15935] (done); phase 2 [ORB-15936] (done); phase 3 [ORB-15937] (reads, done), [ORB-15938]
 (add/update, done), [ORB-15939] (artifact and locks, done), [ORB-15940] (review and
-lifecycle); phase 4 [ORB-15941] (done); phase 5 [ORB-15942]. [ORB-15943] verifies the
+lifecycle, done); phase 4 [ORB-15941] (done); phase 5 [ORB-15942]. [ORB-15943] verifies the
 authorization golden that phases 1 and 4 rely on.
 
 Out of scope: the `Desktop*` host actions (a separate host protocol), GitHub and
@@ -635,7 +661,12 @@ gone, and `orbit.task.artifact.put`, which dispatched `TaskUpdate`, has its own
 are 16 and 13: five artifact/lock tool impls and five action variants are gone. After phase 4,
 they are 11 and 9: the five workflow tool impls are gone, and the four
 workflow action variants and `DesktopDrain`, which only `orbit.workflow.auto`
-dispatched, are replaced by `Workflow(WorkflowVerb)`. The weekly code-health sweep reports
+dispatched, are replaced by `Workflow(WorkflowVerb)`. After phase 3d, they
+are 7 and 5: the review, reject and delete tool impls and their four action
+variants are gone, so `Task(TaskVerb)` covers every task tool. The six tool
+impls left are the two phase 5 tools and the four that migrate only if they
+gain a surface, plus the generic `OperationTool<V>`; the five variants are theirs
+except routine control's, which dispatches outside `OrbitBuiltinAction`. The weekly code-health sweep reports
 both numbers. Neither is a merge gate.
 
 ### Phase 2: tool-only nouns (Implemented)
@@ -761,6 +792,52 @@ inline byte limit. These are tool-path behavior changes, with baseline and
 candidate evidence attached to the task; help stability alone does not prove
 behavior neutrality.
 
+### Phase 3d: task review and lifecycle (Implemented)
+
+`orbit.task.reconcile_review` and `orbit.task.review_reset`, the operator
+review tools, and the inactive `orbit.task.reject` and `orbit.task.delete`
+are declared in
+[lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs)
+and served by `OperationTool<TaskVerb>`. The handler table in
+[task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs)
+calls the review application services the old tools reached, and holds the
+reject and delete handlers that moved there. The CLI names stay hyphenated
+(`review-reset`, `reconcile-review`) and the tool names underscored; reject
+and delete have no CLI and no MCP placement.
+
+`orbit task review-reset` and `orbit task reconcile-review` are
+registry-derived and execute through `run_tool`, as they already did.
+`reconcile-review`'s four action subcommands come from
+`CliArgKind::Actions` (§2.2, §7). Their `prepare` arm drops `--host`, which
+the host preflight already resolved, and binds the checkout's workspace; the
+preflight delivers a routed call as the same tool with the same input. The six
+help goldens were captured before the migration and pass unchanged; the MCP
+snapshot and the authorization golden are unchanged, as are the governed rows.
+
+The surface table in
+[task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs)
+refuses a managed run before any field check with each review tool's shipped
+refusal, and keeps delete's `"true"`/`"false"` string spelling of `force`. The
+two review tools refuse unknown fields, as they did before; reject and delete
+start in warn mode. The behaviour baseline's two differences are in
+[Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
+
+The task subcommands with no tool were judged one by one. None migrates: each
+has a single surface, so a spec would add a tool with nothing to share, and an
+added tool would move the all-tools authorization golden.
+
+| Subcommand | Verdict |
+|---|---|
+| `flow` | Stays hand-wired. A read-only report computed from status history; no tool and no second surface. |
+| `export` | Stays hand-wired. Writes a local archive file the operator names; a tool would hand a remote caller a path on this host. |
+| `import` | Stays hand-wired. Reads a local archive and writes bundles under the operator's conflict policy; the same path concern as `export`. |
+| `publication` | Stays hand-wired. Its own nested command (`publish`, `status`, `inspect`, `restore`) over the publication service, with `publish` governed on the CLI only; a tool would govern a second surface the baseline does not have. |
+| `reindex` | Stays hand-wired. A local maintenance repair of the registry index. |
+| `recheck-blocked` | Stays hand-wired. An operator sweep resolving provider launchers from this shell's `PATH` and `HOME`, which a tool caller does not share. |
+| `archive` | Stays hand-wired. An operator lifecycle command with no MCP counterpart; giving it one is a placement decision, not a migration. |
+| `pilot-comment` | Not a subcommand. It is `show`'s rendering of task-pilot receipts, already on the migrated `show` path. |
+| `blocked-next-step` | Not a subcommand. Phase 3a moved it into `orbit-core`, where it is part of `orbit.task.show`'s answer. |
+
 ### Phase 4: workflow run (Implemented)
 
 `orbit.workflow.ship`, `orbit.workflow.run.show`, `orbit.workflow.run.list`,
@@ -853,7 +930,9 @@ unchanged.
 - [ORB-15937] — phase 3a: migrated the task read verbs and settled ID routing.
 - [ORB-15938] — phase 3b: migrated task `add` and `update` with the guarded
   schema extension.
-- [ORB-15939], [ORB-15940] — phase 3, the rest of the task noun.
+- [ORB-15939] — phase 3c, task artifacts and locks.
+- [ORB-15940] — phase 3d: migrated the task review and lifecycle tools, built
+  CLI action subcommands, and judged the tool-less task subcommands.
 - [ORB-15941] — phase 4: migrated the workflow-run tools and settled the
   multiplexed-action shape.
 - [ORB-15942] — phase 5, routine control and search.

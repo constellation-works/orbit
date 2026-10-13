@@ -1,8 +1,8 @@
 //! Handlers for the task verbs declared in the task operation registry.
 //!
-//! The other task tools keep their hand-wired handlers in
-//! [`super::task_tools`]; these take the input the spec already parsed. The
-//! write verbs' handlers live in [`super::task_write_tools`].
+//! These take the input the spec already parsed. The write verbs' handlers
+//! live in [`super::task_write_tools`], artifact reads in
+//! [`super::task_tools`], and the review verbs in `application::review`.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
@@ -19,9 +19,10 @@ use crate::application::task::{TaskEligibilityQuery, TaskListFilter, TaskListQue
 use super::dispatch::ToolCaller;
 use super::input::{parse_task_priority, parse_task_status, parse_task_type};
 use super::json::{
-    serialize_error, serialize_task_lint_report, serialize_task_show, task_fields_to_json,
+    serialize_error, serialize_task_lint_report, serialize_task_show,
+    serialize_task_write_response, task_fields_to_json,
 };
-use super::task_tools::TaskWriteOutput;
+use super::task_tools::{TaskWriteOutput, write_response_fields};
 
 /// Run one migrated task verb. A write also answers the id it persisted, for
 /// the redaction audit.
@@ -78,7 +79,62 @@ pub(super) fn dispatch(
         TaskVerb::Eligible => read(eligible(runtime, &input)),
         TaskVerb::Show => read(show(runtime, &input)),
         TaskVerb::Lint => read(lint(runtime, &input)),
+        TaskVerb::ReviewReset => reviewed(crate::application::review::reset_review(
+            runtime,
+            input.as_value(),
+        )),
+        TaskVerb::ReconcileReview => reviewed(
+            crate::application::review::reconciliation::reconcile_review(
+                runtime,
+                caller.session_context,
+                input.as_value(),
+            ),
+        ),
+        TaskVerb::Reject => written(reject(runtime, &input, caller.agent, caller.model)),
+        TaskVerb::Delete => read(delete(runtime, &input)),
     }
+}
+
+/// A review verb's answer, and the task it names, for the redaction audit.
+fn reviewed(value: Result<Value, OrbitError>) -> Result<(Value, Option<String>), OrbitError> {
+    let value = value?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Ok((value, id))
+}
+
+/// `orbit.task.reject`.
+fn reject(
+    runtime: &OrbitRuntime,
+    input: &OperationInput,
+    agent: Option<String>,
+    model: Option<String>,
+) -> Result<TaskWriteOutput, OrbitError> {
+    let id = input.required_string("id")?;
+    let note = input.required_string("note")?;
+    let response_fields = write_response_fields(input.as_value())?;
+    let task = runtime.reject_task_with_identity(
+        &id,
+        note,
+        input.optional_string("comment")?,
+        agent,
+        model,
+    )?;
+    Ok(TaskWriteOutput {
+        response: serialize_task_write_response(runtime, &task, response_fields.as_deref())?,
+        persisted_id: task.id,
+    })
+}
+
+/// `orbit.task.delete`: permanent, and outside proposed or rejected status
+/// only with `force`.
+fn delete(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
+    let force = input.optional_bool("force")?.unwrap_or(false);
+    runtime.delete_task_guarded(&id, force)?;
+    Ok(json!({ "id": id, "deleted": true }))
 }
 
 fn statuses(input: &OperationInput) -> Result<Vec<TaskStatus>, OrbitError> {

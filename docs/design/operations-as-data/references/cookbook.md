@@ -11,7 +11,7 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15941]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -33,7 +33,9 @@ already refused extras, retired-field wordings, the `GuardedModes::preempt`
 and `schema_extension` tables, and a hidden option object for operator-only
 CLI flags. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`
 nesting, `cli_groups` help and inherited group arguments, and CLI argument
-relationships. Phase 4 (workflow run, [ORB-15941]) migrated a tool-only
+relationships. Phase 3d (task review and lifecycle, [ORB-15940]) built
+`CliArgKind::Actions`, which spells a multiplexed tool's actions as CLI
+subcommands with their own arguments. Phase 4 (workflow run, [ORB-15941]) migrated a tool-only
 noun whose overlapping CLI stays hand-wired, and the multiplexed
 `orbit.workflow.auto`. A noun needing another kind the kernel lacks extends the kernel
 first. Two recipes: migrating a noun that is still hand-wired, and

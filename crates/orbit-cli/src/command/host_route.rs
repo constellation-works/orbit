@@ -154,8 +154,6 @@ fn requested_host(command: &Commands) -> Option<String> {
             TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
                 invocation.input.get("host").and_then(Value::as_str)
             }
-            TaskSubcommand::ReviewReset(args) => args.routing.host.as_deref(),
-            TaskSubcommand::ReconcileReview(command) => command.routing.host.as_deref(),
             _ => None,
         },
         Commands::Tool(tool) => match &tool.command {
@@ -189,8 +187,6 @@ fn routed_command_id(command: &TaskSubcommand) -> Option<&str> {
         {
             invocation.target_id()
         }
-        TaskSubcommand::ReviewReset(args) => Some(&args.id),
-        TaskSubcommand::ReconcileReview(command) => Some(command.command.task_id()),
         _ => None,
     }
 }
@@ -405,28 +401,37 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                         .map(PathBuf::from),
                 },
             },
+            TaskVerb::ReviewReset => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::ReviewReset,
+            },
+            TaskVerb::ReconcileReview => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Reconcile,
+            },
             TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::Add
             | TaskVerb::List
             | TaskVerb::Eligible
-            | TaskVerb::Lint => {
+            | TaskVerb::Lint
+            | TaskVerb::Reject
+            | TaskVerb::Delete => {
                 return Err(not_routable());
             }
         },
-        TaskSubcommand::ReviewReset(args) => RoutedCall {
-            name: "orbit.task.review_reset".into(),
-            input: args.tool_input(),
-            render: Render::ReviewReset,
-        },
-        TaskSubcommand::ReconcileReview(command) => RoutedCall {
-            name: "orbit.task.reconcile_review".into(),
-            input: command.command.tool_input(),
-            render: Render::Reconcile,
-        },
         _ => return Err(not_routable()),
     })
+}
+
+/// A verb's tool input without the CLI-only `--host` it was routed by.
+fn without_host(input: &Map<String, Value>) -> Value {
+    let mut input = input.clone();
+    input.shift_remove("host");
+    Value::Object(input)
 }
 
 fn not_routable() -> OrbitError {

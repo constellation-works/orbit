@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
 use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
-use orbit_types::tool::{ToolParam, ToolSchema};
+use orbit_types::tool::ToolSchema;
 use serde_json::Value;
 
 use super::identity::resolve_identity;
@@ -92,14 +92,4 @@ fn require_orbit_host(ctx: &ToolContext) -> Result<&dyn crate::OrbitToolHost, Or
             "orbit builtin requires an Orbit runtime host in ToolContext".to_string(),
         )
     })
-}
-
-/// The single required `id` parameter of a `kind` lookup tool.
-pub(super) fn orbit_id_params(kind: &str) -> Vec<ToolParam> {
-    vec![ToolParam {
-        name: "id".to_string(),
-        description: format!("{kind} ID"),
-        param_type: "string".to_string(),
-        required: true,
-    }]
 }

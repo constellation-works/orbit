@@ -11,7 +11,7 @@ summary: Decision log for the operations-as-data registry — the split spec/han
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938, ORB-15941]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
 ---
 
 # Operations as Data — Decisions
@@ -645,6 +645,33 @@ all reviewed:
   audit row per call; the field still has no effect. `workflow.auto` refuses
   them as before, and its bounded and status modes keep their allowlists.
 
+**Review and lifecycle outcome ([ORB-15940]).** `orbit task review-reset`
+and `orbit task reconcile-review` already executed through `run_tool`, so
+they keep the tool path; they are now registry-derived
+([2_design.md §9](./2_design.md#phase-3d-task-review-and-lifecycle-implemented)).
+Reject and delete have no CLI. The Step 0 baseline ran 33 cases against a
+fixture each binary built: the four reconcile-review actions and review-reset
+on the CLI with and without operator authority and in text and JSON, 17 `tool
+run` calls across the four tools (unknown, misspelled and identity fields,
+a bad action, missing fields, a string boolean, a managed run, and reject
+and delete while inactive), the tool list and the audit list. The six help
+goldens, the tool list, the MCP snapshot and the authorization golden are
+unchanged, and so is every other case after normalising paths and times,
+except these, both reviewed:
+
+- **Types at the tool entry.** `review_reset` with
+  `adopt_configured_budget: "true"` is refused as "`adopt_configured_budget`
+  must be a boolean"; the old tool read the string as `false` and went on.
+- **One authorization row.** `reconcile_review` with no `id` is refused at
+  the tool entry, so it writes one operator-override audit row where the old
+  tool wrote two. Its message is unchanged.
+
+`orbit task reconcile-review status --reconciliation` is trimmed like every
+optional string on a registry-derived CLI, and `review-reset` sends
+`adopt_configured_budget` only when the flag is set; the handler's default is
+the value the old command sent. Delete still accepts `force` as a `"true"`
+or `"false"` string.
+
 ## Migrate the remaining nouns on a plan, not on contact
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
@@ -785,6 +812,14 @@ This applies to each multiplexed tool that migrates, starting with
   reader opens the surface table or the handler to learn them, and a field
   meant for one action passes the type check on every action, so the action
   rule must be written and tested where the action is served.
+- **Amended 2026-10-13 ([ORB-15940]):** a command line may spell the actions
+  as subcommands. `orbit task reconcile-review` shipped one subcommand per
+  action, each with its own arguments, so the kernel gained
+  `CliArgKind::Actions`: a CLI binding on the selector that lists each
+  action's subcommand and arguments. It is not the rejected kernel field
+  set. `parse_input` never reads it, the wire schema stays flat, and the
+  handler still owns which fields an action accepts. The subcommand's
+  arguments say only what that command line offers.
 
 ## Task References
 
@@ -803,6 +838,9 @@ This applies to each multiplexed tool that migrates, starting with
   routing keyed by tool name.
 - [ORB-15938] — migrated task `add` and `update` through the tool path, with
   the operator command's options in a hidden `cli_options` object.
+- [ORB-15940] — migrated the task review and lifecycle tools, spelled
+  reconcile-review's actions as CLI subcommands, and kept the tool-less task
+  subcommands hand-wired.
 - [ORB-15941] — migrated the workflow-run tools onto a tool-only noun, kept
   every `orbit run` and `orbit job` subcommand hand-wired, and settled the
   multiplexed-action shape.

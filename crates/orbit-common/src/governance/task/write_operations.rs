@@ -72,7 +72,7 @@ const WRITE_MODEL_PARAM: ParamSpec = both(
 );
 
 /// The response projection a write takes.
-const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
+pub(super) const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
     ParamSpec {
         mcp_description: Some(Description::Computed(write_fields_description)),
         ..mcp_only("fields", ParamType::StringList, "")

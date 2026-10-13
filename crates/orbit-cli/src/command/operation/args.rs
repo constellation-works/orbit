@@ -26,8 +26,8 @@ use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::operation::{
-    CliArgKind, CliBinding, CliConstraint, EnumValue, OperationSpec, OperationVerb, ParamSpec,
-    ParamType, alternatives,
+    CliAction, CliArgKind, CliBinding, CliConstraint, EnumValue, OperationSpec, OperationVerb,
+    ParamSpec, ParamType, alternatives,
 };
 use orbit_core::OrbitError;
 use serde_json::{Map, Value};
@@ -71,7 +71,9 @@ impl<V: OperationVerb> Invocation<V> {
                 .map(|(_, binding)| binding.kind);
             match binding {
                 Some(CliArgKind::Flag { long, .. }) => format!("`--{long}`"),
-                Some(CliArgKind::Positional) | None => format!("`{field}`"),
+                Some(CliArgKind::Positional | CliArgKind::Actions(_)) | None => {
+                    format!("`{field}`")
+                }
             }
         });
         Err(OrbitError::InvalidInput(format!(
@@ -178,6 +180,10 @@ fn find_by_subcommand<V: OperationVerb>(path: &[&str]) -> Option<&'static Operat
 /// options are added to the assembled tree by the CLI entry point.
 ///
 /// The leaf name comes from `cli_path`; its parent is built from `cli_groups`.
+///
+/// A spec with an [`CliArgKind::Actions`] selector gets one subcommand per
+/// action instead of an argument for it, and its other arguments become
+/// global so every action inherits them.
 fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
     let mut cmd =
         Command::new(spec.cli_path.last().copied().unwrap_or_default()).about(spec.cli_about);
@@ -187,8 +193,23 @@ fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
     if let Some(after_help) = spec.cli_help.after_help {
         cmd = cmd.after_help(after_help);
     }
+    let actions = cli_actions(spec);
     for (param, binding) in spec.cli_params_in_help_order() {
-        cmd = cmd.arg(arg_for(param, binding));
+        if !matches!(binding.kind, CliArgKind::Actions(_)) {
+            cmd = cmd.arg(arg_for(param, binding).global(actions.is_some()));
+        }
+    }
+    if let Some(actions) = actions {
+        cmd = cmd.subcommand_required(true).arg_required_else_help(true);
+        for action in actions {
+            let mut leaf = Command::new(action.name).about(action.cli_about);
+            for param in action.params {
+                if let Some(binding) = param.cli {
+                    leaf = leaf.arg(arg_for(param, binding));
+                }
+            }
+            cmd = cmd.subcommand(leaf);
+        }
     }
     for constraint in spec.cli_help.constraints {
         cmd = match *constraint {
@@ -201,6 +222,15 @@ fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
         };
     }
     cmd
+}
+
+/// The spec's action subcommands, when it multiplexes actions.
+fn cli_actions<V: 'static>(spec: &'static OperationSpec<V>) -> Option<&'static [CliAction]> {
+    spec.cli_params()
+        .find_map(|(_, binding)| match binding.kind {
+            CliArgKind::Actions(actions) => Some(actions),
+            CliArgKind::Positional | CliArgKind::Flag { .. } => None,
+        })
 }
 
 /// Build one clap `Arg` from a parameter spec.
@@ -290,6 +320,20 @@ fn input_from_params<'a>(
 ) -> Map<String, Value> {
     let mut input = Map::new();
     for param in params {
+        // The chosen action subcommand sends its value and its own arguments.
+        if let Some(CliArgKind::Actions(actions)) = param.cli.map(|binding| binding.kind) {
+            let chosen = matches.subcommand().and_then(|(name, leaf)| {
+                actions
+                    .iter()
+                    .find(|action| action.name == name)
+                    .map(|action| (action, leaf))
+            });
+            if let Some((action, leaf)) = chosen {
+                input.insert(param.name.to_string(), Value::String(action.value.into()));
+                input.extend(input_from_params(action.params.iter(), leaf));
+            }
+            continue;
+        }
         match param.param_type {
             ParamType::Path => {
                 if let Some(value) = matches.get_one::<String>(param.name) {

@@ -354,14 +354,6 @@ impl Commands {
                             ("publication-restore", Some("workspace"), None)
                         }
                     },
-                    TaskSubcommand::ReviewReset(args) => {
-                        ("review-reset", Some("task"), Some(args.id.as_str()))
-                    }
-                    TaskSubcommand::ReconcileReview(command) => (
-                        "reconcile-review",
-                        Some("task"),
-                        Some(command.command.task_id()),
-                    ),
                     TaskSubcommand::RecheckBlocked(_) => ("recheck-blocked", None, None),
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };

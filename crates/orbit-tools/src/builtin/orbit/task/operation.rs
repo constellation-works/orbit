@@ -6,7 +6,8 @@
 //! `show` a versioned snapshot, that other host actions serve under their own
 //! checks; `add` and `update` have a guarded write mode with its own input
 //! contract and schema conditionals, and `update` refuses an implementation
-//! activity's `blocked` status before any field check.
+//! activity's `blocked` status before any field check. The operator review
+//! verbs refuse a managed run before any field check.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
@@ -64,13 +65,21 @@ impl GuardedModes for TaskVerb {
                     ))
                 })
             }
+            TaskVerb::ReconcileReview => {
+                managed_run_refusal(ctx, "managed runs cannot reconcile reviews")
+            }
+            TaskVerb::ReviewReset => {
+                managed_run_refusal(ctx, "managed runs cannot reset review budgets")
+            }
             TaskVerb::Show
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Lint
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => None,
+            | TaskVerb::LocksRelease
+            | TaskVerb::Reject
+            | TaskVerb::Delete => None,
         }
     }
 
@@ -78,6 +87,7 @@ impl GuardedModes for TaskVerb {
         let boolean_fields: &[&str] = match self {
             TaskVerb::Add => &["allow_missing_context"],
             TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags"],
+            TaskVerb::Delete => &["force"],
             TaskVerb::Show
             | TaskVerb::List
             | TaskVerb::Eligible
@@ -86,7 +96,10 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ArtifactPut
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => return,
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject => return,
         };
         let Some(object) = input.as_object_mut() else {
             return;
@@ -163,7 +176,11 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ArtifactPut
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => None,
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject
+            | TaskVerb::Delete => None,
         }
     }
 
@@ -194,7 +211,11 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => Ok(()),
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject
+            | TaskVerb::Delete => Ok(()),
         }
     }
 
@@ -210,9 +231,24 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ArtifactPut
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => None,
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject
+            | TaskVerb::Delete => None,
         }
     }
+}
+
+/// The refusal of an operator decision a managed run attempts.
+fn managed_run_refusal(
+    ctx: &ToolContext,
+    refusal: &'static str,
+) -> Option<Result<Value, OrbitError>> {
+    ctx.orbit_host
+        .as_ref()
+        .is_some_and(|host| host.task_scope().run_id.is_some())
+        .then(|| Err(OrbitError::CapabilityDenied(refusal.into())))
 }
 
 /// `implement_one` and a resolved `agent_implement` target. Deny mode stamps

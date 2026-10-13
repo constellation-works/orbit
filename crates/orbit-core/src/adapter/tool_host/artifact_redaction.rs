@@ -161,7 +161,7 @@ pub(super) fn finish_tool_response(
     if !is_covered_mutating_action(action) {
         return Ok(());
     }
-    if action == OrbitBuiltinAction::TaskReconcileReview {
+    if action == OrbitBuiltinAction::Task(TaskVerb::ReconcileReview) {
         sanitize_response_value(response, "response", report);
     }
     if let Some(object) = response.as_object_mut() {
@@ -257,28 +257,6 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[
 /// for read-only actions and mutations that only persist structural values.
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
-        OrbitBuiltinAction::TaskReconcileReview => ActionPolicy {
-            // `command` selects an already-authorized stored command. Preserve
-            // it byte-for-byte for exact evidence matching, then redact only
-            // serialized reports at the response boundary.
-            declared: &[],
-            free_text_fields: &["reason"],
-            free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
-        },
-        OrbitBuiltinAction::TaskReviewReset => ActionPolicy {
-            declared: &[],
-            free_text_fields: &["reason"],
-            free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
-        },
-        OrbitBuiltinAction::TaskReject => ActionPolicy {
-            declared: &[],
-            free_text_fields: &["note", "comment"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
         // Claim-lifecycle payloads are compared against durable replay records;
         // all parameters are structural and must stay byte-for-byte intact.
         OrbitBuiltinAction::Drain(verb) => match verb {
@@ -315,7 +293,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
             // Each parameter redacts per its declared class; the task reads
-            // persist nothing, and lint writes only recorded selectors.
+            // persist nothing, and lint writes only recorded selectors. A
+            // reconciliation's `command` selects an already-authorized stored
+            // command, so it is declared plain and kept byte-for-byte; its
+            // serialized reports are redacted at the response boundary.
             TaskVerb::Update
             | TaskVerb::List
             | TaskVerb::Eligible
@@ -324,7 +305,11 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => ActionPolicy {
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject
+            | TaskVerb::Delete => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -367,7 +352,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search
-        | OrbitBuiltinAction::TaskDelete
         // [ORB-11354] The invocation prompt is free text and *is* persisted on
         // the run record, but redacting it would change the instruction the
         // agent receives — an operator debugging an auth failure needs to name
@@ -412,7 +396,12 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | WorkflowVerb::Ship => false,
         },
         OrbitBuiltinAction::Task(verb) => match verb {
-            TaskVerb::Add | TaskVerb::Update | TaskVerb::ArtifactPut => true,
+            TaskVerb::Add
+            | TaskVerb::Update
+            | TaskVerb::ArtifactPut
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject => true,
             TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Show
@@ -420,14 +409,10 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => false,
+            | TaskVerb::LocksRelease
+            | TaskVerb::Delete => false,
         },
-        action => matches!(
-            action,
-            OrbitBuiltinAction::TaskReject
-                | OrbitBuiltinAction::TaskReconcileReview
-                | OrbitBuiltinAction::TaskReviewReset
-        ),
+        _ => false,
     }
 }
 
@@ -721,19 +706,34 @@ fn artifact_target<'a>(
     persisted_task_id: Option<&'a str>,
 ) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
-        OrbitBuiltinAction::Task(TaskVerb::Add | TaskVerb::Update | TaskVerb::ArtifactPut)
-        | OrbitBuiltinAction::TaskReject
-        | OrbitBuiltinAction::TaskReconcileReview
-        | OrbitBuiltinAction::TaskReviewReset => {
-            let id = persisted_task_id.ok_or_else(|| {
-                OrbitError::Execution("redaction audit missing persisted task id".to_string())
-            })?;
-            Ok(ArtifactTarget {
-                artifact_type: "task",
-                artifact_id: id,
-                task_id: Some(id),
-            })
-        }
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::Add
+            | TaskVerb::Update
+            | TaskVerb::ArtifactPut
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject => {
+                let id = persisted_task_id.ok_or_else(|| {
+                    OrbitError::Execution("redaction audit missing persisted task id".to_string())
+                })?;
+                Ok(ArtifactTarget {
+                    artifact_type: "task",
+                    artifact_id: id,
+                    task_id: Some(id),
+                })
+            }
+            TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::Delete => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
         // Every friction verb that redacts writes the record its response
         // names.
         OrbitBuiltinAction::Friction(
@@ -798,9 +798,6 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::TaskReject => "orbit.task.reject",
-        OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
-        OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
         OrbitBuiltinAction::Task(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),

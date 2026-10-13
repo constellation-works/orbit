@@ -6,7 +6,7 @@ use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
 
-use super::{agent, command, operation, pipeline, search, task};
+use super::{agent, command, operation, pipeline, search};
 use crate::ToolRegistry;
 
 pub fn register(registry: &mut ToolRegistry) {
@@ -26,7 +26,6 @@ pub fn register(registry: &mut ToolRegistry) {
     // Friction schemas, MCP exposure and execution kinds are declared once in
     // the shared operation registry and registered from there.
     operation::register_noun(registry, &FRICTION);
-    registry.register_inactive(task::delete::OrbitTaskDeleteTool);
     // Workspace claims are coordination holds like task locks and remain off
     // the MCP surface.
     operation::register_noun(registry, &WORKSPACE_CLAIM);
@@ -39,18 +38,8 @@ pub fn register(registry: &mut ToolRegistry) {
         command::OrbitCommandExecTool,
         McpToolScope::WorkspaceRequired,
     );
-    // Task rejection is a human/operator decision — CLI / dashboard only.
-    registry.register_inactive(task::reject::OrbitTaskRejectTool);
-    registry.register_mcp(
-        task::reconcile_review::OrbitTaskReconcileReviewTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        task::review_reset::OrbitTaskReviewResetTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    // Task reads, writes, artifacts and locks come from the shared operation
-    // registry; the other task tools are hand-wired.
+    // Every task tool comes from the shared operation registry, including
+    // the operator-only review verbs and the inactive reject and delete.
     operation::register_noun(registry, &TASK);
     registry.register_mcp(
         pipeline::invoke::OrbitPipelineInvokeTool,

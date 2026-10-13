@@ -337,7 +337,11 @@ pub(super) fn task_operation(
         | TaskVerb::Lint
         | TaskVerb::List
         | TaskVerb::Eligible
-        | TaskVerb::Show => {}
+        | TaskVerb::Show
+        | TaskVerb::ReviewReset
+        | TaskVerb::ReconcileReview
+        | TaskVerb::Reject
+        | TaskVerb::Delete => {}
     }
     operation
 }

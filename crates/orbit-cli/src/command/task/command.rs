@@ -1,6 +1,6 @@
 use crate::command::locks::LocksContentionArgs;
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
-use orbit_common::governance::task::{TASK, TASK_HOST_HELP, TaskVerb};
+use orbit_common::governance::task::{TASK, TaskVerb};
 use orbit_core::OrbitRuntime;
 
 use super::super::operation_args::Invocation;
@@ -12,9 +12,7 @@ use super::flow::TaskFlowArgs;
 use super::import::TaskImportArgs;
 use super::publication::TaskPublicationCommand;
 use super::recheck_blocked::TaskRecheckBlockedArgs;
-use super::reconcile_review::TaskReconcileReviewCommand;
 use super::reindex::TaskReindexArgs;
-use super::review_reset::TaskReviewResetArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
 /// command render theirs: a hand-rolled template, because clap's derive has no
@@ -76,13 +74,6 @@ pub struct TaskCommand {
     pub command: TaskSubcommand,
 }
 
-/// Host selection shared by task commands that can deliver a tool call.
-#[derive(Args)]
-pub(crate) struct TaskHostArgs {
-    #[arg(long, global = true, value_name = "HOST", help = TASK_HOST_HELP)]
-    pub host: Option<String>,
-}
-
 impl Execute for TaskCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         self.command.execute(runtime)
@@ -91,19 +82,14 @@ impl Execute for TaskCommand {
 
 #[derive(Subcommand)]
 pub enum TaskSubcommand {
-    // Task reads, writes, artifacts and locks, derived from
-    // the task operation registry.
+    // Task reads, writes, artifacts, locks and the review verbs, derived
+    // from the task operation registry.
     #[command(flatten)]
     Operation(TaskInvocation),
     /// Archive a task
     Archive(TaskArchiveArgs),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),
-    /// Reset a review lineage budget with an audited operator reason
-    ReviewReset(TaskReviewResetArgs),
-    /// Validate and independently review the already-merged head of a
-    /// recovered follower delivery so its task can complete from review
-    ReconcileReview(TaskReconcileReviewCommand),
     /// Re-check tasks blocked by a missing provider launcher; `--confirm` returns
     /// the ones whose launcher now resolves to backlog
     RecheckBlocked(TaskRecheckBlockedArgs),
@@ -124,8 +110,6 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Operation(invocation) => invocation.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
-            TaskSubcommand::ReviewReset(args) => args.execute(runtime),
-            TaskSubcommand::ReconcileReview(command) => command.execute(runtime),
             TaskSubcommand::Export(args) => args.execute(runtime),
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),

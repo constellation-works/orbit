@@ -55,24 +55,23 @@ pub(crate) fn execute(
             | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease => true,
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject
+            | TaskVerb::Delete => true,
         },
         action => matches!(
             action,
-            OrbitBuiltinAction::TaskDelete
-                | OrbitBuiltinAction::TaskReject
-                | OrbitBuiltinAction::TaskReconcileReview
-                | OrbitBuiltinAction::TaskReviewReset
-                | OrbitBuiltinAction::AutoTask(
-                    AutoTaskVerb::Add
-                        | AutoTaskVerb::Update
-                        | AutoTaskVerb::Toggle
-                        | AutoTaskVerb::Delete
-                        | AutoTaskVerb::Restore
-                        | AutoTaskVerb::Recover
-                        | AutoTaskVerb::Reset
-                )
-                | OrbitBuiltinAction::Friction(_)
+            OrbitBuiltinAction::AutoTask(
+                AutoTaskVerb::Add
+                    | AutoTaskVerb::Update
+                    | AutoTaskVerb::Toggle
+                    | AutoTaskVerb::Delete
+                    | AutoTaskVerb::Restore
+                    | AutoTaskVerb::Recover
+                    | AutoTaskVerb::Reset
+            ) | OrbitBuiltinAction::Friction(_)
         ),
     };
     if !worker_routed {
@@ -242,7 +241,12 @@ pub(crate) fn execute(
             | TaskVerb::LocksList => {
                 return Ok(None);
             }
-            TaskVerb::LocksReserve | TaskVerb::LocksRelease => {
+            TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::ReconcileReview
+            | TaskVerb::Reject
+            | TaskVerb::Delete => {
                 return Err(OrbitError::PolicyDenied(
                     "claimed worker operation requires its lifecycle boundary".into(),
                 ));
@@ -265,14 +269,6 @@ pub(crate) fn execute(
                 ));
             }
         },
-        OrbitBuiltinAction::TaskDelete
-        | OrbitBuiltinAction::TaskReject
-        | OrbitBuiltinAction::TaskReconcileReview
-        | OrbitBuiltinAction::TaskReviewReset => {
-            return Err(OrbitError::PolicyDenied(
-                "claimed worker operation requires its lifecycle boundary".into(),
-            ));
-        }
         OrbitBuiltinAction::Drain(verb) => match verb {
             DrainVerb::Probe
             | DrainVerb::ReceiptLookup
