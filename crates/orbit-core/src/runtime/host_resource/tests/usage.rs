@@ -110,10 +110,6 @@ fn host_usage_is_tick_utilization_in_cores_and_unavailable_memory() {
         assert_eq!(load.cpu_count, reading.cpu_count);
         assert_eq!(load.memory_total_bytes, reading.memory_total_bytes);
         assert!(load.memory_bytes <= load.memory_total_bytes);
-        println!(
-            "native host: cpu_cores={cores}, cpu_count={}, memory_used_bytes={}, memory_total_bytes={}",
-            load.cpu_count, load.memory_bytes, load.memory_total_bytes
-        );
     }
 }
 
