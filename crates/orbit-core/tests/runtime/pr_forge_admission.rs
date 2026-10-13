@@ -18,8 +18,6 @@ use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 const LOCAL_TAG: &str = "delivery:task_local_pipeline";
 
 /// A workspace registered for PR delivery whose only remote, `origin`, is a
@@ -33,7 +31,7 @@ struct Forgeless {
 }
 
 fn open() -> Forgeless {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let bare = root.path().join("constellation.git");
@@ -161,13 +159,7 @@ fn assert_names_remote_and_fixes(message: &str, bare: &Path) {
 /// Explicit ship, the drain's backlog and readiness refuse an untagged task
 /// with the typed refusal before any run or worktree exists, and admit the
 /// tagged one. A remote on a network host lifts the refusal.
-#[test]
 fn a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run() {
-    if !isolated(
-        "pr_forge_admission::a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run",
-    ) {
-        return;
-    }
     let fixture = open();
     let runtime = &fixture.runtime;
     let plain = seed(runtime, "plain", &[]);
@@ -220,13 +212,7 @@ fn a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run() 
 
 /// Task-pilot preparation does not stage work the PR pipeline could never
 /// open a pull request for, and reports the refusal once.
-#[test]
 fn pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver() {
-    if !isolated(
-        "pr_forge_admission::pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver",
-    ) {
-        return;
-    }
     let fixture = open();
     let runtime = &fixture.runtime;
     let plain = seed(runtime, "plain", &[]);
@@ -249,3 +235,10 @@ fn pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver() {
         &fixture.bare,
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run_scenarios,
+    a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run,
+    pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver
+);

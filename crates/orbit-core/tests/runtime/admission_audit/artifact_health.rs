@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::health::artifact::{
@@ -55,7 +55,7 @@ fn doctor_retirement_confines_linked_and_regular_skill_assets() {
 
     use std::os::unix::fs::symlink;
 
-    let root = tempdir().expect("fixture root");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
     let (runtime, _, _) = workspace_runtime(root.path());
     let skills = root.path().join("global/skills");
     let external = root.path().join("external");
@@ -196,7 +196,7 @@ fn doctor_retirement_confines_linked_and_regular_skill_assets() {
 fn run_isolated_child_fixture(test_name: &str, child_flag: &str) {
     use std::time::{Duration, Instant};
 
-    let home = tempdir().expect("isolated home");
+    let home = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("isolated home");
     let stdout_path = home.path().join("child.stdout");
     let stderr_path = home.path().join("child.stderr");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
@@ -261,7 +261,7 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
 
     use std::os::unix::fs::{FileTypeExt, symlink};
 
-    let root = tempdir().expect("fixture root");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
     let (runtime, _workspace, activities) = workspace_runtime(root.path());
     let external = root.path().join("external");
     std::fs::create_dir_all(external.join("dir")).expect("external fixture");
@@ -416,3 +416,5 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
             .is_symlink()
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.

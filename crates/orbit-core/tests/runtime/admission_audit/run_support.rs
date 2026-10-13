@@ -1,9 +1,9 @@
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_types::workflow::JobRun;
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 pub(crate) fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");

@@ -19,14 +19,7 @@ fn prepare(pair: &Pair, task_id: &str) -> Value {
     )
 }
 
-#[test]
 fn pilot_can_record_a_claimed_prerequisite_without_mutating_it() {
-    if !isolated(
-        module_path!(),
-        "pilot_can_record_a_claimed_prerequisite_without_mutating_it",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let dependent = &pair.tasks[1];
     pair.wire
@@ -80,14 +73,7 @@ fn pilot_can_record_a_claimed_prerequisite_without_mutating_it() {
     }
 }
 
-#[test]
 fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
-    if !isolated(
-        module_path!(),
-        "owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let prepared = prepare(&pair, &pair.tasks[0]);
     let jobs = orbit_store::compose::workspace_job_run_store(
@@ -144,14 +130,7 @@ fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
     );
 }
 
-#[test]
 fn follower_claim_supersedes_a_prepared_assessment_without_unscoped_writes() {
-    if !isolated(
-        module_path!(),
-        "follower_claim_supersedes_a_prepared_assessment_without_unscoped_writes",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let prepared = prepare(&pair, &pair.tasks[0]);
     let drain = pair.start_drain();
@@ -183,14 +162,7 @@ fn apply_validation_assessment(pair: &Pair, criterion: &str) {
     apply_assessment(pair, criterion, json!({}));
 }
 
-#[test]
 fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
-    if !isolated(
-        module_path!(),
-        "owner_pull_holds_host_operational_until_a_decision_or_newer_assessment",
-    ) {
-        return;
-    }
     for release in ["approve-anyway", "selectors"] {
         let pair = Pair::new(1);
         apply_assessment(
@@ -245,14 +217,7 @@ fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
     }
 }
 
-#[test]
 fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
-    if !isolated(
-        module_path!(),
-        "owner_pull_admits_selectors_and_verified_no_diff_dispositions",
-    ) {
-        return;
-    }
     for disposition in ["selectors", "verified_no_diff"] {
         let pair = Pair::new(1);
         let findings = if disposition == "verified_no_diff" {
@@ -309,14 +274,7 @@ pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
     assert_eq!(output["applied_count"], 1, "{output}");
 }
 
-#[test]
 fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
-    if !isolated(
-        module_path!(),
-        "owner_pull_holds_operator_validation_until_the_operator_resolves_it",
-    ) {
-        return;
-    }
     for decision in ["evaluated", "approve-anyway", "rescope"] {
         let pair = Pair::new(1);
         apply_validation_assessment(&pair, "Run a live evaluation with `orbit.pipeline.invoke`.");
@@ -408,14 +366,7 @@ fn recorded_wait(pair: &Pair, drain: &str, task: &str) -> (String, String) {
         .unwrap_or_else(|| panic!("{task} is not recorded as waiting: {recorded:#?}"))
 }
 
-#[test]
 fn a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it() {
-    if !isolated(
-        module_path!(),
-        "a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it",
-    ) {
-        return;
-    }
     let mut pair = Pair::new(1);
     apply_assessment(
         &pair,
@@ -455,14 +406,7 @@ fn a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_
     assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
 }
 
-#[test]
 fn a_machine_finding_keeps_the_task_off_every_other_machine() {
-    if !isolated(
-        module_path!(),
-        "a_machine_finding_keeps_the_task_off_every_other_machine",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let criterion =
         "Timings measured on the owner against its live task store reach a p95 under 1 s.";
@@ -550,3 +494,16 @@ fn owner_pull_ignores_stale_validation_and_advisory_transport_findings() {
         assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    pilot_can_record_a_claimed_prerequisite_without_mutating_it_scenarios,
+    pilot_can_record_a_claimed_prerequisite_without_mutating_it,
+    owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends,
+    follower_claim_supersedes_a_prepared_assessment_without_unscoped_writes,
+    owner_pull_holds_host_operational_until_a_decision_or_newer_assessment,
+    owner_pull_admits_selectors_and_verified_no_diff_dispositions,
+    owner_pull_holds_operator_validation_until_the_operator_resolves_it,
+    a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it,
+    a_machine_finding_keeps_the_task_off_every_other_machine
+);

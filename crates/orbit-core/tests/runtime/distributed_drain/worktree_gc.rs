@@ -158,14 +158,7 @@ fn gc_report(result: &impl serde::Serialize, leaf: &str) -> Value {
 }
 
 /// Delivery must index other runs before filtering its own cleanup [ORB-14533].
-#[test]
 fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
-    if !isolated(
-        module_path!(),
-        "delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal",
-    ) {
-        return;
-    }
     for stable_token in [true, false] {
         for running in [false, true] {
             let pair = gc_pair(0);
@@ -314,14 +307,7 @@ fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
 /// the checkout; worktree GC then removes the checkout on the strength of the
 /// settled admission alone. Every owner task read would fail here, and none
 /// is made.
-#[test]
 fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
-    if !isolated(
-        module_path!(),
-        "an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree",
-    ) {
-        return;
-    }
     let pair = gc_pair(1);
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
@@ -385,14 +371,7 @@ fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
 /// [ORB-13950] A forced release settles the admission but returns unfinished
 /// work to the owner's backlog. GC must keep the clean checkout and its
 /// unhanded commits, including when the owner cannot be queried.
-#[test]
 fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
-    if !isolated(
-        module_path!(),
-        "a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit",
-    ) {
-        return;
-    }
     let pair = gc_pair(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -451,14 +430,7 @@ fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
 /// status on the owner, read over the claim's own route. A transport failure
 /// is reported as `owner_unreachable` carrying the transport's error; once
 /// the owner answers, its answer decides.
-#[test]
 fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure() {
-    if !isolated(
-        module_path!(),
-        "an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure",
-    ) {
-        return;
-    }
     let pair = gc_pair(1);
     let drain = pair.start_drain();
     // Cancellation's terminal hook and the launch pass both try delivery.
@@ -537,14 +509,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
 }
 
 /// A replica retains authority over its own historical tasks [ORB-14447].
-#[test]
 fn a_replica_collects_a_local_done_task_without_asking_the_owner() {
-    if !isolated(
-        module_path!(),
-        "a_replica_collects_a_local_done_task_without_asking_the_owner",
-    ) {
-        return;
-    }
     let pair = gc_pair(0);
     let task = local_done_task(&pair);
     assert_eq!(orbit_types::task::task_id_prefix(&task), Some("DANI"));
@@ -569,14 +534,7 @@ fn a_replica_collects_a_local_done_task_without_asking_the_owner() {
 
 /// An owner outage is memoized without poisoning other namespaces, and a
 /// third prefix never causes a failed task.show call on that owner [ORB-14447].
-#[test]
 fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
-    if !isolated(
-        module_path!(),
-        "replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent",
-    ) {
-        return;
-    }
     let pair = gc_pair(1);
     let drain = pair.start_drain();
     pair.pass(&drain); // Persist an admission identifying the owner's prefix.
@@ -643,14 +601,7 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
 /// machine's in the local store, the owner's over the claim route, another
 /// registered host's on that host, and an unregistered prefix nowhere. A
 /// local mirror never stands in for the holder.
-#[test]
 fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
-    if !isolated(
-        module_path!(),
-        "replica_gc_looks_each_id_up_on_the_host_its_prefix_names",
-    ) {
-        return;
-    }
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
     let pair = gc_pair(1);
@@ -731,3 +682,15 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
         "one holder's outage does not poison another's lookups"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal_scenarios,
+    delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal,
+    an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree,
+    a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit,
+    an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure,
+    a_replica_collects_a_local_done_task_without_asking_the_owner,
+    replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent,
+    replica_gc_looks_each_id_up_on_the_host_its_prefix_names
+);

@@ -66,7 +66,7 @@ fi
 }
 
 fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::DispatchError> {
-    let audit_dir = TempDir::new().unwrap();
+    let audit_dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
         Arc::new(orbit_store::Store::open_in_memory().unwrap()),
@@ -115,14 +115,7 @@ fn due(pair: &Pair, drain: &str) {
     pair.follower.write_run_state(drain, &state).unwrap();
 }
 
-#[test]
 fn auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain() {
-    if !isolated(
-        module_path!(),
-        "auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain",
-    ) {
-        return;
-    }
     let clock = std::time::Instant::now();
     orbit_core::test_support::with_cli_supervision_clock(
         move || clock,
@@ -298,14 +291,7 @@ fn auth_probe_backoff_recovery_fixture() {
     assert!(again["crews"]["auth_exclusions"][0]["next_probe_at"].is_string());
 }
 
-#[test]
 fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
-    if !isolated(
-        module_path!(),
-        "only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded",
-    ) {
-        return;
-    }
     let _env = orbit_common::test_env::scoped([
         ("AUTH_FIXTURE_ALLOWED", Some("permitted")),
         ("AUTH_FIXTURE_NOT_ALLOWED", Some("private")),
@@ -384,3 +370,10 @@ fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain_scenarios,
+    auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain,
+    only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded
+);

@@ -194,15 +194,7 @@ fn assert_plugin_allowlist_denied(error: &OrbitError, tool: &str) {
 
 /// A plugin callback that unsets or rewrites `ORBIT_ALLOWED_TOOLS` is still
 /// bounded by the recorded install, not by the inherited variable.
-#[test]
 fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
-    if !super::isolate(
-        module_path!(),
-        "plugin_callback_allowlist_ignores_forged_or_unset_env",
-    ) {
-        return;
-    }
-
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
@@ -232,15 +224,7 @@ fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
 /// A live token identifies the process the host bound it to. Presenting one
 /// that belongs to another process — read out of the session directory, or
 /// kept across a `setsid` — is a mismatch, never that plugin's allowlist.
-#[test]
 fn plugin_callback_refuses_a_token_bound_to_another_process() {
-    if !super::isolate(
-        module_path!(),
-        "plugin_callback_refuses_a_token_bound_to_another_process",
-    ) {
-        return;
-    }
-
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
@@ -315,15 +299,7 @@ fn assert_ceiling_denied(error: &OrbitError, tool: &str) {
 /// the caller that spawned this backend could reach only one of them. The
 /// second is refused on both entry points even though the child has shed
 /// every restriction it carries in its own environment.
-#[test]
 fn plugin_callback_cannot_exceed_the_spawning_callers_ceiling() {
-    if !super::isolate(
-        module_path!(),
-        "plugin_callback_cannot_exceed_the_spawning_callers_ceiling",
-    ) {
-        return;
-    }
-
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list", "orbit.search"]);
@@ -363,3 +339,11 @@ fn fresh_runtime() -> OrbitRuntime {
     let _ = orbit_core::adapter::command::take_tool_audit_recorded();
     OrbitRuntime::in_memory().expect("build in-memory runtime")
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    plugin_callback_allowlist_ignores_forged_or_unset_env_scenarios,
+    plugin_callback_allowlist_ignores_forged_or_unset_env,
+    plugin_callback_refuses_a_token_bound_to_another_process,
+    plugin_callback_cannot_exceed_the_spawning_callers_ceiling
+);

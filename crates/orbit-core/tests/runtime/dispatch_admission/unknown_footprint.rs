@@ -13,8 +13,8 @@ use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 
 use super::{
-    Seed, admitted, as_operator, isolated, list_backlog_tasks, readiness_task, running_run,
-    runtime, seed, write_files,
+    Seed, admitted, as_operator, list_backlog_tasks, readiness_task, running_run, runtime, seed,
+    write_files,
 };
 
 const MACHINE: &str = "fixture-machine";
@@ -117,13 +117,7 @@ fn record_pilot_assessment(runtime: &OrbitRuntime, task: &str) {
 /// drain and an explicit ship admit them as before. Once the pilot has
 /// assessed a task and left it without selectors, it stops waiting and goes
 /// only alone.
-#[test]
 fn a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work() {
-    if !isolated(
-        "dispatch_admission::unknown_footprint::a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work",
-    ) {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     let runtime = runtime.with_automation_machine_identity(Some(MACHINE.into()));
     install_pilot(&repo);
@@ -222,13 +216,7 @@ fn a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work() {
 /// blocks other editing work while it runs, and, when it must wait, reserves
 /// the tree so lower-ranked editing work cannot keep it waiting. Work tagged
 /// `no-diff-expected` neither waits nor is held.
-#[test]
 fn without_a_pilot_empty_context_work_is_admitted_only_alone() {
-    if !isolated(
-        "dispatch_admission::unknown_footprint::without_a_pilot_empty_context_work_is_admitted_only_alone",
-    ) {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     let first = empty(&runtime, "restyle cards");
     let second = empty(&runtime, "restyle code");
@@ -304,3 +292,10 @@ fn without_a_pilot_empty_context_work_is_admitted_only_alone() {
         "{discovery:#}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work_scenarios,
+    a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work,
+    without_a_pilot_empty_context_work_is_admitted_only_alone
+);

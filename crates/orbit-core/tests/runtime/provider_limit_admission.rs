@@ -14,8 +14,6 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 /// A Claude and a Codex crew, `pool` as the hard-complexity pool, and
 /// `extra` under `[workflow]`.
 fn config(pool: &str, extra: &str) -> String {
@@ -34,7 +32,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         std::fs::create_dir_all(root.path().join("global/resources/jobs")).unwrap();
         std::fs::create_dir_all(root.path().join("repo/.orbit")).unwrap();
         let fixture = Self { root };
@@ -197,12 +195,7 @@ fn substitute_worker() {
     ]);
 }
 
-#[test]
 fn a_task_waits_on_an_exhausted_provider_until_the_reset() {
-    if !isolated("provider_limit_admission::a_task_waits_on_an_exhausted_provider_until_the_reset")
-    {
-        return;
-    }
     let fx = Fixture::new(&config(r#"["opus"]"#, ""));
     let task = fx.task(None);
     // The store keeps microseconds, so the expected reset must too.
@@ -227,13 +220,7 @@ fn a_task_waits_on_an_exhausted_provider_until_the_reset() {
     assert_eq!(entry["eligible"], true, "{entry}");
 }
 
-#[test]
 fn an_explicit_crew_waits_unless_the_policy_draws_from_its_pool() {
-    if !isolated(
-        "provider_limit_admission::an_explicit_crew_waits_unless_the_policy_draws_from_its_pool",
-    ) {
-        return;
-    }
     substitute_worker();
     let pool = r#"["opus", "sol"]"#;
     let fx = Fixture::new(&config(pool, ""));
@@ -274,13 +261,7 @@ fn an_explicit_crew_waits_unless_the_policy_draws_from_its_pool() {
     );
 }
 
-#[test]
 fn an_override_at_one_hundred_gates_only_an_exhausted_window() {
-    if !isolated(
-        "provider_limit_admission::an_override_at_one_hundred_gates_only_an_exhausted_window",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config(
         r#"["opus"]"#,
         "provider_limit_overrides = [\"claude:100\"]",
@@ -300,13 +281,7 @@ fn an_override_at_one_hundred_gates_only_an_exhausted_window() {
 
 /// [ORB-15102] The observation a quota failure records keeps a low-complexity
 /// task off the Antigravity crew until the reset it named.
-#[test]
 fn a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset() {
-    if !isolated(
-        "provider_limit_admission::a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset",
-    ) {
-        return;
-    }
     substitute_worker();
     let low_config = |pool: &str| config(r#"["opus"]"#, &format!("low_complexity_crews = {pool}"));
     let fx = Fixture::new(&low_config(r#"["flash"]"#));
@@ -341,3 +316,12 @@ fn a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the
         "the selection names the limit: {source}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
+    a_task_waits_on_an_exhausted_provider_until_the_reset,
+    an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
+    an_override_at_one_hundred_gates_only_an_exhausted_window,
+    a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset
+);

@@ -589,14 +589,7 @@ impl Delivery {
 /// by hand, revoked the handoff and recovered the claim. The changed merged
 /// head completes only after the operator's reconciliation validated and
 /// reviewed exactly that head; the original run's identity never changes.
-#[test]
 fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
-    if !isolated(
-        module_path!(),
-        "a_recovered_follower_delivery_completes_through_a_reconciled_merged_head",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
     let owner = &delivery.owner;
     let task = &delivery.task;
@@ -835,14 +828,7 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
 
 /// A reviewer's open finding refuses the merged head and becomes one
 /// follow-up task; the merged pull request stays as it landed.
-#[test]
 fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_merged_head_files_a_follow_up_and_cannot_complete",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
     delivery.recover();
     delivery.merged();
@@ -885,14 +871,7 @@ fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
 /// A required command that also fails at the base waits for an operator's
 /// evidence-bound disposition naming a landed remediation; validation stays
 /// incomplete even after the disposition lets the task complete.
-#[test]
 fn a_baseline_failure_completes_only_on_an_operator_disposition() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_failure_completes_only_on_an_operator_disposition",
-    ) {
-        return;
-    }
     std::fs::create_dir_all(home().join("bin")).unwrap();
     let command_path = home().join("bin/verify.sh");
     std::fs::write(&command_path, "#!/bin/sh\ntest -f NOTICE\n").unwrap();
@@ -1175,14 +1154,7 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
 /// same required command on its own, while the merged code still fails it
 /// for a reason the delivery introduced; the disposition refuses it before
 /// running anything, and accepts a remediation landed on top of the merge.
-#[test]
 fn a_baseline_remediation_must_contain_the_landed_delivery() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_remediation_must_contain_the_landed_delivery",
-    ) {
-        return;
-    }
     // Test A: the landing branch lacks NOTICE. Test B: the delivery's hand
     // fix is a regression. One required command runs both.
     std::fs::create_dir_all(home().join("bin")).unwrap();
@@ -1388,14 +1360,7 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
 /// contain the squash commit the provider reports, never the head. Provider
 /// facts that change before or while the remediation runs refuse the
 /// disposition, and completion binds the same landed commit.
-#[test]
 fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
-    if !isolated(
-        module_path!(),
-        "a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit",
-    ) {
-        return;
-    }
     // The command can swap the provider's answer while it runs.
     std::fs::create_dir_all(home().join("bin")).unwrap();
     let command_path = home().join("bin/notice.sh");
@@ -1520,14 +1485,7 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
 /// A command that fails as code at the merged head but cannot be judged at
 /// the base is not an attributable head-only regression or a baseline
 /// disposition candidate.
-#[test]
 fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_environment_failure_is_not_misreported_as_head_only",
-    ) {
-        return;
-    }
     let command =
         "grep -q fixed_by_hand src/f0.rs && exit 1 || orbit-baseline-environment-probe-14175";
     let delivery = Delivery::handed_off(&[command]);
@@ -1565,14 +1523,7 @@ fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
 /// submits. A configuration edited before the run starts, or before a
 /// resubmission, neither drops a requirement nor changes the reviewer; a
 /// frozen crew that no longer resolves refuses with the new-request path.
-#[test]
 fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
-    if !isolated(
-        module_path!(),
-        "a_reconciliation_runs_under_the_contract_frozen_at_submission",
-    ) {
-        return;
-    }
     let required = "test -f src/f0.rs";
     let delivery = Delivery::handed_off(&[required]);
     delivery.recover();
@@ -1685,14 +1636,7 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
 /// explicitly empty one is a no-check acceptance, not a missing snapshot: the
 /// reconciliation adopts the owner's configuration at submission as its own
 /// contract, labelled so, and refuses when there is none to adopt.
-#[test]
 fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
-    if !isolated(
-        module_path!(),
-        "an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&[]);
     delivery.recover();
     delivery.merged();
@@ -1744,14 +1688,7 @@ fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
 /// Evidence binds one observation: a head that changes after submission
 /// refuses the run, and no run outside the governed submission can produce
 /// a record.
-#[test]
 fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
-    if !isolated(
-        module_path!(),
-        "a_reconciliation_refuses_a_changed_head_and_forged_runs",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
     delivery.recover();
     delivery.merged();
@@ -1823,14 +1760,7 @@ fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
 /// A claim recovered while its leaf was still running proves nothing about
 /// that run, and a run the owner happens to hold under the same id is a
 /// different run: completion refuses instead of substituting it.
-#[test]
 fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
-    if !isolated(
-        module_path!(),
-        "a_same_named_owner_run_never_stands_in_for_a_follower_run",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let owner = &pair.wire.owner;
     let drain = pair.run_drain();
@@ -1925,3 +1855,26 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
     );
     assert_eq!(pair.owner_status(&task), "review");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_recovered_follower_delivery_completes_through_a_reconciled_merged_head_scenarios,
+    a_recovered_follower_delivery_completes_through_a_reconciled_merged_head,
+    a_rejected_merged_head_files_a_follow_up_and_cannot_complete,
+    a_baseline_failure_completes_only_on_an_operator_disposition
+);
+
+crate::scenario_table!(
+    a_baseline_remediation_must_contain_the_landed_delivery_scenarios,
+    a_baseline_remediation_must_contain_the_landed_delivery,
+    a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit,
+    a_baseline_environment_failure_is_not_misreported_as_head_only
+);
+
+crate::scenario_table!(
+    a_reconciliation_runs_under_the_contract_frozen_at_submission_scenarios,
+    a_reconciliation_runs_under_the_contract_frozen_at_submission,
+    an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract,
+    a_reconciliation_refuses_a_changed_head_and_forged_runs,
+    a_same_named_owner_run_never_stands_in_for_a_follower_run
+);

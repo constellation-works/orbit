@@ -57,14 +57,7 @@ fn index_bytes(repo: &Path) -> Vec<u8> {
     .unwrap()
 }
 
-#[test]
 fn an_uncommitted_claimed_candidate_is_carried_and_resumed_on_another_host() {
-    if !isolated(
-        module_path!(),
-        "an_uncommitted_claimed_candidate_is_carried_and_resumed_on_another_host",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -175,14 +168,7 @@ fn an_uncommitted_claimed_candidate_is_carried_and_resumed_on_another_host() {
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]).trim(), base);
 }
 
-#[test]
 fn a_partial_claim_refuses_protected_files_and_gitlinks_before_carry() {
-    if !isolated(
-        module_path!(),
-        "a_partial_claim_refuses_protected_files_and_gitlinks_before_carry",
-    ) {
-        return;
-    }
     for protected in [".ENV.local", ".Orbit/state.json", "nested", "staged-nested"] {
         let pair = Pair::new(1);
         let base = owner_published(&pair);
@@ -246,3 +232,10 @@ fn a_partial_claim_refuses_protected_files_and_gitlinks_before_carry() {
         assert!(settled_candidate(&pair, &leaf, "Release").is_null());
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_uncommitted_claimed_candidate_is_carried_and_resumed_on_another_host_scenarios,
+    an_uncommitted_claimed_candidate_is_carried_and_resumed_on_another_host,
+    a_partial_claim_refuses_protected_files_and_gitlinks_before_carry
+);

@@ -13,14 +13,7 @@ use super::*;
 
 use super::claimed_review::{ReviewedLeaf, revision};
 
-#[test]
 fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_worker_files_follow_up_work_only_from_its_active_claim",
-    ) {
-        return;
-    }
     let leaf = ReviewedLeaf::admit();
     let add = |relations: Value| {
         leaf.bound
@@ -93,14 +86,7 @@ fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
     assert!(stale.contains("stale_claim"), "{stale}");
 }
 
-#[test]
 fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
-    if !isolated(
-        module_path!(),
-        "agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist",
-    ) {
-        return;
-    }
     // The isolated launcher clears all activity grants and deny policies.
     assert!(std::env::var_os("ORBIT_ACTIVITY_TOOLS_DENY").is_none());
     assert!(std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT").is_none());
@@ -248,14 +234,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     assert_eq!(task.execution_summary, "activity host summary");
 }
 
-#[test]
 fn a_worker_update_persists_redacted_text_and_a_task_scoped_audit() {
-    if !isolated(
-        module_path!(),
-        "a_worker_update_persists_redacted_text_and_a_task_scoped_audit",
-    ) {
-        return;
-    }
     let leaf = ReviewedLeaf::admit();
     let secret = "ghp_123456789012345678901234567890123456";
     let result = leaf.bound.run_tool("orbit.task.update", json!({
@@ -296,14 +275,7 @@ fn a_worker_update_persists_redacted_text_and_a_task_scoped_audit() {
 /// gate's own records cross on the host channel, so the manifest and the
 /// certificate land and the owner pins the certificate, which the agent then
 /// cannot overwrite either.
-#[test]
 fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes",
-    ) {
-        return;
-    }
     use orbit_types::workflow::handoff::HandoffReviewEvidence;
     use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, ReviewVerdict};
 
@@ -423,3 +395,12 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
         "the pinned certificate is unchanged"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_claimed_worker_files_follow_up_work_only_from_its_active_claim_scenarios,
+    a_claimed_worker_files_follow_up_work_only_from_its_active_claim,
+    agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist,
+    a_worker_update_persists_redacted_text_and_a_task_scoped_audit,
+    a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes
+);

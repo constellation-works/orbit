@@ -20,7 +20,8 @@ fn run_isolated_test(test_name: &str) -> bool {
         return false;
     }
 
-    let home = TempDir::new().expect("isolated test home");
+    let home =
+        TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("isolated test home");
     let mut command = std::process::Command::new(
         std::env::current_exe().expect("locate integration test binary"),
     );
@@ -45,7 +46,8 @@ fn run_isolated_test(test_name: &str) -> bool {
 }
 
 fn test_runtime() -> (TempDir, OrbitRuntime, std::path::PathBuf) {
-    let root = TempDir::new().expect("create tempdir");
+    let root =
+        TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");

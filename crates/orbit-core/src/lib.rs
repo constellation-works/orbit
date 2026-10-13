@@ -74,6 +74,9 @@ pub mod test_support {
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    pub use crate::runtime::{
+        with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
+    };
     pub use orbit_engine::test_support::with_cli_supervision_clock;
     /// The review ledger requests that admit an attempt and record its
     /// reviewer's start and end, as the before-PR gate writes them, for tests

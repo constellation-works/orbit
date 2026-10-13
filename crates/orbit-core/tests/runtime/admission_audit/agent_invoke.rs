@@ -9,14 +9,14 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::activity_job::TRUSTED_HOST_ADMISSION_KEY;
 use serde_json::json;
-use tempfile::{TempDir, tempdir};
+use tempfile::{TempDir, tempdir_in};
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{AGENT_INVOKE_JOB_ID, AgentInvokeRequest};
 
 /// A runtime plus the checkout an invocation is admitted against.
 fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf) {
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");
@@ -28,7 +28,7 @@ fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf) {
 }
 
 fn test_runtime_with_codex_crew(sandbox: &str) -> (TempDir, OrbitRuntime, PathBuf) {
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");
@@ -111,15 +111,7 @@ fn assert_denied(error: OrbitError, expectation: &str) {
 
 // ---------------------------------------------------------------- admission
 
-#[test]
 fn a_runs_own_runner_grant_cannot_admit_an_invocation() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_runs_own_runner_grant_cannot_admit_an_invocation",
-    ) {
-        return;
-    }
-
     // The mode exists to leave the sandbox a managed run executes inside, so a
     // run that could admit itself would be a sandbox escape wearing an
     // authorization. Every other run-reachable governed operation lists
@@ -151,15 +143,7 @@ fn assert_no_run_created(runtime: &OrbitRuntime) {
 
 // -------------------------------------------------------------- forgery
 
-#[test]
 fn ordinary_job_input_cannot_carry_a_trusted_host_admission() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "ordinary_job_input_cannot_carry_a_trusted_host_admission",
-    ) {
-        return;
-    }
-
     // The reserved key is refused on the single path every submission surface
     // funnels through, so this covers `orbit run job`, a tool call, and an
     // automation key alike.
@@ -191,15 +175,7 @@ fn ordinary_job_input_cannot_carry_a_trusted_host_admission() {
     }
 }
 
-#[test]
 fn a_foreground_job_run_cannot_carry_a_trusted_host_admission() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_foreground_job_run_cannot_carry_a_trusted_host_admission",
-    ) {
-        return;
-    }
-
     let (root, runtime, _repo_root) = test_runtime();
     let job_path = root.path().join("forged.yaml");
     std::fs::write(
@@ -237,12 +213,7 @@ spec:
 
 /// A run that carries an admission cannot be resumed: the admission covered one
 /// invocation, and a resume would carry it into a run nobody authorized now.
-#[test]
 fn an_admitted_run_cannot_be_resumed() {
-    if !crate::admission_audit::isolate(module_path!(), "an_admitted_run_cannot_be_resumed") {
-        return;
-    }
-
     let (_root, runtime, _repo_root) = test_runtime();
     let admitted_input = json!({
         "prompt": "why",
@@ -291,15 +262,7 @@ fn an_admitted_run_cannot_be_resumed() {
 
 /// [ORB-13560] Authorization precedes the keyed claim: a refused caller that
 /// names a key leaves no run behind that a later operator retry would resolve.
-#[test]
 fn an_unauthorized_keyed_submission_claims_nothing() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "an_unauthorized_keyed_submission_claims_nothing",
-    ) {
-        return;
-    }
-
     let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let session = agent_session();
     let cwd = repo_root.display().to_string();
@@ -314,3 +277,13 @@ fn an_unauthorized_keyed_submission_claims_nothing() {
 }
 
 // ------------------------------------------------------ provider sandbox
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_runs_own_runner_grant_cannot_admit_an_invocation_scenarios,
+    a_runs_own_runner_grant_cannot_admit_an_invocation,
+    ordinary_job_input_cannot_carry_a_trusted_host_admission,
+    a_foreground_job_run_cannot_carry_a_trusted_host_admission,
+    an_admitted_run_cannot_be_resumed,
+    an_unauthorized_keyed_submission_claims_nothing
+);

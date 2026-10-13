@@ -5,7 +5,6 @@ use orbit_core::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use super::{Workspace, races::apply_input};
-use crate::dispatch_admission::isolated;
 
 fn target(workspace: &Workspace, status: TaskStatus) -> Task {
     workspace
@@ -49,13 +48,7 @@ fn readiness(workspace: &Workspace, task: &Task) -> Value {
         .clone()
 }
 
-#[test]
 fn named_unfinished_blockers_survive_approval_and_repilot_until_done() {
-    if !isolated(
-        "task_pilot::blockers::named_unfinished_blockers_survive_approval_and_repilot_until_done",
-    ) {
-        return;
-    }
     for status in [
         TaskStatus::Proposed,
         TaskStatus::Backlog,
@@ -127,13 +120,7 @@ fn named_unfinished_blockers_survive_approval_and_repilot_until_done() {
     }
 }
 
-#[test]
 fn terminal_missing_foreign_and_free_text_blockers_remain_warnings() {
-    if !isolated(
-        "task_pilot::blockers::terminal_missing_foreign_and_free_text_blockers_remain_warnings",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let done = target(&workspace, TaskStatus::Done);
     let rejected = target(&workspace, TaskStatus::Rejected);
@@ -177,13 +164,7 @@ fn terminal_missing_foreign_and_free_text_blockers_remain_warnings() {
     }
 }
 
-#[test]
 fn self_blockers_are_dropped_with_a_warning_and_other_metadata_applies() {
-    if !isolated(
-        "task_pilot::blockers::self_blockers_are_dropped_with_a_warning_and_other_metadata_applies",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let blocker = target(&workspace, TaskStatus::Backlog);
     let existing = target(&workspace, TaskStatus::Done);
@@ -297,11 +278,7 @@ fn self_blockers_are_dropped_with_a_warning_and_other_metadata_applies() {
     );
 }
 
-#[test]
 fn a_pilot_dependency_cycle_refuses_the_entire_assessment() {
-    if !isolated("task_pilot::blockers::a_pilot_dependency_cycle_refuses_the_entire_assessment") {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("Cyclic assessment");
     let blocker = target(&workspace, TaskStatus::Backlog);
@@ -333,3 +310,12 @@ fn a_pilot_dependency_cycle_refuses_the_entire_assessment() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    named_unfinished_blockers_survive_approval_and_repilot_until_done_scenarios,
+    named_unfinished_blockers_survive_approval_and_repilot_until_done,
+    terminal_missing_foreign_and_free_text_blockers_remain_warnings,
+    self_blockers_are_dropped_with_a_warning_and_other_metadata_applies,
+    a_pilot_dependency_cycle_refuses_the_entire_assessment
+);

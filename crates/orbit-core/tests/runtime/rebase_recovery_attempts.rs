@@ -33,7 +33,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();

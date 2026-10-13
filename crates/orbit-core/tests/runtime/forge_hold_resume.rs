@@ -91,7 +91,7 @@ fn run_isolated_test(test_name: &str) -> bool {
         return false;
     }
 
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -122,7 +122,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         // Submitted runs execute in-process. The substitute child test
         // stays alive while the fixture does, so the supervisor never sees a
         // resumed run's worker exit before its run starts and interrupts the

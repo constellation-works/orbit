@@ -26,8 +26,6 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
-use crate::dispatch_admission::isolated;
-
 const JOB: &str = "finding_verification_pipeline";
 
 struct Fixture {
@@ -71,7 +69,7 @@ impl Fixture {
 
     /// A workspace whose whole `config.toml` is `config`.
     fn with_config(config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&global).unwrap();
@@ -275,13 +273,7 @@ fn shown_verdict(fixture: &Fixture, task: &Task) -> (String, Value) {
     (header.to_string(), serde_json::from_str(document).unwrap())
 }
 
-#[test]
 fn verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task() {
-    if !isolated(
-        "finding_verification::verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let real = fixture.finding("Real defect", TaskComplexity::Medium);
     let wrong = fixture.finding("Wrong premise", TaskComplexity::Medium);
@@ -328,13 +320,7 @@ fn verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task() {
     assert_eq!(fixture.status(&real), TaskStatus::Backlog);
 }
 
-#[test]
 fn a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded() {
-    if !isolated(
-        "finding_verification::a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let past_end = fixture.finding("Past the end", TaskComplexity::Medium);
     let missing = fixture.finding("Missing file", TaskComplexity::Medium);
@@ -357,13 +343,7 @@ fn a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded() {
     }
 }
 
-#[test]
 fn a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew() {
-    if !isolated(
-        "finding_verification::a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     // A low-tier REJECTED verdict and a medium-tier low-confidence one both
     // go to the next tier before anything is recorded.
@@ -440,13 +420,7 @@ fn a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew() {
     assert_eq!(fixture.status(&unsure), TaskStatus::Rejected);
 }
 
-#[test]
 fn the_verifier_is_not_the_filers_crew_when_the_pool_offers_another() {
-    if !isolated(
-        "finding_verification::the_verifier_is_not_the_filers_crew_when_the_pool_offers_another",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let params = |title: &str, complexity| TaskAddParams {
         title: title.into(),
@@ -538,11 +512,7 @@ model = "fixture-hard-gemini"
 verify_findings = true
 "#;
 
-#[test]
 fn verifiers_are_drawn_only_from_inspection_capable_crews() {
-    if !isolated("finding_verification::verifiers_are_drawn_only_from_inspection_capable_crews") {
-        return;
-    }
     let fixture = Fixture::with_config(MIXED_POOL_CONFIG);
     let low = (0..6)
         .map(|index| fixture.finding(&format!("Low finding {index}"), TaskComplexity::Low))
@@ -591,13 +561,7 @@ fn verifiers_are_drawn_only_from_inspection_capable_crews() {
     }
 }
 
-#[test]
 fn without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails() {
-    if !isolated(
-        "finding_verification::without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails",
-    ) {
-        return;
-    }
     let no_capable_pool = MIXED_POOL_CONFIG
         .replace(
             r#"low_complexity_crews = ["low_gemini", "shared_claude", "low_grok"]"#,
@@ -635,13 +599,7 @@ fn without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_
     );
 }
 
-#[test]
 fn promotion_and_backlog_admission_refuse_an_unverified_review_finding() {
-    if !isolated(
-        "finding_verification::promotion_and_backlog_admission_refuse_an_unverified_review_finding",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let finding = fixture.finding("Unverified", TaskComplexity::Medium);
     let refusal = fixture
@@ -738,13 +696,7 @@ fn promotion_and_backlog_admission_refuse_an_unverified_review_finding() {
 /// state trigger still offers findings to a verification routine. The
 /// setting is read when the gate is checked, so turning it on applies to
 /// this already-open runtime.
-#[test]
 fn without_the_setting_a_review_finding_is_approved_promoted_and_admitted() {
-    if !isolated(
-        "finding_verification::without_the_setting_a_review_finding_is_approved_promoted_and_admitted",
-    ) {
-        return;
-    }
     for review in ["", "[review]\nverify_findings = false\n"] {
         let fixture = Fixture::with_review(review);
         let approved = fixture.finding("Approved unverified", TaskComplexity::Medium);
@@ -847,12 +799,7 @@ fn verification_routine() -> RoutineDefinition {
     .unwrap()
 }
 
-#[test]
 fn the_state_trigger_picks_up_only_unverified_review_findings() {
-    if !isolated("finding_verification::the_state_trigger_picks_up_only_unverified_review_findings")
-    {
-        return;
-    }
     let fixture = Fixture::new();
     let owed = fixture.finding("Owed a verdict", TaskComplexity::Medium);
     let confirmed = fixture.finding("Already confirmed", TaskComplexity::Medium);
@@ -889,11 +836,7 @@ fn the_state_trigger_picks_up_only_unverified_review_findings() {
     assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&owed.id));
 }
 
-#[test]
 fn material_edits_supersede_prepared_verdicts() {
-    if !isolated("finding_verification::material_edits_supersede_prepared_verdicts") {
-        return;
-    }
     let fixture = Fixture::new();
     let edits = [
         TaskUpdateParams {
@@ -963,11 +906,7 @@ fn material_edits_supersede_prepared_verdicts() {
     assert!(fixture.verification(&legacy).is_none());
 }
 
-#[test]
 fn escalation_preserves_material_from_initial_preparation() {
-    if !isolated("finding_verification::escalation_preserves_material_from_initial_preparation") {
-        return;
-    }
     let fixture = Fixture::new();
     // Cover drift both before escalation is constructed and while the second
     // verifier is working. Neither round may rebind the first report.
@@ -1021,13 +960,7 @@ fn escalation_preserves_material_from_initial_preparation() {
     }
 }
 
-#[test]
 fn confirmation_is_fresh_for_promotion_admission_and_observation() {
-    if !isolated(
-        "finding_verification::confirmation_is_fresh_for_promotion_admission_and_observation",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let proposed = fixture.finding("Confirmed proposed", TaskComplexity::Medium);
     let backlog = fixture.task(
@@ -1121,13 +1054,7 @@ fn confirmation_is_fresh_for_promotion_admission_and_observation() {
     );
 }
 
-#[test]
 fn legacy_confirmation_is_readable_but_cannot_authorize_promotion() {
-    if !isolated(
-        "finding_verification::legacy_confirmation_is_readable_but_cannot_authorize_promotion",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let task = fixture.finding("Legacy confirmation", TaskComplexity::Medium);
     fixture.confirm(&task);
@@ -1302,13 +1229,7 @@ fn run_verification_job(
     )
 }
 
-#[test]
 fn shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_error() {
-    if !isolated(
-        "finding_verification::shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_error",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let successful = fixture.finding("Confirmed by a successful worker", TaskComplexity::Medium);
     let failed = fixture.finding("Failed verifier", TaskComplexity::Low);
@@ -1347,13 +1268,7 @@ fn shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_err
     );
 }
 
-#[test]
 fn shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop() {
-    if !isolated(
-        "finding_verification::shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let low = fixture.finding("Low tier rejection", TaskComplexity::Low);
     let settled = fixture.finding("Initial confirmation", TaskComplexity::Hard);
@@ -1394,3 +1309,27 @@ fn shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop() {
     assert_eq!(run.pipeline["verdict_errors"], json!([]));
     assert_eq!(run.pipeline["apply"]["recorded_count"], 0);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task_scenarios,
+    verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task,
+    a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded,
+    a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew,
+    the_verifier_is_not_the_filers_crew_when_the_pool_offers_another,
+    verifiers_are_drawn_only_from_inspection_capable_crews,
+    without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails,
+    promotion_and_backlog_admission_refuse_an_unverified_review_finding,
+    without_the_setting_a_review_finding_is_approved_promoted_and_admitted,
+    the_state_trigger_picks_up_only_unverified_review_findings,
+    material_edits_supersede_prepared_verdicts,
+    escalation_preserves_material_from_initial_preparation,
+    confirmation_is_fresh_for_promotion_admission_and_observation
+);
+
+crate::scenario_table!(
+    legacy_confirmation_is_readable_but_cannot_authorize_promotion_scenarios,
+    legacy_confirmation_is_readable_but_cannot_authorize_promotion,
+    shipped_job_applies_successful_partitions_and_retains_a_failed_partitions_error,
+    shipped_job_applies_escalation_verdicts_and_empty_selection_is_a_noop
+);

@@ -34,7 +34,7 @@ impl Workspace {
     }
 
     fn with_config(extra_config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&global).unwrap();
@@ -461,13 +461,7 @@ fn held_reason<'a>(selection: &'a Value, task: &Task) -> Option<&'a str> {
         .as_str()
 }
 
-#[test]
 fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running(
         "workspace_auto_pipeline",
@@ -599,13 +593,7 @@ fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pa
     assert_eq!(report.approved_total, 2);
 }
 
-#[test]
 fn unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
     let unassessed = workspace.task(
@@ -649,13 +637,7 @@ fn unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons() {
     assert_eq!(next["held_by_reason"]["duplicate"], 1);
 }
 
-#[test]
 fn no_auto_approve_is_held_by_every_promotion_authority() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::no_auto_approve_is_held_by_every_promotion_authority",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
     // Otherwise qualifying on both the tag and the fields.
@@ -711,13 +693,7 @@ fn no_auto_approve_is_held_by_every_promotion_authority() {
     assert_eq!(workspace.status(&filed), TaskStatus::Proposed);
 }
 
-#[test]
 fn drain_authority_is_verified_before_any_approval() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::drain_authority_is_verified_before_any_approval",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("scoped", &[], &["file:README.md"], TaskComplexity::Low);
     let task_ids = json!([task.id]);
@@ -740,13 +716,7 @@ fn drain_authority_is_verified_before_any_approval() {
     assert_eq!(workspace.status(&task), TaskStatus::Proposed);
 }
 
-#[test]
 fn a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
     let original = workspace.task("original", &[], &["file:README.md"], TaskComplexity::Low);
@@ -843,13 +813,7 @@ fn a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes
     assert!(selected(&workspace.select(&drain), &creating));
 }
 
-#[test]
 fn an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
     let creating = workspace.creation_task("creating");
@@ -919,13 +883,7 @@ fn selected(selection: &Value, task: &Task) -> bool {
         .is_some_and(|task_ids| task_ids.contains(&json!(task.id)))
 }
 
-#[test]
 fn proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running(
         "workspace_auto_pipeline",
@@ -979,13 +937,7 @@ fn proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred() 
     assert_eq!(next["deferred_candidates"], 0);
 }
 
-#[test]
 fn candidates_with_no_crew_are_never_bundled_with_crewed_candidates() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::candidates_with_no_crew_are_never_bundled_with_crewed_candidates",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let drain = workspace.running(
         "workspace_auto_pipeline",
@@ -1052,13 +1004,7 @@ fn verified_no_diff(task: &Task, evidence: &str) -> Value {
     verified
 }
 
-#[test]
 fn verified_no_diff_merge_proof_uses_only_the_first_parent_change() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::verified_no_diff_merge_proof_uses_only_the_first_parent_change",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.branch_commit_file(
         "unrelated",
@@ -1119,13 +1065,7 @@ fn held_detail<'a>(selection: &'a Value, task: &Task) -> Option<&'a str> {
         .as_str()
 }
 
-#[test]
 fn an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let landed = workspace.commit("the fix");
     let side = workspace.side_commit();
@@ -1237,13 +1177,7 @@ fn an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof() {
     assert_eq!(report.held_by_reason["pilot_verified_no_diff"], 3);
 }
 
-#[test]
 fn a_verified_no_diff_citing_only_the_findings_own_commits_is_held() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::a_verified_no_diff_citing_only_the_findings_own_commits_is_held",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let older = workspace.commit("older change");
     let culprit = workspace.commit("the culprit");
@@ -1357,13 +1291,7 @@ fn a_verified_no_diff_citing_only_the_findings_own_commits_is_held() {
     );
 }
 
-#[test]
 fn a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     // About 4% of 7-character abbreviations are all digits: recommit the
     // culprit until its abbreviation is one.
@@ -1410,13 +1338,7 @@ fn a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count() {
     );
 }
 
-#[test]
 fn an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let landed = workspace.commit("the fix");
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
@@ -1490,13 +1412,7 @@ fn an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_cl
     assert_eq!(workspace.status(&filed), TaskStatus::Proposed);
 }
 
-#[test]
 fn the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let landed = workspace.commit("the fix");
     let sweep_apply = |task: &Task, evidence: &str| {
@@ -1577,13 +1493,7 @@ fn append_pilot_entry(workspace: &Workspace, task: &Task, at: &str, note: &str) 
     .unwrap();
 }
 
-#[test]
 fn a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions",
-    ) {
-        return;
-    }
     // The first open by this binary records the store's boundary.
     let first_open = Utc::now();
     let workspace = Workspace::new();
@@ -1663,13 +1573,7 @@ pub(crate) fn recorded_boundary(global_root: &Path) -> DateTime<Utc> {
         .unwrap()
 }
 
-#[test]
 fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
-    if !super::dispatch_admission::isolated(
-        "drain_approval::an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it",
-    ) {
-        return;
-    }
     let note = "selectors (operation_id=legacy-pilot) [drain-approval-held:warnings]";
     // Empty, as a crash after the older binary created the file left it, and
     // cut short, as a failed write did.
@@ -1706,3 +1610,28 @@ fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_ope
         assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass_scenarios,
+    tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass,
+    unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons,
+    no_auto_approve_is_held_by_every_promotion_authority,
+    drain_authority_is_verified_before_any_approval,
+    a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes,
+    an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change,
+    proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred,
+    candidates_with_no_crew_are_never_bundled_with_crewed_candidates,
+    verified_no_diff_merge_proof_uses_only_the_first_parent_change,
+    an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof,
+    a_verified_no_diff_citing_only_the_findings_own_commits_is_held
+);
+
+crate::scenario_table!(
+    a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count_scenarios,
+    a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count,
+    an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed,
+    the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof,
+    a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions,
+    an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it
+);

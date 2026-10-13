@@ -15,6 +15,95 @@ use crate::OrbitRuntime;
 const OWNER_READ_LOCK_BUSY_RETRY_DELAYS: [Duration; 2] =
     [Duration::from_secs(1), Duration::from_secs(3)];
 
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy)]
+enum TestWaitScope {
+    OwnerReadRetry,
+    PipelinePoll,
+    HostLoadSampling,
+}
+
+#[cfg(feature = "test-support")]
+type TestWait = fn(Duration);
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static TEST_WAITS: std::cell::Cell<[Option<TestWait>; 3]> = const {
+        std::cell::Cell::new([None; 3])
+    };
+}
+
+#[cfg(feature = "test-support")]
+fn test_wait(scope: TestWaitScope) -> Option<TestWait> {
+    TEST_WAITS.with(|slot| slot.get()[scope as usize])
+}
+
+#[cfg(feature = "test-support")]
+fn with_test_wait<T>(scope: TestWaitScope, wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    struct Restore(TestWaitScope, Option<TestWait>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_WAITS.with(|slot| {
+                let mut waits = slot.get();
+                waits[self.0 as usize] = self.1;
+                slot.set(waits);
+            });
+        }
+    }
+    let previous = TEST_WAITS.with(|slot| {
+        let mut waits = slot.get();
+        let previous = waits[scope as usize];
+        waits[scope as usize] = Some(wait);
+        slot.set(waits);
+        previous
+    });
+    let _restore = Restore(scope, previous);
+    operation()
+}
+
+/// Substitute only the owner-read retry wait on this thread, restoring it on
+/// return or unwind. Retry count, error handling and production delays stay intact.
+#[cfg(feature = "test-support")]
+pub fn with_owner_read_retry_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    with_test_wait(TestWaitScope::OwnerReadRetry, wait, operation)
+}
+
+/// Substitute only a pipeline wait's polling sleep on this thread. Elapsed
+/// time, caller deadlines, snapshots and child/process operations remain real.
+/// Restore the previous callback on return or unwind; worker threads must opt in
+/// separately, and cadence/deadline conformance tests must use the system wait.
+#[cfg(feature = "test-support")]
+pub fn with_pipeline_poll_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    with_test_wait(TestWaitScope::PipelinePoll, wait, operation)
+}
+
+/// Substitute sampling waits for an explicitly supplied immutable proc fixture.
+/// Raw reads, real timestamps, CPU unknowns and admission/reservation logic stay
+/// intact. Native proc reads and unopted threads retain the production interval.
+#[cfg(feature = "test-support")]
+pub fn with_host_load_sampling_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    with_test_wait(TestWaitScope::HostLoadSampling, wait, operation)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn pipeline_poll_wait_override() -> Option<TestWait> {
+    test_wait(TestWaitScope::PipelinePoll)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn host_load_sampling_wait_override() -> Option<TestWait> {
+    test_wait(TestWaitScope::HostLoadSampling)
+}
+
+fn retry_wait(delay: Duration) {
+    #[cfg(feature = "test-support")]
+    if let Some(wait) = test_wait(TestWaitScope::OwnerReadRetry) {
+        wait(delay);
+        return;
+    }
+    std::thread::sleep(delay);
+}
+
 impl OrbitRuntime {
     pub fn current_worker_invocation(
         global_root: &std::path::Path,
@@ -112,7 +201,7 @@ impl OrbitRuntime {
                         error = %error,
                         "owner read lost to a lock-wait deadline; retrying",
                     );
-                    std::thread::sleep(*delay);
+                    retry_wait(*delay);
                 }
                 result => break result?,
             }

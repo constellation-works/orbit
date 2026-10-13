@@ -11,7 +11,6 @@ use orbit_types::task::HostOs;
 use serde_json::{Value, json};
 
 use super::Workspace;
-use crate::dispatch_admission::isolated;
 
 const NATIVE_CRITERION: &str = "A real macOS `sandbox-exec` launch of the fixture succeeds.";
 
@@ -173,11 +172,7 @@ fn resolutions(workspace: &Workspace, task: &Task) -> Vec<String> {
         .collect()
 }
 
-#[test]
 fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
-    if !isolated("task_pilot::native_os::a_native_os_finding_tags_an_untagged_task_for_that_os") {
-        return;
-    }
     let mut workspace = Workspace::new();
     on(&mut workspace, HostOs::Linux);
     let task = backlog_task(
@@ -231,13 +226,7 @@ fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
     assert!(resolutions(&workspace, &task).is_empty());
 }
 
-#[test]
 fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
-    if !isolated(
-        "task_pilot::native_os::a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment",
-    ) {
-        return;
-    }
     for clearing in ["approve-anyway", "clear", "rescope", "reassessed"] {
         let mut workspace = Workspace::new();
         on(&mut workspace, HostOs::Linux);
@@ -352,11 +341,7 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
     }
 }
 
-#[test]
 fn a_native_os_decision_is_superseded_by_changed_findings() {
-    if !isolated("task_pilot::native_os::a_native_os_decision_is_superseded_by_changed_findings") {
-        return;
-    }
     for decision in ["approve-anyway", "clear"] {
         for change in ["criteria", "os", "criterion", "machine"] {
             let mut workspace = Workspace::new();
@@ -449,12 +434,7 @@ fn a_native_os_decision_is_superseded_by_changed_findings() {
     }
 }
 
-#[test]
 fn tagged_unfounded_and_other_os_tasks_keep_their_admission() {
-    if !isolated("task_pilot::native_os::tagged_unfounded_and_other_os_tasks_keep_their_admission")
-    {
-        return;
-    }
     // Each case has its own workspace: the fixture tasks share one file, and
     // the drain's wave would defer all but the first.
     let workspace_on = |os| {
@@ -527,11 +507,7 @@ fn tagged_unfounded_and_other_os_tasks_keep_their_admission() {
     }
 }
 
-#[test]
 fn a_malformed_native_os_finding_is_refused_at_apply() {
-    if !isolated("task_pilot::native_os::a_malformed_native_os_finding_is_refused_at_apply") {
-        return;
-    }
     let workspace = Workspace::new();
     let task = backlog_task(&workspace, &[NATIVE_CRITERION], &[]);
     for (required_os, expected) in [
@@ -559,11 +535,7 @@ fn a_malformed_native_os_finding_is_refused_at_apply() {
     assert_eq!(exclusion(&workspace, &task), None);
 }
 
-#[test]
 fn a_machine_finding_holds_every_machine_but_the_owner() {
-    if !isolated("task_pilot::native_os::a_machine_finding_holds_every_machine_but_the_owner") {
-        return;
-    }
     let mut workspace = Workspace::new();
     let task = backlog_task(
         &workspace,
@@ -650,3 +622,18 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
     assert_eq!(exclusion(&workspace, &task), None);
     assert_eq!(resolutions(&workspace, &task), ["human:fixture"]);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_native_os_finding_tags_an_untagged_task_for_that_os_scenarios,
+    a_native_os_finding_tags_an_untagged_task_for_that_os,
+    a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment,
+    a_native_os_decision_is_superseded_by_changed_findings
+);
+
+crate::scenario_table!(
+    tagged_unfounded_and_other_os_tasks_keep_their_admission_scenarios,
+    tagged_unfounded_and_other_os_tasks_keep_their_admission,
+    a_malformed_native_os_finding_is_refused_at_apply,
+    a_machine_finding_holds_every_machine_but_the_owner
+);

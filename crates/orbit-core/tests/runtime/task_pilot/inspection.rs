@@ -67,13 +67,7 @@ fn fetches(trace: &Path) -> usize {
         .count()
 }
 
-#[test]
 fn routine_status_reads_cached_refs_while_clock_sweep_fetches() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::inspection::routine_status_reads_cached_refs_while_clock_sweep_fetches",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("inspection candidate");
@@ -178,13 +172,7 @@ fn routine_status_reads_cached_refs_while_clock_sweep_fetches() {
     );
 }
 
-#[test]
 fn inspection_uses_cached_origin_and_preserves_unfetched_source_reasons() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::inspection::inspection_uses_cached_origin_and_preserves_unfetched_source_reasons",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("cached source candidate");
     let local = workspace.object("HEAD");
@@ -233,13 +221,7 @@ fn inspection_uses_cached_origin_and_preserves_unfetched_source_reasons() {
 /// partial clone's. Status then reads the same refs and material through Git,
 /// so every automation field is unchanged, and a branch that does not resolve
 /// reports Git's own text from either reader.
-#[test]
 fn inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::inspection::inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("fallback candidate");
     workspace.commit_file("AGENTS.md", "repository instructions\n", "instructions");
@@ -387,3 +369,11 @@ fn routine_status_does_not_wait_behind_a_queued_task_commit_writer() {
     );
     assert_eq!(ordinary.join().unwrap().unwrap(), task.id);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    routine_status_reads_cached_refs_while_clock_sweep_fetches_scenarios,
+    routine_status_reads_cached_refs_while_clock_sweep_fetches,
+    inspection_uses_cached_origin_and_preserves_unfetched_source_reasons,
+    inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read
+);

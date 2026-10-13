@@ -7,7 +7,6 @@ use orbit_types::task::{PilotAdmissionVerdict, TaskDecision};
 use serde_json::json;
 
 use super::Workspace;
-use crate::dispatch_admission::isolated;
 
 fn backlog_task(workspace: &Workspace) -> Task {
     task_at_status(workspace, TaskStatus::Backlog)
@@ -87,13 +86,7 @@ fn assess_disposition(
     );
 }
 
-#[test]
 fn host_operational_holds_human_approved_work_until_a_current_operator_decision() {
-    if !isolated(
-        "task_pilot::admission::host_operational_holds_human_approved_work_until_a_current_operator_decision",
-    ) {
-        return;
-    }
     for decision in ["approve-anyway", "clear", "evaluated"] {
         let workspace = Workspace::new();
         let task = task_at_status(&workspace, TaskStatus::Proposed);
@@ -254,13 +247,7 @@ fn host_operational_holds_human_approved_work_until_a_current_operator_decision(
     }
 }
 
-#[test]
 fn host_operational_material_and_newer_dispositions_control_admission() {
-    if !isolated(
-        "task_pilot::admission::host_operational_material_and_newer_dispositions_control_admission",
-    ) {
-        return;
-    }
     for release in ["selectors", "verified_no_diff", "rescope"] {
         let workspace = Workspace::new();
         let task =
@@ -298,13 +285,7 @@ fn host_operational_material_and_newer_dispositions_control_admission() {
     }
 }
 
-#[test]
 fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() {
-    if !isolated(
-        "task_pilot::admission::legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = human_approved_validation_task(&workspace, "The owner-side repair is observable.");
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
@@ -454,13 +435,7 @@ fn assert_admission(workspace: &Workspace, task: &Task, reason: Option<&str>) {
     }
 }
 
-#[test]
 fn latest_pilot_finding_holds_backlog_until_a_clear_assessment() {
-    if !isolated(
-        "task_pilot::admission::latest_pilot_finding_holds_backlog_until_a_clear_assessment",
-    ) {
-        return;
-    }
     for (field, reason) in [
         ("duplicate_of", "pilot_duplicate"),
         ("already_landed", "pilot_already_landed"),
@@ -490,12 +465,7 @@ fn latest_pilot_finding_holds_backlog_until_a_clear_assessment() {
     }
 }
 
-#[test]
 fn human_pilot_decisions_release_only_the_current_assessment() {
-    if !isolated("task_pilot::admission::human_pilot_decisions_release_only_the_current_assessment")
-    {
-        return;
-    }
     for decision in ["approve-anyway", "clear"] {
         for (field, reason) in [
             ("duplicate_of", "pilot_duplicate"),
@@ -617,13 +587,7 @@ fn human_approved_validation_task_with_tools(
     human_approved_validation_task_with_criteria(workspace, vec![criterion.into()], required_tools)
 }
 
-#[test]
 fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision() {
-    if !isolated(
-        "task_pilot::admission::operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision",
-    ) {
-        return;
-    }
     for decision in ["evaluated", "approve-anyway", "clear"] {
         let mut workspace = Workspace::new();
         workspace.runtime = workspace
@@ -836,13 +800,7 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
     }
 }
 
-#[test]
 fn repairable_tool_findings_and_expected_denials_remain_advisory() {
-    if !isolated(
-        "task_pilot::admission::repairable_tool_findings_and_expected_denials_remain_advisory",
-    ) {
-        return;
-    }
     for (criterion, warns) in [
         ("Call `proc.spawn` over MCP to validate the fixture.", true),
         ("Read the fixture through `orbit.task.eligible`.", true),
@@ -882,13 +840,7 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
     assert_admission(&workspace, &task, None);
 }
 
-#[test]
 fn changed_criteria_make_the_pilot_validation_assessment_stale() {
-    if !isolated(
-        "task_pilot::admission::changed_criteria_make_the_pilot_validation_assessment_stale",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task =
         human_approved_validation_task(&workspace, "Evaluate through `orbit.pipeline.invoke`.");
@@ -912,13 +864,7 @@ fn changed_criteria_make_the_pilot_validation_assessment_stale() {
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
 }
 
-#[test]
 fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() {
-    if !isolated(
-        "task_pilot::admission::legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = human_approved_validation_task(&workspace, "Evaluate with `orbit.pipeline.invoke`.");
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
@@ -997,13 +943,7 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
     assert_admission(&workspace, &task, None);
 }
 
-#[test]
 fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
-    if !isolated(
-        "task_pilot::admission::operator_validation_hold_is_retained_when_warnings_exceed_cap",
-    ) {
-        return;
-    }
     let criteria = vec![
         "Validate with `github.run.list` over MCP.".into(),
         "Validate with `github.run.view` over MCP.".into(),
@@ -1145,13 +1085,7 @@ fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, messag
     .unwrap();
 }
 
-#[test]
 fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions() {
-    if !isolated(
-        "task_pilot::admission::an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions",
-    ) {
-        return;
-    }
     for (decision, verdict) in [
         ("approve-anyway", PilotAdmissionVerdict::ApproveAnyway),
         ("clear", PilotAdmissionVerdict::Clear),
@@ -1219,13 +1153,7 @@ fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed
     }
 }
 
-#[test]
 fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
-    if !isolated(
-        "task_pilot::admission::an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it",
-    ) {
-        return;
-    }
     let comment = "task-pilot-admission: approve-anyway\nReviewed the finding.";
     // Empty, as a crash after the older binary created the file left it, and
     // cut short, as a failed write did.
@@ -1261,3 +1189,28 @@ fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_ope
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    host_operational_holds_human_approved_work_until_a_current_operator_decision_scenarios,
+    host_operational_holds_human_approved_work_until_a_current_operator_decision,
+    host_operational_material_and_newer_dispositions_control_admission,
+    legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material,
+    latest_pilot_finding_holds_backlog_until_a_clear_assessment,
+    human_pilot_decisions_release_only_the_current_assessment
+);
+
+crate::scenario_table!(
+    operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision_scenarios,
+    operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision,
+    repairable_tool_findings_and_expected_denials_remain_advisory,
+    changed_criteria_make_the_pilot_validation_assessment_stale,
+    legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit,
+    operator_validation_hold_is_retained_when_warnings_exceed_cap
+);
+
+crate::scenario_table!(
+    an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions_scenarios,
+    an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions,
+    an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it
+);

@@ -42,7 +42,7 @@ impl Fixture {
     /// Profiles from one delivery, a ten-minute horizon, and a host whose
     /// `/proc` holds nothing until a test writes it.
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let workspace_root = root.path().join("repo/.orbit");
         let proc_root = root.path().join("proc");
@@ -271,13 +271,7 @@ fn reserved(forecast: &HostLoadForecast) -> Vec<&str> {
 /// One running for a minute is expected at `cpu(1+t) · alive(1+t) / (2/3)`;
 /// a `small` one past its two-minute profile holds its measured use; a
 /// reserved `small` task adds its profile from minute zero.
-#[test]
 fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
-    if !super::dispatch_admission::isolated(
-        "admission_forecast::the_forecast_scales_running_deliveries_by_survival_and_adds_reservations",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     fixture.finished_delivery("ORB-h1", "hard", &[6.0], &[GIB]);
     fixture.finished_delivery("ORB-h2", "hard", &[3.0, 3.0], &[2 * GIB, 2 * GIB]);
@@ -361,13 +355,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
 
 /// A live leaf of another workspace on the same `orbit.db` is part of the
 /// host's load.
-#[test]
 fn a_live_leaf_of_another_workspace_counts() {
-    if !super::dispatch_admission::isolated(
-        "admission_forecast::a_live_leaf_of_another_workspace_counts",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     assert_ne!(fixture.workspace, OTHER_WORKSPACE);
     let now = Utc::now();
@@ -399,13 +387,7 @@ fn a_live_leaf_of_another_workspace_counts() {
 /// The baseline is `/proc/stat` utilization and `MemTotal - MemAvailable`
 /// minus the running deliveries' newest minutes, held flat. A load average of
 /// 36 on 15 cores with 6 busy cores leaves 2 cores, not 32.
-#[test]
 fn the_baseline_is_measured_utilization_minus_running_use() {
-    if !super::dispatch_admission::isolated(
-        "admission_forecast::the_baseline_is_measured_utilization_minus_running_use",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let now = Utc::now();
     let workspace = fixture.workspace.clone();
@@ -453,13 +435,7 @@ fn the_baseline_is_measured_utilization_minus_running_use() {
 
 /// A reservation stops counting once a delivery run naming its task is
 /// created in its workspace after it, or five minutes after it was written.
-#[test]
 fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
-    if !super::dispatch_admission::isolated(
-        "admission_forecast::a_reservation_ends_when_its_run_exists_or_after_five_minutes",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     fixture.finished_delivery("ORB-p", "small", &[1.0, 1.0], &[GIB, GIB]);
     let now = Utc::now();
@@ -516,13 +492,7 @@ fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
 /// calls: a delivery started, a reservation another connection wrote and the
 /// host's memory all show in the next call, though no delivery finished to
 /// change the profiles.
-#[test]
 fn every_call_reads_running_reservations_and_baseline_fresh() {
-    if !super::dispatch_admission::isolated(
-        "admission_forecast::every_call_reads_running_reservations_and_baseline_fresh",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     fixture.finished_delivery("ORB-p", "small", &[1.0, 1.0], &[GIB, GIB]);
     fixture.write_proc(10_000, 90_000, 4 * GIB);
@@ -719,3 +689,13 @@ fn second_admitter(rendezvous: &Path) {
     )
     .unwrap();
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    the_forecast_scales_running_deliveries_by_survival_and_adds_reservations_scenarios,
+    the_forecast_scales_running_deliveries_by_survival_and_adds_reservations,
+    a_live_leaf_of_another_workspace_counts,
+    the_baseline_is_measured_utilization_minus_running_use,
+    a_reservation_ends_when_its_run_exists_or_after_five_minutes,
+    every_call_reads_running_reservations_and_baseline_fresh
+);

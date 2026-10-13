@@ -76,7 +76,7 @@ fn run_isolated_test(test_name: &str) -> bool {
         return false;
     }
 
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -128,7 +128,7 @@ fn record_upgrade_interruption_at(jobs: &dyn JobRunStoreBackend, run_id: &str, n
 }
 
 fn setup_context() -> TestContext {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let jobs_dir = global.join("resources/jobs");

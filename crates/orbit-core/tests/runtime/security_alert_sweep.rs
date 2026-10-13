@@ -9,10 +9,8 @@ use orbit_tools::ToolContext;
 use orbit_types::task::TaskRelationType;
 use serde_json::{Value, json};
 
-use super::dispatch_admission::isolated;
-
 fn fixture(global: Option<&str>, workspace: Option<&str>) -> (tempfile::TempDir, OrbitRuntime) {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global_root = root.path().join("home/.orbit");
     let workspace_root = root.path().join("repo/.orbit");
     for (path, severity) in [(&global_root, global), (&workspace_root, workspace)] {
@@ -55,11 +53,7 @@ fn file(runtime: &OrbitRuntime, snapshot: Value, severity: Option<&str>) -> Valu
         .unwrap()
 }
 
-#[test]
 fn consolidation_retires_every_duplicate_alert_owner_once() {
-    if !isolated("security_alert_sweep::consolidation_retires_every_duplicate_alert_owner_once") {
-        return;
-    }
     // Duplicate owners alone also need consolidation even though the group
     // contains only one unique alert.
     for numbers in [vec![81, 81], vec![81, 81, 82]] {
@@ -180,13 +174,7 @@ fn consolidation_retires_every_duplicate_alert_owner_once() {
     }
 }
 
-#[test]
 fn filing_applies_each_config_layer_and_reports_the_effective_source() {
-    if !isolated(
-        "security_alert_sweep::filing_applies_each_config_layer_and_reports_the_effective_source",
-    ) {
-        return;
-    }
     for (global, workspace, floor, source, filed, excluded) in [
         (None, None, "moderate", "built-in", 1, vec![72]),
         (None, Some("high"), "high", "workspace", 0, vec![71, 72]),
@@ -233,13 +221,7 @@ fn filing_applies_each_config_layer_and_reports_the_effective_source() {
     }
 }
 
-#[test]
 fn input_overrides_config_for_one_filing_and_secrets_ignore_the_floor() {
-    if !isolated(
-        "security_alert_sweep::input_overrides_config_for_one_filing_and_secrets_ignore_the_floor",
-    ) {
-        return;
-    }
     let (_root, runtime) = fixture(Some("high"), Some("moderate"));
     let mut snapshot = snapshot();
     snapshot["code_scanning"] = json!({"collected": true, "open_alerts": [{
@@ -276,14 +258,8 @@ fn input_overrides_config_for_one_filing_and_secrets_ignore_the_floor() {
     );
 }
 
-#[test]
 fn invalid_severity_is_rejected_by_config_admission_with_its_key() {
-    if !isolated(
-        "security_alert_sweep::invalid_severity_is_rejected_by_config_admission_with_its_key",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&global).unwrap();
@@ -371,13 +347,7 @@ fn code_tasks(runtime: &OrbitRuntime) -> usize {
 /// A rejected implementer verdict on an unchanged alert must stick: the sweep
 /// re-filed alert #484 thirteen minutes after its owner was rejected as a false
 /// positive (on-call ORB-15178, failure class B10).
-#[test]
 fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
-    if !isolated(
-        "security_alert_sweep::rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes",
-    ) {
-        return;
-    }
     let (_root, runtime) = fixture(None, None);
     let rule = "rust/cleartext-logging";
     let path = "crates/a/src/lib.rs";
@@ -439,13 +409,7 @@ fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
 /// only by punctuation or case is a different finding and files again, while a
 /// longer rule or line number sharing the recorded prefix does not inherit the
 /// suppression either.
-#[test]
 fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
-    if !isolated(
-        "security_alert_sweep::rejected_owner_distinguishes_punctuation_only_path_and_rule_changes",
-    ) {
-        return;
-    }
     let rule = "rust/cleartext-logging";
     let path = "crates/foo-bar/src/lib.rs";
 
@@ -483,13 +447,7 @@ fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
 /// A rejected group records one ledger bullet per alert. Moving one alert onto
 /// a sibling's old location must file that alert again; the unchanged sibling
 /// stays suppressed by the same rejected task.
-#[test]
 fn rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location() {
-    if !isolated(
-        "security_alert_sweep::rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location",
-    ) {
-        return;
-    }
     let (_root, runtime) = fixture(None, None);
     let rule = "rust/cleartext-logging";
     let original = code_alerts_snapshot(vec![
@@ -547,13 +505,7 @@ fn rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location() {
 /// Consolidation and duplicate rejections point at another owner. They are not
 /// a verdict on the alert, so a still-open alert whose covering task finished
 /// must be filed again.
-#[test]
 fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
-    if !isolated(
-        "security_alert_sweep::rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling",
-    ) {
-        return;
-    }
     let (_root, runtime) = fixture(None, None);
     let snapshot = || code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs");
     let first = file(&runtime, snapshot(), None);
@@ -569,3 +521,16 @@ fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
     let refiled = file(&runtime, snapshot(), None);
     assert_eq!(refiled["filed_count"], 1, "{refiled}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    consolidation_retires_every_duplicate_alert_owner_once_scenarios,
+    consolidation_retires_every_duplicate_alert_owner_once,
+    filing_applies_each_config_layer_and_reports_the_effective_source,
+    input_overrides_config_for_one_filing_and_secrets_ignore_the_floor,
+    invalid_severity_is_rejected_by_config_admission_with_its_key,
+    rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes,
+    rejected_owner_distinguishes_punctuation_only_path_and_rule_changes,
+    rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location,
+    rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling
+);

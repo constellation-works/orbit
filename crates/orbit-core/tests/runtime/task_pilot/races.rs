@@ -45,13 +45,7 @@ fn assert_superseded(workspace: &Workspace, output: &Value, count: usize) {
     );
 }
 
-#[test]
 fn admitted_and_retired_targets_settle_as_superseded_without_pilot_writes() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::races::admitted_and_retired_targets_settle_as_superseded_without_pilot_writes",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let tasks = [
         "admitted",
@@ -138,13 +132,7 @@ fn admitted_and_retired_targets_settle_as_superseded_without_pilot_writes() {
     }
 }
 
-#[test]
 fn human_material_edits_supersede_preparation_without_writes() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::races::human_material_edits_supersede_preparation_without_writes",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     for admitted in [false, true] {
         for field in ["description", "plan", "context"] {
@@ -197,13 +185,7 @@ fn human_material_edits_supersede_preparation_without_writes() {
     }
 }
 
-#[test]
 fn agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::races::agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.commit_file("src/lib.rs", "fn fixture() {}\n", "add source");
     for (case, echo) in [
@@ -262,13 +244,7 @@ fn agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot() {
     }
 }
 
-#[test]
 fn promoting_ci_sweep_replay_settles_already_applied_without_writes() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::races::promoting_ci_sweep_replay_settles_already_applied_without_writes",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("promoting CI-sweep replay");
     workspace
@@ -343,13 +319,7 @@ fn promoting_ci_sweep_replay_settles_already_applied_without_writes() {
     );
 }
 
-#[test]
 fn superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::races::superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let tasks = ["retired", "repair", "valid"].map(|title| workspace.task(title));
     let prepared = workspace.prepare(
@@ -383,13 +353,7 @@ fn superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies() {
     assert_eq!(output["applied_count"], 2);
 }
 
-#[test]
 fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::races::local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("ready to deliver");
     workspace
@@ -436,3 +400,14 @@ fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
         json!([task.id])
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    admitted_and_retired_targets_settle_as_superseded_without_pilot_writes_scenarios,
+    admitted_and_retired_targets_settle_as_superseded_without_pilot_writes,
+    human_material_edits_supersede_preparation_without_writes,
+    agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot,
+    promoting_ci_sweep_replay_settles_already_applied_without_writes,
+    superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies,
+    local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint
+);

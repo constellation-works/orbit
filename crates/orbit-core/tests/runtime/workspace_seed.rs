@@ -26,18 +26,11 @@ use orbit_core::{
 };
 use orbit_store::compose::auto_task::cursor_state_path;
 
-use super::dispatch_admission::isolated;
-
 const MANIFEST: &str = ".orbit-managed-assets.json";
 
-#[test]
 fn routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh() {
-    if !isolated(
-        "workspace_seed::routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh",
-    ) {
-        return;
-    }
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let catalog = workspace.join("routines");
     let matching_path = catalog.join("task_pilot.yaml");
@@ -147,21 +140,13 @@ fn routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_ref
     );
 }
 
-#[test]
 fn reconciliation_preserves_concurrent_delete_opt_out() {
-    if !isolated("workspace_seed::reconciliation_preserves_concurrent_delete_opt_out") {
-        return;
-    }
     for create_only in [false, true] {
         reconcile_during_lifecycle_change(create_only, false);
     }
 }
 
-#[test]
 fn reconciliation_preserves_concurrent_restore_provenance() {
-    if !isolated("workspace_seed::reconciliation_preserves_concurrent_restore_provenance") {
-        return;
-    }
     for create_only in [false, true] {
         reconcile_during_lifecycle_change(create_only, true);
     }
@@ -171,7 +156,8 @@ fn reconciliation_preserves_concurrent_restore_provenance() {
 /// lifecycle writer. Without exclusion, let that writer commit before sync
 /// resumes, reproducing the stale snapshot deterministically [ORB-15609].
 fn reconcile_during_lifecycle_change(create_only: bool, restoring: bool) {
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime"));
@@ -465,7 +451,8 @@ fn snapshot(catalog: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 #[test]
 fn create_only_seed_creates_absent_defaults_and_never_rewrites_existing_definitions() {
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let routines = workspace.join("routines");
     let auto_tasks = workspace.join("auto_tasks");
@@ -583,15 +570,9 @@ fn create_only_seed_creates_absent_defaults_and_never_rewrites_existing_definiti
     );
 }
 
-#[test]
 fn implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees() {
-    if !isolated(
-        "workspace_seed::implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees",
-    ) {
-        return;
-    }
-
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let mut expected_files = Vec::new();
 
@@ -654,14 +635,9 @@ fn implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees() {
     }
 }
 
-#[test]
 fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
-    if !isolated(
-        "workspace_seed::settings_only_migration_waits_for_crud_and_preserves_concurrent_settings",
-    ) {
-        return;
-    }
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
     let auto_tasks = workspace.join("auto_tasks");
@@ -774,3 +750,17 @@ fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
         AutoTaskBody::Managed
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh_scenarios,
+    routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh,
+    reconciliation_preserves_concurrent_delete_opt_out
+);
+
+crate::scenario_table!(
+    reconciliation_preserves_concurrent_restore_provenance_scenarios,
+    reconciliation_preserves_concurrent_restore_provenance,
+    implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees,
+    settings_only_migration_waits_for_crud_and_preserves_concurrent_settings
+);

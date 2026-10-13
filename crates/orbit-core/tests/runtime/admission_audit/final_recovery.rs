@@ -9,7 +9,7 @@ use orbit_common::fs::git::run_git;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use super::task_support::{enter_isolated_child, test_runtime};
+use super::task_support::test_runtime;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
@@ -201,21 +201,7 @@ fn status(runtime: &OrbitRuntime, task_id: &str) -> TaskStatus {
     runtime.get_task(task_id).expect("read task").status
 }
 
-#[test]
 fn complete_no_diff_completes_only_on_a_commit_reachable_from_base() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "complete_no_diff_completes_only_on_a_commit_reachable_from_base",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "complete_no_diff_completes_only_on_a_commit_reachable_from_base",
-    ) {
-        return;
-    }
     let (root, runtime) = test_runtime();
     let repo = root.path().join("repo");
     let (on_main, off_main) = repository(&repo);
@@ -281,21 +267,7 @@ fn complete_no_diff_completes_only_on_a_commit_reachable_from_base() {
     }
 }
 
-#[test]
 fn complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing",
-    ) {
-        return;
-    }
     let (root, runtime) = test_runtime();
     let (repo, fetched, evidence) = bare_remote_repository(&root.path().join("remote-case"));
     assert_eq!(
@@ -358,21 +330,7 @@ fn complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing()
     assert_eq!(status(&runtime, &task.id), TaskStatus::Blocked);
 }
 
-#[test]
 fn reject_archive_and_escalate_record_the_decision_with_the_run_id() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "reject_archive_and_escalate_record_the_decision_with_the_run_id",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "reject_archive_and_escalate_record_the_decision_with_the_run_id",
-    ) {
-        return;
-    }
     let (root, runtime) = test_runtime();
     let repo = root.path();
     for (output, expected_outcome, expected_status) in [
@@ -408,21 +366,7 @@ fn reject_archive_and_escalate_record_the_decision_with_the_run_id() {
     }
 }
 
-#[test]
 fn requeue_returns_to_backlog_until_the_window_bound_then_escalates() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "requeue_returns_to_backlog_until_the_window_bound_then_escalates",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "requeue_returns_to_backlog_until_the_window_bound_then_escalates",
-    ) {
-        return;
-    }
     let (root, runtime) = test_runtime();
     let task = failed_task(&runtime, "Flaky environment");
     let requeue = json!({"decision": "requeue", "reason": "bwrap now resolves"});
@@ -469,21 +413,7 @@ fn requeue_returns_to_backlog_until_the_window_bound_then_escalates() {
     assert_eq!(status(&runtime, &task.id), TaskStatus::Blocked);
 }
 
-#[test]
 fn a_task_changed_after_the_failure_or_already_settled_is_refused() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_task_changed_after_the_failure_or_already_settled_is_refused",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "a_task_changed_after_the_failure_or_already_settled_is_refused",
-    ) {
-        return;
-    }
     let (root, runtime) = test_runtime();
     let task = failed_task(&runtime, "Operator stepped in");
     let observed = request(&runtime, &task, root.path(), FinalRecoveryCompletion::Done);
@@ -541,21 +471,7 @@ fn a_task_changed_after_the_failure_or_already_settled_is_refused() {
     assert_eq!(status(&runtime, &settled.id), TaskStatus::Archived);
 }
 
-#[test]
 fn malformed_output_escalates_and_resume_writes_nothing() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "malformed_output_escalates_and_resume_writes_nothing",
-    ) {
-        return;
-    }
-
-    if !enter_isolated_child(
-        module_path!(),
-        "malformed_output_escalates_and_resume_writes_nothing",
-    ) {
-        return;
-    }
     let (root, runtime) = test_runtime();
     for (label, output) in [
         ("missing field", Some(json!({"decision": "archive"}))),
@@ -620,3 +536,14 @@ fn malformed_output_escalates_and_resume_writes_nothing() {
         "resume is the engine's to apply; the applier writes nothing"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    complete_no_diff_completes_only_on_a_commit_reachable_from_base_scenarios,
+    complete_no_diff_completes_only_on_a_commit_reachable_from_base,
+    complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing,
+    reject_archive_and_escalate_record_the_decision_with_the_run_id,
+    requeue_returns_to_backlog_until_the_window_bound_then_escalates,
+    a_task_changed_after_the_failure_or_already_settled_is_refused,
+    malformed_output_escalates_and_resume_writes_nothing
+);

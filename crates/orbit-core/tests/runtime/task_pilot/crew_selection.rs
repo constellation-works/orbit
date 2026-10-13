@@ -105,13 +105,7 @@ fn redraws(workspace: &Workspace, task: &Task) -> usize {
         .count()
 }
 
-#[test]
 fn pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins() {
-    if !isolated(
-        "task_pilot::crew_selection::pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins",
-    ) {
-        return;
-    }
     for (populated, pin) in [
         (true, "pool"),
         (false, "default"),
@@ -193,13 +187,7 @@ fn pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins() {
     }
 }
 
-#[test]
 fn complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier() {
-    if !isolated(
-        "task_pilot::crew_selection::complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier",
-    ) {
-        return;
-    }
     for (populated, explicit) in [(true, false), (false, false), (false, true)] {
         let workspace = workspace_with_low_pool(populated);
         let task = task(&workspace, explicit);
@@ -385,3 +373,10 @@ fn admission_recovers_automatic_history_and_reports_current_tier_selection() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins_scenarios,
+    pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins,
+    complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier
+);

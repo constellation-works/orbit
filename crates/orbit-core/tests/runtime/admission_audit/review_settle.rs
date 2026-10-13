@@ -15,15 +15,7 @@ use super::review_support::{
     write_report_bytes,
 };
 
-#[test]
 fn a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     gated.start(&gated.run_id, Utc::now() - Duration::minutes(40));
     let admission = gated.admit().expect("admit");
@@ -90,15 +82,7 @@ fn a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime
     );
 }
 
-#[test]
 fn a_drifted_report_on_a_later_bundle_task_still_settles() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_drifted_report_on_a_later_bundle_task_still_settles",
-    ) {
-        return;
-    }
-
     let gated = gated_bundle_fixture(BEFORE_PR, 2);
     let admission = gated.admit().expect("admit");
     fs::write(
@@ -142,15 +126,7 @@ fn a_drifted_report_on_a_later_bundle_task_still_settles() {
     );
 }
 
-#[test]
 fn the_most_severe_bundle_report_decides_and_refuses_without_retry() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "the_most_severe_bundle_report_decides_and_refuses_without_retry",
-    ) {
-        return;
-    }
-
     let gated = gated_bundle_fixture(BEFORE_PR, 2);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -187,15 +163,7 @@ fn the_most_severe_bundle_report_decides_and_refuses_without_retry() {
 /// implementation commit, posts every finding with what changed for it as a
 /// task comment, and hands the PR steps the revalidation trigger and the
 /// "Review fixes" body section.
-#[test]
 fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -258,15 +226,7 @@ fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation
 
 /// [ORB-13989] No findings: `accept` adds no reviewer commit, while the PR
 /// still carries the raw validation evidence from the certificate.
-#[test]
 fn no_findings_accepts_without_a_reviewer_commit() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "no_findings_accepts_without_a_reviewer_commit",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -304,15 +264,7 @@ fn no_findings_accepts_without_a_reviewer_commit() {
 /// refuses without retry so the failure handoff blocks the task, nothing
 /// goes back to an implementer, and the candidate keeps the implementation
 /// commit plus the reviewer's commit for whatever it did fix.
-#[test]
 fn an_unfixable_finding_rejects_and_preserves_both_commits() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "an_unfixable_finding_rejects_and_preserves_both_commits",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
     let attempt_id = admission["attempt_id"].as_str().expect("attempt");
@@ -378,15 +330,7 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
 /// repair commit records as a rename) is caught at its original path, and a
 /// target spelled as an absolute or out-of-repository path is refused rather
 /// than passed beside a fix.
-#[test]
 fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration",
-    ) {
-        return;
-    }
-
     enum Mutation {
         None,
         Modified,
@@ -594,3 +538,15 @@ fn widening_selectors_reports_the_reviewers_consumed_time() {
         "settlement leaves the attempt on the digest it was admitted under"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only_scenarios,
+    a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only,
+    a_drifted_report_on_a_later_bundle_task_still_settles,
+    the_most_severe_bundle_report_decides_and_refuses_without_retry,
+    fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation,
+    no_findings_accepts_without_a_reviewer_commit,
+    an_unfixable_finding_rejects_and_preserves_both_commits,
+    a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration
+);

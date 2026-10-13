@@ -216,6 +216,8 @@ jobs:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
         run: |
           cargo test --no-fail-fast -p orbit-core --locked sandbox
+          # This table also retains the sandbox-command grammar refusal row.
+          cargo test --no-fail-fast -p orbit-core --locked a_self_skipped_host_run_holds_the_review_scenarios
           cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
 
       # [ORB-13236] Darwin peer credentials and the ancestry walk: a client

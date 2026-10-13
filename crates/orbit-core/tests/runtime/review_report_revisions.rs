@@ -130,13 +130,7 @@ fn remove_history_sidecar(fixture: &Fixture) {
 /// the required CodeQL run failed. A replacement that omits its id is refused
 /// at attach; a corrected report carries the id on a passing rerun, remains
 /// idempotent on retry, and survives a host restart before settlement.
-#[test]
 fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed() {
-    if !super::dispatch_admission::isolated(
-        "review_report_revisions::a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     fixture.put_report(&codeql_failed_report(&fixture));
@@ -264,13 +258,7 @@ fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed(
 /// A first replacement after upgrading must import the held report when no
 /// history sidecar existed yet. This is the legacy branch of the same
 /// two-report omission case, before any settlement has run.
-#[test]
 fn first_replacement_imports_a_legacy_report_without_a_history_sidecar() {
-    if !super::dispatch_admission::isolated(
-        "review_report_revisions::first_replacement_imports_a_legacy_report_without_a_history_sidecar",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     fixture.put_report(&codeql_failed_report(&fixture));
@@ -350,13 +338,7 @@ fn first_replacement_imports_a_legacy_report_without_a_history_sidecar() {
 /// passes; a CodeQL failure an earlier revision recorded is legitimately
 /// resolved by its passing rerun. The certificate, comment, and PR body say
 /// what was not established instead of claiming the workspace passed.
-#[test]
 fn an_unrelated_diagnostic_failure_passes_the_bounded_task_with_its_limits_disclosed() {
-    if !super::dispatch_admission::isolated(
-        "review_report_revisions::an_unrelated_diagnostic_failure_passes_the_bounded_task_with_its_limits_disclosed",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     fixture.put_report(&codeql_failed_report(&fixture));
@@ -414,13 +396,7 @@ fn an_unrelated_diagnostic_failure_passes_the_bounded_task_with_its_limits_discl
 
 /// A diagnostic whose failure lies in the candidate's own changed path is a
 /// required failure under another name: settlement refuses it.
-#[test]
 fn a_diagnostic_failing_inside_the_candidate_scope_is_refused() {
-    if !super::dispatch_admission::isolated(
-        "review_report_revisions::a_diagnostic_failing_inside_the_candidate_scope_is_refused",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     fixture.put_report(&report(
@@ -451,14 +427,7 @@ fn a_diagnostic_failing_inside_the_candidate_scope_is_refused() {
 
 /// The admitted owner command list survives restart and mutable config
 /// changes, and a diagnostic cannot replace one of those required checks.
-#[test]
 fn owner_required_commands_are_bound_at_admission_and_rechecked_by_consumers() {
-    if !super::dispatch_admission::isolated(
-        "review_report_revisions::owner_required_commands_are_bound_at_admission_and_rechecked_by_consumers",
-    ) {
-        return;
-    }
-
     let mut fixture = Fixture::new_with_required_commands(&["make ci-fast"]);
     fixture.admit();
     let manifest = fixture
@@ -535,3 +504,13 @@ fn owner_required_commands_are_bound_at_admission_and_rechecked_by_consumers() {
     assert!(body.contains("## Review validation"));
     assert!(body.contains("`make ci-fast` — passed (required)"));
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed_scenarios,
+    a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed,
+    first_replacement_imports_a_legacy_report_without_a_history_sidecar,
+    an_unrelated_diagnostic_failure_passes_the_bounded_task_with_its_limits_disclosed,
+    a_diagnostic_failing_inside_the_candidate_scope_is_refused,
+    owner_required_commands_are_bound_at_admission_and_rechecked_by_consumers
+);

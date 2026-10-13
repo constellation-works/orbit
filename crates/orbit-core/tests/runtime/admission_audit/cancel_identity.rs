@@ -92,15 +92,7 @@ fn write_provider_spawn(runtime: &OrbitRuntime, run_id: &str, pid: u32, pid_star
 
 /// A recorded owner pid whose start token no longer matches names some other
 /// process now. Cancellation must never signal it.
-#[test]
 fn cancel_job_run_does_not_signal_reused_pid_identity_mismatch() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "cancel_job_run_does_not_signal_reused_pid_identity_mismatch",
-    ) {
-        return;
-    }
-
     let (_root, runtime) = test_runtime();
     let run = insert_pending_run(&runtime, "qa_cancel_reused_pid");
     let sentinel = spawn_bystander();
@@ -133,15 +125,7 @@ fn cancel_job_run_does_not_signal_reused_pid_identity_mismatch() {
 }
 
 /// The same guard for the provider processes a run recorded.
-#[test]
 fn cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid",
-    ) {
-        return;
-    }
-
     let (_root, runtime) = test_runtime();
     let run = insert_pending_run(&runtime, "qa_cancel_provider_reused_pid");
     let bystander = spawn_bystander();
@@ -169,3 +153,10 @@ fn cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid() {
         "a pid the provider record no longer identifies must not be signalled"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    cancel_job_run_does_not_signal_reused_pid_identity_mismatch_scenarios,
+    cancel_job_run_does_not_signal_reused_pid_identity_mismatch,
+    cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid
+);

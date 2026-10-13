@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{DedupePolicy, auto_task_tag};
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
 
@@ -62,7 +62,8 @@ fn show_and_mint_reject_absolute_and_traversal_lookups() {
     let runtime = runtime();
     let orbit = runtime.paths().local_dir.clone();
     write_external_definition(&orbit, "outside");
-    let absolute_root = tempdir().expect("absolute definition root");
+    let absolute_root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("absolute definition root");
     write_external_definition(absolute_root.path(), "escaped");
     let absolute_name = absolute_root
         .path()
@@ -112,22 +113,15 @@ fn show_and_mint_reject_absolute_and_traversal_lookups() {
 }
 
 #[cfg(unix)]
-#[test]
 fn show_and_mint_refuse_symlinked_definition_file() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "show_and_mint_refuse_symlinked_definition_file",
-    ) {
-        return;
-    }
-
     use std::os::unix::fs::symlink;
 
     let runtime = runtime();
     runtime
         .auto_task_add(interval_params("local", 60))
         .expect("add regular definition");
-    let outside = tempdir().expect("symlink target root");
+    let outside =
+        tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("symlink target root");
     write_external_definition(outside.path(), "linked");
     symlink(
         outside.path().join("linked.yaml"),
@@ -150,19 +144,12 @@ fn show_and_mint_refuse_symlinked_definition_file() {
 }
 
 #[cfg(unix)]
-#[test]
 fn show_and_mint_refuse_symlinked_auto_tasks_directory() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "show_and_mint_refuse_symlinked_auto_tasks_directory",
-    ) {
-        return;
-    }
-
     use std::os::unix::fs::symlink;
 
     let runtime = runtime();
-    let outside = tempdir().expect("outside definitions root");
+    let outside = tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("outside definitions root");
     let outside_definitions = outside.path().join("auto_tasks");
     write_external_definition(&outside_definitions, "escaped");
     let definitions = runtime.paths().local_dir.join("auto_tasks");
@@ -184,3 +171,11 @@ fn show_and_mint_refuse_symlinked_auto_tasks_directory() {
     );
     assert_eq!(task_count(&runtime), 0);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+#[cfg(unix)]
+crate::scenario_table!(
+    show_and_mint_refuse_symlinked_definition_file_scenarios,
+    show_and_mint_refuse_symlinked_definition_file,
+    show_and_mint_refuse_symlinked_auto_tasks_directory
+);

@@ -13,6 +13,21 @@
 
 orbit_common::isolate_test_process!();
 
+mod scenarios;
+
+/// Keep related permutations in one table with isolated fixture state.
+macro_rules! scenario_table {
+    ($table:ident, $($row:ident),+ $(,)?) => {
+        #[test]
+        fn $table() {
+            crate::scenarios::run(module_path!(), stringify!($table), &[
+                $((stringify!($row), $row as fn())),+
+            ]);
+        }
+    };
+}
+pub(crate) use scenario_table;
+
 mod actor_identity;
 mod admission_forecast;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

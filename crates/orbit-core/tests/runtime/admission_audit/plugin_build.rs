@@ -87,7 +87,8 @@ fn enter_fake_git_commit_child(test: &str, manifest: &str, extra_env: &[(&str, &
         return true;
     }
 
-    let temp = tempfile::tempdir().expect("fake git directory");
+    let temp = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("fake git directory");
     let manifest_path = temp.path().join("plugin.yaml");
     std::fs::write(&manifest_path, manifest).expect("write fixture manifest");
     let git = temp.path().join("git");
@@ -913,3 +914,5 @@ fn workspace_plugin_toggles(
         runtime.shared_root(),
     ))
 }
+
+// Related boundary scenarios share the isolated table fixture.

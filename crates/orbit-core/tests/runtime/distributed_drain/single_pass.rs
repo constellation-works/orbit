@@ -122,7 +122,8 @@ fn run_single_pass_drain(
         )
         .expect("the replica submits its pull drain");
     let run_id = submitted.run_id;
-    // Poll briskly while leaves settle; the default is 30s.
+    // These fixtures test outcomes, not poll cadence. The real workers and
+    // settlement path remain; zero intervals skip only idle sleep activities.
     let store = pair.follower.sqlite_store().unwrap();
     let workspace = pair.follower.workspace_id().unwrap();
     store
@@ -131,7 +132,7 @@ fn run_single_pass_drain(
                 .connection()
                 .execute(
                     "UPDATE job_runs SET input_json = json_set(input_json, \
-                     '$.poll_sleep_seconds', 1, '$.idle_sleep_seconds', 1) \
+                     '$.poll_sleep_seconds', 0, '$.idle_sleep_seconds', 0) \
                      WHERE workspace_id = ?1 AND run_id = ?2",
                     [workspace.as_str(), run_id.as_str()],
                 )
@@ -155,14 +156,7 @@ fn run_single_pass_drain(
 /// crews differ so the second slot is filled whether or not the first leaf's
 /// release excluded its crew before the second request; the owner keeps the
 /// released task itself from this drain either way.
-#[test]
 fn a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles() {
-    if !isolated(
-        module_path!(),
-        "a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol"), Some("luna"), Some("sol")]);
 
     let drain = run_windowless_drain(&pair, 2, &[]);
@@ -217,14 +211,7 @@ fn a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles() {
 
 /// A windowless drain over an empty backlog asks once and ends, rather than
 /// polling an idle owner.
-#[test]
 fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
-    if !isolated(
-        module_path!(),
-        "a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends",
-    ) {
-        return;
-    }
     let pair = Pair::new(0);
 
     let drain = run_windowless_drain(&pair, 2, &[]);
@@ -247,14 +234,7 @@ fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
 
 /// Explicit zero is the same bounded single-pass contract as an omitted
 /// duration: it admits once, fills only the requested slot, then settles.
-#[test]
 fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
-    if !isolated(
-        module_path!(),
-        "an_explicit_zero_duration_pull_drain_admits_one_bounded_pass",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
 
     let drain = run_explicit_zero_duration_drain(&pair, 1);
@@ -284,14 +264,7 @@ fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
 
 /// A positive window that has run out is not a single pass: an expired timed
 /// drain requests nothing and ends.
-#[test]
 fn an_expired_timed_window_never_gains_the_single_pass() {
-    if !isolated(
-        module_path!(),
-        "an_expired_timed_window_never_gains_the_single_pass",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
 
@@ -311,14 +284,7 @@ fn an_expired_timed_window_never_gains_the_single_pass() {
 
 /// `orbit run auto --stop` before the pass takes it away: the drain requests
 /// nothing and ends, and records no pass it never made.
-#[test]
 fn a_stop_before_the_single_pass_takes_it_away() {
-    if !isolated(
-        module_path!(),
-        "a_stop_before_the_single_pass_takes_it_away",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     let stopped = pair
@@ -348,14 +314,7 @@ fn a_stop_before_the_single_pass_takes_it_away() {
 
 /// A graceful cancel recorded before the pass ends the drain `cancelled`
 /// without a request.
-#[test]
 fn a_cancel_before_the_single_pass_admits_nothing() {
-    if !isolated(
-        module_path!(),
-        "a_cancel_before_the_single_pass_admits_nothing",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     pair.follower
@@ -376,14 +335,7 @@ fn a_cancel_before_the_single_pass_admits_nothing() {
 /// reply re-sends only the request it already recorded — the owner's claim
 /// is carried, not duplicated — and a resumed run, which carries the run
 /// state, finds the pass taken and only settles.
-#[test]
 fn a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new() {
-    if !isolated(
-        module_path!(),
-        "a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new",
-    ) {
-        return;
-    }
     let pair = Pair::new(3);
     let drain = pair.run_drain();
     pair.wire.lose_next_reply("orbit.task.pull");
@@ -437,14 +389,7 @@ fn a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new()
 /// An old zero-window checkpoint has no `pull_single_pass` field. The public
 /// resume submission carries it into a linked run, which must not treat that
 /// missing field as fresh admission authority.
-#[test]
 fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
-    if !isolated(
-        module_path!(),
-        "a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     install_pull_job_assets(&pair);
     // No worker runs either drain; the test drives their state itself. Each
@@ -584,3 +529,20 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
     );
     std::fs::write(&release, "").unwrap();
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles_scenarios,
+    a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles,
+    a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends,
+    an_explicit_zero_duration_pull_drain_admits_one_bounded_pass,
+    an_expired_timed_window_never_gains_the_single_pass,
+    a_stop_before_the_single_pass_takes_it_away,
+    a_cancel_before_the_single_pass_admits_nothing
+);
+
+crate::scenario_table!(
+    a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new_scenarios,
+    a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new,
+    a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim
+);

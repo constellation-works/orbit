@@ -315,23 +315,11 @@ fn recover(fixture: &Fixture) {
     assert_eq!(outcome.pipeline["review_gate_settle"]["gate"], "passed");
 }
 
-#[test]
 fn final_recovery_repair_commit_gets_a_fresh_before_pr_review() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::repair_commit::final_recovery_repair_commit_gets_a_fresh_before_pr_review",
-    ) {
-        return;
-    }
     recover(&fixture());
 }
 
-#[test]
 fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::repair_commit::final_recovery_does_not_authorize_an_unrecorded_head_change",
-    ) {
-        return;
-    }
     for recorded in [false, true] {
         let fixture = fixture();
         if recorded {
@@ -356,3 +344,10 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
+    final_recovery_repair_commit_gets_a_fresh_before_pr_review,
+    final_recovery_does_not_authorize_an_unrecorded_head_change
+);

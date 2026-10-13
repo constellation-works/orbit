@@ -11,7 +11,7 @@ use orbit_tools::{ToolContext, ToolRegistry};
 use orbit_types::policy::{FsProfile, PolicyDef};
 use orbit_types::workflow::ActivityV2Spec;
 use serde_json::json;
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 /// [ORB-12103] Recovery once "repaired" a failed push by adding an `origin`
 /// that pointed at the primary checkout a linked worktree shares its
@@ -28,7 +28,7 @@ fn step_failure_recovery_cannot_write_persistent_git_configuration() {
         return;
     }
 
-    let global = tempdir().unwrap();
+    let global = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     orbit_core::bootstrap::init::init_workspace_at_root(
         global.path(),
         orbit_core::bootstrap::init::InitOptions {
@@ -53,7 +53,7 @@ fn step_failure_recovery_cannot_write_persistent_git_configuration() {
         "recovery still inspects and delivers with git"
     );
 
-    let repo = tempdir().expect("create tempdir");
+    let repo = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let repo_path = repo.path().to_string_lossy().into_owned();
     run_git(repo.path(), &["init"]).expect("git init");
     let mut ctx = recovery_tool_context(repo.path(), Vec::new());

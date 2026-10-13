@@ -29,7 +29,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let repo = root.path().join("repo");
     let global = root.path().join("global");
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
@@ -141,7 +141,7 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let repo = root.path().join("repo");
     let global = root.path().join("global");
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();

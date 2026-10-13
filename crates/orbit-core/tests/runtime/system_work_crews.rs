@@ -18,8 +18,6 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 const LOW: &str = "workflow.low_complexity_crews";
 const MEDIUM: &str = "workflow.medium_complexity_crews";
 const HARD: &str = "workflow.hard_complexity_crews";
@@ -64,7 +62,7 @@ fn fixture() -> Fixture {
 }
 
 fn fixture_with(config: &str) -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -141,13 +139,7 @@ impl Fixture {
     }
 }
 
-#[test]
 fn auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity() {
-    if !isolated(
-        "system_work_crews::auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity",
-    ) {
-        return;
-    }
     let fx = fixture();
 
     let hard = fx.mint("hard-review", TaskComplexity::Hard, None);
@@ -165,13 +157,7 @@ fn auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity() {
     assert_eq!(pinned.crew_source.as_deref(), Some("explicit"));
 }
 
-#[test]
 fn an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews() {
-    if !isolated(
-        "system_work_crews::an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews",
-    ) {
-        return;
-    }
     let fx = fixture();
     let run = fx.run("task_pilot_pipeline");
     let first = fx.model_for(json!({"job_run_id": run, "crew_config_key": LOW}));
@@ -228,13 +214,7 @@ fn an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews(
     );
 }
 
-#[test]
 fn an_empty_pool_falls_back_to_the_default_crew_and_the_run_says_so() {
-    if !isolated(
-        "system_work_crews::an_empty_pool_falls_back_to_the_default_crew_and_the_run_says_so",
-    ) {
-        return;
-    }
     let fx = fixture();
     let run = fx.run("task_pr_pipeline");
     assert_eq!(
@@ -250,11 +230,7 @@ fn an_empty_pool_falls_back_to_the_default_crew_and_the_run_says_so() {
     );
 }
 
-#[test]
 fn the_retired_system_route_draws_from_the_medium_pool() {
-    if !isolated("system_work_crews::the_retired_system_route_draws_from_the_medium_pool") {
-        return;
-    }
     let fx = fixture();
     for input in [
         json!({"crew_config_key": "workflow.system_crew"}),
@@ -326,11 +302,7 @@ fn pool_names(draw: &ActivityCrewDraw) -> Vec<&str> {
         .collect()
 }
 
-#[test]
 fn an_inspecting_activity_draws_only_inspection_capable_crews() {
-    if !isolated("system_work_crews::an_inspecting_activity_draws_only_inspection_capable_crews") {
-        return;
-    }
     let fx = fixture_with(INSPECTION_CONFIG);
     for _ in 0..12 {
         let run = fx.run("task_pilot_pipeline");
@@ -372,13 +344,7 @@ fn an_inspecting_activity_draws_only_inspection_capable_crews() {
     assert_eq!(pool_names(&draw), ["gemini_flash", "haiku", "luna"]);
 }
 
-#[test]
 fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails() {
-    if !isolated(
-        "system_work_crews::an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails",
-    ) {
-        return;
-    }
     // No member of the medium pool can inspect: the next tier up draws, over
     // its capable members only.
     let fx = fixture_with(INSPECTION_CONFIG);
@@ -430,3 +396,14 @@ fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails
     );
     assert!(fx.draws(&run).is_empty());
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity_scenarios,
+    auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity,
+    an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews,
+    an_empty_pool_falls_back_to_the_default_crew_and_the_run_says_so,
+    the_retired_system_route_draws_from_the_medium_pool,
+    an_inspecting_activity_draws_only_inspection_capable_crews,
+    an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails
+);

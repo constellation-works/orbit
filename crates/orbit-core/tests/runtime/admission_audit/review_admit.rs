@@ -18,15 +18,7 @@ use super::review_support::lineage_key;
 
 use super::review_support::{BEFORE_PR, gated_fixture, git};
 
-#[test]
 fn each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let first = gated.admit().expect("admit");
     gated.reviewer_ran(&gated.run_id, &first, 30);
@@ -67,15 +59,7 @@ fn each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over() {
     assert_ne!(admission["lineage_key"], first["lineage_key"]);
 }
 
-#[test]
 fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let runtime = &gated.fixture.runtime;
     let started = Utc::now() - Duration::hours(4);
@@ -169,15 +153,7 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
     assert_ne!(admission["lineage_key"], lineage.as_str());
 }
 
-#[test]
 fn a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(BEFORE_PR);
     let repo = &gated.fixture.repo;
 
@@ -217,15 +193,7 @@ fn a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base
     assert_eq!(admission["base_sha"], base_sha.as_str());
 }
 
-#[test]
 fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start",
-    ) {
-        return;
-    }
-
     use orbit_store::contracts::{ReviewResetRequest, ReviewSettlement};
     let gated = gated_fixture(BEFORE_PR);
     let first = gated.admit().expect("admit the candidate's review");
@@ -315,15 +283,7 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
 /// review: each reviewer invocation is bounded by what the review has left,
 /// an unfinished review continues on resume, and once the minutes are spent
 /// no reviewer is started again for that candidate.
-#[test]
 fn review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent",
-    ) {
-        return;
-    }
-
     let gated = gated_fixture(&format!("{BEFORE_PR}minutes = 1\n"));
     let runtime = &gated.fixture.runtime;
     let invoke = |run_id: &str, admission: &serde_json::Value, event| {
@@ -381,3 +341,13 @@ fn review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent() {
         "{error}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over_scenarios,
+    each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over,
+    a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates,
+    a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base,
+    reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start,
+    review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent
+);

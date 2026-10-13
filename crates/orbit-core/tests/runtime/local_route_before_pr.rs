@@ -16,12 +16,10 @@ use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 const REFUSAL_MARK: &str = "no meaning on the local-only delivery route";
 
 fn open(ship_mode: ShipMode, global: &str, workspace: &str) -> (TempDir, OrbitRuntime) {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global_root = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let workspace_root = repo.join(".orbit");
@@ -240,14 +238,7 @@ fn local_pipeline_error(runtime: &OrbitRuntime, task: &str) -> OrbitError {
 /// workspace. A workspace `false` overrides a global `true`. A PR workspace
 /// stays eligible. `task_local_pipeline` still refuses the combination on
 /// both routes.
-#[test]
 fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
-    if !isolated(
-        "local_route_before_pr::local_route_holds_before_pr_and_the_pr_route_stays_eligible",
-    ) {
-        return;
-    }
-
     let (_root, local_global) = open(ShipMode::Local, "[review]\nbefore_pr = true\n", "");
     let inherited = seed(&local_global, "inherited");
     assert_eq!(
@@ -321,11 +312,7 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
 /// [ORB-14849] `review.before_landing` on a local-only route opens no pull
 /// request to review, so it is held before dispatch and refused at
 /// submission exactly like `review.before_pr`, under a code of its own.
-#[test]
 fn local_route_holds_before_landing_under_its_own_code() {
-    if !isolated("local_route_before_pr::local_route_holds_before_landing_under_its_own_code") {
-        return;
-    }
     let (_root, local) = open(ShipMode::Local, "", "[review]\nbefore_landing = true\n");
     let task = seed(&local, "before landing");
 
@@ -367,3 +354,10 @@ fn local_route_holds_before_landing_under_its_own_code() {
         "{message}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    local_route_holds_before_pr_and_the_pr_route_stays_eligible_scenarios,
+    local_route_holds_before_pr_and_the_pr_route_stays_eligible,
+    local_route_holds_before_landing_under_its_own_code
+);

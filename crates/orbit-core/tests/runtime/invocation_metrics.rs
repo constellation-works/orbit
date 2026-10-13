@@ -40,7 +40,7 @@ fn orchestrator_accounting_excludes_other_workspaces_and_keeps_local_missing_tas
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let open = |name: &str| {
         let workspace = root.path().join(name).join(".orbit");

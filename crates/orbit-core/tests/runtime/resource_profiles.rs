@@ -64,7 +64,7 @@ struct Fixture {
 impl Fixture {
     /// A runtime whose global config sets `[machine.auto_concurrency]`.
     fn new(auto_concurrency: &str) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let workspace = root.path().join("repo/.orbit");
         std::fs::create_dir_all(&global).unwrap();
@@ -206,13 +206,7 @@ impl Fixture {
 
 /// Ten deliveries lasting one to ten minutes, delivery `i` at `i + 1` cores
 /// and GiB throughout: at minute `m` the deliveries `m..10` are alive.
-#[test]
 fn a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("horizon_cap_minutes = 8\n");
     let workspace = fixture.workspace.clone();
     for index in 0..10_u64 {
@@ -281,13 +275,7 @@ fn a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon() {
 
 /// A delivery is every run of its task sharing one admission time, summed per
 /// minute on the admission clock; resumed and live deliveries are left out.
-#[test]
 fn a_delivery_sums_its_run_chain_from_admission_and_skips_resumed_and_live_ones() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::a_delivery_sums_its_run_chain_from_admission_and_skips_resumed_and_live_ones",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("");
     let workspace = fixture.workspace.clone();
     let runs = fixture.delivery(
@@ -342,13 +330,7 @@ fn a_delivery_sums_its_run_chain_from_admission_and_skips_resumed_and_live_ones(
 /// Each lookup names the step that answered. A sparse `no-diff` key borrows
 /// no-diff profiles before any heavier `change` profile; a template ignores
 /// complexity and falls back to its base class.
-#[test]
 fn lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("min_profile_deliveries = 2\n");
     let empty = fixture
         .runtime
@@ -486,13 +468,7 @@ fn lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles() {
 /// Template profiles on another workspace answer step 3, even when opposite
 /// class history is much heavier. The lighter template keeps the base-class
 /// rollup below the heavier template, so this also exercises template ranking.
-#[test]
 fn host_fallback_uses_template_history_with_or_without_opposite_class_history() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::host_fallback_uses_template_history_with_or_without_opposite_class_history",
-    ) {
-        return;
-    }
     for with_change in [false, true] {
         let fixture = Fixture::new("min_profile_deliveries = 2\n");
         for (template, cores) in [("delivery-code-review", 1.0), ("docs-audit", 0.1)] {
@@ -553,13 +529,7 @@ fn host_fallback_uses_template_history_with_or_without_opposite_class_history() 
 
 /// Sparse same-class templates still fall through to step 4; a populated
 /// Change-based template also cannot answer a NoDiff same-class fallback.
-#[test]
 fn sparse_or_opposite_class_templates_do_not_answer_the_same_class_fallback() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::sparse_or_opposite_class_templates_do_not_answer_the_same_class_fallback",
-    ) {
-        return;
-    }
     for no_diff in [true, false] {
         let fixture = Fixture::new("min_profile_deliveries = 2\n");
         let task = fixture.template_task("docs-audit", no_diff);
@@ -598,13 +568,7 @@ fn sparse_or_opposite_class_templates_do_not_answer_the_same_class_fallback() {
 
 /// Templates compete with class profiles using core-minutes first, then
 /// memory peak when CPU ties.
-#[test]
 fn host_fallback_ranks_templates_and_class_profiles_by_cpu_then_memory() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::host_fallback_ranks_templates_and_class_profiles_by_cpu_then_memory",
-    ) {
-        return;
-    }
     for (cores, memory, template_wins) in [
         (1.0, 8 * GIB, false),
         (2.0, 3 * GIB, false),
@@ -668,13 +632,7 @@ fn host_fallback_ranks_templates_and_class_profiles_by_cpu_then_memory() {
 
 /// Different sparse templates of one base class can together populate the
 /// local rollup. The opposite class never contributes deliveries to it.
-#[test]
 fn local_base_class_rollups_include_template_only_history() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::local_base_class_rollups_include_template_only_history",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("min_profile_deliveries = 2\n");
     for (template, no_diff, cores) in [
         ("docs-audit", true, 1.0),
@@ -717,13 +675,7 @@ fn local_base_class_rollups_include_template_only_history() {
 
 /// Step 4 answers only when the base class has no profile anywhere, and takes
 /// the heaviest even when every profile is sparse.
-#[test]
 fn a_class_with_no_profile_borrows_the_heaviest_on_the_host() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::a_class_with_no_profile_borrows_the_heaviest_on_the_host",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("");
     let workspace = fixture.workspace.clone();
     fixture.delivery(
@@ -745,13 +697,7 @@ fn a_class_with_no_profile_borrows_the_heaviest_on_the_host() {
 
 /// Profiles are reused across lookups and runtime clones while nothing
 /// finishes; new minutes of a live delivery change nothing until it does.
-#[test]
 fn profiles_stay_cached_until_a_delivery_finishes() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::profiles_stay_cached_until_a_delivery_finishes",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("");
     let workspace = fixture.workspace.clone();
     fixture.delivery(
@@ -795,13 +741,7 @@ fn profiles_stay_cached_until_a_delivery_finishes() {
 /// No-diff profiles, and templates whose tasks are no-diff, flag deliveries
 /// over one core for two minutes in a row; a template that builds by design
 /// and change work are never flagged.
-#[test]
 fn no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design() {
-    if !super::dispatch_admission::isolated(
-        "resource_profiles::no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("");
     let workspace = fixture.workspace.clone();
     let building = vec![0.2, 2.5, 3.0, 0.2];
@@ -913,3 +853,18 @@ fn no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_de
             .is_empty()
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon_scenarios,
+    a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon,
+    a_delivery_sums_its_run_chain_from_admission_and_skips_resumed_and_live_ones,
+    lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles,
+    host_fallback_uses_template_history_with_or_without_opposite_class_history,
+    sparse_or_opposite_class_templates_do_not_answer_the_same_class_fallback,
+    host_fallback_ranks_templates_and_class_profiles_by_cpu_then_memory,
+    local_base_class_rollups_include_template_only_history,
+    a_class_with_no_profile_borrows_the_heaviest_on_the_host,
+    profiles_stay_cached_until_a_delivery_finishes,
+    no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design
+);

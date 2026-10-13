@@ -15,8 +15,6 @@ use orbit_types::telemetry::{
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 /// A grok and an antigravity crew as the hard pool, with `workflow_extra`
 /// under `[workflow]`.
 fn config(workflow_extra: &str) -> String {
@@ -37,7 +35,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         std::fs::create_dir_all(root.path().join("global/resources/jobs")).unwrap();
         std::fs::create_dir_all(root.path().join("repo/.orbit")).unwrap();
         std::fs::write(root.path().join("repo/.orbit/config.toml"), config).unwrap();
@@ -175,13 +173,7 @@ impl Fixture {
     }
 }
 
-#[test]
 fn spend_at_the_threshold_gates_until_the_oldest_spend_ages_out() {
-    if !isolated(
-        "provider_limit_budget::spend_at_the_threshold_gates_until_the_oldest_spend_ages_out",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     let task = fx.task();
     // $27 of $30 in the trailing 5h is 90%; the $50 outside the window and the
@@ -217,11 +209,7 @@ fn spend_at_the_threshold_gates_until_the_oldest_spend_ages_out() {
     );
 }
 
-#[test]
 fn spend_below_the_threshold_gates_nothing() {
-    if !isolated("provider_limit_budget::spend_below_the_threshold_gates_nothing") {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     let task = fx.task();
     fx.grok(12.0, Duration::hours(4));
@@ -239,11 +227,7 @@ fn spend_below_the_threshold_gates_nothing() {
     assert_eq!(entry["eligible"], true, "$20 of $30 is under 90%: {entry}");
 }
 
-#[test]
 fn an_empty_budget_window_reports_positive_zero() {
-    if !isolated("provider_limit_budget::an_empty_budget_window_reports_positive_zero") {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
 
     let [reading] = fx.readings("grok").try_into().unwrap();
@@ -276,13 +260,7 @@ fn an_empty_budget_window_reports_positive_zero() {
     assert_eq!(json_reading["used_percent"].to_string(), "0.0");
 }
 
-#[test]
 fn a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest() {
-    if !isolated(
-        "provider_limit_budget::a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config(
         "provider_limit_budgets = [\"antigravity:1000tokens/1d\"]",
     ));
@@ -319,13 +297,7 @@ fn a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest() {
     assert!(fx.readings("gemini").is_empty());
 }
 
-#[test]
 fn a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost() {
-    if !isolated(
-        "provider_limit_budget::a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     fx.grok(27.0, Duration::hours(1));
     let [reading] = fx.readings("grok").try_into().unwrap();
@@ -346,13 +318,7 @@ fn a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost() {
     );
 }
 
-#[test]
 fn a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger() {
-    if !isolated(
-        "provider_limit_budget::a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     let task = fx.task();
     fx.grok(29.0, Duration::hours(1));
@@ -389,3 +355,14 @@ fn a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger() {
     assert_eq!(reading.source, ProviderLimitSource::Ledger, "{reading:?}");
     assert!(reading.gated, "{reading:?}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    spend_at_the_threshold_gates_until_the_oldest_spend_ages_out_scenarios,
+    spend_at_the_threshold_gates_until_the_oldest_spend_ages_out,
+    spend_below_the_threshold_gates_nothing,
+    an_empty_budget_window_reports_positive_zero,
+    a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest,
+    a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost,
+    a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger
+);

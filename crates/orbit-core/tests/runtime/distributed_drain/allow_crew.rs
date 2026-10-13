@@ -29,14 +29,7 @@ fn before_pr_owner(crew: &str) -> String {
 /// A drain restricted to `sol` and `luna` claims only their tasks, on every
 /// refill and after a resume, while tasks on crews it can run but was not
 /// allowed stay in the owner's backlog with their crews unchanged.
-#[test]
 fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume() {
-    if !isolated(
-        module_path!(),
-        "a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("opus"), Some("sol"), Some("antigravity"), Some("luna")]);
     let (opus, sol, antigravity, luna) = (
         pair.tasks[0].clone(),
@@ -129,14 +122,7 @@ fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume(
 /// The restriction selects implementation crews only: an owner whose
 /// before-PR review runs on `opus` still hands a `sol`-only drain its `sol`
 /// task, because `opus` runs here.
-#[test]
 fn a_restriction_leaves_the_owners_before_pr_reviewer_usable() {
-    if !isolated(
-        module_path!(),
-        "a_restriction_leaves_the_owners_before_pr_reviewer_usable",
-    ) {
-        return;
-    }
     let pair = Pair::with_owner_config(&before_pr_owner("opus"), &[Some("sol")]);
     let drain = pair
         .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": ["sol"]}));
@@ -158,14 +144,7 @@ fn a_restriction_leaves_the_owners_before_pr_reviewer_usable() {
 /// The restriction never stands in for a reviewer that cannot run: with the
 /// review crew's provider missing here, a restricted drain refuses before it
 /// requests a claim, naming the reviewer.
-#[test]
 fn a_restricted_drain_refuses_before_claiming_when_the_reviewer_cannot_run() {
-    if !isolated(
-        module_path!(),
-        "a_restricted_drain_refuses_before_claiming_when_the_reviewer_cannot_run",
-    ) {
-        return;
-    }
     let pair = Pair::with_owner_config(&before_pr_owner("opus"), &[Some("sol")]);
     pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
     let drain = pair
@@ -184,14 +163,7 @@ fn a_restricted_drain_refuses_before_claiming_when_the_reviewer_cannot_run() {
 
 /// When nothing the restriction allows can run here, the drain says so and
 /// requests nothing, rather than idling or falling back to another crew.
-#[test]
 fn a_restriction_with_no_runnable_crew_refuses_without_requesting() {
-    if !isolated(
-        module_path!(),
-        "a_restriction_with_no_runnable_crew_refuses_without_requesting",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol"), Some("antigravity")]);
     pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
     let drain = pair.run_drain_with_input(
@@ -212,14 +184,7 @@ fn a_restriction_with_no_runnable_crew_refuses_without_requesting() {
 
 /// Unknown and blank names refuse at submission, before the owner is probed
 /// or any run exists.
-#[test]
 fn an_unknown_or_blank_restriction_refuses_before_the_probe() {
-    if !isolated(
-        module_path!(),
-        "an_unknown_or_blank_restriction_refuses_before_the_probe",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let selector = format!("{OWNER}/ws_replica");
     for (names, expected) in [
@@ -255,14 +220,7 @@ fn an_unknown_or_blank_restriction_refuses_before_the_probe() {
 
 /// Through the real submission and job, the restriction is persisted by
 /// canonical name on the run input and only an allowed task is claimed.
-#[test]
 fn a_submitted_restriction_is_persisted_and_honored_by_the_job() {
-    if !isolated(
-        module_path!(),
-        "a_submitted_restriction_is_persisted_and_honored_by_the_job",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("opus"), Some("sol")]);
 
     let drain = super::single_pass::run_windowless_drain(&pair, 2, &[" sol ".to_string()]);
@@ -284,3 +242,14 @@ fn a_submitted_restriction_is_persisted_and_honored_by_the_job() {
     assert_eq!(shown["status"], "backlog", "{shown}");
     assert_eq!(shown["crew"], "opus", "{shown}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume_scenarios,
+    a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume,
+    a_restriction_leaves_the_owners_before_pr_reviewer_usable,
+    a_restricted_drain_refuses_before_claiming_when_the_reviewer_cannot_run,
+    a_restriction_with_no_runnable_crew_refuses_without_requesting,
+    an_unknown_or_blank_restriction_refuses_before_the_probe,
+    a_submitted_restriction_is_persisted_and_honored_by_the_job
+);

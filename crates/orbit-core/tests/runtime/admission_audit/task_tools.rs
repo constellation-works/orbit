@@ -119,15 +119,7 @@ mod artifact_get {
     }
 }
 
-#[test]
 fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution",
-    ) {
-        return;
-    }
-
     use orbit_tools::ToolContext;
     use orbit_types::policy::Role;
     use orbit_types::tool::{McpCapability, McpTransport};
@@ -268,15 +260,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
 /// Coverage evidence is read only after its action stops, when nobody can fix
 /// it, so a file that does not parse as the schema is refused at put with the
 /// exact parse error and stores nothing; a well-formed file is accepted.
-#[test]
 fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error",
-    ) {
-        return;
-    }
-
     use crate::admission_audit::tool_support::run_tool_as_operator;
 
     let (_root, runtime, repo_root) = test_runtime();
@@ -341,3 +325,10 @@ fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
     .to_string())
     .expect("well-formed evidence is stored");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution_scenarios,
+    task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution,
+    artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error
+);

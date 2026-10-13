@@ -64,6 +64,13 @@ impl HostLoadProbe {
             }
         };
         if !wait.is_zero() {
+            #[cfg(feature = "test-support")]
+            if self.proc_root != std::path::Path::new("/proc")
+                && let Some(fixture_wait) = crate::runtime::host_load_sampling_wait_override()
+            {
+                fixture_wait(wait);
+                return;
+            }
             std::thread::sleep(wait);
         }
     }

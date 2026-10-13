@@ -68,16 +68,9 @@ pub(super) fn record(global_root: &Path, name: &str) -> InstalledPlugin {
 /// rewritten name collides with an already-active plugin's tool instead of
 /// an unrelated field. `register_entry` must refuse to let the tampered
 /// row's inactive entry displace the real owner's active one (§4.9).
-#[test]
 fn a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_active_tool() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_active_tool",
-    ) {
-        return;
-    }
-
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global");
     let orbit_dir = temp.path().join("repo/.orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
@@ -149,16 +142,9 @@ fn a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_ac
 /// `fs.write` on the plugin root (or a parent, or `/`) would let the backend
 /// rewrite `plugin.yaml` under an already-recorded `fs` grant. Registration
 /// refuses it independently of the digest check.
-#[test]
 fn fs_write_covering_the_plugin_root_is_refused_at_registration() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "fs_write_covering_the_plugin_root_is_refused_at_registration",
-    ) {
-        return;
-    }
-
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global");
     let orbit_dir = temp.path().join("repo/.orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
@@ -209,16 +195,9 @@ fn fs_write_covering_the_plugin_root_is_refused_at_registration() {
 
 /// Registration refuses a traversal from the one writable global subtree to
 /// the host's plugin-grant witnesses before the tool can become active.
-#[test]
 fn fs_write_traversal_to_a_protected_global_path_is_refused_at_registration() {
-    if !crate::admission_audit::isolate(
-        module_path!(),
-        "fs_write_traversal_to_a_protected_global_path_is_refused_at_registration",
-    ) {
-        return;
-    }
-
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global");
     let orbit_dir = temp.path().join("repo/.orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
@@ -264,3 +243,11 @@ fn fs_write_traversal_to_a_protected_global_path_is_refused_at_registration() {
         "the refused plugin is visible but inactive"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_active_tool_scenarios,
+    a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_active_tool,
+    fs_write_covering_the_plugin_root_is_refused_at_registration,
+    fs_write_traversal_to_a_protected_global_path_is_refused_at_registration
+);

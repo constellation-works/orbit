@@ -58,14 +58,7 @@ fn kill(workers: &[&Worker]) {
 /// A launched claimed leaf and its drain whose workers both died: the history
 /// read interrupts both, and the leaf's failure reaches the owner, which no
 /// longer holds the task as running.
-#[test]
 fn a_dead_drain_and_claimed_leaf_are_interrupted_and_settled_with_the_owner() {
-    if !isolated(
-        module_path!(),
-        "a_dead_drain_and_claimed_leaf_are_interrupted_and_settled_with_the_owner",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let leaf_worker = Worker::spawn();
@@ -99,14 +92,7 @@ fn a_dead_drain_and_claimed_leaf_are_interrupted_and_settled_with_the_owner() {
 
 /// The drain itself died before launching what it admitted: the history
 /// read interrupts it and releases the admitted claim to the owner's backlog.
-#[test]
 fn a_dead_drain_releases_the_claim_it_never_launched() {
-    if !isolated(
-        module_path!(),
-        "a_dead_drain_releases_the_claim_it_never_launched",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let drain = pair.drain_owned_by(&drain_worker);
@@ -132,14 +118,7 @@ fn a_dead_drain_releases_the_claim_it_never_launched() {
 
 /// A drain and leaf whose workers are alive but slow are left running: the
 /// read reconciles nothing and settles nothing with the owner.
-#[test]
 fn a_live_slow_drain_and_leaf_are_not_reconciled() {
-    if !isolated(
-        module_path!(),
-        "a_live_slow_drain_and_leaf_are_not_reconciled",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let leaf_worker = Worker::spawn();
@@ -161,3 +140,11 @@ fn a_live_slow_drain_and_leaf_are_not_reconciled() {
     assert_eq!(pair.owner_status(&task), "in-progress");
     assert!(drain_worker.running() && leaf_worker.running());
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_dead_drain_and_claimed_leaf_are_interrupted_and_settled_with_the_owner_scenarios,
+    a_dead_drain_and_claimed_leaf_are_interrupted_and_settled_with_the_owner,
+    a_dead_drain_releases_the_claim_it_never_launched,
+    a_live_slow_drain_and_leaf_are_not_reconciled
+);

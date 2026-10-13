@@ -16,11 +16,9 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 /// A workspace runtime admitting tasks as a host running `os` would.
 fn runtime_on(os: HostOs) -> (TempDir, OrbitRuntime) {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -120,13 +118,7 @@ fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
 /// wave and readiness with the wait named, and an explicit ship refuses it
 /// before anything is submitted. A task tagged for both OSes, and an untagged
 /// one, are admitted exactly as before; a macOS host admits the macOS task.
-#[test]
 fn a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait() {
-    if !isolated(
-        "host_os_routing::a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait",
-    ) {
-        return;
-    }
     let (_root, linux) = runtime_on(HostOs::Linux);
     // Matching ignores case; the stored tag is normalized.
     let mac = task(&linux, "mac", &["OS:MacOS"], TaskStatus::Backlog);
@@ -225,13 +217,7 @@ fn a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait() {
 
 /// Retagging a backlog task applies at its next admission; retagging a task
 /// already running leaves it, and the run carrying it, where they are.
-#[test]
 fn retagging_applies_at_the_next_admission_and_never_moves_running_work() {
-    if !isolated(
-        "host_os_routing::retagging_applies_at_the_next_admission_and_never_moves_running_work",
-    ) {
-        return;
-    }
     let (_root, linux) = runtime_on(HostOs::Linux);
     let queued = task(&linux, "queued", &["ci-failure-sweep"], TaskStatus::Backlog);
     let running = task(&linux, "running", &[], TaskStatus::InProgress);
@@ -273,11 +259,7 @@ fn retagging_applies_at_the_next_admission_and_never_moves_running_work() {
 
 /// The `os:` namespace is reserved: `task.add` and `task.update` reject a
 /// value outside it, naming the accepted ones, and write nothing.
-#[test]
 fn an_unsupported_os_tag_is_rejected_on_add_and_update() {
-    if !isolated("host_os_routing::an_unsupported_os_tag_is_rejected_on_add_and_update") {
-        return;
-    }
     let (root, runtime) = runtime_on(HostOs::Linux);
     let workspace = root.path().join("repo").to_string_lossy().into_owned();
     let add = runtime
@@ -317,3 +299,11 @@ fn an_unsupported_os_tag_is_rejected_on_add_and_update() {
         vec!["os:linux".to_string()]
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait_scenarios,
+    a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait,
+    retagging_applies_at_the_next_admission_and_never_moves_running_work,
+    an_unsupported_os_tag_is_rejected_on_add_and_update
+);

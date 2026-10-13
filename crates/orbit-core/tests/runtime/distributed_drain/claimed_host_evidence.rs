@@ -213,11 +213,7 @@ fn a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept() 
 
 /// A probe that skips itself is missing evidence, never a pass: the result
 /// is not attached, the log names the skip, and the review holds.
-#[test]
 fn a_self_skipped_host_run_holds_the_review() {
-    if !isolated(module_path!(), "a_self_skipped_host_run_holds_the_review") {
-        return;
-    }
     let (leaf, attempt_id) = leaf_with_probe(
         "echo 'SKIP: the probe needs a kernel feature'\n\
          echo 'test probe ... ok'\n\
@@ -251,14 +247,7 @@ fn a_self_skipped_host_run_holds_the_review() {
 
 /// A command outside the closed grammar, or carrying shell syntax, is
 /// refused with its typed reason and never reaches a shell; the review holds.
-#[test]
 fn a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run() {
-    if !isolated(
-        module_path!(),
-        "a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run",
-    ) {
-        return;
-    }
     for (command, reason) in [
         (
             "cargo test -p orbit-exec --test probe; touch ran-outside-grammar",
@@ -300,3 +289,10 @@ fn a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_self_skipped_host_run_holds_the_review_scenarios,
+    a_self_skipped_host_run_holds_the_review,
+    a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run
+);

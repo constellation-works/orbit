@@ -13,7 +13,7 @@ use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
-use super::dispatch_admission::{PressureProbe, isolated};
+use super::dispatch_admission::PressureProbe;
 
 /// Closed tasks in the workspace: far more than a bounded selection reads.
 const CLOSED: usize = 300;
@@ -77,13 +77,7 @@ fn entry<'a>(readiness: &'a Value, task: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{task} missing from readiness: {readiness}"))
 }
 
-#[test]
 fn readiness_reads_open_work_and_the_closed_tasks_its_rules_reach() {
-    if !isolated(
-        "readiness_population::readiness_reads_open_work_and_the_closed_tasks_its_rules_reach",
-    ) {
-        return;
-    }
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
@@ -232,12 +226,8 @@ fn readiness_reads_open_work_and_the_closed_tasks_its_rules_reach() {
     }
 }
 
-#[test]
 fn restored_closed_child_retains_inherited_epic_footprint() {
-    if !isolated("readiness_population::restored_closed_child_retains_inherited_epic_footprint") {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -307,3 +297,10 @@ fn restored_closed_child_retains_inherited_epic_footprint() {
         "{backlog}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    readiness_reads_open_work_and_the_closed_tasks_its_rules_reach_scenarios,
+    readiness_reads_open_work_and_the_closed_tasks_its_rules_reach,
+    restored_closed_child_retains_inherited_epic_footprint
+);

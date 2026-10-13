@@ -29,7 +29,7 @@ fn run_isolated_test(test_name: &str) -> bool {
     if std::env::var(CHILD).as_deref() == Ok(test_name) {
         return false;
     }
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -40,7 +40,7 @@ fn run_isolated_test(test_name: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut command, test_name, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         test_name,
@@ -64,7 +64,7 @@ impl Fixture {
     }
 
     fn new_for_job(job: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         // The substitute stays alive until this directory is removed, so a
         // resumed run's worker does not exit and interrupt the run mid-assert.
         crate::worker_fixture::install(root.path(), "removed");

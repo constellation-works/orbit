@@ -43,7 +43,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         // A submitted child's substitute worker stays alive until the test
         // has settled the child, so the supervisor never interrupts it.
         crate::worker_fixture::install(root.path().join("ran-{run_id}").as_path(), "created");
@@ -117,29 +117,30 @@ impl Fixture {
                 settle(&runtime, &child);
                 child
             });
-            let output = self
-                .runtime
-                .run_deterministic(
-                    "invoke_and_wait",
-                    &json!({}),
-                    &json!({
-                        "job_name": CHILD,
-                        "run_input": {"results": results},
-                        "run_id": self.parent,
-                        "step_id": "deliver",
-                        "timeout_seconds": timeout_seconds,
-                        "poll_interval_seconds": 1,
-                    }),
-                    // The engine dispatches a gate's child with operator authority.
-                    ToolContext {
-                        session_context: ToolSessionContext {
-                            effective_capabilities: BTreeSet::from([McpCapability::Operator]),
-                            ..ToolSessionContext::default()
+            let output = crate::scenarios::with_prompt_pipeline_polls(|| {
+                self.runtime
+                    .run_deterministic(
+                        "invoke_and_wait",
+                        &json!({}),
+                        &json!({
+                            "job_name": CHILD,
+                            "run_input": {"results": results},
+                            "run_id": self.parent,
+                            "step_id": "deliver",
+                            "timeout_seconds": timeout_seconds,
+                            "poll_interval_seconds": 1,
+                        }),
+                        // The engine dispatches a gate's child with operator authority.
+                        ToolContext {
+                            session_context: ToolSessionContext {
+                                effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                                ..ToolSessionContext::default()
+                            },
+                            ..ToolContext::default()
                         },
-                        ..ToolContext::default()
-                    },
-                )
-                .expect("the wait returns the child's settlement as data");
+                    )
+                    .expect("the wait returns the child's settlement as data")
+            });
             (settler.join().unwrap(), output)
         });
         std::fs::write(self.root.path().join(format!("ran-{child}")), "").unwrap();

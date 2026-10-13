@@ -3,7 +3,7 @@
 use std::process::Command;
 
 use orbit_core::OrbitRuntime;
-use tempfile::tempdir;
+use tempfile::tempdir_in;
 
 /// Names the one test a re-executed child of this test binary runs in-process.
 const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_TASK_FIXTURE_CHILD";
@@ -28,7 +28,8 @@ pub(crate) fn enter_isolated_child(module: &str, test: &str) -> bool {
         return true;
     }
 
-    let home = tempdir().expect("isolated fixture home");
+    let home =
+        tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("isolated fixture home");
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -66,7 +67,7 @@ pub(crate) fn assert_isolated_child() {
 
 pub(crate) fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {
     assert_isolated_child();
-    let root = tempdir().expect("create tempdir");
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
     let workspace_root = repo_root.join(".orbit");

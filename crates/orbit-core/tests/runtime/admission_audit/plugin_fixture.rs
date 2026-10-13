@@ -23,7 +23,8 @@ pub(crate) fn enter_isolated_child(module: &str, test: &str) -> bool {
         return true;
     }
 
-    let home = tempfile::tempdir().expect("isolated plugin fixture home");
+    let home = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated plugin fixture home");
     let mut child = Command::new(std::env::current_exe().expect("test executable"));
     clear_child_authority(&mut child);
     let output = child
@@ -86,7 +87,8 @@ impl PluginFixture {
             std::env::var_os(ISOLATED_CHILD_ENV).is_some(),
             "mutable plugin fixtures must run through enter_isolated_child"
         );
-        let root = tempfile::tempdir().expect("tempdir");
+        let root =
+            tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
         let home = root.path().join("home");
         std::fs::create_dir_all(&home).expect("create fixture HOME");
         let home_str = home.to_str().expect("utf8 fixture HOME");

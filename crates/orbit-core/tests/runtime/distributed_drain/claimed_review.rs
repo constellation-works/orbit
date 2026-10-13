@@ -577,14 +577,7 @@ pub(super) fn revision(repo: &Path, spec: &str) -> SourceRevision {
 /// and verdict comment land on the owner's task, the attempt ledger stays on
 /// the follower, and the owner accepts the handoff carrying the settled
 /// verdict and moves the task to `review`.
-#[test]
 fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit();
     let pair = &leaf.pair;
     let pulls = pair.wire.calls("orbit.task.pull");
@@ -694,14 +687,7 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
 /// A reviewer that rejects the candidate stops the leaf before it pushes,
 /// as on the owner's own route: the findings are on the owner's task, and
 /// the leaf's failure settlement blocks it there.
-#[test]
 fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_claimed_review_blocks_the_task_on_the_owner",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit();
     let admitted = leaf.admit_review();
     let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
@@ -921,14 +907,7 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
 /// no claim: its pass stops at the probe with the reason. The owner defines
 /// the crew, since its own load refuses a review crew it does not
 /// [ORB-15195].
-#[test]
 fn a_follower_without_the_review_crew_claims_nothing() {
-    if !isolated(
-        module_path!(),
-        "a_follower_without_the_review_crew_claims_nothing",
-    ) {
-        return;
-    }
     let pair = Pair::with_owner_config(
         &format!(
             "{}\n[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\n\
@@ -956,14 +935,7 @@ fn a_follower_without_the_review_crew_claims_nothing() {
 /// elapsed reservation alone ends nothing: the live claim still reads and
 /// writes until the owner recovers it. The leaf's binding reaches the owner
 /// exactly as its run's broker forwards a bridged call.
-#[test]
 fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_reviewers_manifest_read_needs_the_owners_active_claim",
-    ) {
-        return;
-    }
     type Settle = fn(&ReviewedLeaf);
     let release: Settle = |leaf| {
         let (_, worker) = leaf.claim();
@@ -1157,3 +1129,12 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence_scenarios,
+    a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence,
+    a_rejected_claimed_review_blocks_the_task_on_the_owner,
+    a_follower_without_the_review_crew_claims_nothing,
+    a_claimed_reviewers_manifest_read_needs_the_owners_active_claim
+);

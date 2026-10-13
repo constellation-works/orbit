@@ -38,7 +38,7 @@ struct Fixture {
 impl Fixture {
     /// A host in `mode`, with `extra` config lines, and no profiles yet.
     fn new(mode: &str, extra: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let workspace = root.path().join("repo/.orbit");
         let proc_root = root.path().join("proc");
@@ -262,19 +262,21 @@ fn write_proc(proc_root: &Path) {
 }
 
 fn classify(runtime: &OrbitRuntime, drain: &str, slots: u32) -> Value {
-    runtime
-        .run_deterministic(
-            "classify_workspace_auto_tasks",
-            &json!({}),
-            &json!({
-                "run_id": drain,
-                "max_active_leaf_runs": slots,
-                "poll_sleep_seconds": 7,
-                "idle_sleep_seconds": 70,
-            }),
-            ToolContext::default(),
-        )
-        .expect("classify")
+    crate::scenarios::with_immutable_host_load(|| {
+        runtime
+            .run_deterministic(
+                "classify_workspace_auto_tasks",
+                &json!({}),
+                &json!({
+                    "run_id": drain,
+                    "max_active_leaf_runs": slots,
+                    "poll_sleep_seconds": 7,
+                    "idle_sleep_seconds": 70,
+                }),
+                ToolContext::default(),
+            )
+            .expect("classify")
+    })
 }
 
 fn admitted(output: &Value) -> Vec<String> {
@@ -308,13 +310,7 @@ fn ids(entries: impl IntoIterator<Item = String>) -> Vec<String> {
 /// is skipped with the minute and resource, a lighter `low` one behind it is
 /// admitted in the same pass, and the admission is reserved for the next
 /// admitter on the host.
-#[test]
 fn enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it() {
-    if !isolated(
-        "dispatch_admission::gap_fit::enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("enforce", "");
     fixture.seed_profiles();
     fixture.running_hard_delivery();
@@ -373,11 +369,7 @@ fn enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it() {
 /// Each admitted candidate is in the forecast before the next is judged:
 /// on an idle host two 3-core `low` deliveries fit under 8 cores, and the
 /// third, which would make 9, does not.
-#[test]
 fn candidates_admitted_in_one_pass_count_each_other() {
-    if !isolated("dispatch_admission::gap_fit::candidates_admitted_in_one_pass_count_each_other") {
-        return;
-    }
     let fixture = Fixture::new("enforce", "");
     fixture.finished_delivery("low", &[3.0, 3.0]);
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Low);
@@ -405,13 +397,7 @@ fn candidates_admitted_in_one_pass_count_each_other() {
 /// `shadow` admits what `off` admits for the same inputs, records the
 /// decisions `enforce` would have made, and reserves nothing. `off` builds
 /// no forecast and records no block.
-#[test]
 fn shadow_admits_as_off_and_records_what_enforce_would_do() {
-    if !isolated(
-        "dispatch_admission::gap_fit::shadow_admits_as_off_and_records_what_enforce_would_do",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("off", "");
     fixture.seed_profiles();
     fixture.running_hard_delivery();
@@ -470,11 +456,7 @@ fn shadow_admits_as_off_and_records_what_enforce_would_do() {
 /// `max_active_leaf_runs` is enforced before gap fit: with one free slot,
 /// two candidates that both fit admit one, and the other is queued, not
 /// skipped.
-#[test]
 fn the_ceiling_holds_before_gap_fit() {
-    if !isolated("dispatch_admission::gap_fit::the_ceiling_holds_before_gap_fit") {
-        return;
-    }
     let fixture = Fixture::new("enforce", "");
     fixture.seed_profiles();
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Low);
@@ -493,13 +475,7 @@ fn the_ceiling_holds_before_gap_fit() {
 
 /// Sustained pressure holds the pass whatever the forecast says: nothing is
 /// admitted, and no forecast is built for a pass that cannot admit.
-#[test]
 fn the_throttle_holds_enforce_whatever_the_forecast_says() {
-    if !isolated(
-        "dispatch_admission::gap_fit::the_throttle_holds_enforce_whatever_the_forecast_says",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("enforce", "");
     fixture.seed_profiles();
     fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
@@ -517,13 +493,7 @@ fn the_throttle_holds_enforce_whatever_the_forecast_says() {
 }
 
 /// A host with no profiles admits in `enforce` exactly what `off` admits.
-#[test]
 fn a_host_without_profiles_admits_in_enforce_as_off_does() {
-    if !isolated(
-        "dispatch_admission::gap_fit::a_host_without_profiles_admits_in_enforce_as_off_does",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("off", "");
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Hard);
     let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Medium);
@@ -549,11 +519,7 @@ fn a_host_without_profiles_admits_in_enforce_as_off_does() {
 /// (zero here, so from its second failing pass), nothing behind it is
 /// admitted, even work that fits, and the drain polls rather than idles.
 /// When the head fits it is admitted and the guard lifts.
-#[test]
 fn a_starving_head_holds_backfill_until_it_fits() {
-    if !isolated("dispatch_admission::gap_fit::a_starving_head_holds_backfill_until_it_fits") {
-        return;
-    }
     let fixture = Fixture::new("enforce", "head_max_wait_minutes = 0\n");
     fixture.seed_profiles();
     let running = fixture.running_hard_delivery();
@@ -608,11 +574,7 @@ fn a_starving_head_holds_backfill_until_it_fits() {
 
 /// When gap fit refuses every candidate while the backlog has work, the pass
 /// waits the short poll, not the idle wait.
-#[test]
 fn a_pass_gap_fit_refuses_entirely_polls() {
-    if !isolated("dispatch_admission::gap_fit::a_pass_gap_fit_refuses_entirely_polls") {
-        return;
-    }
     let fixture = Fixture::new("enforce", "");
     fixture.seed_profiles();
     fixture.running_hard_delivery();
@@ -632,13 +594,7 @@ fn a_pass_gap_fit_refuses_entirely_polls() {
 /// inside the horizon (10 minutes here, so +5 and +10), counting what the
 /// pass admitted, with the pass's decisions; `off` records nothing. The
 /// accuracy report counts, per drain, what shadow would have held.
-#[test]
 fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
-    if !isolated(
-        "dispatch_admission::gap_fit::shadow_and_enforce_passes_record_their_forecast_and_off_records_none",
-    ) {
-        return;
-    }
     let fixture = Fixture::new("off", "");
     fixture.finished_delivery("hard", &[1.0, 1.0, 1.0, 6.0, 1.0]);
     fixture.finished_delivery("medium", &[1.0, 6.0, 1.0]);
@@ -880,3 +836,20 @@ fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
         assert_eq!(skip.detail, "cpu 180% at +1m");
     }
 }
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it_scenarios,
+    enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it,
+    candidates_admitted_in_one_pass_count_each_other,
+    shadow_admits_as_off_and_records_what_enforce_would_do,
+    the_ceiling_holds_before_gap_fit,
+    the_throttle_holds_enforce_whatever_the_forecast_says,
+    a_host_without_profiles_admits_in_enforce_as_off_does
+);
+
+crate::scenario_table!(
+    a_starving_head_holds_backfill_until_it_fits_scenarios,
+    a_starving_head_holds_backfill_until_it_fits,
+    a_pass_gap_fit_refuses_entirely_polls,
+    shadow_and_enforce_passes_record_their_forecast_and_off_records_none
+);

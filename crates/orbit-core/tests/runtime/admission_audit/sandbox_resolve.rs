@@ -292,20 +292,13 @@ fn sbpl_regex(quoted: &str) -> regex::Regex {
 /// allow, so provider and runtime conveniences must not hand a reviewer the
 /// source checkout, its managed worktree, or primary workspace `.orbit` stores.
 #[cfg(target_os = "macos")]
-#[test]
 fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
-    if !super::isolate(
-        module_path!(),
-        "macos_reviewer_profile_grants_no_source_or_workspace_writes",
-    ) {
-        return;
-    }
-
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     let canonical_repo = repo_root.canonicalize().expect("canonical repo");
     let worktree = canonical_repo.join(".orbit/state/worktrees/orbit-jrun-orb-13458");
     std::fs::create_dir_all(&worktree).expect("create managed worktree");
-    let inspection = tempfile::tempdir().expect("inspection checkout");
+    let inspection = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("inspection checkout");
     let inspection_root = inspection
         .path()
         .canonicalize()
@@ -368,15 +361,7 @@ fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
 /// the denies let SBPL last-match-wins override them, including the `**/.env`
 /// globs, which compile to `regex` clauses rather than `subpath` ones.
 #[cfg(target_os = "macos")]
-#[test]
 fn macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree() {
-    if !super::isolate(
-        module_path!(),
-        "macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree",
-    ) {
-        return;
-    }
-
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     let repo = repo_root.canonicalize().expect("canonical repo");
     let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-orb-15117");
@@ -489,15 +474,7 @@ fn assert_native_write(profile: &str, path: &std::path::Path, allowed: bool) {
 /// must sit outside every grant the leaf receives — including the run store
 /// the leaf legitimately writes through `orbit.task.*` and audit tools.
 #[cfg(target_os = "linux")]
-#[test]
 fn linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority() {
-    if !super::isolate(
-        module_path!(),
-        "linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority",
-    ) {
-        return;
-    }
-
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     seed_executor(
         &runtime,
@@ -550,15 +527,7 @@ fn linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority() 
 }
 
 #[cfg(target_os = "linux")]
-#[test]
 fn resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor() {
-    if !super::isolate(
-        module_path!(),
-        "resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor",
-    ) {
-        return;
-    }
-
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     seed_executor(
         &runtime,
@@ -647,19 +616,12 @@ fn resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor() {
 /// preparation has already created directories at the redirect target by the
 /// time dispatch fails.
 #[cfg(target_os = "linux")]
-#[test]
 fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
-    if !super::isolate(
-        module_path!(),
-        "a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target",
-    ) {
-        return;
-    }
-
     use std::os::unix::fs::symlink;
 
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
-    let outside = tempfile::tempdir().expect("redirect target");
+    let outside = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("redirect target");
     let outside = outside.path().canonicalize().expect("canonical target");
     symlink(&outside, runtime.paths().global_dir.join("state"))
         .expect("redirect the global state store");
@@ -678,3 +640,22 @@ fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
         "sandbox preparation must not create runtime stores at a redirect target"
     );
 }
+
+#[cfg(target_os = "macos")]
+use super::engine_support::runtime_with_workspace_config;
+
+// Related boundary scenarios share the isolated table fixture.
+#[cfg(target_os = "macos")]
+crate::scenario_table!(
+    macos_reviewer_profile_grants_no_source_or_workspace_writes_scenarios,
+    macos_reviewer_profile_grants_no_source_or_workspace_writes,
+    macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree
+);
+
+#[cfg(target_os = "linux")]
+crate::scenario_table!(
+    linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority_scenarios,
+    linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority,
+    resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor,
+    a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target
+);

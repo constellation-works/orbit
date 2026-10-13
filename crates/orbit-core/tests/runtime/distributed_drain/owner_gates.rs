@@ -86,14 +86,7 @@ fn derive_deferral(
 
 /// With review off, the ship contract captures no gates; the receipt alone
 /// carries the owner's, and the leaf applies them over its own.
-#[test]
 fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_leaf_applies_the_owners_captured_gates_over_its_own",
-    ) {
-        return;
-    }
     let leaf = ReviewedLeaf::admit_from(OWNER_GATES, REPLICA_GATES);
     let receipt = leaf.pair.admission(&leaf.leaf).receipt.unwrap();
     assert!(receipt.request.ship.review.is_none(), "review is off");
@@ -143,14 +136,7 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
 /// A claim an older owner admitted captured no gates: the leaf falls back to
 /// the replica's configuration, and a refusal says that is where its gate
 /// list came from.
-#[test]
 fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
-    if !isolated(
-        module_path!(),
-        "a_claim_without_captured_gates_falls_back_to_the_replica_config",
-    ) {
-        return;
-    }
     let leaf = ReviewedLeaf::admit_launched(OWNER_GATES, REPLICA_GATES, |pair, drain| {
         *pair.wire.gateless.lock().unwrap() = true;
         pair.launched_leaf(drain, 1, std::process::id())
@@ -220,14 +206,7 @@ fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
 /// A drain records the owner's probe report at submission, so `orbit run
 /// auto --pull` and `orbit doctor` can name each list that differs, and say
 /// so when the owner is too old to report any.
-#[test]
 fn a_pull_drain_reports_how_the_replicas_gates_differ_from_the_owners() {
-    if !isolated(
-        module_path!(),
-        "a_pull_drain_reports_how_the_replicas_gates_differ_from_the_owners",
-    ) {
-        return;
-    }
     let drifted = Pair::with_configs(OWNER_GATES, REPLICA_GATES, &[]);
     let drain = run_windowless_drain(&drifted, 1, &[]);
     let drift = drifted.follower.pull_gate_drift(&drain).unwrap().unwrap();
@@ -250,3 +229,11 @@ fn a_pull_drain_reports_how_the_replicas_gates_differ_from_the_owners() {
     let drift = older.follower.pull_gate_drift(&drain).unwrap().unwrap();
     assert!(drift.contains("reported no validation gates"), "{drift}");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_claimed_leaf_applies_the_owners_captured_gates_over_its_own_scenarios,
+    a_claimed_leaf_applies_the_owners_captured_gates_over_its_own,
+    a_claim_without_captured_gates_falls_back_to_the_replica_config,
+    a_pull_drain_reports_how_the_replicas_gates_differ_from_the_owners
+);
