@@ -46,6 +46,7 @@ a host that can create Linux mount namespaces.
 | rustc wrapper | Repository | `scripts/rustc-compiler-cache.sh` |
 | Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`); native Windows [overrides it off](#windows) |
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
+| Linux host validation output | Primary repository, keyed by canonical source checkout | `.orbit/state/host-validation-targets/<source-path-sha256>/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
 root. Managed worktrees whose activity cwd lies within a writable policy root
@@ -285,12 +286,63 @@ binary failed with `No such file or directory` for
 post-recovery validation, hit this; any sandboxed build followed by host
 validation with no source change in between can. [ORB-15870]
 
-Required validation on Linux therefore runs with `CARGO_TARGET_DIR` set to
-`<worktree>/target/orbit-host-validation`, a target no sandboxed step builds
-in. Host validation compiles everything it runs; the sandbox keeps its own
-warm `target/`. The host is not source-aliased, so workspace crates miss the
-compiler cache across worktrees there, and only the first host run in a
-worktree pays for the build; later validations of the same worktree reuse it.
+Recovery can also build into `<worktree>/target/orbit-host-validation`.
+That target is still under its writable checkout, and the wrapper normalizes
+`CARGO_MANIFEST_DIR` even when the target itself is not aliased. Host Cargo
+then treats the output as fresh but the compiled manifest path points into the
+expired sandbox source mount. A directory name alone did not isolate it.
+
+Required validation and host-evidence execution on Linux now replace inherited
+`CARGO_TARGET_DIR` with
+`<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`.
+The primary repository comes from the Git common directory. The directory is
+host-owned state, outside the managed worktree and the sandbox's writable
+compiler/download cache grants. The runner refuses symlink components rather
+than following a redirect into recovery's writable paths. It leaves all old
+targets and logs intact. The hash binds build reuse to the exact canonical
+source path: a host-evidence detached checkout and a candidate checkout cannot
+reuse each other's embedded fixture paths. Repeated required validation in the
+same checkout reuses its host target. A detached evidence checkout is recreated
+for each run, so Cargo may rebuild its timestamp-changed workspace sources.
+
+The effective target appears in `validation_env.cargo_target_dir`. Commands,
+build-budget admission, toolchain environment and candidate/base/tree evidence
+bindings are unchanged. Baseline result schema 8 uses a new versioned cache
+key so earlier results cannot certify the new execution contract; old records
+are retained at their earlier keys. These targets are rebuildable host state;
+this repair does not add eviction or delete shared caches. The first validation
+in each source namespace pays for a fresh build; dependencies still use the
+compiler cache. Sandboxed builds continue using their own warm targets.
+
+The existing engine validation boundary matrix uses real Cargo/rustc and
+short-lived source/build symlinks to reproduce the compiled-path mismatch
+without nested namespaces. It checks both required-validation routes, detached
+host evidence, preservation of the poisoned target and ordinary host reuse.
+For a native mount-namespace replay, use the existing compiler-cache namespace
+check on a Linux host that can create Bubblewrap namespaces; a sandbox refusal
+is not passing evidence.
+
+### Replay a retained candidate after deploying the repair
+
+Deploy the repaired runtime through the supported upgrade procedure and
+confirm the owning worker uses that generation. Keep the original failed
+logs, target directories, candidate commit and exact original base. On the
+owning Linux host outside the agent sandbox, replay the regression selector:
+
+```bash
+cargo test -p orbit-engine --test engine pr_landing::stable_build_mount -- --nocapture
+```
+
+Then validate the retained candidate's unchanged required-command list on its
+exact base/candidate binding using the repaired runner. Check the new logs'
+head, base, tree, effective host target, executed test counts and absence of
+deferrals. An agent-sandbox pass does not replace host evidence. Only once the
+host evidence passes, requeue the task and submit a new delivery against the
+integration branch. A terminal previous run cannot resume its checkpoints.
+The preserved-candidate route reapplies the patch onto the current base and
+validates it again; a moved base needs fresh evidence. Confirm its
+`resume_candidate` decision names the retained candidate rather than a fresh
+implementation. Deployment and submission remain operator actions.
 
 ## Custom `CARGO_TARGET_DIR`
 

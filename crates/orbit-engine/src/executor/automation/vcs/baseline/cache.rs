@@ -24,7 +24,9 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// failures, never conclusive base results.
 /// Version 6 records the failures the complete output names [ORB-15375].
 /// Version 7 retains complete-output host coverage refusals for flaky admission.
-pub(super) const CACHE_SCHEMA_VERSION: u32 = 7;
+/// Version 8 runs in host-owned source-path target namespaces: earlier results
+/// could have executed sandbox-built binaries [F2026-10-342].
+pub(super) const CACHE_SCHEMA_VERSION: u32 = 8;
 
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
@@ -45,7 +47,13 @@ pub(in super::super) fn cache_paths(
     command: &str,
     selection: Option<&Value>,
 ) -> Result<CachePaths, OrbitError> {
-    let mut identity = format!("{}\0{}", base_sha.trim(), command.trim());
+    // Preserve earlier evidence at its old key rather than overwriting it
+    // when the execution contract changes.
+    let mut identity = format!(
+        "{CACHE_SCHEMA_VERSION}\0{}\0{}",
+        base_sha.trim(),
+        command.trim()
+    );
     // The selection is handed to the command outside its text, so a run of
     // another selection is another result [ORB-15131].
     if let Some(selection) = selection {
