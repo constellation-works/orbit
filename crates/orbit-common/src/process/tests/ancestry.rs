@@ -1,9 +1,11 @@
 //! The macOS process tree names the calling process and a live child, and
 //! drops the child once it has been reaped.
 
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::process::OwnedChild;
 use crate::process::ancestry::{self, ProcessTreeProcess};
 
 #[test]
@@ -52,20 +54,21 @@ fn a_child_is_in_the_process_tree_until_it_exits() {
         );
     }
 
-    let mut child = Command::new("/bin/sleep")
+    let child = Command::new("/bin/sleep")
         .arg("30")
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn sleep");
-    let child_pid = child.id();
+    let mut child = OwnedChild::from_spawned(child);
+    let child_pid = child.pid();
     let deadline = Instant::now() + Duration::from_secs(5);
     let found = loop {
         let current = ancestry::process_tree(self_pid);
         if current.is_none() {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill_and_reap();
             match crate::test_env::ps_stat(self_pid) {
                 crate::test_env::PsRun::Denied(reason) => {
                     crate::test_env::report_ps_denied(TEST, &reason);
@@ -83,8 +86,7 @@ fn a_child_is_in_the_process_tree_until_it_exits() {
             break current.expect("just checked");
         }
         if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill_and_reap();
             panic!("sleep {child_pid} never appeared in the process tree: {current:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -94,8 +96,7 @@ fn a_child_is_in_the_process_tree_until_it_exits() {
         "direct child is part of the tree"
     );
 
-    child.kill().expect("kill sleep");
-    child.wait().expect("reap sleep");
+    child.kill_and_reap();
     let after = ancestry::process_tree(self_pid).expect("tree still readable after reap");
     assert!(
         !contains_pid(&after, child_pid),
@@ -204,8 +205,8 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
         }
     }
 
-    // Tree 1 -> 2 -> 3, each start key `pid * 10`. Every fault lands at one
-    // kernel-call boundary of the walk.
+    // Tree R(1) -> A(2) -> B(3) -> C(4), each start key `pid * 10`.
+    // Every fault lands at one kernel-call boundary of the walk.
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum Fault {
         None,
@@ -215,26 +216,34 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
         ChildListingGone,
         RootReplacedDuringListing,
         ParentReplacedBeforeChildRead,
+        ParentReparentedBeforeChildRead,
         ChildReplacedDuringListing,
         ParentReadDenied,
     }
     for (fault, expected) in [
-        (Fault::None, Some(vec![1, 2, 3])),
+        (Fault::None, Some(vec![1, 2, 3, 4])),
         (Fault::RootGone, None),
         (Fault::ChildGone, Some(vec![1])),
         (Fault::ChildReparented, Some(vec![1])),
         (Fault::ChildListingGone, Some(vec![1, 2])),
         (Fault::RootReplacedDuringListing, None),
         (Fault::ParentReplacedBeforeChildRead, Some(vec![1])),
+        (Fault::ParentReparentedBeforeChildRead, Some(vec![1, 2, 3])),
         (Fault::ChildReplacedDuringListing, Some(vec![1, 2])),
         (Fault::ParentReadDenied, None),
     ] {
         let listed = RefCell::new(Vec::new());
         let start_reads = RefCell::new(HashMap::<u32, u32>::new());
+        let parent_reparented = Cell::new(false);
         let original = |pid: u32| (u64::from(pid) * 10, pid.saturating_sub(1));
         let tree = snapshot_with(
             1,
             |pid| {
+                // B has listed C and passed its post-listing identity check.
+                // A now exits, reparenting B outside R; C still names B.
+                if fault == Fault::ParentReparentedBeforeChildRead && pid == 4 {
+                    parent_reparented.set(true);
+                }
                 if fault == Fault::RootGone && pid == 1 || fault == Fault::ChildGone && pid == 2 {
                     return Err(ReadError::Gone);
                 }
@@ -255,7 +264,7 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
                 listed.borrow_mut().push(pid);
                 match pid {
                     2 if fault == Fault::ChildListingGone => Err(ReadError::Gone),
-                    1 | 2 => Ok(vec![pid + 1]),
+                    1..=3 => Ok(vec![pid + 1]),
                     _ => Ok(Vec::new()),
                 }
             },
@@ -276,6 +285,9 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
                     // second is the ownership check for its queued child.
                     (Fault::ParentReplacedBeforeChildRead, 1) if reads > 1 => replaced,
                     (Fault::ParentReadDenied, 1) if reads > 1 => Err(ReadError::Unreadable),
+                    (Fault::ParentReparentedBeforeChildRead, 3) if parent_reparented.get() => {
+                        Ok((starttime, 9))
+                    }
                     _ => Ok((starttime, parent)),
                 }
             },

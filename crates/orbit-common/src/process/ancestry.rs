@@ -174,8 +174,9 @@ pub(super) mod darwin_tree {
     ) -> Option<Vec<ProcessTreeProcess>> {
         let mut found = Vec::new();
         let mut seen = HashSet::from([root]);
-        // Each queued child carries the identity of the parent that listed it.
-        let mut queue = VecDeque::from([(root, None::<ProcessStartKey>)]);
+        // Each queued child carries the start identity and observed parent PID
+        // of the process that listed it, so reparenting invalidates ownership.
+        let mut queue = VecDeque::from([(root, None::<(ProcessStartKey, u32)>)]);
         while let Some((pid, owner)) = queue.pop_front() {
             let is_root = owner.is_none();
             let (process, parent) = match read_process(pid) {
@@ -183,14 +184,15 @@ pub(super) mod darwin_tree {
                 Err(ReadError::Gone) if !is_root => continue,
                 Err(ReadError::Gone | ReadError::Unreadable) => return None,
             };
-            if let Some(owner) = owner {
+            if let Some((owner, owner_parent)) = owner {
                 // A listed PID may now name an unrelated process, and a parent
-                // PID alone also matches a replacement of that parent.
+                // PID alone also matches a replacement of that parent. The
+                // listing parent may also have left the tree since queueing.
                 if parent != owner.pid {
                     continue;
                 }
                 match read_start(owner.pid) {
-                    Ok((start, _)) if start == owner.starttime => {}
+                    Ok(current) if current == (owner.starttime, owner_parent) => {}
                     Ok(_) | Err(ReadError::Gone) => continue,
                     Err(ReadError::Unreadable) => return None,
                 }
@@ -211,7 +213,7 @@ pub(super) mod darwin_tree {
             }
             for child in children {
                 if seen.insert(child) {
-                    queue.push_back((child, Some(process.key)));
+                    queue.push_back((child, Some((process.key, parent))));
                 }
             }
         }
