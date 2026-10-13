@@ -423,6 +423,20 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
                     so the caller has to be someone this process can name",
     },
     GovernedOperation {
+        id: "orbit.auto_task.delete",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "deleting an auto-task discards its scheduler cursor and delivery consumer \
+                    state, and a deleted shipped default stays out of later reseeds",
+    },
+    GovernedOperation {
+        id: "orbit.auto_task.reset",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "resetting a delivery consumer forgets its coverage debt and can abandon an \
+                    executing action",
+    },
+    GovernedOperation {
         id: "orbit.task.delete",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

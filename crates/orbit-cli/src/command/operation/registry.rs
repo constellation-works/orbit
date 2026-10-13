@@ -501,38 +501,7 @@ impl Commands {
                 )
             }
             Commands::AutoTask(command) => {
-                use super::super::auto_task::AutoTaskSubcommand;
-                let runtime_need = if matches!(
-                    &command.command,
-                    AutoTaskSubcommand::List(_) | AutoTaskSubcommand::Show(_)
-                ) {
-                    RuntimeNeed::ReadOnly
-                } else {
-                    RuntimeNeed::Required
-                };
-                let (subcommand, target_id) = match &command.command {
-                    AutoTaskSubcommand::Add(args) => ("add", Some(args.name.as_str())),
-                    AutoTaskSubcommand::List(_) => ("list", None),
-                    AutoTaskSubcommand::Show(args) => ("show", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Update(args) => ("update", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Toggle(args) => ("toggle", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Mint(args) => ("mint", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Recover(args) => ("recover", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Reset(args) => ("reset", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Delete(args) => ("delete", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Restore(args) => ("restore", Some(args.name.as_str())),
-                };
-                CommandOperation::new(
-                    runtime_need,
-                    Some(admin_meta(
-                        "auto-task",
-                        Some(subcommand),
-                        Some("auto_task"),
-                        target_id,
-                    )),
-                    None,
-                    runtime_dispatch!(AutoTask),
-                )
+                registry_operation(&command.command, runtime_dispatch!(AutoTask))
             }
             Commands::Job(command) => {
                 use super::super::job::JobSubcommand;

@@ -8,19 +8,39 @@ use std::path::PathBuf;
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
+/// `delete` and `reset` are governed `operator`; a fixture is non-interactive.
+fn operator(fixture: &Fixture, args: &[&str]) -> assert_cmd::Command {
+    let mut command = fixture.command(args);
+    command.env("ORBIT_OPERATOR", "1");
+    command
+}
+
+pub(crate) fn operator_json(fixture: &Fixture, args: &[&str]) -> serde_json::Value {
+    let output = operator(fixture, args)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap_or_else(|error| panic!("JSON for {args:?}: {error}"))
+}
+
 fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let fixture = Fixture::new();
     let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
     let shipped_path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
     let original = fs::read(&shipped_path).unwrap();
-    let removed = fixture.json(&[
-        "auto-task",
-        "delete",
-        "backlog-hygiene",
-        "--reason",
-        "Disposable fixture opt-out",
-        "--json",
-    ]);
+    let removed = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            "backlog-hygiene",
+            "--reason",
+            "Disposable fixture opt-out",
+            "--json",
+        ],
+    );
     assert_eq!(removed["opted_out"], true);
     assert!(!shipped_path.exists());
     fixture
@@ -58,31 +78,36 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let id = minted["id"].as_str().unwrap();
     let task_before = fixture.json(&["task", "show", id, "--json"]);
     let definition_before = fixture.json(&["auto-task", "show", "fixture-open-task", "--json"]);
-    fixture
-        .command(&[
+    operator(
+        &fixture,
+        &[
             "auto-task",
             "delete",
             "fixture-open-task",
             "--reason",
             "Refused while open",
             "--json",
-        ])
-        .assert()
-        .failure();
+        ],
+    )
+    .assert()
+    .failure();
     assert_eq!(
         fixture.json(&["auto-task", "show", "fixture-open-task", "--json"]),
         definition_before
     );
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), task_before);
-    let forced = fixture.json(&[
-        "auto-task",
-        "delete",
-        "fixture-open-task",
-        "--reason",
-        "Explicit disposable force",
-        "--force",
-        "--json",
-    ]);
+    let forced = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            "fixture-open-task",
+            "--reason",
+            "Explicit disposable force",
+            "--force",
+            "--json",
+        ],
+    );
     assert_eq!(forced["opted_out"], false);
     assert!(
         forced["open_tasks"]
@@ -163,18 +188,24 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     assert_eq!(after.generation, original.generation + 1);
     assert_eq!(after.baseline, original.baseline);
     assert_eq!(after.pending, original.pending);
-    let reset_preview = fixture.json(&["auto-task", "reset", &definition.name, "--json"]);
+    let reset_preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
     assert_eq!(reset_preview["applied"], false);
     assert_eq!(reset_preview["generation"], after.generation);
     assert_eq!(store.automation_state(&consumer).unwrap(), Some(after));
-    let reset = fixture.json(&[
-        "auto-task",
-        "reset",
-        &definition.name,
-        "--reason",
-        "Disposable reset",
-        "--json",
-    ]);
+    let reset = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--reason",
+            "Disposable reset",
+            "--json",
+        ],
+    );
     assert_eq!(reset["applied"], true);
     assert!(store.automation_state(&consumer).unwrap().is_none());
     let records = store.automation_recoveries(&consumer, 10).unwrap();
@@ -195,17 +226,19 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         1,
         "consumer operations must not mint or dispatch a task"
     );
-    fixture
-        .command(&[
+    operator(
+        &fixture,
+        &[
             "auto-task",
             "reset",
             "missing-consumer",
             "--reason",
             "Refused",
             "--json",
-        ])
-        .assert()
-        .failure();
+        ],
+    )
+    .assert()
+    .failure();
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
 }
 
@@ -267,17 +300,19 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     };
     let definition_before = show_definition();
 
-    fixture
-        .command(&[
+    operator(
+        &fixture,
+        &[
             "auto-task",
             "delete",
             name,
             "--reason",
             "Disposable failing delete",
             "--json",
-        ])
-        .assert()
-        .failure();
+        ],
+    )
+    .assert()
+    .failure();
     assert!(
         store.automation_state(&consumer).unwrap().is_none(),
         "the failure must come after teardown applied the consumer reset"
@@ -290,14 +325,17 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     assert_eq!(show_definition(), definition_before);
 
     fs::remove_file(&ref_lock).unwrap();
-    let removed = fixture.json(&[
-        "auto-task",
-        "delete",
-        name,
-        "--reason",
-        "Disposable delete",
-        "--json",
-    ]);
+    let removed = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            name,
+            "--reason",
+            "Disposable delete",
+            "--json",
+        ],
+    );
     assert_eq!(removed["cursor_removed"], true);
     assert_eq!(
         removed["consumer"]["released_refs"],
@@ -819,7 +857,10 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     };
 
     // While the task is open its executor may still submit evidence.
-    let preview = fixture.json(&["auto-task", "reset", &definition.name, "--json"]);
+    let preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
     assert!(
         preview["refusals"]
             .as_array()
@@ -853,14 +894,17 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
             .contains(&serde_json::json!("active_execution"))
     );
 
-    let reset = fixture.json(&[
-        "auto-task",
-        "reset",
-        &definition.name,
-        "--reason",
-        "The review task closed without coverage evidence",
-        "--json",
-    ]);
+    let reset = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--reason",
+            "The review task closed without coverage evidence",
+            "--json",
+        ],
+    );
     assert_eq!(reset["applied"], true);
     assert!(store.automation_state(&consumer).unwrap().is_none());
 }

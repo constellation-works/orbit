@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use serde_json::Value;
 
@@ -82,11 +83,8 @@ pub fn prepare_remote_task_artifact_put(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrbitBuiltinAction {
-    AutoTaskAdd,
-    AutoTaskList,
-    AutoTaskMint,
-    AutoTaskShow,
-    AutoTaskUpdate,
+    /// Auto-task verbs are registry data, like friction's.
+    AutoTask(AutoTaskVerb),
     AgentInvoke,
     CommandExec,
     DesktopRead,
@@ -127,6 +125,12 @@ pub enum OrbitBuiltinAction {
     WorkspaceClaimAcquire,
     WorkspaceClaimRelease,
     WorkspaceClaimShow,
+}
+
+impl From<AutoTaskVerb> for OrbitBuiltinAction {
+    fn from(verb: AutoTaskVerb) -> Self {
+        Self::AutoTask(verb)
+    }
 }
 
 impl From<FrictionVerb> for OrbitBuiltinAction {

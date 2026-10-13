@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction is migrated onto kernel v2's structure and validates input at the tool entry in warn mode, and a planned noun-by-noun migration is accepted and in progress.
+summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction and auto-task are migrated onto kernel v2 and validate input at the tool entry in warn mode, and a planned noun-by-noun migration is accepted and in progress.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935]
 ---
 
 # Operations as Data — Overview
@@ -24,9 +24,10 @@ drifted four ways. **Operations as data** replaces that with one declaration per
 verb: a `const` spec that every surface derives its wiring from. This is bearing 1
 of [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry).
 
-**Status.** The friction noun was migrated end to end in [ORB-10358] and is still
-the only migrated noun. The rest of the tool surface (task, auto-task, workflow
-run, drain, workspace claim, and the single-verb tools) is hand-wired. A
+**Status.** The friction noun was migrated end to end in [ORB-10358], and the
+auto-task noun followed in [ORB-15935] (phase 1). The rest of the tool surface
+(task, workflow run, drain, workspace claim, and the single-verb tools) is
+hand-wired. A
 2026-10-12 review found that the friction kernel declared a verb's *names* once
 but still restated its *behaviour* — read/write class, redaction, accepted
 aliases, cross-field rules — on several surfaces, and that it could not yet
@@ -37,7 +38,10 @@ governed. [ORB-15932] built kernel v2's structure and ported friction onto it:
 read/write class and redaction are now declared in the spec. [ORB-15933]
 declared accepted aliases, retired fields and the "change something" rule, and
 validates friction input once at the tool entry, warning about unknown fields
-before a later step refuses them. The work is tracked as
+before a later step refuses them. [ORB-15935] added the switch, enum, object
+and CLI-only parameter kinds, flag defaults and aliases, and moved every
+`orbit auto-task` verb onto the tool, including the six that were CLI-only. The
+work is tracked as
 Orbit tasks tagged `operations-as-data`, starting with [ORB-15932]. Each section
 of [2_design.md](./2_design.md) is marked **Implemented** or **Planned**.
 
@@ -91,14 +95,18 @@ and again in the tool handler.
 |---------|------|------|
 | The kernel: noun, operation, parameter, effect and redaction vocabulary; the `OperationVerb` trait and `operation_registry!` | [crates/orbit-common/src/governance/operation.rs](../../../crates/orbit-common/src/governance/operation.rs) | [ORB-10358], [ORB-15932] |
 | The friction registry (single declaration site) | [crates/orbit-common/src/governance/friction/operations.rs](../../../crates/orbit-common/src/governance/friction/operations.rs) | [ORB-10358] |
+| The auto-task registry (single declaration site) | [crates/orbit-common/src/governance/auto_task/operations.rs](../../../crates/orbit-common/src/governance/auto_task/operations.rs) | [ORB-15935] |
 | MCP adapter: generic `OperationTool<V>`, schema, scope and execution kind | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358], [ORB-15932] |
+| Auto-task guarded modes (bounded list, acknowledged mint, checked toggle), keyed on `AutoTaskVerb` | [crates/orbit-tools/src/builtin/orbit/auto_task.rs](../../../crates/orbit-tools/src/builtin/orbit/auto_task.rs) | [ORB-15935] |
 | CLI adapter: generic clap impls for `Invocation<V>`, tool input | [crates/orbit-cli/src/command/operation/args.rs](../../../crates/orbit-cli/src/command/operation/args.rs) | [ORB-10358], [ORB-15932] |
 | Friction CLI surface tables (request shaping, renderers) | [crates/orbit-cli/src/command/friction.rs](../../../crates/orbit-cli/src/command/friction.rs) | [ORB-10358], [ORB-15932] |
+| Auto-task CLI surface tables (flag composition, renderers) | [crates/orbit-cli/src/command/auto_task/](../../../crates/orbit-cli/src/command/auto_task/) | [ORB-15935] |
 | CLI audit metadata and runtime need (`registry_operation`) | [crates/orbit-cli/src/command/operation/spec.rs](../../../crates/orbit-cli/src/command/operation/spec.rs) | [ORB-15932] |
 | Web handlers over registry field names | [crates/orbit-web/src/api/frictions.rs](../../../crates/orbit-web/src/api/frictions.rs) | [ORB-10358] |
 | Handler table, keyed on `FrictionVerb` | [crates/orbit-core/src/adapter/tool_host/friction_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/friction_tools.rs) | [ORB-10358] |
+| Handler table, keyed on `AutoTaskVerb` | [crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs) | [ORB-15935] |
 | Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs) | [ORB-15932] |
-| Claimed-worker routing, keyed on `FrictionVerb` | [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs) | [ORB-15932] |
+| Claimed-worker routing, keyed on `FrictionVerb` and `AutoTaskVerb` | [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs) | [ORB-15932], [ORB-15935] |
 | Shared tool-input parsing and unknown-field refusal | [crates/orbit-common/src/protocol/tool_input.rs](../../../crates/orbit-common/src/protocol/tool_input.rs) | — |
 | Migration cookbook | [references/cookbook.md](./references/cookbook.md) | [ORB-10358] |
 
@@ -111,5 +119,7 @@ and again in the tool handler.
   structure and ported friction onto it.
 - [ORB-15933] — phase 0b: input validation at the tool entry in warn mode, with
   declared aliases, retired fields and `at_least_one_of`.
+- [ORB-15935] — phase 1: migrated the auto-task noun, adding the switch, enum,
+  object and CLI-only parameter kinds.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

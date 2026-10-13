@@ -16,7 +16,7 @@ use orbit_types::workflow::automation::{
 };
 use serde_json::{Value, json};
 
-use crate::auto_task_lifecycle_cli::git;
+use crate::auto_task_lifecycle_cli::{git, operator_json};
 use crate::isolated_cli_fixture::Fixture;
 
 const CONSUMER: &str = "delivery-code-review";
@@ -636,14 +636,17 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     ]);
     assert_doctor_fails(&fixture, "wedged");
 
-    fixture.json(&[
-        "auto-task",
-        "delete",
-        CONSUMER,
-        "--reason",
-        "Disposable opt-out",
-        "--json",
-    ]);
+    operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            CONSUMER,
+            "--reason",
+            "Disposable opt-out",
+            "--json",
+        ],
+    );
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "deleting the consumer opts out: {row}");
     // The deprecated policy still asks for after-landing review, which a

@@ -9,9 +9,9 @@ doc_role: reference
 type: design
 summary: Step-by-step procedure for migrating a noun to the operation registry under kernel v2, and for adding a verb to an already-migrated noun.
 tags: [operations-as-data, architecture, adr-0209, cookbook]
-paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-cli/src/command/operation/args.rs"]
+paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -22,11 +22,12 @@ kernel v2 in [2_design.md](../2_design.md). Phase 0a of
 ([ORB-15932]): `NounSpec`, `cli_path`, `effect`, parameter groups, `redact`,
 the `operation_registry!` macro and the generic adapters. Phase 0b built input
 validation at the tool entry in warn mode ([ORB-15933]): `parse_input`,
-`aliases`, `at_least_one_of` and `retired_fields`. Steps that use the
-still-planned parameter kinds (`Enum`, `Switch`, `Object`, `default`, nested
-`cli_path`) say so; until a phase builds them, a noun that needs one extends the
-kernel first. Two recipes: migrating a noun that is still
-hand-wired, and adding a verb to a noun that is already migrated.
+`aliases`, `at_least_one_of` and `retired_fields`. Phase 1 (auto-task,
+[ORB-15935]) built the `Switch`, `Enum`, `Object` and CLI-only parameter
+kinds, `default`, and flag aliases and value names. A nested `cli_path` is
+still planned; a noun that needs it, or another kind the kernel lacks, extends
+the kernel first. Two recipes: migrating a noun that is still hand-wired, and
+adding a verb to a noun that is already migrated.
 
 ---
 
@@ -93,16 +94,17 @@ In `orbit-common`, next to the noun's existing shared types. Invoke
 `operation_registry!` with one `Variant => SPEC` list: it emits the verb enum,
 its `OperationVerb` impl (an exhaustive `spec()` match) and the ordered
 operations list, so they cannot disagree. Write a `NounSpec` const holding the
-CLI name, tool prefix, `--help` summary, audit target type, any intermediate CLI
-groups, and the operations list. `friction/operations.rs` is the example.
+CLI name, tool prefix, `--help` summary, audit target type, the parameter whose
+value is the audit target id, any intermediate CLI groups, and the operations
+list. `friction/operations.rs` and `auto_task/operations.rs` are the examples.
 
 For each verb, fill `cli_path`, `effect` and its parameter groups. For each
 parameter, fill `redact` in addition to the friction-era fields: `FreeText` for
 prose a caller writes, `Path` for a path or URL, `None` otherwise. Also fill
 `aliases` with every alternative spelling the handlers accept today,
 `retired_fields` with every field they refuse with a pointer to its
-replacement, and `at_least_one_of` with any "change something" rule; `default`
-waits for its phase.
+replacement, `at_least_one_of` with any "change something" rule, and `default`
+with any `default_value` the old clap struct declared.
 Choose `effect` from what the verb does, not from what the old CLI arm happened
 to open; where they differ, say so in the PR, with evidence that a verb moving
 to the read-only runtime does not rely on stale-run reconciliation on open.
@@ -114,6 +116,14 @@ Copy both orders from the code you are replacing.
 Factor repeated shapes with `const fn` helpers (friction has `text_param` and
 `count_param`) and shared flags with a parameter group, but write out anything
 that differs. A helper that needs three override arguments is not a helper.
+
+Where the CLI and MCP shapes differ — one flag per field on the CLI, one
+structured object over MCP — declare the MCP field without a CLI binding and
+each flag as a **CLI-only** parameter (a binding and no MCP description). A
+CLI-only parameter is not a wire field: the CLI's `prepare` table consumes it
+and composes the structured field (auto-task's `--cron`/`--every-minutes`/
+`--deliveries-landed` → `schedule`). A wire field the CLI composes and MCP does
+not advertise has neither binding (auto-task `update`'s `template_patch`).
 
 ### Step 3. Test the registry at the boundary
 
@@ -158,10 +168,15 @@ Step 4. It also validates input with `parse_input` and reports unknown fields
 Delete the noun's block from `register_builtins`.
 
 If a verb overrode `input_schema()`, move the override into the noun's exhaustive
-`schema_extension(verb)` table in `orbit-tools`. If a parameter has allowed values
-or a default, decide whether its schema keeps them in the description
-(wire-identical) or emits `enum`/`default` (additive wire change), and say which
-in the PR.
+`schema_extension(verb)` table in `orbit-tools`. Allowed values and defaults stay
+in the parameter's MCP description; the schema emits no `enum` or `default`
+keyword ([2_design.md §6](../2_design.md#6-mcp-adapter)).
+
+If a tool routed some inputs elsewhere before dispatch (auto-task's bounded
+`list`, acknowledged `mint` and checked `update` go to desktop host actions),
+implement the noun's `GuardedModes` table in `orbit-tools`, an exhaustive match
+on the verb that returns `None` for every verb without such a mode. Every noun
+implements it; friction's returns `None` throughout.
 
 Unknown-field refusal starts in warn-and-audit mode for the noun; the refusal
 flip is a separate change after the 30-day compatibility window.
@@ -178,7 +193,9 @@ Delete the per-verb `Args` structs and `Execute` impls. The generic
 has type `Invocation<<Noun>Verb>`, and its `#[command(about)]` reads the noun
 spec's `cli_about`. Keep only the noun's exhaustive CLI surface tables:
 `render(verb, &Value)` and, if the noun shapes or checks requests for the CLI
-only, `prepare(verb, &mut Map) -> Result<(), OrbitError>`.
+only, `prepare(verb, &mut Map)`. `prepare` removes every CLI-only parameter it
+consumes, so none reaches the tool as an unknown field; a client-side filter
+(auto-task `list --enabled`) is returned from `prepare` to `render`.
 
 Every verb executes through `run_tool`, including CLI-only verbs registered with
 `mcp_scope: None`. A destructive CLI-only verb becomes reachable through

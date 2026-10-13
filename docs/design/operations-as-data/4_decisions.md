@@ -9,9 +9,9 @@ doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935]
 ---
 
 # Operations as Data — Decisions
@@ -38,7 +38,7 @@ the same day. They govern kernel v2 and the migration plan in
 - **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
 - **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted; followed by friction since [ORB-15932].
 - **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation built in warn mode ([ORB-15933]).
-- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted.
+- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted; built on auto-task in [ORB-15935].
 - **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
 
 ## Split spec/handler table joined by a typed verb enum
@@ -421,8 +421,8 @@ drift the tool entry does not.
 
 ## Migrated CLI verbs execute through the tool path
 
-**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935]
-**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/task/add.rs`, `crates/orbit-core/src/adapter/tool_host/task_tools.rs`
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935]
+**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs`, `crates/orbit-cli/src/command/task/add.rs`, `crates/orbit-core/src/adapter/tool_host/task_tools.rs`
 
 ### Context
 
@@ -460,6 +460,53 @@ not a migration.
   through `orbit tool run`. A destructive CLI-only verb such as `auto-task
   delete` needs a `GOVERNED_OPERATIONS` row, and a re-blessed authorization
   matrix golden, in the same PR.
+
+**Auto-task outcome ([ORB-15935]).** The six CLI-only verbs (`show`, `toggle`,
+`delete`, `restore`, `recover`, `reset`) are tools with `mcp_scope: None`.
+`orbit.auto_task.delete` and `orbit.auto_task.reset` are governed `operator`
+and unadvertised, and `GOVERNED_TOOL_PLACEMENT` records both: delete discards a
+definition's cursor and delivery consumer state, and reset forgets coverage
+debt and may abandon an executing action. `toggle`, `restore` and `recover`
+stay ungoverned. `toggle` has the authority `orbit.auto_task.update`'s
+`enabled` already has, `restore` reinstates a shipped default disabled, and
+`recover` never covers, waives or discards an obligation. Shipped activities'
+`tool_disallow_list` still names only `add`, `mint` and `update`: the five
+CLI-only tools are not in the agent-facing schema set an activity list is
+validated against, so a deny-mode activity never grants them. The dashboard's
+`auto_task.toggle` and `auto_task.mint` rows are unchanged: the dashboard still
+calls the runtime directly and still refuses a non-operator.
+
+The measured differences against the pre-migration CLI, from an isolated
+fixture run of every verb with and without `ORBIT_OPERATOR=1`:
+
+- **Capability.** `delete` and `reset` now refuse a caller with no capability (a
+  non-interactive shell without `ORBIT_OPERATOR=1` or an agent envelope); the
+  old CLI performed them. The refusal covers `reset`'s preview (no
+  `--reason`) too, because the row governs the tool. A person at a terminal
+  is unaffected. An operator override writes an `authorization` audit row.
+  The CLI integration tests that delete or reset now set `ORBIT_OPERATOR=1`.
+  The other verbs answer as before.
+- **Audit rows.** The CLI's own `auto-task <verb>` row is unchanged: same
+  subcommand label, `target_id` the definition name (`list` none), same role.
+  `add` and `update` now add `artifact_redaction` rows when they redact.
+  `delete` still writes its core row.
+- **Redaction.** CLI `add` and `update` now redact the template's free text
+  (title, body, criteria) and the description before they are stored, as the
+  tool always did; the old CLI stored a credential-shaped token verbatim.
+- **Output.** `add` and `update` JSON gains `redactions`/`redactions_applied`,
+  and `update` gains `effective_enabled`. `list` JSON with `--all` gains
+  `inactive_plugin` on an inactive row. `show`, `list`, `toggle`, `mint`,
+  `restore`, `recover`, `reset` and `delete` JSON otherwise match, and every
+  text rendering is byte-identical.
+- **Attribution.** Unchanged: `created_by`/`updated_by`/`deleted_by` resolve to
+  the same actor (`operator`, or `unknown` for an unidentified caller).
+- **Input.** Optional strings and list items are trimmed, as for every
+  registry-derived CLI. Flag-combination errors (`--waive-batch` without
+  `--waiver-reason`, `--replay-history` with `--adopt-settings`) are refused by
+  the CLI's `prepare` table or the handler with an `invalid input` error rather
+  than by clap's usage error. `add` checks `required_tools` before the write on
+  every surface, so a refused tool name no longer leaves a definition behind
+  over MCP.
 
 ## Migrate the remaining nouns on a plan, not on contact
 
@@ -512,5 +559,7 @@ only; the migration is still incremental, one noun at a time.
   that replaced `CliRender`.
 - [ORB-15933] — built `parse_input` at the tool entry on friction in warn mode,
   with `aliases`, `retired_fields` and `at_least_one_of` in the spec.
+- [ORB-15935] — migrated auto-task through the tool path, governing its
+  destructive CLI-only verbs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -11,15 +11,53 @@
 //! dashboard and the deterministic dispatcher), so they all share one
 //! validation and the handler receives canonical input.
 //!
-//! A migrated noun supplies only its registry and a
-//! `From<Verb> for OrbitBuiltinAction` impl in [`crate::host`].
+//! A migrated noun supplies its registry, a `From<Verb> for OrbitBuiltinAction`
+//! impl in [`crate::host`], and its [`GuardedModes`] table.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::operation::{Effect, NounSpec, OperationSpec, OperationVerb};
+use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::operation::{
+    Effect, NounSpec, OperationInput, OperationSpec, OperationVerb,
+};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegistry};
+
+/// A noun's MCP surface table: the guarded modes of its verbs.
+///
+/// A guarded mode is an optional variant of a verb, selected by an input
+/// field, that another host action serves under stricter checks (an
+/// acknowledged unconditional mint, a compare-and-set toggle). Each noun
+/// implements this as one exhaustive `match` on its verb.
+pub(super) trait GuardedModes: OperationVerb {
+    /// Serve a call that selects a guarded mode of this verb; `None` hands it
+    /// to the verb's own handler.
+    fn guarded_mode(
+        self,
+        ctx: &ToolContext,
+        input: &OperationInput,
+    ) -> Option<Result<Value, OrbitError>>;
+}
+
+impl GuardedModes for FrictionVerb {
+    fn guarded_mode(
+        self,
+        _ctx: &ToolContext,
+        _input: &OperationInput,
+    ) -> Option<Result<Value, OrbitError>> {
+        match self {
+            FrictionVerb::Add
+            | FrictionVerb::List
+            | FrictionVerb::Show
+            | FrictionVerb::Stats
+            | FrictionVerb::Tags
+            | FrictionVerb::Update
+            | FrictionVerb::Resolve
+            | FrictionVerb::Rehome => None,
+        }
+    }
+}
 
 /// One registry operation, exposed as a tool.
 ///
@@ -29,7 +67,7 @@ pub struct OperationTool<V: 'static>(pub &'static OperationSpec<V>);
 
 impl<V> Tool for OperationTool<V>
 where
-    V: OperationVerb,
+    V: GuardedModes,
     OrbitBuiltinAction: From<V>,
 {
     fn schema(&self) -> ToolSchema {
@@ -45,6 +83,9 @@ where
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
         let input = self.0.parse_input(input)?;
+        if let Some(served) = self.0.verb.guarded_mode(ctx, &input) {
+            return served;
+        }
         super::report_unknown_fields(ctx, self.0.tool_name, &input);
         super::execute_host_action(ctx, input.into_value(), self.0.verb.into())
     }
@@ -53,7 +94,7 @@ where
 /// Register every operation a noun declares, under the exposure each declares.
 pub(super) fn register_noun<V>(registry: &mut ToolRegistry, noun: &'static NounSpec<V>)
 where
-    V: OperationVerb,
+    V: GuardedModes,
     OrbitBuiltinAction: From<V>,
 {
     for spec in noun.operations {
@@ -69,7 +110,7 @@ where
 ///
 /// Parameter order follows the spec's declaration order, which is contract: it
 /// is what the shipped `mcp_tools_list` snapshot records.
-fn operation_tool_schema<V: 'static>(spec: &OperationSpec<V>) -> ToolSchema {
+pub(super) fn operation_tool_schema<V: 'static>(spec: &OperationSpec<V>) -> ToolSchema {
     ToolSchema {
         name: spec.tool_name.to_string(),
         description: spec.tool_description.to_string(),

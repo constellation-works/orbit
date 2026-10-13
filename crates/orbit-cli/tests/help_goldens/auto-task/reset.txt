@@ -1,0 +1,36 @@
+Preview or apply the audited reset of a delivery consumer: forget its coverage debt and re-baseline at the branch head
+
+Usage: orbit auto-task reset [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Definition name
+
+Options:
+      --reason <REASON>
+          Operator explanation, retained in the audit record. Required to apply; without it the command previews and writes nothing
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --force
+          Reset even while an action is executing. The admitted task or run is abandoned, not cancelled
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')

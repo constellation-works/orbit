@@ -431,7 +431,12 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
         vec!["auto-task", "mint", "qa-sweep", "--json"],
     ] {
         let before = auto_task_state_snapshot(&replica_repo, &home);
-        let output = command(&replica_repo, &home)
+        let mut mutation = command(&replica_repo, &home);
+        if args[1] == "delete" {
+            // Governed `operator`: an operator is still refused on a replica.
+            mutation.env("ORBIT_OPERATOR", "1");
+        }
+        let output = mutation
             .args(&args)
             .output()
             .expect("run replica auto-task mutation");
