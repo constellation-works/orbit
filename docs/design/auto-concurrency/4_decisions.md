@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Proposed standing rules for predictive admission — measure what each task uses, forecast host-wide, keep the throttle as the backstop, assume unknown work is expensive, never exceed the operator's ceiling or cancel work.
 tags: [auto-concurrency, drain, capacity, decisions]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/runtime/host_resource/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/actions/admission/auto_admission.rs", "crates/orbit-core/src/runtime/host_resource/**"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---

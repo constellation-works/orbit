@@ -153,7 +153,7 @@ inline a machine-generated blob — a serialized structure, a path list, a
 captured stream — into it. Because `events.jsonl` is append-only, an oversized
 note is permanent: it dilutes every downstream reader of that task (history
 scanning, memory distillation, triage, and the agent task context assembled in
-`v2_host/task_context.rs`) for the life of the record.
+`engine_host/actions/task_context.rs`) for the life of the record.
 
 A writer whose note would carry such a payload must instead keep a leading
 excerpt and name, **inside the note itself**, the command that reads the full

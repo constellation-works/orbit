@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: How finding_verification_pipeline selects review findings, draws verifier crews from the complexity pools, validates and records verdicts, escalates doubtful ones, and gates promotion and drain admission.
 tags: [finding-verification, review, automation, admission]
-paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/finding_verification/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
+paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/adapter/engine_host/actions/finding_verification/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
 related_features: [automation-triggers, review-gate, distributed-drain, routines]
 related_artifacts: [ORB-15662]
 ---

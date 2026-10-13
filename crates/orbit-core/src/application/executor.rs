@@ -83,7 +83,7 @@ pub(crate) fn seed_default_executors_for_platform(
 /// silent. It does NOT relax validation of user-authored executor defs: a
 /// custom def that explicitly requests an incompatible sandbox backend is left
 /// untouched here and still fails closed at dispatch in
-/// `runtime::v2_host::sandbox`. See [ORB-10112] / [ORB-10047].
+/// `adapter::engine_host::actions::sandbox`. See [ORB-10112] / [ORB-10047].
 fn select_shipped_sandbox(
     declared: Option<ExecutorSandboxKind>,
     target_os: &str,

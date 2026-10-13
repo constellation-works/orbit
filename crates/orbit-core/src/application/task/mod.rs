@@ -20,7 +20,7 @@ mod lint;
 mod listing;
 mod params;
 mod paths;
-mod pilot;
+pub(crate) mod pilot;
 mod pr_closure;
 mod pull_request_links;
 mod query;

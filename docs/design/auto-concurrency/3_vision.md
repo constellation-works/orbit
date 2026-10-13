@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Open questions predictive admission leaves unanswered (step-aligned profiles, macOS sampling, crew-aware profiles, backfill reservations, cross-host placement, measuring whether it helps) and the scheduling and resource-prediction prior work it borrows from.
 tags: [auto-concurrency, drain, capacity, vision]
-paths: ["crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs"]
+paths: ["crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/adapter/engine_host/actions/admission/auto_admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---

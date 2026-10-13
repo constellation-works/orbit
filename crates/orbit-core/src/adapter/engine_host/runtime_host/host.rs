@@ -28,7 +28,7 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::{cli_executor, dispatch, sandbox, task_context};
+use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task_context};
 use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current_repo_root};
 #[cfg(target_os = "linux")]
 use crate::runtime::recovery_authority::RecoveryAuthority;

@@ -5,7 +5,7 @@ use orbit_types::workflow::Provider;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::task_context;
+use crate::adapter::engine_host::actions::task_context;
 
 /// The canonical name of `provider`, lower-cased as given when it is not a
 /// known one.
