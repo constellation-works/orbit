@@ -54,8 +54,8 @@ pub struct BaseCommandResult {
 /// Why `base` cannot stand in for the candidate's run of the same command,
 /// which reported `selection`, or `None` when it can [ORB-15131].
 ///
-/// A command that reports no summary on either side is judged by its exit
-/// status as before. Otherwise the base must report the candidate's selection,
+/// A command that reports no summary on either side has no selection check.
+/// Otherwise the base must report the candidate's selection,
 /// and a pass counts only when it executed at least one counted test. A
 /// replay of the candidate's failing tests ([`FAILING_TESTS_KEY`]) must have
 /// executed one whether it passed or failed: a filter that matched nothing
@@ -111,15 +111,21 @@ pub(in super::super) struct BaselineCheck {
 }
 
 impl BaselineCheck {
-    /// Whether the base fails exactly as the candidate did: same exit status
-    /// and the same timeout outcome, on a comparable run. A base result that
+    /// Whether a comparable completed base run confirms every failure the
+    /// candidate names, with the same exit status. Missing identities or a
+    /// timeout cannot establish reproduction. A base result that
     /// is itself a missing tool or a network failure was never cached and
     /// never gets here.
     pub(in super::super) fn reproduces(&self, run: &RequiredCommandRun) -> bool {
         run.infrastructure_failure.is_none()
+            && !run.timed_out
+            && !run.failures.is_empty()
             && self.not_comparable.is_none()
             && self.result.as_ref().is_ok_and(|base| {
-                !base.passed && base.exit_code == run.exit_code && base.timed_out == run.timed_out
+                !base.passed
+                    && !base.timed_out
+                    && base.exit_code == run.exit_code
+                    && run.failures.is_subset(&base.failures)
             })
     }
 
@@ -186,6 +192,7 @@ impl BaselineCheck {
             "decision": self.decision(),
             "exit_code": self.result.as_ref().ok().map(|base| base.exit_code),
             "timed_out": self.result.as_ref().ok().map(|base| base.timed_out),
+            "failures": self.result.as_ref().ok().map(|base| &base.failures),
             "cached": self.cached,
             "reason": self.result.as_ref().err().or(self.not_comparable.as_ref()),
             "log": log,
@@ -217,6 +224,7 @@ impl BaselineCheck {
                 "network_retries": base.network_retries,
                 "host_coverage_refused": base.host_coverage_refused,
                 "output": base.output,
+                "failures": base.failures,
                 "validation_env": base.validation_env,
                 "summary": base.summary,
                 "not_comparable": self.not_comparable,
@@ -565,12 +573,22 @@ pub(in super::super) fn candidate_failure(
                 "Base {} passes this command, so the candidate introduced the failure.",
                 check.base_sha
             ),
-            (Ok(base), None) => format!(
-                "Base {} also fails this command, but differently (exit {}{}), so the failure \
-                 is judged the candidate's.",
+            (Ok(base), None) if run.timed_out || base.timed_out => format!(
+                "Base {} also fails this command (exit {}{}), but a timed-out run cannot \
+                 establish matching failures, so the candidate still requires validation repair.",
                 check.base_sha,
                 base.exit_code,
                 if base.timed_out { ", timed out" } else { "" }
+            ),
+            (Ok(base), None) if run.failures.is_empty() || base.failures.is_empty() => format!(
+                "Base {} also fails this command (exit {}), but failure identities are missing, \
+                 so matching failures are unconfirmed and the candidate still requires validation repair.",
+                check.base_sha, base.exit_code
+            ),
+            (Ok(base), None) => format!(
+                "Base {} also fails this command (exit {}), but its failure identities or exit \
+                 status differ from the candidate's, so the candidate still requires validation repair.",
+                check.base_sha, base.exit_code
             ),
             (Err(reason), _) => format!(
                 "Base {} could not be judged ({reason}), so the failure is judged the \

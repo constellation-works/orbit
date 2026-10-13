@@ -17,7 +17,8 @@
 //! - the base result is cached in the repository's Git common directory per
 //!   `(base, command)` behind an exclusive file lock, so concurrent
 //!   candidates on one host share a single base run;
-//! - a base that fails the same way (same exit status, same timeout) makes the
+//! - a comparable completed base failure with the same exit status and
+//!   every candidate failure identity makes the
 //!   failure typed `[baseline_red]`: no recovery repairs it, and the
 //!   task is held until the base moves to a commit where the command passes
 //!   ([`baseline_hold_status`]);
@@ -26,6 +27,8 @@
 //!   them, so it is not held, and the step records the known-red tests and
 //!   proceeds. Review settlement applies the same rule to a reviewer's
 //!   red-base claim [ORB-15546];
+//! - missing identities, candidate-specific identities and timeouts cannot
+//!   establish reproduction: both logs remain evidence for candidate repair;
 //! - a comparable passing base allows one bounded candidate replay of only
 //!   the failed tests ([`super::flaky`]); tests passing that isolated replay
 //!   are recorded as flaky, and failures that remain are rejected as before.
