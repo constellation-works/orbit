@@ -24,6 +24,7 @@ use super::command::WorkerCommandConfig;
 use super::record::{self, PipelineAuditRow};
 use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
 use super::*;
+use crate::application::job::pipeline::wait::announce_worker_exit;
 use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
 use crate::runtime::event_bus::EventLog;
 
@@ -272,7 +273,22 @@ impl PipelineWorkerSupervisor {
     }
 
     /// Watch `child` until it claims the run or exits, then settle the run.
+    /// Every return follows the child's reap, after which this process's
+    /// pipeline waits are woken to reread the run.
     pub(crate) fn monitor_startup(
+        &self,
+        run_id: &str,
+        child: Child,
+        worker_log: &Path,
+        worker_log_reader: File,
+        actor: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        let settled = self.observe_startup(run_id, child, worker_log, worker_log_reader, actor);
+        announce_worker_exit();
+        settled
+    }
+
+    fn observe_startup(
         &self,
         run_id: &str,
         mut child: Child,

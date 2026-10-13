@@ -1339,6 +1339,8 @@ Resume readmission records the resumed run as the cleanup owner in task history 
 
 After [ORB-10461], every detached pipeline worker appends stdout and stderr to the private run-addressable path `.orbit/state/logs/<run_id>.worker.log`. The parent-side startup observer records that path in claimed/failure audit events. If the child exits before setting its pending-run owner, the observer terminalizes the same run as `interrupted` and copies a redacted, bounded tail of the worker output into the synthetic diagnostic step; startup and action-registration errors are therefore inspectable by run id without waiting for the stale-run grace window. Normal claimed-worker execution and admission polling are unchanged.
 
+A pipeline wait (`--wait`, `orbit.pipeline.wait`, agent-invocation waits) rereads durable run state once per poll interval. When the waiting process also launched the worker (the usual `--wait` case), its startup observer wakes the wait as soon as it has reaped the worker and settled any run the exit left non-terminal. The wait does not have to sleep out the rest of its interval. The wake is a process-local counter and condition variable. A wait reads the counter before each snapshot, so an exit between the snapshot and the sleep is not lost. The wake only triggers a reread: durable state decides the outcome, and any worker exit in the process wakes every wait in it. A run whose worker another process launched, a worker the waiting process does not reap, and a cancellation the canceller terminalizes all fall back to the poll interval. The caller's deadline, its poll input and the poll defaults are unchanged. Nothing is registered per run, so there is nothing to clean up.
+
 
 ### 8.7 Invocation metrics
 
