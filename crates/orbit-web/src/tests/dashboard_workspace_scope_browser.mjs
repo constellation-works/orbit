@@ -9,7 +9,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     page.on('pageerror', error => errors.push(error.message));
     let reliabilityEvidence = null;
     try {
-      await page.goto(`${origin}/#audit?role=operator`);
+      await page.goto(`${origin}/#diagnostics/incidents/events?role=operator`);
       await page.evaluate(async workspaceCount => {
         const task = { id: 'SCOPE-1', title: 'Workspace scope fixture', status: 'review', priority: 'medium' };
         const claim = {
@@ -126,12 +126,12 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
           throw new Error('Removing a multi-workspace chip must select and persist aggregate scope');
         }
         await page.locator('#workspace-select').selectOption('one');
-        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit?role=operator'));
+        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/events?role=operator'));
         await chip.waitFor({ state: 'visible' });
       }
       await page.locator('#audit-scope-chips [data-chip="actor"]').click();
       await page.locator('#audit-scope-chips [data-chip="actor"]').waitFor({ state: 'detached' });
-      if (!(await chip.isVisible())) throw new Error('Removing an Audit filter must retain the workspace chip');
+      if (!(await chip.isVisible())) throw new Error('Removing an Events filter must retain the workspace chip');
 
       await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('operations/routines'));
       const routine = page.locator('#routines-body .operation-switch');
@@ -170,25 +170,31 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         throw new Error(`Actions must succeed with workspace=one: ${JSON.stringify(requests)}`);
       }
       if (workspaceCount > 1) {
-        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents'));
+        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('analytics/metrics'));
         const railPositions = async () => page.locator('.rail .tab, .rail .subtab').evaluateAll(nodes =>
           nodes.map(node => ({ route: node.dataset.tab || node.dataset.subtab, top: node.getBoundingClientRect().top })));
         const initialRailPositions = await railPositions();
         const note = page.locator('#workspace-scope-note');
 
-        await page.locator('#diag-subtabs [data-subtab="reliability"]').click();
+        await page.locator('#analytics-subtabs [data-subtab="reliability"]').click();
         await note.waitFor({ state: 'visible' });
         if (!(await note.textContent()).includes('Workspace filter inactive')
           || await note.getAttribute('aria-hidden') !== 'false') {
           throw new Error('Reliability must expose the workspace-filter note visually and to assistive technology');
         }
         const reliabilityPositions = await railPositions();
+        // Tools reads the per-workspace audit summary, so the workspace
+        // filter applies there again.
+        await page.locator('#reliability-views [data-view="tools"]').click();
+        await note.waitFor({ state: 'hidden' });
+        await page.locator('#reliability-views [data-view="pipeline"]').click();
+        await note.waitFor({ state: 'visible' });
 
-        await page.locator('#diag-subtabs [data-subtab="cost"]').click();
-        await page.locator('#diag-subtabs [data-subtab="cost"].active').waitFor({ state: 'visible' });
+        await page.locator('#analytics-subtabs [data-subtab="cost"]').click();
+        await page.locator('#analytics-subtabs [data-subtab="cost"].active').waitFor({ state: 'visible' });
         await note.waitFor({ state: 'hidden' });
         if (await note.getAttribute('aria-hidden') !== 'true') {
-          throw new Error('The workspace-filter note must be hidden from assistive technology outside Reliability');
+          throw new Error('The workspace-filter note must be hidden from assistive technology outside Reliability › Pipeline');
         }
         const costPositions = await railPositions();
         for (const [label, positions] of [['Reliability', reliabilityPositions], ['Cost', costPositions]]) {
@@ -236,7 +242,7 @@ async function assertReliabilityScope(page) {
   };
   const evidence = {};
 
-  await page.locator('#diag-subtabs [data-subtab="reliability"]').click();
+  await page.locator('#analytics-subtabs [data-subtab="reliability"]').click();
   await reportNames('alpha-only-workspace');
   const alpha = await view();
   if (alpha.report['reliability-count'] !== '17 runs / 24h' || !alpha.report['reliability-meta'].includes('unreadable')

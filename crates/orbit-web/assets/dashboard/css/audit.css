@@ -1,22 +1,6 @@
-/* Audit tab: its layout, event rows and their detail, the codebase view,
-   summary cards (also used by Health), and the failures-by-tool cards. */
-
-@media (min-width: 901px) {
-  .tab-pane[data-tab="audit"] > main.tasks-layout {
-    align-items: stretch;
-  }
-  #audit-pane {
-    display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    min-height: 0;
-  }
-  #audit-body {
-    flex: 1 1 0;
-    min-height: 0;
-    overflow-y: auto;
-  }
-}
+/* Audit records: Health › Incidents › Events rows and their detail, the
+   Analytics › Codebase view, summary cards (also used by Reliability and
+   Metrics), and the failures-by-tool cards. */
 
 .audit-status {
   font-size: 12.5px;
@@ -118,17 +102,11 @@ tr.audit-detail-row td {
   word-break: break-all;
 }
 
-/* Audit layout: Events beside the audit summary; Codebase takes the full
-   width (setAuditSubtab toggles .audit-full and hides the summary column). */
-main.tasks-layout.audit-layout { grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr); }
-main.tasks-layout.audit-layout.audit-full { grid-template-columns: minmax(0, 1fr); }
-.audit-primary,
-.audit-side { display: flex; flex-direction: column; min-width: 0; }
-/* `clip`, unlike `hidden`, makes no scroll container, so the sticky detail
-   panel sticks to the tab pane's scroll. */
-main.audit-layout.audit-full #audit-pane { overflow: clip; }
+/* `clip`, unlike `hidden`, makes no scroll container, so the Codebase
+   detail panel sticks to the tab pane's scroll. */
+#codebase-panel { overflow: clip; }
 
-/* Audit › Codebase. Each ranking has one colour, set on the element that
+/* Analytics › Codebase. Each ranking has one colour, set on the element that
    carries data-ranking (or data-tile) and read by its dots and bars. */
 .codebase-head {
   display: flex;

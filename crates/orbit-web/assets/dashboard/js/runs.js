@@ -944,7 +944,7 @@ function runsScopeNote() {
   const note = el("div", {
     class: "runs-scope-note",
     text: runsScopeText(),
-    title: "The count beside Runs uses these same Failed, Timeout, and Interrupted outcomes for the selected window. Click that count to open this list on Failed for that window. Health › Errors lists step and event failures in the selected window.",
+    title: "The count beside Runs uses these same Failed, Timeout, and Interrupted outcomes for the selected window. Click that count to open this list on Failed for that window. Health › Incidents › Errors lists step and event failures in the selected window.",
   });
   note.dataset.key = "runs-scope-note";
   note.dataset.hash = `scope-${runFilter}-${getWindow()}-${runTaskId}-${runJobId}`;

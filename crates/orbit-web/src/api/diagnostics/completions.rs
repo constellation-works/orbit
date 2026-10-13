@@ -1,4 +1,4 @@
-//! Tasks reaching a terminal status per bucket, for Health › Metrics.
+//! Tasks reaching a terminal status per bucket, for Analytics › Metrics.
 //!
 //! A task counts at its index `updated_at`, which is its move to the terminal
 //! status unless a later write (a comment, an artifact) touched the bundle.

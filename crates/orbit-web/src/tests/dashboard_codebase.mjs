@@ -1,8 +1,8 @@
-// Audit › Codebase: the subtab swap to a full-width view and its hash, the
-// window / group-by segments and minimum-support stepper, the ranking tiles,
-// the cross-ranking overlap list, each ranking's list and empty state, the
-// detail panel, a poll that keeps the reader's place, and the denial badge
-// that opens Events filtered to denials.
+// Analytics › Codebase: its hash, the window / group-by segments and
+// minimum-support stepper, the ranking tiles, the cross-ranking overlap list,
+// each ranking's list and empty state, the detail panel, a poll that keeps the
+// reader's place; and the Health denial badge that opens Events filtered to
+// denials, with Events' default failure + denied filter.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -104,30 +104,23 @@ const make = (tag, id, parent) => {
   return node;
 };
 const body = new Node('body');
-const layout = make('main', 'audit-main', body);
-layout.className = 'tasks-layout audit-layout';
-const subtabs = make('nav', 'audit-subtabs', layout);
-for (const name of ['events', 'codebase']) {
-  const button = make('button', null, subtabs);
-  button.className = 'subtab';
-  button.dataset.subtab = name;
-}
-for (const id of ['audit-title', 'audit-count', 'audit-events-controls', 'audit-body', 'audit-codebase-controls', 'audit-codebase-body', 'audit-summary-column', 'rail-count-audit-denials', 'audit-search']) {
+const layout = make('main', 'analytics-codebase-main', body);
+for (const id of ['audit-count', 'audit-body', 'codebase-controls', 'codebase-body', 'rail-count-denials', 'audit-search', 'audit-filter']) {
   make('div', id, layout);
 }
-make('span', 'codebase-meta', byId['audit-codebase-controls']);
+make('span', 'codebase-meta', byId['codebase-controls']);
 const segments = { 'codebase-window': ['7d', '30d', '90d', 'all'], 'codebase-rollup': ['file', 'dir', 'crate'] };
 for (const [id, values] of Object.entries(segments)) {
-  const group = make('div', id, byId['audit-codebase-controls']);
+  const group = make('div', id, byId['codebase-controls']);
   for (const value of values) {
     const button = make('button', null, group);
     button.className = 'codebase-seg';
     button.dataset.value = value;
   }
 }
-make('button', 'codebase-min-down', byId['audit-codebase-controls']);
-make('output', 'codebase-min-support', byId['audit-codebase-controls']);
-make('button', 'codebase-min-up', byId['audit-codebase-controls']);
+make('button', 'codebase-min-down', byId['codebase-controls']);
+make('output', 'codebase-min-support', byId['codebase-controls']);
+make('button', 'codebase-min-up', byId['codebase-controls']);
 const document = {
   activeElement: null,
   body,
@@ -156,15 +149,16 @@ const load = name => {
   }
   return modules.get(name);
 };
-const auditModule = load('audit.js');
-await auditModule.link(specifier => load(specifier.replace(/^\.\//, '')));
-await auditModule.evaluate();
-const audit = auditModule.namespace;
+for (const name of ['codebase.js', 'audit.js']) {
+  await load(name).link(specifier => load(specifier.replace(/^\.\//, '')));
+  await load(name).evaluate();
+}
+const audit = modules.get('audit.js').namespace;
 const codebase = modules.get('codebase.js').namespace;
 const common = modules.get('common.js').namespace;
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setTimeout(resolve, 0)); };
 const shown = id => byId[id].style.display !== 'none';
-const view = () => byId['audit-codebase-body'];
+const view = () => byId['codebase-body'];
 const part = key => view().children.find(node => node.dataset.key === key);
 const click = node => { assert.ok(node, 'the control exists'); for (const listener of node.listeners.click || []) listener(); };
 const tiles = () => part('tiles').querySelectorAll('button.codebase-tile');
@@ -187,30 +181,12 @@ common.setMultiWorkspace(true);
 common.setWorkspace('ws-a');
 await settle();
 
-// Codebase takes the full width: the audit summary column is hidden and the
-// layout drops to one column. Events brings both back. A retired Policy link
-// lands on Events.
-audit.setActiveAuditSubtabFromButton('codebase');
-assert.ok(shown('audit-codebase-body') && shown('audit-codebase-controls'), 'Codebase shows its body and controls');
-assert.ok(!shown('audit-body') && !shown('audit-events-controls'), 'Codebase hides the Events listing');
-assert.ok(!shown('audit-summary-column') && layout.classList.contains('audit-full'), 'Codebase hides the audit summary and goes full width');
-assert.deepEqual(subtabs.children.filter(node => node.classList.contains('active')).map(node => node.dataset.subtab), ['codebase']);
-assert.equal(audit.buildAuditHash(), '#audit/codebase', 'the default selection writes a bare #audit/codebase');
-audit.setAuditSubtab('policy');
-assert.equal(audit.getActiveAuditSubtab(), 'events', 'the retired policy subtab falls back to Events');
-assert.ok(shown('audit-body') && !shown('audit-codebase-body'));
-assert.ok(shown('audit-summary-column') && !layout.classList.contains('audit-full'), 'Events keeps the audit summary beside it');
-
-// An Events filter survives a visit to Codebase, and #audit/codebase?… restores
+// The default selection writes a bare #analytics/codebase, and a hash restores
 // the window, minimum support and rollup into the controls and the request.
-audit.applyAuditHashQuery(new URLSearchParams('status=denied'), 'events');
-audit.applyAuditHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'), 'codebase');
-audit.setActiveAuditSubtabFromButton('codebase');
-assert.equal(audit.buildAuditHash(), '#audit/codebase?window=30d&min_support=5&rollup=dir');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase', 'the default selection writes a bare #analytics/codebase');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'));
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir');
 assert.deepEqual([pressed('codebase-window'), pressed('codebase-rollup'), byId['codebase-min-support'].value], [['30d'], ['dir'], '5']);
-audit.setActiveAuditSubtabFromButton('events');
-assert.match(audit.buildAuditHash(), /status=denied/, 'the Events filter is kept across the Codebase visit');
-audit.setActiveAuditSubtabFromButton('codebase');
 
 // The fixture's four path rankings share five paths in two or more of them:
 // src/a/ in all four; src/c/ (footprint 80%), src/b/ (regressions 50%),
@@ -403,7 +379,7 @@ click(byId['codebase-min-down']);
 click(byId['codebase-min-down']);
 assert.equal(codebase.getCodebaseQuery().min_support, 1);
 assert.equal(byId['codebase-min-down'].disabled, true, 'the stepper stops at 1');
-assert.equal(audit.buildAuditHash(), '#audit/codebase?window=7d&min_support=1&rollup=crate');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=7d&min_support=1&rollup=crate');
 
 // An empty coupling ranking offers directory grouping and a lower minimum;
 // both rewrite the selection. Crate grouping warns that overlaps say little.
@@ -434,7 +410,7 @@ click(button(part('list'), 'Lower to 5'));
 assert.equal(codebase.getCodebaseQuery().min_support, 5);
 assert.equal(changes, 2, 'each action asks for a new hash');
 assert.deepEqual([pressed('codebase-rollup'), byId['codebase-min-support'].value], [['dir'], '5']);
-assert.equal(audit.buildAuditHash(), '#audit/codebase?window=7d&min_support=5&rollup=dir');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=7d&min_support=5&rollup=dir');
 
 // The aggregate view shows the placeholder instead of the codebase view.
 common.setWorkspace('');
@@ -447,20 +423,36 @@ assert.equal(byId['codebase-meta'].textContent, '');
 common.setWorkspace('ws-a');
 await settle();
 
-// The denial badge beside Audit shows the canonical count and routes to
-// Events filtered to denials for the window it counted.
-const badge = byId['rail-count-audit-denials'];
+// Events opens on failures and denials; `status=all` is the explicit
+// unfiltered choice, and an unknown status falls back to the default.
+audit.buildAuditChips({});
+const statusChips = () => byId['audit-filter'].children.filter(chip => chip.dataset.status);
+const activeChip = () => statusChips().filter(chip => chip.classList.contains('active')).map(chip => chip.dataset.status);
+audit.applyAuditHashQuery(new URLSearchParams(''));
+audit.syncAuditControls();
+assert.equal(audit.buildAuditHash(), '#diagnostics/incidents/events?since=24h&status=non_success', 'Events opens on failure + denied');
+assert.deepEqual(activeChip(), ['non_success'], 'the failure + denied chip is preselected');
+audit.applyAuditHashQuery(new URLSearchParams('status=all'));
+audit.syncAuditControls();
+assert.equal(audit.buildAuditHash(), '#diagnostics/incidents/events?since=24h&status=all');
+assert.deepEqual(activeChip(), ['all'], 'all statuses stay available');
+audit.applyAuditHashQuery(new URLSearchParams('status=bogus'));
+assert.match(audit.buildAuditHash(), /status=non_success/, 'an unknown status falls back to the default');
+click(statusChips().find(chip => chip.dataset.status === 'all'));
+assert.equal(window.location.hash, '#diagnostics/incidents/events?since=24h&status=all', 'the all chip writes status=all');
+
+// The denial badge on Health shows the canonical count and routes to Events
+// filtered to denials for the window it counted.
+const badge = byId['rail-count-denials'];
 audit.renderDenialCount({ denials: 4, denials_sql: 3, denials_v2: 1, window: '7d' });
 assert.equal(badge.hidden, false);
 assert.equal(badge.textContent, '4 denied');
 assert.match(badge.title, /3 audit rows, 1 loop denials/);
-assert.equal(badge.dataset.route, 'audit/events?since=7d&status=denied');
-const [route, query] = badge.dataset.route.split('?');
-audit.applyAuditHashQuery(new URLSearchParams(query), route.split('/')[1]);
-audit.setActiveAuditSubtabFromButton(route.split('/')[1]);
-assert.equal(audit.buildAuditHash(), '#audit?since=7d&status=denied', 'the badge lands on Events filtered to denials');
+assert.equal(badge.dataset.route, 'diagnostics/incidents/events?since=7d&status=denied');
+audit.applyAuditHashQuery(new URLSearchParams(badge.dataset.route.split('?')[1]));
+assert.equal(audit.buildAuditHash(), '#diagnostics/incidents/events?since=7d&status=denied', 'the badge lands on Events filtered to denials');
 audit.renderDenialCount({ denials: 0, window: '7d' });
 assert.equal(badge.hidden, true, 'no denials, no badge');
 assert.equal(badge.dataset.route, undefined);
 
-console.log('codebase view, subtab swap and denial badge behaviors passed');
+console.log('codebase view, Events default filter and denial badge behaviors passed');

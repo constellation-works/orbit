@@ -1,5 +1,5 @@
 // Usage: node dashboard_metrics_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/metrics-browser
-// Health › Metrics (ORB-15746) through the shipped app, router, renderer and
+// Analytics › Metrics (ORB-15746) through the shipped app, router, renderer and
 // CSS: duration and completion trends, series toggles, statistic and table
 // views, hover and keyboard tooltips, window changes, the empty window with
 // its widen action, and a 390px phone.
@@ -145,7 +145,7 @@ try {
   page.on('console', message => {
     if (message.type() === 'error' && !/EventSource|Failed to load resource/.test(message.text())) errors.push(message.text());
   });
-  await page.goto(`${origin}#diagnostics/metrics`);
+  await page.goto(`${origin}#analytics/metrics`);
   const body = page.locator('#metrics-body');
   await body.locator('.mx-sc').first().waitFor();
   await page.evaluate(async () => { await document.fonts.ready; });
@@ -159,7 +159,7 @@ try {
   assert.match(cards[0].delta, /▲ 46% slower/);
   assert.match(cards[0].delta, /vs prev 24h 30\.1m/);
   assert.ok(cards.every(card => card.pressed === 'true'));
-  assert.equal(await page.locator('#diagnostics-main').evaluate(node => getComputedStyle(node).display), 'none', 'the list panel is swapped out');
+  assert.equal(await page.locator('.tab-pane.active').getAttribute('data-tab'), 'analytics', 'Metrics opens under Analytics');
   assert.match(await page.locator('#metrics-count').textContent(), /200 runs · 276 done · window 24h/);
   pass('duration cards', { cards });
 
@@ -328,7 +328,7 @@ try {
 
   assert.deepEqual(errors, [], 'no browser errors');
   fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
-  console.log(`PASS: ${assertions.length} Health › Metrics scenarios.`);
+  console.log(`PASS: ${assertions.length} Analytics › Metrics scenarios.`);
 } catch (error) {
   await page?.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true });
   throw error;

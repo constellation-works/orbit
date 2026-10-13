@@ -1,4 +1,4 @@
-// A Health › Errors refresh bounds matches to its requested window.
+// A Health › Incidents › Errors refresh bounds matches to its requested window.
 use std::cell::Cell;
 use std::fs;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};

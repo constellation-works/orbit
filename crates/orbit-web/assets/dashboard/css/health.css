@@ -1,4 +1,4 @@
-/* Health tab: reliability and incidents. */
+/* Health and Analytics: incidents, doctor, reliability and metrics. */
 
 /* ORB-10588 — pipeline reliability.
    The colour rules here encode the display contract: a real reading is
@@ -467,7 +467,7 @@ td .rel-rate { font-size: 12px; }
 .doctor-passing summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
 .doctor-passing .doctor-message { color: var(--fg-dim); }
 
-/* ORB-15746 — Health › Metrics: implement_one duration and task completion
+/* ORB-15746 — Analytics › Metrics: implement_one duration and task completion
    trends. One colour per complexity series, shared by lines, dots, stacked
    bars, swatches and tooltips; `other` (xhard + unset) only ever stacks. */
 .metrics-body {

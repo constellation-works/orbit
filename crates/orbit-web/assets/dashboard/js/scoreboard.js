@@ -1,4 +1,4 @@
-// Health › Cost: managed-execution cost and token usage.
+// Analytics › Cost: managed-execution cost and token usage.
 // The family leaderboard, narrative, agent cards and insights panel are gone.
 // The page still reads GET /api/scoreboard for summary.orchestration.
 // Pure vanilla JS, split into ES modules with no build step.

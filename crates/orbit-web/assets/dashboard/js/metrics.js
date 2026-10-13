@@ -1,4 +1,4 @@
-// Orbit dashboard Health › Metrics (ORB-15746): implement_one duration and
+// Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration and
 // task completion trends over the shared dashboard window, split by
 // complexity, with the per-actor tables beneath.
 // Pure vanilla JS, split into ES modules with no build step.
@@ -346,7 +346,7 @@ function trendSection() {
       const query = new URLSearchParams(window.location.hash.split("?")[1] || "");
       query.set("outcome", key);
       view.hover = null;
-      window.location.hash = `#diagnostics/metrics?${query}`;
+      window.location.hash = `#analytics/metrics?${query}`;
     }) : null,
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),

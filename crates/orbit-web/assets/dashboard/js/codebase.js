@@ -1,4 +1,4 @@
-// Audit › Codebase: which parts of the repository are expensive or risky for
+// Analytics › Codebase: which parts of the repository are expensive or risky for
 // agents to change, ranked from records Orbit already keeps
 // (/api/codebase/analytics). "Touched" is the declared footprint, not the
 // landed diff. The server caches one scan per workspace; the window, minimum
@@ -13,7 +13,7 @@ import { el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, s
 
 const $ = (id) => document.getElementById(id);
 
-const BODY_ID = "audit-codebase-body";
+const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
 const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file" };
@@ -81,7 +81,7 @@ function normalizedQuery(raw, fallback = DEFAULT_QUERY) {
   return { window, min_support, rollup };
 }
 
-/// Read the view's selection from an `#audit/codebase?…` hash query.
+/// Read the view's selection from an `#analytics/codebase?…` hash query.
 function applyCodebaseHashQuery(query) {
   codebaseQuery = normalizedQuery({
     window: query.get("window"),
@@ -91,12 +91,15 @@ function applyCodebaseHashQuery(query) {
   syncCodebaseControls();
 }
 
-/// Write the non-default parts of the selection into `sp`, so a reload or a
-/// shared `#audit/codebase` link restores the same view.
-function codebaseHashParams(sp) {
+/// The view's hash, naming the non-default parts of the selection, so a
+/// reload or a shared link restores the same view.
+function buildCodebaseHash() {
+  const sp = new URLSearchParams();
   if (codebaseQuery.window !== DEFAULT_QUERY.window) sp.set("window", codebaseQuery.window);
   if (codebaseQuery.min_support !== DEFAULT_QUERY.min_support) sp.set("min_support", String(codebaseQuery.min_support));
   if (codebaseQuery.rollup !== DEFAULT_QUERY.rollup) sp.set("rollup", codebaseQuery.rollup);
+  const qs = sp.toString();
+  return qs ? `#analytics/codebase?${qs}` : "#analytics/codebase";
 }
 
 function getCodebaseQuery() {
@@ -853,7 +856,7 @@ function renderCodebase(data) {
 
 export {
   applyCodebaseHashQuery,
-  codebaseHashParams,
+  buildCodebaseHash,
   fetchAndRenderCodebase,
   getCodebaseQuery,
   renderCodebase,

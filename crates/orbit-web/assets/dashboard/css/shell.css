@@ -745,6 +745,17 @@ main {
   background: #1f1f26;
 }
 
+/* A view's secondary tabs (Incidents | Events | Errors, Pipeline | Tools)
+   sit above its panels, aligned with the <main> they switch. */
+.view-tabs {
+  max-width: 1800px;
+  margin: 0 auto;
+  padding: 12px 20px 0;
+  border-bottom: none;
+}
+.view-tabs[hidden] { display: none; }
+.view-tabs:not([hidden]) ~ main { padding-top: 12px; }
+
 footer {
   padding: 24px;
   font-family: var(--font-mono);

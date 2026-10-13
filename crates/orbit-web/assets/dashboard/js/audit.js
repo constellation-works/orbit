@@ -1,20 +1,24 @@
-// Orbit dashboard audit-domain rendering and actions.
+// Orbit dashboard audit-domain rendering and actions: the event log (Health ›
+// Incidents › Events), the tool-call summary (Analytics › Reliability › Tools)
+// and the denial count on the Health rail entry.
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
-import { applyCodebaseHashQuery, codebaseHashParams } from './codebase.js';
 
 const $ = (id) => document.getElementById(id);
 
 const AUDIT_LIMIT = positiveIntParam("audit", 50);
 const INCIDENT_ID_BATCH_SIZE = 500;
 const AUDIT_STATUSES = ["success", "failure", "denied", "non_success"];
-const AUDIT_SUBTABS = ["events", "codebase"];
+// Nearly every audited call is a successful poll, so Events opens on failures
+// and denials. `status=all` in the hash is the explicit unfiltered choice.
+const DEFAULT_AUDIT_STATUS = "non_success";
+const ALL_STATUSES = "all";
 // Server header naming the `before` cursor that resumes the listing; absent
 // once the window is exhausted.
 const AUDIT_NEXT_BEFORE_HEADER = "x-audit-next-before";
 
-// Audit tab state (moved from app.js)
+// Events state (moved from app.js)
 let lastAudit = [];
 // Paging over `lastAudit`: the head page is re-fetched on every refresh, older
 // pages stay until the scope (filters, window, workspace) changes.
@@ -22,7 +26,7 @@ let auditPaging = freshAuditPaging();
 // `events` of /api/audit/summary for `window`: the size of the selected window.
 let auditWindowTotal = null;
 let auditFilter = {
-  status: null,
+  status: DEFAULT_AUDIT_STATUS,
   q: "",
   tool: null,
   role: null,
@@ -43,7 +47,6 @@ let auditFilter = {
   hide_unverified: false,
 };
 let expandedAuditIds = new Set();
-let activeAuditSubtab = "events";
 const AUDIT_COLUMNS = [
   { key: "time", label: "time" },
   { key: "status", label: "status" },
@@ -77,23 +80,14 @@ function doRefresh(ctx) {
   }
 }
 
-function doSetActiveTab(ctx, route, opts) {
-  if (hasCtx(ctx, "setActiveTab")) {
-    try { ctx.setActiveTab(route, opts); } catch (_) {}
-  }
-}
-
 function buildAuditHash() {
   const sp = new URLSearchParams();
-  // The Events and Codebase sub-tabs serialize different axes; project only
-  // the active sub-tab's so the hash stays self-describing and reload-safe.
-  if (activeAuditSubtab === "codebase") {
-    codebaseHashParams(sp);
-  } else if (auditFilter.eventIds.length > 0) {
+  if (auditFilter.eventIds.length > 0) {
     sp.set("ids", auditFilter.eventIds.join(","));
   } else {
     if (auditFilter.since) sp.set("since", auditFilter.since);
-    if (auditFilter.status) sp.set("status", auditFilter.status);
+    // Always written: a hash without a status opens on the default filter.
+    sp.set("status", auditFilter.status || ALL_STATUSES);
     if (auditFilter.tool) sp.set("tool", auditFilter.tool);
     if (auditFilter.role) sp.set("role", auditFilter.role);
     if (auditFilter.agent_family) sp.set("agent_family", auditFilter.agent_family);
@@ -103,38 +97,7 @@ function buildAuditHash() {
     if (auditFilter.hide_unverified) sp.set("hide_unverified", "1");
     if (auditFilter.metric) sp.set("metric", auditFilter.metric);
   }
-  const path = activeAuditSubtab && activeAuditSubtab !== "events"
-    ? `audit/${activeAuditSubtab}`
-    : "audit";
-  const qs = sp.toString();
-  return qs ? `#${path}?${qs}` : `#${path}`;
-}
-
-function setAuditSubtab(name) {
-  if (!AUDIT_SUBTABS.includes(name)) name = "events";
-  activeAuditSubtab = name;
-  for (const btn of document.querySelectorAll("#audit-subtabs .subtab")) {
-    btn.classList.toggle("active", btn.dataset.subtab === name);
-  }
-  const eventsCtl = $("audit-events-controls");
-  const eventsBody = $("audit-body");
-  const codebaseCtl = $("audit-codebase-controls");
-  const codebaseBody = $("audit-codebase-body");
-  if (eventsCtl) eventsCtl.style.display = name === "events" ? "" : "none";
-  if (eventsBody) eventsBody.style.display = name === "events" ? "" : "none";
-  if (codebaseCtl) codebaseCtl.style.display = name === "codebase" ? "" : "none";
-  if (codebaseBody) codebaseBody.style.display = name === "codebase" ? "" : "none";
-  // The audit summary describes events, not the codebase, so Codebase drops
-  // that column and takes the full width.
-  const layout = $("audit-main");
-  if (layout) layout.classList.toggle("audit-full", name === "codebase");
-  const summary = $("audit-summary-column");
-  if (summary) summary.style.display = name === "codebase" ? "none" : "";
-  // The audit count is the Events listing's; Codebase states its own totals.
-  const count = $("audit-count");
-  if (count) count.style.display = name === "events" ? "" : "none";
-  const title = $("audit-title");
-  if (title) title.textContent = name === "codebase" ? "Codebase" : "Audit events";
+  return `#diagnostics/incidents/events?${sp.toString()}`;
 }
 
 function syncAuditControls() {
@@ -142,9 +105,8 @@ function syncAuditControls() {
   if (search && search.value !== (auditFilter.q || "")) {
     search.value = auditFilter.q || "";
   }
-  for (const chip of document.querySelectorAll("#audit-filter .chip")) {
-    const status = chip.dataset.status;
-    chip.classList.toggle("active", auditFilter.status === status);
+  for (const chip of document.querySelectorAll("#audit-filter .chip[data-status]")) {
+    chip.classList.toggle("active", (auditFilter.status || ALL_STATUSES) === chip.dataset.status);
   }
   const hideChip = Array.from($("audit-filter")?.children || []).find(chip => chip.dataset.toggle === "hide_unverified");
   if (hideChip) {
@@ -239,16 +201,12 @@ function renderScopeChips() {
   }
 }
 
-function applyAuditHashQuery(query, subtab = "events") {
+function applyAuditHashQuery(query) {
   // Mutates auditFilter from URLSearchParams (hash query). Called from setActiveTab.
   // Legacy run_id alias for execution_id is preserved for old deep links.
-  // A Codebase hash carries only that view's selection, so it leaves the
-  // Events filter as it was.
-  if (subtab === "codebase") {
-    applyCodebaseHashQuery(query);
-    return;
-  }
-  auditFilter.status = query.get("status") || null;
+  const status = query.get("status");
+  auditFilter.status = status === ALL_STATUSES ? null
+    : AUDIT_STATUSES.includes(status) ? status : DEFAULT_AUDIT_STATUS;
   auditFilter.tool = query.get("tool") || null;
   auditFilter.role = query.get("role") || null;
   auditFilter.agent_family = query.get("agent_family") || null;
@@ -265,19 +223,8 @@ function applyAuditHashQuery(query, subtab = "events") {
   auditFilter.hide_unverified = query.get("hide_unverified") === "1";
 }
 
-function getActiveAuditSubtab() {
-  return activeAuditSubtab;
-}
-
-function setActiveAuditSubtabFromButton(name) {
-  if (!AUDIT_SUBTABS.includes(name)) name = "events";
-  activeAuditSubtab = name;
-  setAuditSubtab(name);
-}
-
 function placeholdAuditAggregate() {
   renderPanelPlaceholder("audit-body");
-  renderPanelPlaceholder("audit-codebase-body");
   lastAudit = [];
   auditPaging = freshAuditPaging();
   const count = $("audit-count");
@@ -427,7 +374,7 @@ function auditCountLabel() {
 
 function updateAuditCount() {
   const count = $("audit-count");
-  if (count && activeAuditSubtab === "events" && auditPaging.path) count.textContent = auditCountLabel();
+  if (count && auditPaging.path) count.textContent = auditCountLabel();
 }
 
 function buildAuditFooter(ctx) {
@@ -547,10 +494,10 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 }
 
 // The canonical denial count of /api/audit/summary (`denials`: denied audit
-// rows plus v2 loop denials) rides on the rail beside Audit. Its route opens
-// Audit › Events filtered to denials for the window it counted.
+// rows plus v2 loop denials) rides on the Health rail entry. Its route opens
+// Health › Incidents › Events filtered to denials for the window it counted.
 function renderDenialCount(data) {
-  const node = $("rail-count-audit-denials");
+  const node = $("rail-count-denials");
   if (!node) return;
   const denials = Number(data && data.denials) || 0;
   const window = (data && data.window) || "24h";
@@ -563,11 +510,11 @@ function renderDenialCount(data) {
   }
   const sql = Number(data.denials_sql) || 0;
   const v2 = Number(data.denials_v2) || 0;
-  node.title = `${denials} policy denials in the ${window} window (${sql} audit rows, ${v2} loop denials). Click to open Audit › Events filtered to denials.`;
+  node.title = `${denials} policy denials in the ${window} window (${sql} audit rows, ${v2} loop denials). Click to open Health › Incidents › Events filtered to denials.`;
   const sp = new URLSearchParams();
   if (window !== "all") sp.set("since", window);
   sp.set("status", "denied");
-  node.dataset.route = `audit/events?${sp.toString()}`;
+  node.dataset.route = `diagnostics/incidents/events?${sp.toString()}`;
 }
 
 function renderAuditSummary(data, ctx) {
@@ -643,15 +590,18 @@ function renderAuditSummary(data, ctx) {
     };
   };
 
+  // A tool's row opens its events under Health, keeping the other filters
+  // Events was left with.
   const filterByTool = (item) => {
-    auditFilter.tool = auditFilter.tool === item.tool ? null : item.tool;
+    auditFilter.tool = item.tool;
+    auditFilter.eventIds = [];
     syncAuditControls();
     window.location.hash = buildAuditHash();
   };
 
   const windowLabel = data.window || "24h";
   const title = $("audit-summary-title");
-  if (title) title.textContent = `Audit summary ${windowLabel}`;
+  if (title) title.textContent = `Tool calls ${windowLabel}`;
 
   if (data.tool_call_failure_rate) {
     addCard(
@@ -815,20 +765,20 @@ function emptyAuditFilter() {
 function navigateToAuditExecution(executionId, ctx) {
   auditFilter = emptyAuditFilter();
   auditFilter.execution_id = executionId;
-  activeAuditSubtab = "events";
   syncAuditControls();
   window.location.hash = buildAuditHash();
 }
 
-/// Navigates to the Audit tab pre-filtered by the exact recorded `role`.
+/// Navigates to Events pre-filtered by the exact recorded `role`.
 /// Clears unrelated filters so the landing page is the role view.
 function navigateToRole(role, ctx) {
   navigateToDrilldown({ role }, ctx);
 }
 
-/// Family, role, or metric drill-down into Audit Events. Incidents use this
-/// for evidence. Carries the shared dashboard window and records the source
-/// metric so the landing chips explain the scope.
+/// Family, role, or metric drill-down into Health › Incidents › Events.
+/// Incidents use this for evidence. Carries the shared dashboard window and
+/// records the source metric so the landing chips explain the scope. A
+/// drill-down without a status lists every status.
 function navigateToDrilldown(opts = {}, ctx) {
   auditFilter = emptyAuditFilter();
   auditFilter.eventIds = Array.isArray(opts.eventIds)
@@ -842,7 +792,6 @@ function navigateToDrilldown(opts = {}, ctx) {
   // Incident drilldowns supply exact event IDs and clear these broader filters.
   auditFilter.tool = auditFilter.eventIds.length > 0 ? null : (opts.tool || null);
   if (opts.window) auditFilter.since = opts.window === "all" ? null : opts.window;
-  activeAuditSubtab = "events";
   syncAuditControls();
   window.location.hash = buildAuditHash();
 }
@@ -852,10 +801,11 @@ function buildAuditChips(ctx) {
   if (!container) return;
   container.innerHTML = "";
   const allChip = el("button", { class: "chip", text: "all" });
+  allChip.dataset.status = ALL_STATUSES;
   allChip.addEventListener("click", () => {
     auditFilter.status = null;
     syncAuditControls();
-    doSetActiveTab(ctx, "audit" + buildAuditHash().slice(6), { refresh: true });
+    window.location.hash = buildAuditHash();
   });
   container.appendChild(allChip);
   for (const status of AUDIT_STATUSES) {
@@ -1068,7 +1018,6 @@ function buildAuditDetailRow(ev, ctx) {
 export {
   // hash/subtab/control sync
   buildAuditHash,
-  setAuditSubtab,
   syncAuditControls,
   effectiveAuditWindow,
   // refresh entry points
@@ -1082,9 +1031,6 @@ export {
   navigateToAuditExecution,
   navigateToRole,
   navigateToDrilldown,
-  // state inspection used by setActiveTab + activeRefreshJobs
-  getActiveAuditSubtab,
-  setActiveAuditSubtabFromButton,
   // hash → state import used by setActiveTab
   applyAuditHashQuery,
 };

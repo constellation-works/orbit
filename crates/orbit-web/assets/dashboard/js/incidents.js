@@ -901,7 +901,7 @@ function groupEventIds(group) {
 }
 
 // Exact event IDs when the payload carried every one; otherwise the actor and
-// surface narrow the raw Audit view to the same population.
+// surface narrow Events to the same population.
 function openAuditEvents(group) {
   const eventIds = groupEventIds(group);
   const sample = group.sample;
@@ -913,7 +913,7 @@ function openAuditEvents(group) {
 }
 
 function auditButton(group, text, className) {
-  const button = el("button", { class: className, type: "button", text, title: "Every underlying event stays in the raw Audit view" });
+  const button = el("button", { class: className, type: "button", text, title: "Open the underlying events in Health › Incidents › Events" });
   button.addEventListener("click", () => openAuditEvents(group));
   return button;
 }

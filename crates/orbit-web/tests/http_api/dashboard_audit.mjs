@@ -105,6 +105,7 @@ const rateCard = container.children.find(node => node.dataset.key === 'tool-call
 assert.match(rateCard.textContent, /22\.2%.*2 failed \/ 9 tool calls/);
 assert.match(rateCard.textContent, /4 denied calls excluded/);
 rows[0].listeners.get('click')();
+assert.match(window.location.hash, /^#diagnostics\/incidents\/events\?/, 'a Tools row opens Health › Incidents › Events');
 const route = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(common.namespace.getWorkspace(), 'ws_fixture', 'drill-down keeps the selected workspace');
 assert.equal(audit.namespace.effectiveAuditWindow(), '24h', 'drill-down keeps the selected window');
@@ -204,8 +205,8 @@ scoreboard.namespace.renderScoreboard({ window: '24h', agents: {}, orchestration
 assert.match(costHost.textContent, /No managed execution cost data yet/);
 assert.equal(costCount.textContent, '—');
 
-// The family leaderboard no longer opens Audit. Incidents still do, through
-// the same drill-down, and the landing chips must keep family and non-success.
+// The family leaderboard is gone. Incidents still open Events through the
+// same drill-down, and the landing chips must keep family and non-success.
 audit.namespace.navigateToDrilldown({
   agent_family: 'codex', metric: 'failure_incidents', status: 'non_success',
 });
@@ -229,7 +230,7 @@ audit.namespace.buildAuditChips();
 const nonSuccessChip = auditFilterChips.children.find(node => node.dataset.status === 'non_success');
 assert.ok(nonSuccessChip, 'combined status filter is available in Events');
 nonSuccessChip.listeners.get('click')();
-assert.equal(new URLSearchParams(window.location.hash.split('?')[1]).has('status'), false, 'combined status can be cleared');
+assert.equal(new URLSearchParams(window.location.hash.split('?')[1]).get('status'), 'all', 'combined status can be cleared to every status');
 audit.namespace.navigateToRole('gpt-6.1-sol');
 const exactRoleRoute = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(exactRoleRoute.get('role'), 'gpt-6.1-sol');

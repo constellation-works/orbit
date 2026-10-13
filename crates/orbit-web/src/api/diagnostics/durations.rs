@@ -1,4 +1,4 @@
-//! implement_one durations for Health › Metrics: the windowed trend by
+//! implement_one durations for Analytics › Metrics: the windowed trend by
 //! complexity and actor, and the 30-day actor table per complexity.
 
 use std::collections::{BTreeMap, HashMap};

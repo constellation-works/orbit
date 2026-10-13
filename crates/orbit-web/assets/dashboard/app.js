@@ -3,8 +3,8 @@
 
 import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
-import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, renderDenialCount, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
-import { fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
+import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
@@ -13,7 +13,7 @@ import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
-import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
@@ -109,7 +109,12 @@ let lastRunSourcesUnavailable = [];
 let lastDiagnostics = { errors: null, incidents: null };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
+// Health: the rail subtab (`runs` is the Runs entry's list) and the view
+// Incidents shows. Analytics: the rail subtab and the view Reliability shows.
 let activeDiagSubtab = "runs";
+let activeIncidentsView = "incidents";
+let activeAnalyticsSubtab = "metrics";
+let activeReliabilityView = "pipeline";
 let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
 let refreshSequence = 0;
@@ -167,10 +172,16 @@ function auditContext() {
   };
 }
 
+// The Health list panel's view: the run list, or Incidents' signature list or
+// error feed. Events and Doctor have their own panels.
+function diagListView() {
+  return activeDiagSubtab === "incidents" ? activeIncidentsView : activeDiagSubtab;
+}
+
 function diagnosticsContext() {
   return {
     getLastDiagnostics: () => lastDiagnostics,
-    getActiveDiagSubtab: () => activeDiagSubtab,
+    getActiveDiagSubtab: diagListView,
     refreshDiagnostics: () => refreshDashboard(),
     loadMoreErrors: (limit) => {
       errorDiagLimit = Math.min(Number(limit) || errorDiagLimit, 200);
@@ -186,7 +197,7 @@ function diagnosticsContext() {
     fmtRelative,
     fmtDuration,
     // ORB-10871: incident expansion states exact first/last timestamps, not
-    // just "3h ago" — the raw evidence has to be locatable in the Audit view.
+    // just "3h ago" — the raw evidence has to be locatable in Events.
     fmtAbsTime,
     truncate,
     setActiveTab: sAT,
@@ -201,6 +212,12 @@ function routerContext() {
     setTab: (v) => { activeTab = v; },
     getDiagSubtab: () => activeDiagSubtab,
     setDiagSubtab: (v) => { activeDiagSubtab = v; },
+    getIncidentsView: () => activeIncidentsView,
+    setIncidentsView: (v) => { activeIncidentsView = v; },
+    getAnalyticsSubtab: () => activeAnalyticsSubtab,
+    setAnalyticsSubtab: (v) => { activeAnalyticsSubtab = v; },
+    getReliabilityView: () => activeReliabilityView,
+    setReliabilityView: (v) => { activeReliabilityView = v; },
     getKnowledgeSubtab: () => activeKnowledgeSubtab,
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
     getOperationsSubtab: () => activeOperationsSubtab,
@@ -228,10 +245,10 @@ function routerContext() {
     // callbacks (close over app.js scope)
     refreshDashboard,
     renderDiagnostics: () => renderDiagnostics(diagnosticsContext()),
-    // ORB-10588: Reliability aggregates server-side across workspaces, so a
-    // subtab switch can fetch straight away instead of waiting for the next
-    // refresh tick (and without the aggregate-view guard the other diagnostics
-    // fetches need).
+    // ORB-10588: Reliability › Pipeline aggregates server-side across
+    // workspaces, so opening it can fetch straight away instead of waiting
+    // for the next refresh tick (and without the aggregate-view guard the
+    // per-workspace views need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
@@ -239,13 +256,13 @@ function routerContext() {
     fitLogPanelToViewport,
     showDrainDock: () => setDockMode("drain"),
 
-    // audit pass-throughs (re-exported here for router; imported at top of this file)
+    // Events and Codebase pass-throughs (re-exported here for router;
+    // imported at top of this file)
     applyAuditHashQuery,
-    setAuditSubtab,
-    getActiveAuditSubtab,
-    setActiveAuditSubtabFromButton,
     buildAuditHash,
     syncAuditControls,
+    applyCodebaseHashQuery,
+    buildCodebaseHash,
 
     // ORB-10874: tasks pass-throughs (mirrors the audit ones above) so the
     // status/search filters shown on the Tasks tab are represented in the
@@ -1079,14 +1096,12 @@ function renderAggregatePlaceholders() {
   resetSummaryCounts();
 }
 
-// Most Diagnostics panels are fed exclusively by per-workspace endpoints and
+// Most Health panels are fed exclusively by per-workspace endpoints and
 // remain unavailable in aggregate mode. Runs is the exception: its body is
 // managed by the bounded /api/job-runs/all response and must not be overwritten
 // by these placeholders.
 function renderDiagnosticsPlaceholders() {
   renderPanelPlaceholder("diag-body");
-  placeholdScoreboardAggregate();
-  placeholdMetricsAggregate();
   const diagCount = $("diag-count");
   if (diagCount) diagCount.textContent = "—";
 }
@@ -1103,13 +1118,12 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   if (count) count.textContent = "—";
 }
 
-// The Runs and Audit rail counts are fed by the per-workspace
+// The Runs failure and Health denial counts are fed by the per-workspace
 // /api/audit/summary endpoint, so in aggregate mode and on a workspace switch
 // they are cleared rather than showing the last-selected workspace's numbers as
 // if they were machine-wide.
 function resetSummaryCounts() {
   setRailCount("rail-count-diag-runs", null);
-  setRailCount("rail-count-audit", null);
   renderDenialCount(null);
   const runsCount = $("rail-count-diag-runs");
   if (runsCount) delete runsCount.dataset.window;
@@ -1369,12 +1383,33 @@ function activeRefreshJobs() {
     return jobs;
   }
 
-  if (activeTab === "audit") {
-    if (getActiveAuditSubtab() === "codebase") {
-      add("Audit › Codebase", fetchAndRenderCodebase());
-    } else {
-      add("Audit › Events", fetchAndRenderAudit(auditContext()));
+  if (activeTab === "analytics") {
+    // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
+    // the `Ws` extractor, so Pipeline answers in aggregate mode too. Tools
+    // renders the summary read above on every tick; Codebase placeholds
+    // itself without a concrete workspace.
+    if (activeAnalyticsSubtab === "reliability") {
+      if (activeReliabilityView === "pipeline") add("Analytics › Reliability", fetchAndRenderReliability());
+      return jobs;
     }
+    if (activeAnalyticsSubtab === "codebase") {
+      add("Analytics › Codebase", fetchAndRenderCodebase());
+      return jobs;
+    }
+    if (aggregate) {
+      placeholdScoreboardAggregate();
+      placeholdMetricsAggregate();
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "cost") {
+      // ORB-15921: Cost kept the managed-execution panel from Scoreboard.
+      // Every refresh honors the shared dashboard window. A mismatched
+      // window, a superseded request, or a stale workspace visit is not painted.
+      add("Analytics › Cost", fetchAndRenderScoreboard());
+      return jobs;
+    }
+    // ORB-15746: trends follow the shared window like Cost.
+    add("Analytics › Metrics", fetchAndRenderMetrics());
     return jobs;
   }
 
@@ -1415,23 +1450,21 @@ function activeRefreshJobs() {
   }
 
   if (activeTab === "diagnostics") {
-    // Most diagnostics fetches are per-workspace. Runs has a bounded aggregate
-    // endpoint; Metrics, errors, friction and Cost still require a
-    // concrete workspace and show placeholders without one.
-    // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
-    // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
-    // ahead of the guard below rather than being placeheld with the rest.
-    if (activeDiagSubtab === "reliability") {
-      add("Health › Reliability", fetchAndRenderReliability());
-      return jobs;
-    }
+    // Most Health fetches are per-workspace. Runs has a bounded aggregate
+    // endpoint; Incidents and Errors show placeholders without a concrete
+    // workspace, and Events placeholds itself.
     // Doctor runs on open and on its own Refresh button, never on this tick;
     // the tick only repaints the report's age (or reads it the first time).
     if (activeDiagSubtab === "doctor") {
       add("Health › Doctor", openDoctor());
       return jobs;
     }
-    if (aggregate && activeDiagSubtab === "runs") {
+    const view = diagListView();
+    if (view === "events") {
+      add("Health › Events", fetchAndRenderAudit(auditContext()));
+      return jobs;
+    }
+    if (aggregate && view === "runs") {
       renderDiagnosticsPlaceholders();
       add("Runs", fetchAndRenderRuns());
       return jobs;
@@ -1440,34 +1473,21 @@ function activeRefreshJobs() {
       renderDiagnosticsPlaceholders();
       return jobs;
     }
-    if (activeDiagSubtab === "cost") {
-      // ORB-15921: Cost kept the managed-execution panel from Scoreboard.
-      // Every refresh honors the shared dashboard window. A mismatched
-      // window, a superseded request, or a stale workspace visit is not painted.
-      add("Health › Cost", fetchAndRenderScoreboard());
-      return jobs;
-    }
-    if (activeDiagSubtab === "metrics") {
-      // ORB-15746: trends follow the shared window like Cost.
-      add("Health › Metrics", fetchAndRenderMetrics());
-      return jobs;
-    }
-    if (activeDiagSubtab === "runs") {
+    if (view === "runs") {
       add("Runs", fetchAndRenderRuns());
     } else {
-      const subtab = activeDiagSubtab;
       // Incidents may narrow the shared window to its own 6h segment.
-      const windowFor = () => (subtab === "incidents" ? getIncidentWindow() : getWindow());
+      const windowFor = () => (view === "incidents" ? getIncidentWindow() : getWindow());
       const selectedWindow = windowFor();
       const incidentClass = getIncidentClass();
-      const limit = subtab === "errors" ? errorDiagLimit : DIAG_LIMIT;
-      const path = subtab === "incidents"
+      const limit = view === "errors" ? errorDiagLimit : DIAG_LIMIT;
+      const path = view === "incidents"
         ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&class=${encodeURIComponent(incidentClass)}&limit=${incidentDiagLimit}`
-        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
-      add(subpanel("diag-subtabs", subtab), requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
-        lastDiagnostics[subtab] = payload;
-        if (activeDiagSubtab === subtab && windowFor() === selectedWindow
-          && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
+        : `/api/diagnostics/${view}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
+      add(view === "errors" ? "Health › Errors" : "Health › Incidents", requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+        lastDiagnostics[view] = payload;
+        if (diagListView() === view && windowFor() === selectedWindow
+          && (view !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
       }, "diag-count"));
     }
   }
@@ -1653,8 +1673,7 @@ function setRailCount(id, value, alert = false, title = "") {
 }
 
 // The windowed counts of /api/audit/summary ride on the rail: failed runs on
-// Runs, audited events and denials on Audit. Their titles keep each count's
-// definition.
+// Runs and denials on Health. Their titles keep each count's definition.
 function renderSummaryCounts(data) {
   if (!data) return;
   const windowLabel = data.window || getWindow();
@@ -1665,7 +1684,6 @@ function renderSummaryCounts(data) {
     if (data.failed_runs) runsCount.dataset.window = String(windowLabel);
     else delete runsCount.dataset.window;
   }
-  setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
   renderDenialCount(data);
 }
 
@@ -1835,7 +1853,7 @@ wireFrictionResponsiveDetail();
 wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
-wireCodebaseControls(() => { window.location.hash = buildAuditHash(); });
+wireCodebaseControls(() => { window.location.hash = buildCodebaseHash(); });
 $("refresh-btn").addEventListener("click", refreshDashboard);
 initHostResources();
 wireReliabilityWindowSelector();
@@ -1843,14 +1861,10 @@ wireDoctorPanel();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();
-  if (activeTab === "diagnostics") {
-    const url = new URL(window.location.href);
-    const outcome = new URLSearchParams(url.hash.split("?")[1] || "").get("outcome");
-    url.hash = `diagnostics/${activeDiagSubtab}?window=${encodeURIComponent(getWindow())}`;
-    if (activeDiagSubtab === "metrics") url.hash += `&outcome=${outcome === "all" ? "all" : "succeeded"}`;
-    if (url.href !== window.location.href) history.replaceState(null, "", url);
-  } else if (activeTab === "audit") {
-    const next = buildAuditHash();
+  // A window change rewrites the Health or Analytics hash in place, so a
+  // reload or copied link keeps it.
+  const next = scopeRouteHash();
+  if (next) {
     const url = new URL(window.location.href);
     url.hash = next.replace(/^#/, "");
     if (url.href !== window.location.href) history.replaceState(null, "", url);

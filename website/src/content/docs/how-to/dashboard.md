@@ -111,7 +111,7 @@ expected on the default port, `7878`.
   it (`on build-box`) and that machine is registered on the serving host, the
   name links to that run on that host, as `?host=<name>&workspace=<workspace>&window=<window>#runs?run_id=<run>`.
   An unregistered machine stays plain text.
-- **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Audit, Health) uses that
+- **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Health, Analytics) uses that
   same form and carries the selected host, workspace and time window, so a link
   opened in a new tab or copied shows the run in that scope.
 - **Read-only.** Writes to another host go through the serving dashboard's
@@ -137,7 +137,8 @@ the current directory, else the first active workspace.
 - Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
 - The URL holds the host, workspace, and time window, so a reload or copied
   link opens the same view.
-- **Health → Reliability** covers every workspace, whatever is selected.
+- **Analytics → Reliability → Pipeline** covers every workspace, whatever is
+  selected.
 
 Confirm the selected workspace before you act. A count or metric does not
 prove that a particular task or run succeeded.
@@ -148,8 +149,8 @@ prove that a particular task or run succeeded.
 |---|---|
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
 | **Runs** | Job runs, newest first, and run detail. |
-| **Audit** | Recent events and a 24-hour summary. |
-| **Health** | Incidents, Doctor, Errors, Reliability, Metrics, and Cost. |
+| **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
+| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (with **Pipeline** and **Tools** tabs), **Codebase**, and **Cost**. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
@@ -158,8 +159,9 @@ prove that a particular task or run succeeded.
 The top bar shows live load, memory, and disk readings for the serving host,
 the drain state when a delivery window is active, and **Refresh**. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
-under **Runs**, and audited events under **Audit**. Click a rail count to open
-the view behind it.
+under **Runs**, and doctor warnings, policy denials, and failing routines under
+**Health**. Click a rail count to open the view behind it. The denial count
+opens **Health → Incidents → Events** filtered to denials.
 
 View URLs keep older section names: `#diagnostics/…` is Health,
 `#operations/…` is Automation, and `#config/…` is Settings.
@@ -312,23 +314,27 @@ These counts answer different questions:
 |---|---|
 | **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
 | Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
-| **Audit** rail count | Audited events in the selected window. |
-| **Health → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
+| **Health** denial count | Policy denials in the window that count was computed for. Click it to open **Events** filtered to denials. |
+| **Health → Incidents → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
 
-The Audit **Failure categories**, **Unexpected Failures by Callable Tool**,
-and **Lifecycle diagnostics** views use the capped incident scan. When the scan
-reaches its limit, each view marks its counts as **capped** and shows partial
-coverage. These counts cover only the newest non-success audit rows in the
+**Events** opens on the **failure + denied** filter, because nearly every
+audited call is a successful poll. Choose **all** to list every status. A
+link from an incident lists its events whatever their status.
+
+The **Analytics → Reliability → Tools** cards for **Failure categories**,
+**Unexpected Failures by Callable Tool**, and **Lifecycle diagnostics** use
+the capped incident scan. When the scan reaches its limit, each card marks its
+counts as **capped** and shows partial coverage. These counts cover only the newest non-success audit rows in the
 selected window; older failures and affected runs may be omitted. Per-tool
 unexpected-failure rates use the scanned failure counts with successful-call
 counts from the full window, so rates may be understated. Total audited events
 and raw tool-call counts still cover the full window.
 
-Health › Cost (`#diagnostics/cost`) shows managed-execution cost and token
-usage for the selected window. Older `#diagnostics/scoreboard` links open Cost.
+Select a tool on **Tools** to open its events. **Analytics → Cost** shows
+managed-execution cost and token usage for the selected window.
 
 ## Automation
 
@@ -619,7 +625,7 @@ returns the same `403` with `operation: auto_drain.approve_proposed`.
 | Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
 | Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
 | `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
-| **Runs** rail count disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| **Runs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
