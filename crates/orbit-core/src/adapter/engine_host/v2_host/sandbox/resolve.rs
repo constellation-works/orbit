@@ -299,7 +299,8 @@ fn sandbox_unavailable_message(provider: &str, kind: ExecutorSandboxKind, host_o
 
 /// Hide plugin state and the plugin secret store (design
 /// `docs/design/plugins/2_agent_call_broker.md` §6) and the clock credentials
-/// file from the sandboxed process.
+/// file from the sandboxed process. Linux also hides authenticated SSH control
+/// sockets under the invoking user's home, independent of the runtime root.
 ///
 /// Every sandboxed launch gets the mask, whether or not its run's broker then
 /// binds: a broker that fails costs the run its plugin calls, never the mask.
@@ -315,7 +316,7 @@ pub(super) fn agent_sandbox_mask(
     runtime: &OrbitRuntime,
 ) -> Result<orbit_engine::SandboxMask, DispatchError> {
     let global_root = runtime.global_root();
-    let prepared = crate::runtime::plugin::sandbox_mask::prepare_plugin_mask(&global_root)
+    let prepared = crate::runtime::plugin::sandbox_mask::prepare_agent_mask(&global_root)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let global_root = global_root.canonicalize().map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
