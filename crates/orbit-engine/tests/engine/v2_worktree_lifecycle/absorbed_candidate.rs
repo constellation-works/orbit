@@ -537,30 +537,60 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                     "task_scope_changed",
                 ),
             ];
+            // Generate this common precondition through real conflict recovery
+            // once. Every neighbour below receives independent host stores and
+            // re-observes the same certified checkout after exactly one change.
+            let prepared = absorbed_rebase("jrun-neighbour");
+            let seed = resolving_host(&prepared, "printf 'target\\n' > README.md");
+            let conflict = stopped_conflict(&prepared);
+            let outcome = recover(
+                &seed,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &prepared.prepared, &conflict),
+            )
+            .expect("the absorbed continuation is certified");
+            assert!(outcome.success, "{:?}", outcome.message);
+            let error = prepared
+                .rebase_on(&seed, &prepared.prepared)
+                .expect_err("an absorbed candidate fails its step");
+            let message = format!("deterministic action `sync_base_absorbed` failed: {error}");
+            let OrbitError::CandidateAbsorbed(candidate) = error else {
+                panic!("expected typed absorption, got {error:?}");
+            };
             for (case, change, reason) in cases {
-                let prepared = absorbed_rebase("jrun-neighbour");
-                let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
-                let conflict = stopped_conflict(&prepared);
-                let outcome = recover(
-                    &host,
-                    &prepared.run_id,
-                    recovery_input_for(&prepared, &prepared.prepared, &conflict),
-                )
-                .expect("the absorbed continuation is certified");
-                assert!(outcome.success, "{case}: {:?}", outcome.message);
-                // The retry's settlement claim, as git_rebase made it before
-                // the change.
-                let error = prepared
-                    .rebase_on(&host, &prepared.prepared)
-                    .expect_err("an absorbed candidate fails its step");
-                let message = format!("deterministic action `sync_base_absorbed` failed: {error}");
-                let OrbitError::CandidateAbsorbed(candidate) = error else {
-                    panic!("{case}: expected typed absorption, got {error:?}");
-                };
+                // Restore only the fixture-owned mutations from the previous
+                // row, including its branch and the primary's covering ref.
+                let rebase = git_path(&prepared.checkout.path, "rebase-merge");
+                if rebase.exists() {
+                    fs::remove_dir(&rebase).expect("the neighbour created an empty rebase dir");
+                }
+                let stray = prepared.checkout.path.join("stray.txt");
+                if stray.exists() {
+                    fs::remove_file(stray).unwrap();
+                }
+                git(
+                    &prepared.checkout.path,
+                    &["checkout", "--force", &prepared.checkout.branch],
+                );
+                git(
+                    &prepared.checkout.path,
+                    &["reset", "--hard", &prepared.target],
+                );
+                git(
+                    &prepared.fixture.repo,
+                    &["reset", "--hard", &prepared.target],
+                );
+                let host = seed.with_provider(seed.provider.as_deref().unwrap());
+                *host.checkpoints.lock().unwrap() = seed.checkpoints();
+                *host.recovery_attempts.lock().unwrap() = seed.recovery_attempts();
+                *host.run_states.lock().unwrap() = seed.run_states.lock().unwrap().clone();
                 stub_pipeline_steps(&host, &prepared);
                 host.stubs.lock().unwrap().insert(
                     "sync_base_absorbed".into(),
-                    Err(DispatchError::CandidateAbsorbed { candidate, message }),
+                    Err(DispatchError::CandidateAbsorbed {
+                        candidate: candidate.clone(),
+                        message: message.clone(),
+                    }),
                 );
                 host.stub(
                     "decide",

@@ -63,7 +63,6 @@ fn untracked_status(workspace: &Path) -> String {
 /// under a claim footprint admitting `dir:.orbit`, and not under a local
 /// run's exact selector. It is left untouched rather than refused, since it
 /// is where every worker is told to write scratch.
-#[test]
 fn scratch_under_orbit_tmp_is_never_delivered() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -115,7 +114,6 @@ fn scratch_under_orbit_tmp_is_never_delivered() {
 /// added path the footprint does not cover into an exact widening request.
 /// Only paths no owner can accept are refused — Git or `.orbit` metadata and
 /// environment files — before any index change.
-#[test]
 fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -215,7 +213,6 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
 /// ORB-13990: an owner run's implementer may create and modify paths outside
 /// the task's selectors. Delivery commits them and widens the task's
 /// selectors with exact `file:` entries, recording the implement step.
-#[test]
 fn owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -260,7 +257,6 @@ fn owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance() {
 /// and refuses nothing. Ambiguous ownership goes to the task whose agent
 /// changed the path (its widening history), else the exact `file:` owner; a
 /// path no selector covers goes to the first task, whose selectors widen.
-#[test]
 fn per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -319,7 +315,6 @@ fn per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it() {
 /// symlink safety; a renamed addition outside the footprint is an ordinary
 /// widening request.
 #[cfg(unix)]
-#[test]
 fn owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -363,4 +358,35 @@ fn owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations() {
             assert_eq!(validated.unwrap().1, vec![path.to_string()]);
         }
     }
+}
+
+#[test]
+fn candidate_path_authority_contracts() {
+    super::super::run_family(
+        concat!(module_path!(), "::candidate_path_authority_contracts"),
+        module_path!(),
+        &[
+            (
+                "scratch_under_orbit_tmp_is_never_delivered",
+                scratch_under_orbit_tmp_is_never_delivered,
+            ),
+            (
+                "claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening",
+                claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening,
+            ),
+            (
+                "owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance",
+                owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance,
+            ),
+            (
+                "per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it",
+                per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it,
+            ),
+            #[cfg(unix)]
+            (
+                "owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations",
+                owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations,
+            ),
+        ],
+    );
 }

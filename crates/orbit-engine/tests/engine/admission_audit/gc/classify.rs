@@ -8,7 +8,6 @@ use tempfile::tempdir;
 
 /// A directory whose `.git` link still resolves may be a moved worktree that
 /// `git worktree repair` brings back, so GC leaves it for an operator.
-#[test]
 fn gc_keeps_an_unregistered_directory_whose_git_link_still_resolves() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -47,7 +46,6 @@ fn gc_keeps_an_unregistered_directory_whose_git_link_still_resolves() {
 }
 
 /// A leftover is reclaimed only on the same gates as any worktree.
-#[test]
 fn gc_keeps_a_leftover_whose_task_is_not_settled() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -78,4 +76,22 @@ fn gc_keeps_a_leftover_whose_task_is_not_settled() {
 
     assert_eq!(result.reports[0].action, "skipped:task_status_ineligible");
     assert!(worktree.join("work.txt").exists());
+}
+
+#[test]
+fn gc_ownership_contracts() {
+    super::super::run_family(
+        concat!(module_path!(), "::gc_ownership_contracts"),
+        module_path!(),
+        &[
+            (
+                "gc_keeps_an_unregistered_directory_whose_git_link_still_resolves",
+                gc_keeps_an_unregistered_directory_whose_git_link_still_resolves,
+            ),
+            (
+                "gc_keeps_a_leftover_whose_task_is_not_settled",
+                gc_keeps_a_leftover_whose_task_is_not_settled,
+            ),
+        ],
+    );
 }

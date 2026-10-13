@@ -162,8 +162,14 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
         // Test both CLI conventions: nonzero failure and an exit-0 wrapper.
         for exit_code in [0, 1] {
             let run = format!("auth-{index}-{exit_code}");
-            let audit = tempfile::tempdir().unwrap();
-            let (writer, _) = build_writer(audit.path(), &run).unwrap();
+            // This matrix observes typed provider results, not audit storage.
+            // Durable blobs and envelope readback stay covered by the adjacent
+            // revoked-token and no-diff dispatch fixtures.
+            let writer = Arc::new(V2AuditWriter::new(
+                &run,
+                "smoke",
+                Arc::new(orbit_agent::loop_engine::audit::NullSink),
+            ));
             let fake = fake_cli(binary, &format!("#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{payload}\nPAYLOAD\nexit {exit_code}\n")).unwrap();
             let mut spec = cli_agent_loop_spec(Some(provider));
             spec.model = None;

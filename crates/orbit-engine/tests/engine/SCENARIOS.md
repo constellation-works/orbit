@@ -461,3 +461,164 @@ after the wrapper signals that its queue interval earned the capped credit.
 
 - `a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks`: superset, disjoint
 
+
+## Reconciled PR families (ORB-15959 salvage)
+
+These families reuse one bounded child and pristine Git seed; each named row still makes its own copied checkout, remote, host and forge state. The partitions are bounded by measured row cost, and every production Git/forge/validation operation in each row still runs.
+
+### `pr_landing::metadata_lag_pins_and_repair`
+
+- `previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins`
+- `previous_published_head_metadata_lag_after_in_run_conflict_repair`
+
+### `pr_landing::pull_ref_pins_and_identity`
+
+- `previous_published_head_pull_ref_lag_settles_with_exact_merge_pin`
+- `pull_ref_identity_refusals`
+
+### `pr_landing::pr_open_branch_identity`
+
+- `pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip`
+- `pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch`
+- `pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate`
+
+### `pr_landing::pr_create_retry_contracts`
+
+- `pr_open_permanent_create_failures_never_retry_or_look_up_again`
+- `pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr`
+- `pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase`
+
+### `pr_landing::pr_number_and_push_transports`
+
+- `pr_open_preserves_provider_number_representations`
+- `fixture_push_guard_checks_all_effective_push_urls`
+- `fixture_push_refuses_non_file_transports_without_network`
+
+### `pr_landing::base_race_fresh_gates`
+
+- `a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence`
+- `a_base_race_refresh_refuses_unmet_gates_without_another_merge`
+
+### `pr_landing::base_race_candidate_identity`
+
+- `a_base_race_refresh_refuses_a_changed_candidate_without_another_merge`
+- `an_already_merged_refresh_reconciles_without_another_merge_request`
+
+### `pr_landing::merge_refusal_bounds`
+
+- `other_merge_refusals_fail_on_the_first_request`
+- `repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget`
+
+### `pr_landing::recovered_base_advances`
+
+- `conflicting_base_advances_after_recovery_are_chased_until_the_bound`
+- `a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands`
+
+### `pr_landing::review_checks_and_delivery`
+
+- `a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review`
+- `passing_checks_merge_the_reviewed_candidate_and_record_its_delivery`
+
+### `pr_landing::review_fix_revalidation`
+
+- `a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges`
+- `a_failed_review_revalidation_rejects_and_preserves_both_commits`
+- `a_red_base_during_pr_revalidation_holds_the_task`
+
+### `pr_landing::review_repair_leases`
+
+- `a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease`
+- `a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes`
+
+### `pr_landing::claimed_validation_failures`
+
+- `a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs`
+- `a_claimed_candidate_that_cannot_reach_the_network_fails_transient`
+- `a_required_command_red_on_the_base_holds_the_task_without_a_pr`
+
+### `pr_landing::claimed_publication_and_merge_pins`
+
+- `a_pr_claim_validates_before_publication_and_pins_after_it`
+- `a_pr_merge_batch_lands_the_checked_head_at_its_pin`
+- `a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check`
+
+### `pr_landing::validation_repairs_and_logs`
+
+- `required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes`
+- `required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs`
+- `printed_supervisor_notes_remain_candidate_failures_on_both_streams`
+
+### `pr_landing::supervisor_and_truncated_failures`
+
+- `supervisor_stops_are_environment_failures_and_never_poison_the_base_cache`
+- `a_failure_only_the_truncated_middle_names_still_holds_the_candidate`
+
+### `pr_landing::network_retry_and_cached_base`
+
+- `a_network_flake_is_rerun_before_the_candidate_is_judged`
+- `remote_base_transport_retries_preserve_access_refusals`
+- `claimed_handoff_fetch_timeout_uses_only_a_related_cached_base`
+
+### `pr_landing::linux_deferral_contracts`
+
+- `a_claimed_leaf_replays_its_implementers_deferral_before_publication`
+- `a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step`
+- `a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery`
+
+### `pr_landing::macos_deferral_contracts`
+
+- `a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication`
+- `a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication`
+- `a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs`
+- `a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure`
+
+### `pr_landing::validation_and_empty_handoffs`
+
+- `validation_environment_contracts`
+- `empty_validation_and_handoff_contracts`
+
+### `pr_landing::failure_and_implementation_handoffs`
+
+- `failure_handoff_contracts`
+- `implementation_handoff_contracts`
+
+### `pr_landing::known_red_validation_and_subset`
+
+- `a_candidate_failing_only_known_red_tests_proceeds_and_records_them`
+- `claimed_known_red_equal_and_subset`
+
+## Admission audit families
+
+Each named row keeps a fresh disposable home, temporary directory, cwd, authority marker, host and state. Only the bounded child executable is shared. Environment and cwd restore before the next row, including on unwind.
+
+### `admission_audit::commit::candidate_paths::candidate_path_authority_contracts`
+
+- `scratch_under_orbit_tmp_is_never_delivered`
+- `claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening`
+- `owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance`
+- `per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it`
+- `owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations`
+
+### `admission_audit::gc::classify::gc_ownership_contracts`
+
+- `gc_keeps_an_unregistered_directory_whose_git_link_still_resolves`
+- `gc_keeps_a_leftover_whose_task_is_not_settled`
+
+### `admission_audit::gc::leftovers::gc_leftover_lifetime_contracts`
+
+- `gc_reclaims_the_leftover_of_a_removal_that_failed_partway`
+- `gc_reclaims_trash_directory_when_deleter_pid_is_dead`
+- `gc_reclaims_trash_directory_when_age_exceeds_timeout`
+- `gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout`
+- `gc_leaves_malformed_trash_directory_as_unrecognized`
+
+### `admission_audit::gc::sweep::gc_symlink_and_read_only_contracts`
+
+- `symlink_at_a_known_worktree_path_is_never_followed`
+- `gc_removes_a_worktree_holding_a_read_only_directory`
+
+### `admission_audit::trusted_host::trusted_host_authority_contracts`
+
+- `a_forged_admission_value_does_not_admit_the_mode`
+- `an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox`
+- `distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit`

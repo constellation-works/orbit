@@ -19,7 +19,7 @@ use serde_json::json;
 
 use super::provider_capacity::{
     CapacityHost, FakeProvider, SUCCESS_ENVELOPE, agent_spec, failure_message, implementation_job,
-    run_job, writer,
+    outcome_writer, run_job,
 };
 
 /// What Antigravity wrote for crew `gemini-flash` (runs
@@ -126,7 +126,7 @@ fn dispatch(
         spec: &ActivityV2Spec::AgentLoop(agent_spec(case.provider)),
         fs_profile: None,
         input: json!({ "prompt": "implement" }),
-        audit: writer(audit.path(), &run_id),
+        audit: outcome_writer(&run_id),
         run_id: &run_id,
         host: Some(&host),
     })
