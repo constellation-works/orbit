@@ -105,6 +105,7 @@ profile_window = 50
 min_profile_deliveries = 10
 horizon_cap_minutes = 120
 head_max_wait_minutes = 30
+head_stuck_passes = 20
 ```
 
 | Key | Default | What it is |
@@ -116,12 +117,14 @@ head_max_wait_minutes = 30
 | `machine.auto_concurrency.min_profile_deliveries` | `10` deliveries | Minimum samples before using a profile key rather than falling back along the profile chain. |
 | `machine.auto_concurrency.horizon_cap_minutes` | `120` minutes | Maximum forecast horizon for a candidate. |
 | `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits, or until the host holds no running delivery or reservation, when it is admitted. |
+| `machine.auto_concurrency.head_stuck_passes` | `20` passes | Stuck head: once a protected head's miss has not improved (another resource, a later minute, or at least one percentage point less) over this many consecutive passes, an `enforce` drain files one friction naming the head, its profile source and key, the miss and the baseline, and `orbit run show` and `orbit run readiness` print a `Stuck head:` line while it lasts. Admission is unchanged. At least `1`. |
 
 **Observing admission.** `orbit run show <drain>` renders an `Admission:`
 line from `pipeline_state.drain_last_pass.admission_forecast`: skipped
 candidate titles, the failing resource, percentage and minute, and a protected
-queue head's starvation guard. Shadow decisions are labelled as hypothetical;
-they do not hold admissions. With no block (off mode or an older drain), no
+queue head's starvation guard, followed by a `Stuck head:` line naming its
+miss, profile and baseline while that head is stuck. Shadow decisions are
+labelled as hypothetical; they do not hold admissions. With no block (off mode or an older drain), no
 line appears. JSON preserves the complete recorded block, including the
 profile source (`exact`, `without_complexity`, `base_class`,
 `heaviest_of_class`, `heaviest_on_host`, or `none`).

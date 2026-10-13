@@ -21,6 +21,7 @@ use crate::adapter::engine_host::actions::admission::cpu_light::{LightBudget, Re
 use crate::adapter::engine_host::actions::admission::gap_fit::{
     GapFit, GapFitMode, HeadWait, task_lookup,
 };
+use crate::adapter::engine_host::actions::admission::stuck_head::report_stuck_head;
 use crate::adapter::engine_host::actions::admission::unknown_footprint::{
     FootprintGuard, whole_tree_holder,
 };
@@ -261,7 +262,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         GapFitMode::from_setting(&runtime.context.settings().auto_concurrency().mode);
     let GapFitPass {
         mut selection,
-        record: admission_forecast,
+        record: mut admission_forecast,
         forecast,
     } = match gap_fit_mode {
         None => GapFitPass {
@@ -275,6 +276,21 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         }
     };
     admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)?;
+    // Only `enforce` idles the drain behind a stuck head, so only it files;
+    // `shadow` records the stall as what `enforce` would have reported.
+    if let (Some(GapFitMode::Enforce), Some(run_id), Some(head)) = (
+        gap_fit_mode,
+        drain_run_id(input),
+        admission_forecast
+            .as_mut()
+            .and_then(|record| record.head.as_mut()),
+    ) {
+        let title = snapshot
+            .task_lookup
+            .get(&head.task_id)
+            .map(|task| task.title.clone());
+        report_stuck_head(runtime, run_id, head, title.as_deref());
+    }
     if let (Some(forecast), Some(record)) = (forecast, admission_forecast.as_ref()) {
         record_admission_forecast(
             runtime,
@@ -448,6 +464,7 @@ fn gap_fit_selection(
     let head_wait = HeadWait {
         previous: previous.as_ref(),
         max_wait: Duration::minutes(i64::from(settings.head_max_wait_minutes)),
+        stuck_passes: settings.head_stuck_passes,
         now: Utc::now(),
     };
     if !can_admit {

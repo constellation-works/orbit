@@ -14,9 +14,11 @@ use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadFor
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
-    AdmissionForecastPoint, ResourceUsageStoreBackend, RunResourceMinute,
+    AdmissionForecastPoint, FrictionListFilter, ResourceUsageStoreBackend, RunResourceMinute,
 };
+use orbit_store::friction_store::FrictionStore;
 use orbit_tools::ToolContext;
+use orbit_types::record::FrictionRecord;
 use orbit_types::workflow::{DrainAdmissionForecast, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -45,7 +47,7 @@ impl Fixture {
         for dir in [&global, &workspace, &proc_root] {
             std::fs::create_dir_all(dir).unwrap();
         }
-        write_proc(&proc_root);
+        write_proc(&proc_root, 2);
         let probe = PressureProbe::calm();
         let runtime = build(&global, &workspace, &proc_root, &probe, mode, extra);
         Self {
@@ -245,15 +247,15 @@ fn build(
 }
 
 /// Ten CPUs whose ticks never move, so the CPU baseline is unknown and
-/// counts as zero, and 2 GiB of 32 GiB in use.
-fn write_proc(proc_root: &Path) {
+/// counts as zero, and `used_gib` of 32 GiB in use.
+fn write_proc(proc_root: &Path, used_gib: u64) {
     let mut stat = "cpu  1000 0 0 9000 0 0 0 0 0 0\n".to_string();
     for cpu in 0..10 {
         stat.push_str(&format!("cpu{cpu} 100 0 0 900 0 0 0 0 0 0\n"));
     }
     std::fs::write(proc_root.join("stat"), stat).unwrap();
     let total_kb = 32 * GIB / 1024;
-    let available_kb = 30 * GIB / 1024;
+    let available_kb = (32 - used_gib) * GIB / 1024;
     std::fs::write(
         proc_root.join("meminfo"),
         format!("MemTotal: {total_kb} kB\nMemFree: 1024 kB\nMemAvailable: {available_kb} kB\n"),
@@ -277,6 +279,21 @@ fn classify(runtime: &OrbitRuntime, drain: &str, slots: u32) -> Value {
             )
             .expect("classify")
     })
+}
+
+/// The friction records filed in the fixture's workspace.
+fn frictions(runtime: &OrbitRuntime) -> Vec<FrictionRecord> {
+    FrictionStore::open(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        runtime.data_root().join("frictions"),
+    )
+    .unwrap()
+    .list(&FrictionListFilter::default())
+    .unwrap()
+    .into_iter()
+    .map(|stored| stored.record)
+    .collect()
 }
 
 fn admitted(output: &Value) -> Vec<String> {
@@ -836,6 +853,126 @@ fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
         assert_eq!(skip.detail, "cpu 180% at +1m");
     }
 }
+/// A protected head whose miss stays put over `head_stuck_passes` (three
+/// here) is reported stuck once: its record names the profile, the miss and
+/// the baseline, one friction names the head, and both last only while it is
+/// the head. A head whose miss improves every pass is never reported. Neither
+/// changes what is admitted.
+///
+/// The head is a `medium` delivery beside the running `hard` one, refused on
+/// memory at +0m: the host's memory in use, plus 1 GiB for each delivery,
+/// over the 24 GiB threshold.
+#[test]
+fn a_protected_head_whose_miss_never_improves_is_reported_stuck_once() {
+    if !isolated(
+        "dispatch_admission::gap_fit::a_protected_head_whose_miss_never_improves_is_reported_stuck_once",
+    ) {
+        return;
+    }
+    // Memory in use per pass, in GiB, and each pass's stall count once the
+    // head is protected (from the second pass).
+    let cases: [(&str, [u64; 5], [u32; 4]); 2] = [
+        ("constant miss", [26; 5], [1, 2, 3, 4]),
+        ("improving miss", [27, 26, 25, 24, 23], [1, 1, 1, 1]),
+    ];
+    for (case, used, passes) in cases {
+        let fixture = Fixture::new(
+            "enforce",
+            "head_max_wait_minutes = 0\nhead_stuck_passes = 3\n",
+        );
+        fixture.seed_profiles();
+        let running = fixture.running_hard_delivery();
+        let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+        let drain = fixture.drain();
+
+        let mut friction_id = None;
+        for (pass, used_gib) in used.into_iter().enumerate() {
+            write_proc(&fixture.proc_root, used_gib);
+            if pass == 1 {
+                // The head is protected once it has failed for longer than
+                // zero minutes.
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let output = classify(&fixture.runtime, &drain, 4);
+            assert_eq!(
+                admitted(&output),
+                Vec::<String>::new(),
+                "{case}: {output:#}"
+            );
+            let record = recorded(&fixture.runtime, &drain, &output);
+            let head = record.head.as_ref().expect("the head fails gap fit");
+            assert_eq!(head.task_id, heavy, "{case}");
+            let miss = head.miss.as_ref().expect("the head records its miss");
+            assert_eq!(
+                (
+                    miss.resource.as_str(),
+                    miss.minute,
+                    miss.profile_source.as_str()
+                ),
+                ("memory", 0, "exact"),
+                "{case}: {record:#?}"
+            );
+            assert_eq!(miss.profile_key.as_deref(), Some("change/medium"), "{case}");
+            let percent = (used_gib + 2) as f64 / 32.0 * 100.0;
+            assert!((miss.percent - percent).abs() < 1e-9, "{case}: {record:#?}");
+            let baseline = used_gib as f64 / 32.0 * 100.0;
+            assert!(
+                miss.baseline_percent
+                    .is_some_and(|measured| (measured - baseline).abs() < 1e-9),
+                "{case}: {record:#?}"
+            );
+            let Some(expected) = pass.checked_sub(1).map(|index| passes[index]) else {
+                assert!(
+                    !head.protected && head.stall.is_none(),
+                    "{case}: {record:#?}"
+                );
+                continue;
+            };
+            let stall = head.stall.as_ref().expect("a protected head has a stall");
+            assert_eq!(stall.passes, expected, "{case} pass {pass}: {record:#?}");
+            assert_eq!(
+                stall.stuck,
+                expected >= 3,
+                "{case} pass {pass}: {record:#?}"
+            );
+            let filed = frictions(&fixture.runtime);
+            if stall.stuck {
+                let [friction] = filed.as_slice() else {
+                    panic!("{case} pass {pass}: exactly one friction: {filed:#?}");
+                };
+                assert_eq!(stall.friction_id.as_ref(), Some(&friction.id), "{case}");
+                friction_id.get_or_insert_with(|| friction.id.clone());
+                assert_eq!(friction_id.as_ref(), Some(&friction.id), "{case}");
+                let body = &friction.body;
+                for named in [
+                    heavy.as_str(),
+                    "change/medium",
+                    "exact",
+                    "memory 88% at +0m",
+                ] {
+                    assert!(body.contains(named), "{case}: {named} missing: {body}");
+                }
+            } else {
+                assert!(filed.is_empty(), "{case} pass {pass}: {filed:#?}");
+                assert!(stall.friction_id.is_none(), "{case}: {record:#?}");
+            }
+        }
+
+        // The running delivery ends: the head is admitted, and the stuck
+        // record goes with it. The friction stays as the incident's record.
+        fixture.ended(&running);
+        let output = classify(&fixture.runtime, &drain, 4);
+        assert_eq!(admitted(&output), vec![heavy.clone()], "{case}: {output:#}");
+        assert!(recorded(&fixture.runtime, &drain, &output).head.is_none());
+        assert_eq!(
+            frictions(&fixture.runtime).len(),
+            usize::from(friction_id.is_some()),
+            "{case}"
+        );
+        assert_eq!(friction_id.is_some(), case == "constant miss");
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it_scenarios,

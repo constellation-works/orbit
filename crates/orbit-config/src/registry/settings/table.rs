@@ -285,6 +285,15 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 38,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(30)),
     },
+    machine_auto_concurrency_head_stuck_passes: u32 => u32 {
+        key: "machine.auto_concurrency.head_stuck_passes", value_type: "integer",
+        description: "Starvation guard: consecutive protected passes whose miss has not improved before a drain reports the queue head stuck (>= 1, default 20).",
+        section: ConfigSection::Machine, order: 39,
+        resolve: |raw: Option<u32>| match raw.unwrap_or(20) {
+            0 => Err(OrbitError::InvalidInput("machine.auto_concurrency.head_stuck_passes must be at least 1".into())),
+            passes => Ok(passes),
+        },
+    },
     machine_auto_concurrency_horizon_cap_minutes: u32 => u32 {
         key: "machine.auto_concurrency.horizon_cap_minutes", value_type: "integer",
         description: "Maximum forecast horizon for a candidate, in minutes (default 120).",

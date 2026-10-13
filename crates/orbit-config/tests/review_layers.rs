@@ -413,13 +413,14 @@ fn machine_auto_concurrency_defaults_and_global_values_are_admitted() {
             min_profile_deliveries: 10,
             horizon_cap_minutes: 120,
             head_max_wait_minutes: 30,
+            head_stuck_passes: 20,
         }
     );
 
     write_config(
         global.path(),
         "[workflow.resource_throttle]\ncpu_high_percent = 2\ncpu_resume_percent = 1\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
-         [machine.auto_concurrency]\nmode = \"shadow\"\nadmit_cpu_percent = 100\nadmit_memory_percent = 79\nprofile_window = 20\nmin_profile_deliveries = 10\nhorizon_cap_minutes = 90\nhead_max_wait_minutes = 5\n",
+         [machine.auto_concurrency]\nmode = \"shadow\"\nadmit_cpu_percent = 100\nadmit_memory_percent = 79\nprofile_window = 20\nmin_profile_deliveries = 10\nhorizon_cap_minutes = 90\nhead_max_wait_minutes = 5\nhead_stuck_passes = 7\n",
     );
     let configured = ResolvedConfig::load(&roots)
         .expect("global settings load with CPU utilization independent of load-based throttle");
@@ -433,6 +434,7 @@ fn machine_auto_concurrency_defaults_and_global_values_are_admitted() {
             min_profile_deliveries: 10,
             horizon_cap_minutes: 90,
             head_max_wait_minutes: 5,
+            head_stuck_passes: 7,
         }
     );
 }

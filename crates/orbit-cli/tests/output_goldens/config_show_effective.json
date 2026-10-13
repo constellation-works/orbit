@@ -105,6 +105,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.auto_concurrency.head_stuck_passes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.auto_concurrency.horizon_cap_minutes": {
       "scope": "built-in",
       "state": "default",

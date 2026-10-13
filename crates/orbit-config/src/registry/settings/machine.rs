@@ -132,6 +132,8 @@ pub struct AutoConcurrencySettings {
     pub horizon_cap_minutes: u32,
     /// Maximum time the queue head may wait before it blocks backfilling, in minutes.
     pub head_max_wait_minutes: u32,
+    /// Consecutive protected passes without a better miss before the queue head is reported stuck.
+    pub head_stuck_passes: u32,
 }
 
 impl AutoConcurrencySettings {
