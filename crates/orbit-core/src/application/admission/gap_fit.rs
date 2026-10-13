@@ -52,7 +52,7 @@ const IMPROVEMENT_POINTS: f64 = 1.0;
 
 /// `machine.auto_concurrency.mode` when it is not `off`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::adapter::engine_host::actions) enum GapFitMode {
+pub(crate) enum GapFitMode {
     /// Decide and record, but admit as `off`.
     Shadow,
     /// Admit by gap fit.
@@ -61,7 +61,7 @@ pub(in crate::adapter::engine_host::actions) enum GapFitMode {
 
 impl GapFitMode {
     /// The mode a setting names; `None` for `off`.
-    pub(in crate::adapter::engine_host::actions) fn from_setting(mode: &str) -> Option<Self> {
+    pub(crate) fn from_setting(mode: &str) -> Option<Self> {
         match mode {
             "shadow" => Some(Self::Shadow),
             "enforce" => Some(Self::Enforce),
@@ -79,14 +79,14 @@ impl GapFitMode {
 
 /// The starvation guard's memory between passes.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::adapter::engine_host::actions) struct HeadWait<'a> {
+pub(crate) struct HeadWait<'a> {
     /// The previous pass's head, while it was failing.
-    pub(in crate::adapter::engine_host::actions) previous: Option<&'a GapFitHead>,
-    pub(in crate::adapter::engine_host::actions) max_wait: Duration,
+    pub(crate) previous: Option<&'a GapFitHead>,
+    pub(crate) max_wait: Duration,
     /// `head_stuck_passes`: protected passes without a better miss before
     /// the head is stuck.
-    pub(in crate::adapter::engine_host::actions) stuck_passes: u32,
-    pub(in crate::adapter::engine_host::actions) now: DateTime<Utc>,
+    pub(crate) stuck_passes: u32,
+    pub(crate) now: DateTime<Utc>,
 }
 
 impl HeadWait<'_> {
@@ -142,7 +142,7 @@ impl HeadWait<'_> {
 
     /// The record of a pass that built no forecast: no slot was free, or no
     /// candidate was left to fit.
-    pub(in crate::adapter::engine_host::actions) fn record_without_forecast(
+    pub(crate) fn record_without_forecast(
         &self,
         mode: GapFitMode,
         pending: &[String],
@@ -162,10 +162,7 @@ impl HeadWait<'_> {
 /// The profile lookup that prices `task` in `workspace_id`: its work class
 /// from its tags now, its complexity, and `no-diff-expected` for a
 /// template's base class.
-pub(in crate::adapter::engine_host::actions) fn task_lookup(
-    workspace_id: &str,
-    task: &Task,
-) -> ProfileLookup {
+pub(crate) fn task_lookup(workspace_id: &str, task: &Task) -> ProfileLookup {
     ProfileLookup::new(
         workspace_id,
         work_class(&task.tags),
@@ -175,7 +172,7 @@ pub(in crate::adapter::engine_host::actions) fn task_lookup(
 }
 
 /// One pass's gap fit against one forecast.
-pub(in crate::adapter::engine_host::actions) struct GapFit<'a> {
+pub(crate) struct GapFit<'a> {
     mode: GapFitMode,
     forecast: &'a HostLoadForecast,
     gap: Option<ForecastGap>,
@@ -190,7 +187,7 @@ pub(in crate::adapter::engine_host::actions) struct GapFit<'a> {
 }
 
 impl<'a> GapFit<'a> {
-    pub(in crate::adapter::engine_host::actions) fn new(
+    pub(crate) fn new(
         mode: GapFitMode,
         forecast: &'a HostLoadForecast,
         admit_cpu_percent: u8,
@@ -215,7 +212,7 @@ impl<'a> GapFit<'a> {
     /// Whether `task` fits the gap. One that fits is counted in the forecast
     /// from now on; one that does not, or that the starvation guard holds,
     /// is recorded with why.
-    pub(in crate::adapter::engine_host::actions) fn admits(&mut self, task: &Task) -> bool {
+    pub(crate) fn admits(&mut self, task: &Task) -> bool {
         let lookup = task_lookup(self.workspace_id, task);
         let found = self.forecast.profiles.lookup(&lookup);
         let profile_source = found.source.as_str().to_string();
@@ -307,7 +304,7 @@ impl<'a> GapFit<'a> {
     }
 
     /// The pass's record, and the reservations for what it admitted.
-    pub(in crate::adapter::engine_host::actions) fn finish(
+    pub(crate) fn finish(
         self,
         pending: &[String],
     ) -> (DrainAdmissionForecast, Vec<AdmissionReservationRequest>) {

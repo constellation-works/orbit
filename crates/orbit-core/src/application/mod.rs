@@ -15,6 +15,7 @@
 /// [ORB-10016] and stamps the same identity.
 pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 
+pub(crate) mod admission;
 pub mod audit_event;
 pub mod auto_tasks;
 pub mod config;
@@ -36,6 +37,7 @@ pub mod task;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod workflow;
+pub(crate) mod workspace_auto;
 pub mod workspace_sync;
 
 #[cfg(test)]

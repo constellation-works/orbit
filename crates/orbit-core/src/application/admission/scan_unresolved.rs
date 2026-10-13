@@ -22,7 +22,7 @@ const WAKE_TASK_STATUSES: [TaskStatus; 3] = [
 
 const WAKE_RUN_STATES: [JobRunState; 2] = [JobRunState::Failed, JobRunState::Timeout];
 
-pub(in crate::adapter::engine_host::actions) fn scan_unresolved_work(
+pub(crate) fn scan_unresolved_work(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

@@ -31,7 +31,7 @@ const FALLBACK_TAG: &str = "other";
 /// at threshold one or after progress resets the stall. Best effort: a drain
 /// that cannot file it still admits as it would and reports the head from its
 /// run state; the next pass tries again.
-pub(in crate::adapter::engine_host::actions) fn report_stuck_head(
+pub(crate) fn report_stuck_head(
     runtime: &OrbitRuntime,
     run_id: &str,
     head: &mut GapFitHead,

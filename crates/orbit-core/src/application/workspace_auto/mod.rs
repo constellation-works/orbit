@@ -9,9 +9,9 @@ mod drains;
 mod readiness;
 mod window;
 
-pub(super) use approvals::{
+pub(crate) use approvals::{
     await_approval_pilot, record_proposed_approvals, select_proposed_approvals,
 };
-pub(super) use classify::classify_workspace_auto_tasks;
+pub(crate) use classify::classify_workspace_auto_tasks;
 pub(super) use drains::read_live_leaf_runs;
-pub(super) use window::drain_window;
+pub(crate) use window::drain_window;

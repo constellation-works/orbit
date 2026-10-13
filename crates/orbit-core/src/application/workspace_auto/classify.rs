@@ -11,21 +11,17 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::actions::admission::auto_admission::{
+use crate::application::admission::auto_admission::{
     AdmissionHolders, AdmissionSelection, DeferralReason, select_admissions,
 };
-use crate::adapter::engine_host::actions::admission::backlog_exclusion::{
+use crate::application::admission::backlog_exclusion::{
     BacklogTaskExclusion, allowlist_from_input, backlog_snapshot,
 };
-use crate::adapter::engine_host::actions::admission::claim_holders::ClaimHolders;
-use crate::adapter::engine_host::actions::admission::cpu_light::{LightBudget, ResourceGate};
-use crate::adapter::engine_host::actions::admission::gap_fit::{
-    GapFit, GapFitMode, HeadWait, task_lookup,
-};
-use crate::adapter::engine_host::actions::admission::stuck_head::report_stuck_head;
-use crate::adapter::engine_host::actions::admission::unknown_footprint::{
-    FootprintGuard, whole_tree_holder,
-};
+use crate::application::admission::claim_holders::ClaimHolders;
+use crate::application::admission::cpu_light::{LightBudget, ResourceGate};
+use crate::application::admission::gap_fit::{GapFit, GapFitMode, HeadWait, task_lookup};
+use crate::application::admission::stuck_head::report_stuck_head;
+use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
 use crate::runtime::host_resource::forecast::{ForecastDecision, ForecastPoints};
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -71,7 +67,7 @@ const MAX_CANDIDATE_POOL: u64 = 500;
 /// of overlapping candidates costs one slot instead of all of them. Readiness
 /// reads the same snapshot and calls the same routine, which is what keeps the
 /// diagnostic and the drain from disagreeing about who starts.
-pub(in super::super) fn classify_workspace_auto_tasks(
+pub(crate) fn classify_workspace_auto_tasks(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
