@@ -55,72 +55,110 @@ fn branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget() {
         ..GitTimeoutBudget::DEFAULT
     });
     let root = std::env::current_dir().unwrap();
-    let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    for (timeouts, response, refusal, calls) in [
-        (1, format!("{sha}\trefs/heads/candidate\n"), "", 2),
-        (1, String::new(), "", 2),
-        (100, String::new(), "", 3),
-        (0, String::new(), "fatal: Authentication failed", 1),
-        (0, String::new(), "fatal: connection timed out", 1),
-        (1, String::new(), "fatal: Authentication failed", 2),
-    ] {
-        for (name, value) in [
-            ("count", "0".to_string()),
-            ("timeouts", timeouts.to_string()),
-            ("response", response.clone()),
-            ("refusal", refusal.to_string()),
-        ] {
-            fs::write(root.join(name), value).unwrap();
-        }
-        let result = remote_branch_sha(&root, "candidate");
-        if timeouts == 100 {
-            let error = result.expect_err("remote reads must exhaust a bounded retry budget");
-            assert!(
-                error.is_timeout(),
-                "timeout classification survives: {error}"
-            );
-            let message = error.to_string();
-            assert!(
-                message.contains("branch freshness ls-remote probe"),
-                "{message}"
-            );
-            assert!(message.contains("3 attempts"), "{message}");
-            assert!(message.contains("per-attempt timeout=1000ms"), "{message}");
-            assert!(message.contains("backoff=750ms"), "{message}");
-            let elapsed = message
-                .split("elapsed=")
-                .nth(1)
-                .unwrap()
-                .split("ms")
-                .next()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap();
-            assert!(
-                elapsed >= 3_750,
-                "elapsed includes attempts and backoff: {message}"
-            );
-        } else if !refusal.is_empty() {
-            let error = result.expect_err("a completed Git refusal must stop the read retry");
-            assert!(
-                !error.is_timeout(),
-                "a diagnostic is not a deadline: {error}"
-            );
-            assert!(error.to_string().contains(refusal), "{error}");
-        } else {
-            let expected = (!response.is_empty()).then(|| sha.to_string());
-            assert_eq!(
-                result.unwrap(),
-                expected,
-                "a stalled PR preparation read must recover"
-            );
-        }
-        assert_eq!(
-            fs::read_to_string(root.join("count")).unwrap().trim(),
-            calls.to_string(),
-            "only supervisor deadlines may consume additional attempts"
-        );
-    }
+    use orbit_common::test_env::{SupervisorSeam, with_supervision_clock, with_supervisor_seam};
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
+    let now = Rc::new(Cell::new(Instant::now()));
+    let observed = Rc::clone(&now);
+    let clock = Rc::clone(&now);
+    let ready = root.join("probe-ready");
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            if ready.exists() {
+                fs::remove_file(&ready).unwrap();
+                now.set(now.get() + Duration::from_secs(1));
+                return Ok(None);
+            }
+            child.try_wait()
+        })),
+        ..SupervisorSeam::default()
+    };
+    with_supervision_clock(
+        move || clock.get(),
+        || {
+            with_supervisor_seam(seam, || {
+                super::super::remote_probe::with_remote_probe_backoff(10, || {
+                    let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+                    for (timeouts, response, refusal, calls) in [
+                        (1, format!("{sha}\trefs/heads/candidate\n"), "", 2),
+                        (1, String::new(), "", 2),
+                        (100, String::new(), "", 3),
+                        (0, String::new(), "fatal: Authentication failed", 1),
+                        (0, String::new(), "fatal: connection timed out", 1),
+                        (1, String::new(), "fatal: Authentication failed", 2),
+                    ] {
+                        for (name, value) in [
+                            ("count", "0".to_string()),
+                            ("timeouts", timeouts.to_string()),
+                            ("response", response.clone()),
+                            ("refusal", refusal.to_string()),
+                        ] {
+                            fs::write(root.join(name), value).unwrap();
+                        }
+                        let began = observed.get();
+                        let result = remote_branch_sha(&root, "candidate");
+                        assert!(
+                            observed.get().duration_since(began)
+                                >= Duration::from_secs(timeouts.min(3)),
+                            "stalled reads must reach their supervised deadlines"
+                        );
+                        if timeouts == 100 {
+                            let error = result
+                                .expect_err("remote reads must exhaust a bounded retry budget");
+                            assert!(
+                                error.is_timeout(),
+                                "timeout classification survives: {error}"
+                            );
+                            let message = error.to_string();
+                            assert!(
+                                message.contains("branch freshness ls-remote probe"),
+                                "{message}"
+                            );
+                            assert!(message.contains("3 attempts"), "{message}");
+                            assert!(message.contains("per-attempt timeout=1000ms"), "{message}");
+                            assert!(message.contains("backoff=30ms"), "{message}");
+                            let elapsed = message
+                                .split("elapsed=")
+                                .nth(1)
+                                .unwrap()
+                                .split("ms")
+                                .next()
+                                .unwrap()
+                                .parse::<u64>()
+                                .unwrap();
+                            assert!(
+                                elapsed >= 30,
+                                "elapsed includes attempts and backoff: {message}"
+                            );
+                        } else if !refusal.is_empty() {
+                            let error = result
+                                .expect_err("a completed Git refusal must stop the read retry");
+                            assert!(
+                                !error.is_timeout(),
+                                "a diagnostic is not a deadline: {error}"
+                            );
+                            assert!(error.to_string().contains(refusal), "{error}");
+                        } else {
+                            let expected = (!response.is_empty()).then(|| sha.to_string());
+                            assert_eq!(
+                                result.unwrap(),
+                                expected,
+                                "a stalled PR preparation read must recover"
+                            );
+                        }
+                        assert_eq!(
+                            fs::read_to_string(root.join("count")).unwrap().trim(),
+                            calls.to_string(),
+                            "only supervisor deadlines may consume additional attempts"
+                        );
+                    }
+                });
+            })
+        },
+    );
 }
 
 const STUB_GIT: &str = r#"#!/bin/sh
@@ -129,7 +167,7 @@ while [ "$1" = -c ]; do shift 2; done
 [ "$1" = ls-remote ] && [ "$2" = --heads ] && [ "$3" = origin ] && [ "$4" = refs/heads/candidate ] || exit 2
 count=$(($(cat count) + 1))
 printf '%s\n' "$count" > count
-if [ "$count" -le "$(cat timeouts)" ]; then exec sleep 600; fi
+if [ "$count" -le "$(cat timeouts)" ]; then : > probe-ready; exec sleep 600; fi
 if [ -s refusal ]; then cat refusal >&2; exit 1; fi
 cat response
 "#;

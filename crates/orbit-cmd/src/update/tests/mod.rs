@@ -3,3 +3,6 @@
 mod fixture;
 mod flow;
 mod stage;
+
+#[cfg(unix)]
+mod converge;

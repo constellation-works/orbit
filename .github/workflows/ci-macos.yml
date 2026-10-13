@@ -27,6 +27,8 @@ on:
       - "crates/orbit-common/src/fs/**"
       - "crates/orbit-cli/tests/workspace/generation_root.rs"
       - "crates/orbit-cli/tests/process/**"
+      - "crates/orbit-cmd/src/update/converge.rs"
+      - "crates/orbit-cmd/src/update/tests/converge.rs"
       - "crates/orbit-cli/tests/mcp/**"
       - "crates/orbit-cli/tests/output/error_output.rs"
       - "crates/orbit-cli/tests/support/generation_fixture.rs"
@@ -233,6 +235,7 @@ jobs:
       - name: Run portable process-boundary tests
         run: |
           cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
+          cargo test --no-fail-fast -p orbit-cmd --locked --lib update::tests::converge::
           cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
           cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
           cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp

@@ -62,5 +62,9 @@ pub use process::{UnrelatedProcess, spawn_unrelated_process};
 pub use process_scrub::{SCRUBBED_MARKER_ENV, scrub_inherited_authority};
 pub use temp_dir::{bulk_write_temp_dir, canonical_temp_dir};
 
+/// Clock seam for tests of callers that use fixed supervision deadlines.
+#[cfg(feature = "test-support")]
+pub use crate::process::supervisor::seam::with_supervision_clock;
+
 /// Supervision seams for tests of a supervisor's callers in other crates.
 pub use crate::process::supervisor::seam::{SupervisorSeam, WaitHook, with_supervisor_seam};

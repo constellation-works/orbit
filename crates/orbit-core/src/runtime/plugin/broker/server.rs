@@ -96,6 +96,23 @@ pub(crate) struct BrokerServer {
     workers: Vec<JoinHandle<()>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static REQUEST_TIMEOUT: std::cell::Cell<Duration> = const { std::cell::Cell::new(IO_TIMEOUT) };
+}
+
+#[cfg(test)]
+pub(super) fn with_request_timeout<T>(timeout: Duration, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Duration);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            REQUEST_TIMEOUT.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(REQUEST_TIMEOUT.with(|slot| slot.replace(timeout)));
+    operation()
+}
+
 impl BrokerServer {
     pub(crate) fn spawn(
         listener: UnixListener,
@@ -110,9 +127,14 @@ impl BrokerServer {
         let (queue, pending) = mpsc::sync_channel::<Admitted>(IN_FLIGHT + QUEUED);
         let pending = Arc::new(Mutex::new(pending));
 
+        #[cfg(test)]
+        let request_timeout = REQUEST_TIMEOUT.with(std::cell::Cell::get);
+        #[cfg(not(test))]
+        let request_timeout = IO_TIMEOUT;
         let mut workers = Vec::new();
         for _ in 0..IN_FLIGHT {
             let worker = Worker {
+                request_timeout,
                 pending: Arc::clone(&pending),
                 admitted: Arc::clone(&admitted),
                 stop: Arc::clone(&stop),
@@ -282,6 +304,7 @@ impl Acceptor {
 }
 
 struct Worker {
+    request_timeout: Duration,
     pending: Arc<Mutex<Receiver<Admitted>>>,
     admitted: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
@@ -315,7 +338,7 @@ impl Worker {
         let mut reader = RequestReader {
             stream: &mut stream,
             stop: &self.stop,
-            deadline: Instant::now() + IO_TIMEOUT,
+            deadline: Instant::now() + self.request_timeout,
         };
         let body = match read_frame(&mut reader, MAX_REQUEST_BYTES) {
             Ok(body) => body,

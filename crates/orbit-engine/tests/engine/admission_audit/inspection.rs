@@ -283,7 +283,7 @@ fn slow_full_ancestry_copy_outlasts_the_local_deadline() {
         return;
     }
     if let Some(stub_dir) = std::env::var_os(STUB_GIT_DIR_ENV) {
-        set_fetch_delay(std::path::Path::new(&stub_dir), 11);
+        fs::write(Path::new(&stub_dir).join("clocked-fetch"), "").expect("clocked copy");
         let temp = tempdir().expect("tempdir");
         let repo = temp.path().join("repo");
         let revision = super::orchestrator_env::init_repo(&repo);
@@ -301,13 +301,49 @@ printf '{"schemaVersion":1,"status":"success","result":{"head":"%s"},"error":nul
             "grok:test",
             std::sync::Arc::new(orbit_agent::loop_engine::audit::NullSink),
         ));
-        let outcome = orbit_engine::activity_job::cli_runner::run_cli_backend(
+        use orbit_common::test_env::{
+            SupervisorSeam, with_supervision_clock, with_supervisor_seam,
+        };
+        use std::{
+            cell::Cell,
+            rc::Rc,
+            time::{Duration, Instant},
+        };
+        let origin = Instant::now();
+        let now = Rc::new(Cell::new(origin));
+        let clock = Rc::clone(&now);
+        let ready = Path::new(&stub_dir).join("fetch-ready");
+        let release = Path::new(&stub_dir).join("fetch-release");
+        orbit_common::test_env::create_fixture_fifo(&release).expect("copy release FIFO");
+        let seam = SupervisorSeam {
+            wait: Some(Box::new(move |child| {
+                if ready.exists() {
+                    fs::remove_file(&ready).expect("consume copy readiness");
+                    now.set(origin + Duration::from_secs(11));
+                    // The copy remains blocked for this deadline decision. A
+                    // local (10s) budget fails before the next poll releases it.
+                    return Ok(None);
+                }
+                if now.get() != origin && release.exists() {
+                    orbit_common::test_env::release_fixture_fifo(
+                        &release,
+                        Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+                    )
+                    .expect("release copy under its bulk deadline");
+                    fs::remove_file(&release).expect("consume copy FIFO");
+                }
+                child.try_wait()
+            })),
+            ..SupervisorSeam::default()
+        };
+        let outcome = with_supervision_clock(move || clock.get(), || with_supervisor_seam(seam, ||
+        orbit_engine::activity_job::cli_runner::run_cli_backend(
             &TestHost::with_command(provider.display().to_string()),
             &super::cli_support::test_agent_loop_spec_for("grok", std::time::Duration::from_secs(5)),
             "slow-inspection", "slow-inspection", audit,
             &json!({"inspection_revision": revision, "source_revision": revision, "workspace_path": repo}),
             Some("reviewer"),
-        ).expect("a copy under the bulk bound seeds the slot");
+        ))).expect("a copy under the bulk bound seeds the slot");
         assert!(
             outcome.success,
             "the inspection checkout can be read: {:?}",
@@ -330,11 +366,14 @@ fn run_child_with_stub_git(test: &str) {
             .display()
             .to_string(),
     );
+    let clocked = quote_posix_arg(&stub_dir.path().join("clocked-fetch").display().to_string());
+    let ready = quote_posix_arg(&stub_dir.path().join("fetch-ready").display().to_string());
+    let release = quote_posix_arg(&stub_dir.path().join("fetch-release").display().to_string());
     let git_path = quote_posix_arg(&real_git_path().display().to_string());
     write_executable(
         &stub_dir.path().join("git"),
         &format!(
-            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) sleep \"$(cat {delay})\" ;;\n  *\" --verify \"*) [ -e {kill} ] && kill -9 $$ ;;\nesac\nexec {git_path} \"$@\"\n"
+            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) if [ -e {clocked} ]; then : > {ready}; read go < {release}; else sleep \"$(cat {delay})\"; fi ;;\n  *\" --verify \"*) [ -e {kill} ] && kill -9 $$ ;;\nesac\nexec {git_path} \"$@\"\n"
         ),
     );
     let mut paths = vec![stub_dir.path().to_path_buf()];

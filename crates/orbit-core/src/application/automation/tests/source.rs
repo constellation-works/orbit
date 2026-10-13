@@ -911,17 +911,34 @@ fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
         FileLockOptions::default(),
     )
     .unwrap();
-    let source = Source::new(repo);
-    let started = Instant::now();
-    let result = source.head("main");
-    assert!(result.is_err(), "a held lock must defer the fetch");
-    assert!(
-        started.elapsed() < Duration::from_secs(32),
-        "lock wait renewed the full timeout"
-    );
-    assert!(
-        started.elapsed() >= Duration::from_secs(29),
-        "the fixture must exercise real lock contention rather than an earlier error"
+    use super::super::source::test_support::with_delivery_source_clock;
+    use std::{cell::Cell, rc::Rc};
+
+    let spent = Rc::new(Cell::new(Duration::ZERO));
+    let clock_spent = Rc::clone(&spent);
+    let origin = Instant::now();
+    with_delivery_source_clock(
+        move || origin + clock_spent.get(),
+        || {
+            let source = Source::new(repo);
+            spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(250));
+            let started = Instant::now();
+            let result = source.head("main");
+            assert!(result.is_err(), "a held lock must defer the fetch");
+            assert!(
+                matches!(&result, Err(AutomationError::Deferred(reason))
+                if reason.contains("acquiring git fetch lock")),
+                "the held fetch lock must cause the deferral: {result:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "lock wait renewed the full timeout"
+            );
+            assert!(
+                started.elapsed() >= Duration::from_millis(200),
+                "the fixture must exercise real lock contention rather than an earlier error"
+            );
+        },
     );
     drop(lock);
 }

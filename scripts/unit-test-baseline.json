@@ -44,6 +44,7 @@
         "doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is",
         "tests/diagnostics.rs::read_month_rejects_jsonl_symlink_outside_month",
         "tests/diagnostics.rs::read_month_rejects_path_traversal",
+        "update/tests/converge.rs::probe_timeouts_tear_down_descendants_before_and_after_parent_exit",
         "update/tests/flow.rs::http_rejects_declared_and_streamed_oversized_bodies",
         "update/tests/flow.rs::installed_verification_failures_preserve_both_causes_when_restore_fails",
         "update/tests/flow.rs::release_requests_never_leave_https",

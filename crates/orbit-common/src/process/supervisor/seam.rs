@@ -50,6 +50,37 @@ pub fn with_supervisor_seam<T>(seam: SupervisorSeam, operation: impl FnOnce() ->
     operation()
 }
 
+#[cfg(feature = "test-support")]
+type FixtureClock = Rc<dyn Fn() -> std::time::Instant>;
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static CLOCK: RefCell<Option<FixtureClock>> = const { RefCell::new(None) };
+}
+
+/// Use a fixture clock for fixed supervision deadlines on this thread.
+/// Explicit caller clocks take precedence; process cleanup retains real time.
+/// The previous clock is restored on return or unwind.
+#[cfg(feature = "test-support")]
+pub fn with_supervision_clock<T>(
+    clock: impl Fn() -> std::time::Instant + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<FixtureClock>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CLOCK.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(CLOCK.with(|slot| slot.replace(Some(Rc::new(clock)))));
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+pub(super) fn clock() -> Option<FixtureClock> {
+    CLOCK.with(|slot| slot.borrow().clone())
+}
+
 fn current() -> Option<Rc<SupervisorSeam>> {
     SEAM.with(|slot| slot.borrow().clone())
 }

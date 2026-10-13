@@ -257,6 +257,20 @@ controls command, lookup and whole-pass budgets; `with_cli_supervision_clock`
 controls a provider's supervision deadline. Freeze time while real commands
 complete, or advance it only after a child signals readiness to exercise a
 timeout. The distributed-drain landing and auth fixtures demonstrate both.
+For callers that use fixed deadlines through the shared process supervisor,
+`orbit_common::test_env::with_supervision_clock` supplies the same scoped clock
+under `orbit-common`'s dev-only `test-support` feature. Explicit caller clocks
+and extendable deadlines keep their own policy. The proc-spawn, inspection-copy
+and pre-push probe fixtures advance this clock only after the intended child
+signals readiness; prerequisite commands retain their ordinary budgets. Remote
+probe fixtures can also scale backoff with
+`orbit_engine::test_support::with_remote_probe_backoff`, retaining all three
+attempts and the elapsed/waited diagnostics. Broker request fixtures capture a
+per-listener request timeout when starting their workers. The isolated stdin
+fixture also scales its output-drain allowance with a `cfg(test)` guard and
+asks its escaped helper to acknowledge kernel `POLLHUP` after finalization,
+while that helper still holds the unread pipe.
+
 These thread-local hooks restore prior clocks on unwind and require the
 dev-only `test-support` feature. Cleanup and the outer child-test hang guard
 keep their real clocks, so a broken handshake still fails and is reaped.

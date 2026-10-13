@@ -103,14 +103,59 @@ fn timed_out_command_recommends_native_shell_transport() {
 #[cfg(unix)]
 #[test]
 fn activity_budget_lets_a_command_outlast_the_unscoped_ceiling() {
+    use orbit_common::test_env::{SupervisorSeam, with_supervision_clock, with_supervisor_seam};
+    use std::{cell::Cell, rc::Rc, time::Instant};
+
+    let root = tempfile::tempdir().expect("fixture root");
+    let ready = root.path().join("ready");
+    let release = root.path().join("release");
+    orbit_common::test_env::create_fixture_fifo(&release).expect("release FIFO");
+    let script = format!(
+        "touch '{}'; read go < '{}'",
+        ready.display(),
+        release.display()
+    );
+    let origin = Instant::now();
+    let clock = Rc::new(Cell::new(origin));
+    let read_clock = Rc::clone(&clock);
+    let advance_clock = Rc::clone(&clock);
+    let advanced = Cell::new(false);
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            if !advanced.get() && ready.exists() {
+                advance_clock.set(origin + Duration::from_secs(90));
+                advanced.set(true);
+                // Keep the child blocked for the deadline decision. A regressed
+                // 60-second ceiling kills it here before it can be released.
+                return Ok(None);
+            }
+            if advanced.get() && release.exists() {
+                orbit_common::test_env::release_fixture_fifo(
+                    &release,
+                    Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+                )
+                .expect("release command after its virtual 90 seconds");
+                std::fs::remove_file(&release).expect("consume fixture FIFO");
+            }
+            child.try_wait()
+        })),
+        ..SupervisorSeam::default()
+    };
     let ctx = activity_context(
-        "/bin/sleep",
+        "/bin/sh",
         Some(budget(Duration::from_secs(10 * 60), 45 * MINUTE_MS)),
     );
-    let value = spawn(
-        &ctx,
-        json!({ "program": "/bin/sleep", "args": ["90"] }),
-        Some(180_000),
+    let value = with_supervision_clock(
+        move || read_clock.get(),
+        || {
+            with_supervisor_seam(seam, || {
+                spawn(
+                    &ctx,
+                    json!({ "program": "/bin/sh", "args": ["-c", script] }),
+                    Some(180_000),
+                )
+            })
+        },
     );
     assert_eq!(value["success"], json!(true), "{value:?}");
     assert_eq!(value["timed_out"], json!(false), "{value:?}");
@@ -123,7 +168,7 @@ fn activity_budget_lets_a_command_outlast_the_unscoped_ceiling() {
         "ceiling is the remaining budget: {value:?}"
     );
     assert!(
-        value["duration_ms"].as_u64().expect("duration") >= 90_000,
+        clock.get().duration_since(origin) >= Duration::from_secs(90),
         "{value:?}"
     );
 }

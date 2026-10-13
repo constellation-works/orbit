@@ -10,6 +10,35 @@ use super::git::{git_failure_error, git_run, timeout_recovery_error};
 const PROBE_ATTEMPTS: u32 = 3;
 const INITIAL_BACKOFF_MS: u64 = 250;
 
+#[cfg(feature = "test-support")]
+thread_local! {
+    static BACKOFF_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(INITIAL_BACKOFF_MS) };
+}
+
+/// Scale retry waits in fixtures without changing attempt counts or production defaults.
+#[cfg(feature = "test-support")]
+pub fn with_remote_probe_backoff<T>(milliseconds: u64, operation: impl FnOnce() -> T) -> T {
+    struct Restore(u64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BACKOFF_MS.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(BACKOFF_MS.with(|slot| slot.replace(milliseconds)));
+    operation()
+}
+
+fn initial_backoff_ms() -> u64 {
+    #[cfg(feature = "test-support")]
+    {
+        BACKOFF_MS.with(std::cell::Cell::get)
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        INITIAL_BACKOFF_MS
+    }
+}
+
 pub(super) struct RemoteBranchProbe {
     pub(super) sha: Option<String>,
     pub(super) attempts: u32,
@@ -96,7 +125,7 @@ pub(super) fn remote_ref_output(
                 ),
             ));
         }
-        let backoff_ms = INITIAL_BACKOFF_MS << (attempt - 1);
+        let backoff_ms = initial_backoff_ms() << (attempt - 1);
         tracing::warn!(
             stage,
             attempt,

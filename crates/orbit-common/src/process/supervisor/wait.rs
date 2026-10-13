@@ -220,6 +220,10 @@ impl SupervisedChild {
         // Every pipe worker is bounded by `drain_stop`: once the child is gone
         // the supervisor waits at most `drain_budget` for them. Dropping it on
         // an early error return stops them as well.
+        #[cfg(feature = "test-support")]
+        let fixture_clock = seam::clock();
+        #[cfg(feature = "test-support")]
+        let clock = clock.or(fixture_clock.as_deref());
         let mut deadline = Deadline::new(timeout, extendable_deadline, clock);
         let drain_stop = DrainStop::new();
         #[cfg(all(test, unix))]

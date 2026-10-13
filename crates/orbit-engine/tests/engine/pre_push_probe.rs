@@ -29,7 +29,10 @@ fn a_timed_out_pre_push_probe_recovers_and_allows_publication() {
                 let output = fixture.push().expect("a timed-out read is safe to retry");
                 assert_eq!(output["remote_probe_attempts"], 2, "{output}");
                 assert!(output["remote_probe_waited_ms"].as_u64().unwrap() > 0);
-                assert!(output["remote_probe_elapsed_ms"].as_u64().unwrap() >= 1_000);
+                assert!(
+                    output["remote_probe_elapsed_ms"].as_u64().unwrap()
+                        >= output["remote_probe_waited_ms"].as_u64().unwrap()
+                );
                 if remote.is_empty() {
                     assert_eq!(output["decision"], "performed_create");
                     assert_eq!(fixture.calls(), ["probe", "probe", "push"]);
@@ -77,10 +80,10 @@ fn exhausted_pre_push_timeouts_report_the_stage_budget_and_contention_evidence()
                     .parse::<u64>()
                     .unwrap();
                 assert!(
-                    elapsed >= 3_000,
+                    elapsed >= 30,
                     "elapsed covers attempts and waits: {message}"
                 );
-                assert!(message.contains("per-attempt timeout=1000ms"), "{message}");
+                assert!(message.contains("per-attempt timeout=30000ms"), "{message}");
                 let expected_lock = if diagnostic.is_empty() {
                     "not observed"
                 } else {
@@ -173,19 +176,61 @@ impl Fixture {
     }
 
     fn push(&self) -> Result<Value, OrbitError> {
-        execute_deterministic_action(
-            &Host,
-            "git_push",
-            &json!({}),
-            &json!({
-                "workspace_path": self.root.path(),
-                "branch": "candidate",
-                "git_timeout_ms": 1_000,
-            }),
-            false,
-            &HashMap::new(),
-            None,
-        )
+        use orbit_common::test_env::{
+            SupervisorSeam, with_supervision_clock, with_supervisor_seam,
+        };
+        use std::{
+            cell::Cell,
+            rc::Rc,
+            time::{Duration, Instant},
+        };
+        let origin = Instant::now();
+        let now = Rc::new(Cell::new(origin));
+        let observed = Rc::clone(&now);
+        let clock = Rc::clone(&now);
+        let ready = self.root.path().join("probe-ready");
+        let seam = SupervisorSeam {
+            wait: Some(Box::new(move |child| {
+                if ready.exists() {
+                    fs::remove_file(&ready).expect("consume probe readiness");
+                    now.set(now.get() + Duration::from_secs(31));
+                    return Ok(None);
+                }
+                child.try_wait()
+            })),
+            ..SupervisorSeam::default()
+        };
+        let result = with_supervision_clock(
+            move || clock.get(),
+            || {
+                with_supervisor_seam(seam, || {
+                    orbit_engine::test_support::with_remote_probe_backoff(10, || {
+                        execute_deterministic_action(
+                            &Host,
+                            "git_push",
+                            &json!({}),
+                            &json!({
+                                "workspace_path": self.root.path(),
+                                "branch": "candidate",
+                            }),
+                            false,
+                            &HashMap::new(),
+                            None,
+                        )
+                    })
+                })
+            },
+        );
+        let injected_attempts = fs::read_to_string(self.root.path().join("timeouts"))
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            .min(3);
+        assert!(
+            observed.get().duration_since(origin) >= Duration::from_secs(31 * injected_attempts),
+            "each stalled ls-remote must reach its supervised deadline: {result:?}"
+        );
+        result
     }
 
     fn calls(&self) -> Vec<String> {
@@ -210,6 +255,7 @@ case "$1" in
     printf '%s\n' "$count" > count
     if [ "$count" -le "$(cat timeouts)" ]; then
       cat probe-failure >&2
+      : > probe-ready
       exec sleep 600
     fi
     if [ -s probe-failure ]; then cat probe-failure >&2; exit 1; fi
