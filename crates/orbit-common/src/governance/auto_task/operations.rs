@@ -14,8 +14,8 @@
 
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
-    Redaction, both, cli_only, defaulted, free_text, mcp_only, operation_registry, preserve_empty,
-    required,
+    Redaction, UnknownFields, both, cli_only, defaulted, free_text, mcp_only, operation_registry,
+    preserve_empty, required,
 };
 use crate::governance::task::{
     TASK_COMPLEXITY_VALUES, TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES,
@@ -242,6 +242,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Managed workers can ask the owning host to edit its live definitions.
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
@@ -291,6 +292,7 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -314,6 +316,7 @@ const SHOW: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // `list` already returns full definitions to agents.
     mcp_scope: None,
 };
@@ -486,6 +489,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -509,6 +513,7 @@ const TOGGLE: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Agents enable or disable through `orbit.auto_task.update`'s `enabled`.
     mcp_scope: None,
 };
@@ -540,6 +545,7 @@ const DELETE: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Destructive administration stays off MCP.
     mcp_scope: None,
 };
@@ -561,6 +567,7 @@ const RESTORE: AutoTaskOperation = AutoTaskOperation {
     ))]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -587,6 +594,7 @@ const MINT: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -631,6 +639,7 @@ const RECOVER: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -661,6 +670,7 @@ const RESET: AutoTaskOperation = AutoTaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 

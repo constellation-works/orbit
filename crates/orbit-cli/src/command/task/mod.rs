@@ -1,4 +1,3 @@
-mod add;
 mod archive;
 pub(crate) mod artifact;
 pub mod artifacts;
@@ -9,7 +8,7 @@ pub(crate) mod flow;
 mod import;
 mod lint;
 mod list;
-mod operation;
+pub(crate) mod operation;
 pub(crate) mod output;
 mod pilot_comment;
 mod publication;
@@ -19,7 +18,6 @@ mod reindex;
 pub(crate) mod review_reset;
 mod show;
 pub(crate) mod support;
-pub(crate) mod update;
 
 pub use command::{TaskCommand, TaskSubcommand};
 pub use publication::TaskPublicationSubcommand;

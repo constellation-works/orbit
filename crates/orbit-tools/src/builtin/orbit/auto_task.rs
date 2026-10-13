@@ -15,6 +15,21 @@ use super::operation::{GuardedModes, operation_tool_schema};
 use crate::{OrbitBuiltinAction, ToolContext};
 
 impl GuardedModes for AutoTaskVerb {
+    fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
+        match self {
+            AutoTaskVerb::Add
+            | AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Update
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => None,
+        }
+    }
+
     fn guarded_mode(
         self,
         ctx: &ToolContext,
@@ -42,6 +57,36 @@ impl GuardedModes for AutoTaskVerb {
                 .then(|| checked_toggle(ctx, input.clone())),
             AutoTaskVerb::Add
             | AutoTaskVerb::Show
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => None,
+        }
+    }
+
+    fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
+        match self {
+            AutoTaskVerb::Add
+            | AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Update
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => Ok(()),
+        }
+    }
+
+    fn schema_extension(self) -> Option<fn(&mut Value)> {
+        match self {
+            AutoTaskVerb::Add
+            | AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Update
             | AutoTaskVerb::Toggle
             | AutoTaskVerb::Delete
             | AutoTaskVerb::Restore

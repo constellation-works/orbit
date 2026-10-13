@@ -11,7 +11,7 @@
 
 use crate::governance::operation::{
     CliArgKind, CliBinding, CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec,
-    ParamType, RETIRED_AGENT_FIELD, Redaction, operation_registry,
+    ParamType, RETIRED_AGENT_FIELD, Redaction, UnknownFields, operation_registry,
 };
 use orbit_types::tool::McpToolScope;
 
@@ -87,6 +87,7 @@ const ADD: FrictionOperation = FrictionOperation {
             redact: Redaction::FreeText,
             mcp_description: Some(BODY_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("body"),
                 help: BODY_HELP,
             }),
@@ -101,6 +102,7 @@ const ADD: FrictionOperation = FrictionOperation {
             redact: Redaction::FreeText,
             mcp_description: Some(ADD_TITLE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("title"),
                 help: ADD_TITLE_CLI_HELP,
             }),
@@ -115,6 +117,7 @@ const ADD: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(Description::Computed(add_tags_description)),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
@@ -138,6 +141,7 @@ const ADD: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(DURING_TASK_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("during-task"),
                 help: DURING_TASK_HELP,
             }),
@@ -154,6 +158,7 @@ const ADD: FrictionOperation = FrictionOperation {
                 "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
             )),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("model"),
                 help: Description::Static(
                     "Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)",
@@ -163,6 +168,7 @@ const ADD: FrictionOperation = FrictionOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -209,6 +215,7 @@ const LIST: FrictionOperation = FrictionOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Agents list frictions through `orbit.search` with `kind: friction` and
     // no query; this verb backs the CLI listing and the dashboard.
     mcp_scope: None,
@@ -225,6 +232,7 @@ const SHOW: FrictionOperation = FrictionOperation {
     params: &[&[BARE_ID_PARAM]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // `list` already returns the record bodies an agent needs; fetching one by
     // id is a human/dashboard follow-up and stays on the CLI surface.
     mcp_scope: None,
@@ -241,6 +249,7 @@ const STATS: FrictionOperation = FrictionOperation {
     params: &[],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Aggregate administration stays off the MCP surface.
     mcp_scope: None,
 };
@@ -256,6 +265,7 @@ const TAGS: FrictionOperation = FrictionOperation {
     params: &[],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // The taxonomy is already spelled out in the `add`/`update` tag parameter
     // descriptions, so a separate advertised lookup earns nothing.
     mcp_scope: None,
@@ -280,6 +290,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Positional,
                 help: FRICTION_ID_HELP,
             }),
@@ -295,6 +306,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(Description::Computed(update_tags_description)),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
@@ -318,6 +330,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             redact: Redaction::FreeText,
             mcp_description: Some(UPDATE_BODY_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("body"),
                 help: UPDATE_BODY_HELP,
             }),
@@ -332,6 +345,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(REHOME_TO_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("rehome-to"),
                 help: REHOME_TO_HELP,
             }),
@@ -346,6 +360,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(MOVE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("move"),
                 help: MOVE_HELP,
             }),
@@ -360,6 +375,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             redact: Redaction::FreeText,
             mcp_description: Some(UPDATE_TITLE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("title"),
                 help: UPDATE_TITLE_CLI_HELP,
             }),
@@ -367,6 +383,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
     ]],
     at_least_one_of: &["status", "tags", "body", "title", "rehome_to"],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -381,6 +398,7 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     params: &[&[BARE_ID_PARAM]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Resolution is an operator decision taken through the CLI / dashboard.
     mcp_scope: None,
 };
@@ -404,6 +422,7 @@ const REHOME: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Positional,
                 help: FRICTION_ID_HELP,
             }),
@@ -418,6 +437,7 @@ const REHOME: FrictionOperation = FrictionOperation {
             redact: Redaction::None,
             mcp_description: Some(TO_WORKSPACE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("to-workspace"),
                 help: TO_WORKSPACE_HELP,
             }),
@@ -425,6 +445,7 @@ const REHOME: FrictionOperation = FrictionOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
     // remains the CLI spelling of the same move.
     mcp_scope: None,
@@ -468,6 +489,7 @@ const BARE_ID_PARAM: ParamSpec = ParamSpec {
     redact: Redaction::None,
     mcp_description: Some(Description::Static("friction ID")),
     cli: Some(CliBinding {
+        required: false,
         kind: CliArgKind::Positional,
         help: FRICTION_ID_HELP,
     }),
@@ -485,6 +507,7 @@ const fn text_param(name: &'static str, description: &'static str) -> ParamSpec 
         redact: Redaction::None,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
+            required: false,
             kind: flag(name),
             help: Description::Static(description),
         }),
@@ -503,6 +526,7 @@ const fn count_param(name: &'static str, description: &'static str) -> ParamSpec
         redact: Redaction::None,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
+            required: false,
             kind: flag(name),
             help: Description::Static(description),
         }),

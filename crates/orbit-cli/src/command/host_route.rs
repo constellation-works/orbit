@@ -154,7 +154,6 @@ fn requested_host(command: &Commands) -> Option<String> {
             TaskSubcommand::Operation(invocation) => {
                 invocation.input.get("host").and_then(Value::as_str)
             }
-            TaskSubcommand::Update(args) => args.routing.host.as_deref(),
             TaskSubcommand::Artifact(command) => command.routing.host.as_deref(),
             TaskSubcommand::ReviewReset(args) => args.routing.host.as_deref(),
             TaskSubcommand::ReconcileReview(command) => command.routing.host.as_deref(),
@@ -183,10 +182,12 @@ fn explicit_root(cli: &Cli) -> bool {
 fn routed_command_id(command: &TaskSubcommand) -> Option<&str> {
     match command {
         // A registry-derived verb routes by id when its tool does.
-        TaskSubcommand::Operation(invocation) if is_id_routed_tool(invocation.spec.tool_name) => {
+        TaskSubcommand::Operation(invocation)
+            if invocation.spec.verb == TaskVerb::Update
+                || is_id_routed_tool(invocation.spec.tool_name) =>
+        {
             invocation.target_id()
         }
-        TaskSubcommand::Update(args) => Some(&args.id),
         TaskSubcommand::Artifact(artifact) => Some(match &artifact.command {
             TaskArtifactSubcommand::Put(args) => &args.id,
             TaskArtifactSubcommand::Get(args) => &args.id,
@@ -365,12 +366,14 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                     render: Render::TaskShow { fields },
                 }
             }
-            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => return Err(not_routable()),
-        },
-        TaskSubcommand::Update(args) => RoutedCall {
-            name: "orbit.task.update".into(),
-            input: args.remote_tool_input(&holder.ssh)?,
-            render: Render::TaskWrite { verb: "Updated" },
+            TaskVerb::Update => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: super::task::operation::remote_update_input(&invocation.input, &holder.ssh)?,
+                render: Render::TaskWrite { verb: "Updated" },
+            },
+            TaskVerb::Add | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => {
+                return Err(not_routable());
+            }
         },
         TaskSubcommand::Artifact(artifact) => match &artifact.command {
             TaskArtifactSubcommand::Put(args) => {

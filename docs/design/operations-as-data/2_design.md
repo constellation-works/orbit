@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on friction, auto-task, drain, workspace claim and the task read verbs, plus the planned migration of the remaining nouns.
+summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on friction, auto-task, drain, workspace claim and the task read and write verbs, plus the planned migration of the remaining nouns.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-cli/src/command/task/operation.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938]
 ---
 
 # Operations as Data — Design
@@ -21,7 +21,7 @@ This doc describes the friction implementation and the revisions accepted on
 is **Implemented** (true of the code today, on the migrated nouns) or
 **Planned** (accepted but not yet built). Kernel v2's structure, its richer
 parameter kinds and its input validation are implemented, the validation in
-warn mode for unknown fields. Both follow the rules in
+warn mode for unknown fields except on the task writes, which refuse them. Both follow the rules in
 [4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
 Planned to Implemented. The order in which nouns migrate is in §9;
 forward-looking questions are in
@@ -86,6 +86,7 @@ pub struct OperationSpec<V: 'static> {
     pub params: &'static [&'static [ParamSpec]], // groups, concatenated in order
     pub at_least_one_of: &'static [&'static str],
     pub retired_fields: &'static [RetiredField], // name + where it went
+    pub unknown_fields: UnknownFields,  // Warn | Refuse (§4)
     pub mcp_scope: Option<McpToolScope>,
 }
 
@@ -93,7 +94,7 @@ pub struct ParamSpec {
     pub name: &'static str,
     pub aliases: &'static [&'static str], // accepted wire spellings, resolved at the tool entry
     pub param_type: ParamType,         // String | StringList | Integer | Boolean
-                                       // | Switch | Enum(&[EnumValue]) | Object (§2.2)
+                                       // | Switch | Enum(&[EnumValue]) | Object | Array (§2.2)
     pub required: bool,
     pub preserve_empty: bool,
     pub default: Option<&'static str>, // CLI default, shown as `[default: …]` (§2.2)
@@ -162,8 +163,11 @@ What each kernel v2 piece is for:
   instead. Richer cross-field rules stay in handlers.
 - **`retired_fields`** replaces `rejects_agent_field`: a field that used to be
   accepted is refused with a message that names where it went. Friction `add`
-  retires `agent` (`RETIRED_AGENT_FIELD`); task's
-  `reject_retired_task_add_input_fields` moves here when task migrates.
+  retires `agent` (`RETIRED_AGENT_FIELD`). Its `wording` keeps a shipped
+  refusal's phrasing: `no_longer_accepts` (friction's), `unknown_field` (task
+  `add`'s `plan`, `status`, `parent_id` and the other creation-time fields,
+  which name `orbit.task.update`), or `verbatim` (task `update`'s
+  `required_tools` spellings, `force` and `artifacts`).
 - **`CliGroup`** names an intermediate subcommand and its `--help` summary. No
   migrated noun declares one yet; the CLI adapter builds groups when the first
   nested noun (task, phase 3) needs them.
@@ -181,6 +185,7 @@ pub enum ParamType {
     Enum(&'static [EnumValue]),      // fixed values; a string on the wire
     EnumList(&'static [EnumValue]),  // several fixed values; a string list on the wire
     Object,                          // a JSON object, for structured input
+    Array,                           // a JSON array of structured entries
 }
 
 pub struct EnumValue {
@@ -237,6 +242,13 @@ What each addition is for:
   The parameter builders (`both`, `mcp_only`, `cli_only`, `required` and the
   other modifiers) moved into the kernel from the auto-task registry, and the
   task enum value tables moved to the task registry, so both nouns share them.
+- **`Array`, `CliBinding::required` and hidden option objects** are what the
+  task writes (phase 3b) needed. `relations` is an array of typed entries
+  (`Array`). `add --complexity` is required on the CLI while guarded creation
+  over MCP may omit it (`cli_required`). The operator command's options that
+  MCP must not see (`add --plan`, `--status`, `--parent`; `update --approve`,
+  `--force`, `--artifact`) travel in one `cli_options` object that is a
+  hidden wire field, consumed by the core handler (§9, phase 3b).
 - **Enum membership is a content rule.** The tool entry checks only that an
   `Enum` value is a string; the handler (or the serde type it deserializes
   into) owns the allowed set. The CLI spells values in kebab-case
@@ -275,7 +287,10 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 ## 4. Input validation at the tool entry
 
 **Implemented (warn mode)** on friction, auto-task, drain, workspace claim and
-the task read verbs: unknown fields are reported, not yet refused.
+the task read verbs: unknown fields are reported, not yet refused. The task
+writes declare `unknown_fields: Refuse`, because `orbit.task.add` and
+`orbit.task.update` refused unknown fields before they migrated; the refusal
+names the field and suggests a declared one.
 
 `OperationSpec::parse_input(&self, input: Value) -> Result<OperationInput,
 OrbitError>` in `orbit-common` checks a call against its spec, reusing the
@@ -409,8 +424,9 @@ requires a workspace; it carries no placement or capability policy beyond that.
 `Friction(FrictionVerb)`, and auto-task's five into `AutoTask(AutoTaskVerb)`;
 phase 2 similarly replaces six drain variants with `Drain(DrainVerb)` and three
 workspace-claim variants with `WorkspaceClaim(WorkspaceClaimVerb)`, and phase
-3a replaces the four task read variants with `Task(TaskVerb)`; the other task
-variants stay until their slices land.
+3a replaces the four task read variants with `Task(TaskVerb)`, and phase 3b
+folds `TaskAdd` and `TaskUpdate` into it; the other task variants stay until
+their slices land.
 `orbit-tools` implements `From<V>` for each. Downstream matches pattern-match
 on the inner verb. Friction needs no module of its own in `orbit-tools`.
 
@@ -426,22 +442,25 @@ The task table in
 [task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs)
 does the same for `show` (`view: "bounded"`, and `snapshot: true` for the
 versioned snapshot) and `list` (`view: "bounded"`); `eligible` and `lint`
-return none.
+return none. `GuardedModes::preempt` runs before `parse_input`, for a mode
+whose input the spec's flat parameter list does not describe: guarded
+creation and guarded update (`add` and `update` carrying `request_id`,
+`expected_revision`, `verdict` or `complete`) keep their own field rules, and `update` refuses a managed
+implementation activity setting `blocked`, and an explicit `crew: null`,
+with their shipped messages.
+
+**Schema extensions** are the same table's `schema_extension(verb)`, an
+exhaustive match applied after the derived schema. Only `orbit.task.add` and
+`orbit.task.update` return one
+([guarded.rs](../../../crates/orbit-tools/src/builtin/orbit/task/guarded.rs)):
+the JSON Schema conditionals for guarded creation and update, which the flat
+parameter list cannot express and only MCP needs. The MCP snapshot did not
+move.
 
 The `list` spec also declares the tool-only `response_mode` parameter (no CLI
 flag; `list` is not advertised over MCP, where agents list frictions with
 `orbit.search`). Omitting it preserves the legacy record-array response. The
 explicit `with_notes` mode has one stable object shape, `{records, notes}`.
-
-**Planned:**
-
-- **Schema extensions as a surface table.** `orbit.task.add` and
-  `orbit.task.update` override `Tool::input_schema()` to add JSON Schema
-  conditionals for guarded creation
-  ([guarded.rs](../../../crates/orbit-tools/src/builtin/orbit/task/guarded.rs)).
-  The flat parameter list cannot express those, and only MCP needs them. Each
-  noun's `orbit-tools` module provides an exhaustive `fn schema_extension(verb)
-  -> Option<fn(&mut Value)>`, applied after the derived schema.
 
 **Decided (phase 1):** an `Enum` parameter keeps its allowed values, and any
 default, in its MCP description, and the schema emits no `enum` or `default`
@@ -566,7 +585,7 @@ other nouns.
 ## 9. Migration plan
 
 **Planned**, except phase 0a, phase 0b's warn mode, phases 1–2 and phase 3's
-read slice, which are implemented. This replaces the touch-it-move-it ratchet; see
+read and write slices, which are implemented. This replaces the touch-it-move-it ratchet; see
 [Migrate the remaining nouns on a plan, not on contact](./4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
 
 Each phase is one Orbit task tagged `operations-as-data` (large nouns split per
@@ -578,7 +597,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 0b (warn mode done) | Kernel v2 input validation on friction: `parse_input`, aliases, retired fields, `at_least_one_of`, unknown-field warnings | Moves the friction handlers onto canonical names and the warn-then-refuse rollout onto the one migrated noun |
 | 1 (done) | auto-task: 5 tools (`show` inactive), 10 CLI verbs | Second pilot. First noun whose CLI calls core directly; exercises `Enum`, `default`, parameter groups, CLI-only verbs (`toggle`, `delete`, `restore`, `recover`, `reset` with `mcp_scope: None`) and the tool-path rule |
 | 2 (done) | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
-| 3 (reads done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
+| 3 (reads, writes done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
 | 4 | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
 
@@ -586,7 +605,7 @@ Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
 [ORB-15933] (input validation, warn mode, done) and [ORB-15934] (refuse unknown
 fields after the window); phase 1
 [ORB-15935] (done); phase 2 [ORB-15936] (done); phase 3 [ORB-15937] (reads, done), [ORB-15938]
-(add/update), [ORB-15939] (artifact and locks), [ORB-15940] (review and
+(add/update, done), [ORB-15939] (artifact and locks), [ORB-15940] (review and
 lifecycle); phase 4 [ORB-15941]; phase 5 [ORB-15942]. [ORB-15943] verifies the
 authorization golden that phases 1 and 4 rely on.
 
@@ -603,7 +622,10 @@ variants were counted at phase 1's base). After phase 2 on the same date, they
 are 27 and 23: nine per-verb tool impls and nine action variants are replaced by
 the generic tool and two noun variants. After phase 3a on the same date, they
 are 23 and 19: the four task read tool impls and action variants are replaced
-by the generic tool and `Task(TaskVerb)`. The weekly code-health sweep reports
+by the generic tool and `Task(TaskVerb)`. After phase 3b on the same date,
+they are 21 and 18: the `add` and `update` tool impls and action variants are
+gone, and `orbit.task.artifact.put`, which dispatched `TaskUpdate`, has its own
+`TaskArtifactPut` variant until its slice lands. The weekly code-health sweep reports
 both numbers. Neither is a merge gate.
 
 ### Phase 2: tool-only nouns (Implemented)
@@ -655,6 +677,39 @@ rather than only the bounded one. The behaviour baseline's differences are
 listed in
 [Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 
+### Phase 3b: task writes (Implemented)
+
+`orbit.task.add` and `orbit.task.update` are declared in
+[write_operations.rs](../../../crates/orbit-common/src/governance/task/write_operations.rs)
+and served by `OperationTool<TaskVerb>`. `orbit task add` and `orbit task
+update` execute through `run_tool`, and the one handler in
+[task_write_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_write_tools.rs)
+assembles `TaskAddParams` and `TaskUpdateParams` for every surface. The help
+goldens under `crates/orbit-cli/tests/help_goldens/task/` (`add.txt`,
+`update.txt`) were captured before the migration and pass unchanged, and the
+MCP snapshot, including the guarded-creation conditionals, is unchanged.
+
+The operator command keeps options that MCP never had. The CLI `prepare`
+table moves them into one `cli_options` object: `add`'s `--parent`,
+`--dependencies`, `--plan`, `--ref`, `--status` and `--source-task`, and
+`update`'s `--approve`, `--force`, `--discard-candidate` and `--artifact`. The
+tool registry admits `cli_options` only from a caller without an MCP session,
+so an MCP call that sends it gets the same `unknown field 'cli_options'` as
+any other unknown field. A request carrying it is screened as the operator
+command was (`TaskWriteScreen::from_process`, bound to a reservation owner
+when there is one) and keeps the CLI's update semantics: `--approve` takes
+the approval step, and other updates are lifecycle or forced writes without
+the guarded start and approval transitions. A claimed worker's `add` refuses
+`cli_options`.
+
+`--host` routing for `update` is unchanged: the preflight sends the derived
+input to the owning host as `orbit.task.update`, refusing the flags with no
+tool field, as before. The retired-field and unknown-field refusals the tools
+shipped are spec entries (§2.1, §4), and over MCP and `orbit tool run` the
+registry's schema check still answers first with the same plain `unknown
+field` message. The Step 0 baseline and its differences are in
+[Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
+
 ## 10. Concerns & Honest Limitations
 
 - **The registry is a wall of contract strings.** Centralizing tool names,
@@ -703,8 +758,9 @@ listed in
   and CLI-only parameter kinds.
 - [ORB-15936] — phase 2, drain and workspace claim.
 - [ORB-15937] — phase 3a: migrated the task read verbs and settled ID routing.
-- [ORB-15938], [ORB-15939], [ORB-15940] — phase 3, the rest of the task noun in
-  three slices.
+- [ORB-15938] — phase 3b: migrated task `add` and `update` with the guarded
+  schema extension.
+- [ORB-15939], [ORB-15940] — phase 3, the rest of the task noun.
 - [ORB-15941] — phase 4, workflow run.
 - [ORB-15942] — phase 5, routine control and search.
 - [ORB-15943] — verifies the authorization golden still catches placement and

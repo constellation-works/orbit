@@ -812,6 +812,113 @@ fn stdio_friction_add_reports_unknown_fields_without_refusing() {
     assert_eq!(fields, [json!("severity")]);
 }
 
+/// Task writes run through the operation spec, which refuses an unknown or
+/// retired field before any write, and keeps the operator command's
+/// `cli_options` off the MCP surface.
+fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"Refusal proof","description":"Disposable boundary","complexity":"low","model":"codex"}),
+    );
+    let id = task["id"].as_str().unwrap();
+    let add =
+        json!({"title":"Refused","description":"Never stored","complexity":"low","model":"codex"});
+    let update = json!({"id":id,"title":"Never stored","model":"codex"});
+    for (tool, base, field, value, expected) in [
+        (
+            "orbit_task_add",
+            &add,
+            "bogus",
+            json!(true),
+            "unknown field 'bogus'",
+        ),
+        (
+            "orbit_task_add",
+            &add,
+            "plan",
+            json!("p"),
+            "unknown field 'plan'",
+        ),
+        (
+            "orbit_task_add",
+            &add,
+            "dependencies",
+            json!(["x"]),
+            "unknown field 'dependencies'",
+        ),
+        (
+            "orbit_task_add",
+            &add,
+            "cli_options",
+            json!({}),
+            "unknown field 'cli_options'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "bogus",
+            json!(true),
+            "unknown field 'bogus'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "force",
+            json!(true),
+            "unknown field 'force'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "artifacts",
+            json!([]),
+            "unknown field 'artifacts'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "required_tools",
+            json!(["x"]),
+            "unknown field 'required_tools'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "cli_options",
+            json!({"force":true}),
+            "unknown field 'cli_options'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "crew",
+            Value::Null,
+            "`crew` must be a string",
+        ),
+    ] {
+        let mut arguments = base.clone();
+        arguments[field] = value;
+        let refused = client.call_tool_err(tool, arguments);
+        assert_eq!(
+            refused["code"], "invalid_input",
+            "{tool} {field}: {refused}"
+        );
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|m| m.contains(expected)),
+            "{tool} {field}: {refused}"
+        );
+    }
+    let shown = client.call_tool_ok("orbit_task_show", json!({"id":id,"fields":["title"]}));
+    assert_eq!(
+        shown["value"], "Refusal proof",
+        "a refused update wrote: {shown}"
+    );
+}
+
 #[test]
 fn artifact_and_auto_task_stdio_contracts() {
     for (name, check) in [
@@ -830,6 +937,10 @@ fn artifact_and_auto_task_stdio_contracts() {
         (
             "stdio_friction_add_reports_unknown_fields_without_refusing",
             stdio_friction_add_reports_unknown_fields_without_refusing as fn(),
+        ),
+        (
+            "stdio_task_writes_refuse_unknown_retired_and_cli_only_fields",
+            stdio_task_writes_refuse_unknown_retired_and_cli_only_fields as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

@@ -328,7 +328,6 @@ impl Commands {
                     TaskSubcommand::Operation(invocation) => {
                         return task_operation(invocation, boxed_runtime_dispatch!(Task));
                     }
-                    TaskSubcommand::Add(_) => ("add", Some("task"), None),
                     TaskSubcommand::Artifact(command) => match &command.command {
                         TaskArtifactSubcommand::Put(args) => {
                             ("artifact-put", Some("task"), Some(args.id.as_str()))
@@ -348,9 +347,6 @@ impl Commands {
                         ),
                     },
                     TaskSubcommand::Flow(_) => ("flow", None, None),
-                    TaskSubcommand::Update(args) => {
-                        ("update", Some("task"), Some(args.id.as_str()))
-                    }
                     TaskSubcommand::Archive(args) => {
                         ("archive", Some("task"), Some(args.id.as_str()))
                     }

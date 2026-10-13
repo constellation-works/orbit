@@ -69,12 +69,16 @@ impl Tool for OrbitTaskArtifactPutTool {
                 ));
             }
             reject_unknown_tool_fields(&input, &["id", "artifacts", "model"])?;
-            return super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskUpdate);
+            return super::super::execute_host_action(
+                ctx,
+                input,
+                OrbitBuiltinAction::TaskArtifactPut,
+            );
         }
 
         let update_input = prepare_remote_payload(input, ctx)?;
 
-        super::super::execute_host_action(ctx, update_input, OrbitBuiltinAction::TaskUpdate)
+        super::super::execute_host_action(ctx, update_input, OrbitBuiltinAction::TaskArtifactPut)
     }
 }
 
@@ -122,8 +126,8 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
     let artifact = read_bounded_artifact(&resolved_source_path, artifact_path.as_deref())?;
     validate_review_report(&artifact)?;
 
-    // Build the TaskUpdate input from attachment and transport fields only.
-    // Future TaskUpdate fields cannot silently widen artifact.put authority.
+    // Build the attachment input from attachment and transport fields only.
+    // Future task update fields cannot silently widen artifact.put authority.
     let mut update_input = Map::new();
     update_input.insert("id".to_string(), Value::String(id));
     for key in ["model", "workspace", "_meta"] {

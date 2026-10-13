@@ -29,7 +29,6 @@ pub fn register(registry: &mut ToolRegistry) {
     // Friction schemas, MCP exposure and execution kinds are declared once in
     // the shared operation registry and registered from there.
     operation::register_noun(registry, &FRICTION);
-    registry.register_mcp(task::add::OrbitTaskAddTool, McpToolScope::WorkspaceRequired);
     // Attach and read are the two halves of one artifact surface: without a
     // read verb an agent can store a reference it can never inspect again.
     registry.register_mcp(
@@ -67,13 +66,10 @@ pub fn register(registry: &mut ToolRegistry) {
         task::review_reset::OrbitTaskReviewResetTool,
         McpToolScope::WorkspaceRequired,
     );
-    // The migrated task reads (`list`, `eligible`, `show`, `lint`) come from
-    // the shared operation registry; the other task tools are hand-wired.
+    // The migrated task verbs (`add`, `update`, `list`, `eligible`, `show`,
+    // `lint`) come from the shared operation registry; the other task tools
+    // are hand-wired.
     operation::register_noun(registry, &TASK);
-    registry.register_mcp(
-        task::update::OrbitTaskUpdateTool,
-        McpToolScope::WorkspaceRequired,
-    );
     registry.register_mcp(
         pipeline::invoke::OrbitPipelineInvokeTool,
         McpToolScope::WorkspaceRequired,

@@ -84,36 +84,35 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
     super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)
 }
 
-/// Describe guarded extensions without weakening ordinary creation requirements.
-pub(super) fn input_schema(schema: &orbit_types::tool::ToolSchema, create: bool) -> Value {
-    let mut value = Value::Object(orbit_common::protocol::tool_schema::tool_input_schema(
-        schema,
-    ));
-    if create {
-        value["allOf"] = json!([{
-            "if":{"required":["request_id"]},
-            "then":{"required":["workspace","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
-            "else":{"required":["complexity"]}
-        }]);
-        // Nullable crew is used only by guarded creation; ordinary creation still
-        // parses and validates its existing field semantics at the host boundary.
-        value["properties"]["crew"]["type"] = json!(["string", "null"]);
-    } else {
-        let string = json!({"type":"string"});
-        let strings = json!({"type":"array","items":{"type":"string"}});
-        value["properties"]["verdict"] = json!({"type":"object","additionalProperties":false,"required":["decision","rationale","criteria","evidence"],"properties":{
-            "decision":{"enum":["accept","changes_requested"]},"rationale":string,"evidence":strings,
-            "expected_run_id":{"type":["string","null"]},"expected_head":{"type":["string","null"]},
-            "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","met","evidence"],"properties":{"criterion":string,"met":{"type":"boolean"},"evidence":strings}}}
-        }});
-        value["allOf"] = json!([{
-            "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
-            "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
-                {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","verdict","complete"]}},
-                {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","comment"]}},
-                {"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
-            ]}
-        }]);
-    }
-    value
+/// `orbit.task.add`'s schema extension: guarded creation's conditionals,
+/// without weakening ordinary creation's requirements.
+pub(super) fn extend_create_schema(value: &mut Value) {
+    value["allOf"] = json!([{
+        "if":{"required":["request_id"]},
+        "then":{"required":["workspace","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
+        "else":{"required":["complexity"]}
+    }]);
+    // Nullable crew is used only by guarded creation; ordinary creation still
+    // parses and validates its existing field semantics at the host boundary.
+    value["properties"]["crew"]["type"] = json!(["string", "null"]);
+}
+
+/// `orbit.task.update`'s schema extension: the review verdict's shape and
+/// the guarded write's conditionals.
+pub(super) fn extend_update_schema(value: &mut Value) {
+    let string = json!({"type":"string"});
+    let strings = json!({"type":"array","items":{"type":"string"}});
+    value["properties"]["verdict"] = json!({"type":"object","additionalProperties":false,"required":["decision","rationale","criteria","evidence"],"properties":{
+        "decision":{"enum":["accept","changes_requested"]},"rationale":string,"evidence":strings,
+        "expected_run_id":{"type":["string","null"]},"expected_head":{"type":["string","null"]},
+        "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","met","evidence"],"properties":{"criterion":string,"met":{"type":"boolean"},"evidence":strings}}}
+    }});
+    value["allOf"] = json!([{
+        "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
+        "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
+            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","verdict","complete"]}},
+            {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","comment"]}},
+            {"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
+        ]}
+    }]);
 }

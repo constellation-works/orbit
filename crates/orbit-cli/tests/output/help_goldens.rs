@@ -61,6 +61,8 @@ const CASES: &[(&[&str], &str)] = &[
     (&["auto-task", "recover"], "auto-task/recover.txt"),
     (&["auto-task", "reset"], "auto-task/reset.txt"),
     (&["task"], "task/root.txt"),
+    (&["task", "add"], "task/add.txt"),
+    (&["task", "update"], "task/update.txt"),
     (&["task", "list"], "task/list.txt"),
     (&["task", "eligible"], "task/eligible.txt"),
     (&["task", "show"], "task/show.txt"),

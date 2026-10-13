@@ -4,7 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use orbit_common::protocol::tool_input::RETIRED_TASK_ADD_INPUT_FIELDS;
+use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::task::TaskVerb;
 use orbit_tools::{ToolContext, ToolRegistry};
 
 #[test]
@@ -467,10 +468,11 @@ fn task_add_schema_uses_trimmed_authoring_surface() {
             "model",
         ]
     );
-    for removed in RETIRED_TASK_ADD_INPUT_FIELDS {
+    for removed in TaskVerb::Add.spec().retired_fields {
         assert!(
-            !names.contains(removed),
-            "orbit.task.add schema must not expose retired param {removed}"
+            !names.contains(&removed.name),
+            "orbit.task.add schema must not expose retired param {}",
+            removed.name
         );
     }
 }

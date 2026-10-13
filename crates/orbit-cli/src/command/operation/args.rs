@@ -164,9 +164,11 @@ fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
 
 /// Build one clap `Arg` from a parameter spec.
 fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
+    // A wire-required parameter with a default is optional on the command
+    // line; a binding may require a flag the wire does not.
     let mut arg = Arg::new(param.name)
         .help(binding.help.resolve())
-        .required(param.required);
+        .required((param.required && param.default.is_none()) || binding.required);
     if let Some(default) = param.default {
         arg = arg.default_value(default);
     }
@@ -192,7 +194,7 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
     match param.param_type {
         // A presence flag takes no value, so it has no value name.
         ParamType::Switch => return arg.action(ArgAction::SetTrue),
-        ParamType::String | ParamType::Object => {}
+        ParamType::String | ParamType::Object | ParamType::Array => {}
         ParamType::StringList => arg = arg.action(ArgAction::Append).value_delimiter(delimiter),
         ParamType::Integer => arg = arg.value_parser(clap::value_parser!(usize)),
         ParamType::UnsignedInteger => arg = arg.value_parser(clap::value_parser!(u64)),
@@ -255,15 +257,17 @@ fn input_from_matches<V: 'static>(
                 }
             }
             ParamType::StringList => {
-                let values = matches
-                    .get_many::<String>(param.name)
-                    .into_iter()
-                    .flatten()
+                let Some(given) = matches.get_many::<String>(param.name) else {
+                    continue;
+                };
+                let values = given
                     .map(|value| value.trim())
                     .filter(|value| !value.is_empty())
                     .map(|value| Value::String(value.to_string()))
                     .collect::<Vec<_>>();
-                if !values.is_empty() {
+                // A flag given only blank values clears a list whose spec
+                // gives empty a meaning.
+                if !values.is_empty() || param.preserve_empty {
                     input.insert(param.name.to_string(), Value::Array(values));
                 }
             }
@@ -308,7 +312,7 @@ fn input_from_matches<V: 'static>(
             }
             // A JSON argument. Text that does not parse is passed as a string
             // for the tool entry's type check to refuse.
-            ParamType::Object => {
+            ParamType::Object | ParamType::Array => {
                 if let Some(value) = matches.get_one::<String>(param.name) {
                     input.insert(
                         param.name.to_string(),

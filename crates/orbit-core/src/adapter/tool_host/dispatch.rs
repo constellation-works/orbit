@@ -64,6 +64,12 @@ pub(super) fn execute(
         )?;
         return Ok(result);
     }
+    // An operator is a caller holding operator capability and naming no
+    // agent identity; only such a caller can close out a rescued blocked
+    // task without starting work on it.
+    let operator = agent.is_none()
+        && model.is_none()
+        && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
@@ -113,19 +119,35 @@ pub(super) fn execute(
             super::pipeline_tools::wait(runtime, input, agent, model)
         }
         OrbitBuiltinAction::Search => super::search_tools::search(runtime, input),
-        OrbitBuiltinAction::TaskAdd => {
-            let written = super::task_tools::add(
+        OrbitBuiltinAction::Task(verb) => {
+            let (response, written) = super::task_operation_tools::dispatch(
                 runtime,
+                ToolCaller {
+                    session_context,
+                    agent,
+                    model,
+                    reservation_owner,
+                },
+                operator,
+                verb,
                 input,
-                agent,
-                model,
-                session_context.worker_invocation.as_ref(),
+            )?;
+            persisted_task_id = written;
+            Ok(response)
+        }
+        OrbitBuiltinAction::TaskArtifactPut => {
+            let written = super::task_write_tools::artifact_put(
+                runtime,
+                ToolCaller {
+                    session_context,
+                    agent,
+                    model,
+                    reservation_owner,
+                },
+                &input,
             )?;
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
-        }
-        OrbitBuiltinAction::Task(verb) => {
-            super::task_operation_tools::dispatch(runtime, verb, input)
         }
         OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
@@ -160,25 +182,6 @@ pub(super) fn execute(
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
             Ok(result)
-        }
-        OrbitBuiltinAction::TaskUpdate => {
-            // An operator is a caller holding operator capability and naming
-            // no agent identity; only such a caller can close out a rescued
-            // blocked task without starting work on it.
-            let operator = agent.is_none()
-                && model.is_none()
-                && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
-            let written = super::task_tools::update(
-                runtime,
-                input,
-                agent,
-                model,
-                reservation_owner,
-                runtime.artifact_origin(session_context),
-                operator,
-            )?;
-            persisted_task_id = Some(written.persisted_id);
-            Ok(written.response)
         }
         OrbitBuiltinAction::WorkflowShip => super::workflow_tools::ship(
             runtime,

@@ -310,7 +310,12 @@ pub(super) fn task_operation(
         TaskVerb::Lint if invocation.input.get("restore_pruned") != Some(&Value::Bool(true)) => {
             operation.runtime_need = RuntimeNeed::ReadOnly;
         }
-        TaskVerb::Lint | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show => {}
+        TaskVerb::Add
+        | TaskVerb::Update
+        | TaskVerb::Lint
+        | TaskVerb::List
+        | TaskVerb::Eligible
+        | TaskVerb::Show => {}
     }
     operation
 }

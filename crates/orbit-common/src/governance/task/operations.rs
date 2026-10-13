@@ -1,8 +1,9 @@
 //! The task operation registry — the migrated task verbs, declared once.
 //!
-//! Only the read verbs (`list`, `eligible`, `show`, `lint`) are here so far;
-//! the other task verbs are hand-wired until their migration slice lands, and
-//! the CLI's `orbit task` mixes the two.
+//! The read verbs (`list`, `eligible`, `show`, `lint`) are declared here and
+//! the write verbs (`add`, `update`) in `write_operations.rs`; the other
+//! task verbs are hand-wired until their migration slice lands, and the CLI's
+//! `orbit task` mixes the two.
 //!
 //! The CLI and MCP shapes of a verb may differ. `show` takes `--host`, which
 //! the CLI resolves before any runtime opens, and `list` takes the CLI-only
@@ -16,9 +17,10 @@
 use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
 use orbit_types::tool::McpToolScope;
 
+use super::write_operations::{ADD, UPDATE};
 use crate::governance::operation::{
     CliArgKind, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, ToolOnlyRegistration, aliased, both, cli_only, defaulted, mcp_only,
+    ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, defaulted, mcp_only,
     operation_registry,
 };
 
@@ -35,6 +37,10 @@ operation_registry! {
     /// Within a spec, parameter order is the MCP tool schema order.
     pub const TASK_OPERATIONS;
     {
+        /// Create a task.
+        Add => ADD,
+        /// Update a task's fields, or move it through its lifecycle.
+        Update => UPDATE,
         /// List tasks.
         List => LIST,
         /// List the backlog and proposed tasks no in-flight work blocks.
@@ -330,6 +336,7 @@ const LIST: TaskOperation = TaskOperation {
     ],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -394,6 +401,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
     ],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -439,6 +447,7 @@ const SHOW: TaskOperation = TaskOperation {
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Computed(show_fields_description)),
                 cli: Some(crate::governance::operation::CliBinding {
+                    required: false,
                     kind: CliArgKind::Flag {
                         long: "fields",
                         delimiter: Some(','),
@@ -483,6 +492,7 @@ const SHOW: TaskOperation = TaskOperation {
     ],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
@@ -537,6 +547,7 @@ const LINT: TaskOperation = TaskOperation {
     ],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 

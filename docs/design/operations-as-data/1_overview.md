@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction, auto-task, drain, workspace claim and the task read verbs are migrated onto kernel v2 and validate input at the tool entry in warn mode, and a planned noun-by-noun migration is accepted and in progress.
+summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction, auto-task, drain, workspace claim and the task read and write verbs are migrated onto kernel v2 and validate input at the tool entry, and a planned noun-by-noun migration is accepted and in progress.
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938]
 ---
 
 # Operations as Data — Overview
@@ -28,8 +28,9 @@ of [North-star architecture bearing: operations as data behind an operation regi
 auto-task noun followed in [ORB-15935] (phase 1). Drain and workspace claim
 followed in [ORB-15936] (phase 2), migrating nine tool-only verbs. The task
 read verbs (`show`, `list`, `eligible`, `lint`) followed in [ORB-15937]
-(phase 3a), which also settled that ID routing stays keyed by tool name. The
-remaining tool surface (the other task verbs, workflow run, and the
+(phase 3a), which also settled that ID routing stays keyed by tool name, and
+task `add` and `update` followed in [ORB-15938] (phase 3b), with the guarded
+creation schema as a surface table. The remaining tool surface (the other task verbs, workflow run, and the
 single-verb tools) is hand-wired. A
 2026-10-12 review found that the friction kernel declared a verb's *names* once
 but still restated its *behaviour* — read/write class, redaction, accepted
@@ -137,5 +138,7 @@ and again in the tool handler.
   preserving active/inactive registration, schemas and governance.
 - [ORB-15937] — phase 3a: migrated the task read verbs and kept ID routing keyed
   by tool name.
+- [ORB-15938] — phase 3b: migrated task `add` and `update`, adding the array
+  parameter kind, refuse-mode unknown fields and the schema extension table.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

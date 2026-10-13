@@ -1,4 +1,3 @@
-pub mod add;
 pub mod artifact_get;
 pub mod artifact_put;
 pub mod delete;
@@ -8,4 +7,3 @@ mod operation;
 pub mod reconcile_review;
 pub mod reject;
 pub mod review_reset;
-pub mod update;

@@ -11,7 +11,7 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -27,7 +27,11 @@ validation at the tool entry in warn mode ([ORB-15933]): `parse_input`,
 kinds, `default`, and flag aliases and value names. Phase 3a (task reads,
 [ORB-15937]) built `EnumList`, multi-value flags, optional positionals and
 `CliHelp` (long description, after-help examples, flag order), and showed how
-to migrate part of a noun. A nested `cli_path` is still planned; a noun that needs it, or another kind the kernel lacks, extends
+to migrate part of a noun. Phase 3b (task writes, [ORB-15938]) built `Array`,
+CLI-required flags (`cli_required`), `UnknownFields::Refuse` for a verb that
+already refused extras, retired-field wordings, the `GuardedModes::preempt`
+and `schema_extension` tables, and a hidden option object for operator-only
+CLI flags. A nested `cli_path` is still planned; a noun that needs it, or another kind the kernel lacks, extends
 the kernel first. Two recipes: migrating a noun that is still hand-wired, and
 adding a verb to a noun that is already migrated.
 
@@ -178,11 +182,24 @@ If a verb overrode `input_schema()`, move the override into the noun's exhaustiv
 in the parameter's MCP description; the schema emits no `enum` or `default`
 keyword ([2_design.md §6](../2_design.md#6-mcp-adapter)).
 
+If a tool already refused unknown fields, declare `unknown_fields: Refuse` so
+the migration keeps refusing them; every other verb starts in `Warn`. Declare
+each retired field with the `RetiredField` constructor whose wording matches
+the shipped refusal.
+
+If the CLI command has options MCP must not accept (task `add --plan`,
+`update --approve`), the CLI `prepare` table moves them into one hidden
+object parameter (task's `cli_options`) for the core handler to read. Admit
+that field only from a caller without an MCP session, so MCP keeps refusing
+it.
+
 If a tool routed some inputs elsewhere before dispatch (auto-task's bounded
 `list`, acknowledged `mint` and checked `update` go to desktop host actions),
 implement the noun's `GuardedModes` table in `orbit-tools`, an exhaustive match
 on the verb that returns `None` for every verb without such a mode. Every noun
-implements it; friction's returns `None` throughout.
+implements it; friction's returns `None` throughout. A mode whose input the
+flat spec does not describe (task's guarded creation and update) goes in
+`preempt`, which runs before `parse_input`.
 
 For versioned inputs whose protocol-skew refusal must precede shape validation,
 use the host's `prepare_operation_input` hook before `parse_input` (drain pull).
@@ -334,5 +351,8 @@ runtime need all come from the spec.
   CLI-only parameter kinds.
 - [ORB-15937] — migrated the task read verbs, building enum lists, multi-value
   flags, optional positionals and `CliHelp`, and the part-migrated noun shape.
+- [ORB-15938] — migrated task `add` and `update`, building arrays,
+  CLI-required flags, refuse-mode unknown fields, `preempt`,
+  `schema_extension` and the hidden CLI option object.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
