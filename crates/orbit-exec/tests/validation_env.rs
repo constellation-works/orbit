@@ -83,7 +83,8 @@ impl Host {
     }
 
     /// A real bash login profile sources an rc with the usual interactive
-    /// guard. Profile logging counts both attempts without using real dotfiles.
+    /// guard. Profile logging records startup reaching the profile, which a
+    /// timed-out probe need not do, without using real dotfiles.
     fn bash_rc(&self, profile_setup: &str, interactive_setup: &str) {
         fs::write(
             self.home.join(".bash_profile"),
@@ -463,23 +464,38 @@ fn interactive_rc_toolchains_are_found_and_can_be_disabled() {
 
 /// A broken interactive rc cannot prevent the login profile from providing
 /// validation tooling. The failure and successful fallback are cached together.
+/// A timeout can precede any shell marker. Record shell entry separately from
+/// profile entry, and make a retry fail even if neither marker is reached.
 #[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "native probe evidence records process IDs and observed startup modes"
+)]
 fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
-    for (rc, reason, timeout) in [
+    for (rc, reason, timeout, stalled_startup) in [
         (
             "exec /bin/sleep 30",
             "did not finish within 300ms",
             Duration::from_millis(300),
+            false,
         ),
         (
             "echo 'rc failure' >&2; exit 7",
             "exited with status 7",
             Duration::from_secs(10),
+            false,
         ),
         (
             "exec /bin/sh -c 'echo replaced-shell'",
             "marker missing",
             Duration::from_secs(10),
+            false,
+        ),
+        (
+            "exec /bin/sleep 30",
+            "did not finish within 300ms",
+            Duration::from_millis(300),
+            true,
         ),
     ] {
         let host = Host::new();
@@ -491,10 +507,30 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             ),
             rc,
         );
+        if stalled_startup {
+            // Stop interactive startup before the profile can record its mode.
+            // This models an unscheduled/slow startup without loading the host.
+            let profile = host.home.join(".bash_profile");
+            fs::write(
+                &profile,
+                format!(
+                    "case $- in *i*) exec /bin/sleep 30 ;; esac\n{}",
+                    fs::read_to_string(&profile).unwrap()
+                ),
+            )
+            .unwrap();
+        }
         // macOS runner startup can exceed 300ms; keep the production probe
         // timeout for these immediate-exit cases. The hanging case above
         // continues to exercise the short bounded-timeout path.
-        let bash = LoginShell::new("/bin/bash", timeout);
+        let program = host.home.join("recording-bash");
+        executable(
+            &program,
+            "#!/bin/sh\n\
+             printf '%s %s\\n' \"$$\" \"$1\" >> \"$HOME/shell-entries\"\n\
+             exec /bin/bash \"$@\"\n",
+        );
+        let bash = LoginShell::new(&program, timeout);
         let started = Instant::now();
         let resolved = ValidationEnvironment::resolve(
             host.launcher_env(),
@@ -521,18 +557,62 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
         );
         assert_eq!(var(&resolved, "ORBIT_TEST_LOGIN_SECRET"), None);
         assert!(run_with(&resolved, "orbit-fake-tool-13987").0);
+        let entries_path = host.home.join("shell-entries");
+        let entry_log = fs::read_to_string(&entries_path).unwrap();
+        let entries: Vec<bool> = entry_log
+            .lines()
+            .map(|line| line.split_whitespace().nth(1).unwrap() == "-i")
+            .collect();
+        if timeout == Duration::from_millis(300) {
+            assert!(
+                matches!(entries.as_slice(), [false] | [true, false]),
+                "timed-out startup may not reach even the shell-entry marker: {entries:?}"
+            );
+        } else {
+            assert_eq!(entries, vec![true, false], "interactive then login entry");
+        }
+        let probes_path = host.home.join("probes");
+        let probes = fs::read_to_string(&probes_path).unwrap();
+        let modes: Vec<bool> = probes.lines().map(|flags| flags.contains('i')).collect();
+        if stalled_startup {
+            assert_eq!(modes, vec![false], "timeout precedes the profile marker");
+        } else if timeout == Duration::from_millis(300) {
+            assert!(
+                matches!(modes.as_slice(), [false] | [true, false]),
+                "timed-out startup may not reach the profile: {modes:?}"
+            );
+        } else {
+            assert_eq!(modes, vec![true, false], "immediate rc failure is observed");
+        }
+        eprintln!(
+            "rc={rc:?} stalled_startup={stalled_startup} elapsed={:?} \
+             shell_entries={entry_log:?} profile_modes={modes:?} fallback={fallback:?}",
+            started.elapsed()
+        );
+        // A marker alone cannot detect a retry killed before writing it. Make
+        // either probe fail on a retry, so result equality also proves reuse
+        // when startup never reaches the recording code. Keep the cache key.
+        executable(
+            &program,
+            "#!/bin/sh\n\
+             printf '%s %s\\n' \"$$\" \"$1\" >> \"$HOME/shell-entries\"\n\
+             exit 91\n",
+        );
         let cached = ValidationEnvironment::resolve(
             host.launcher_env(),
             &ValidationEnvPolicy::default(),
             &bash,
         );
         assert_eq!(cached, resolved);
-        let probes = fs::read_to_string(host.home.join("probes")).unwrap();
-        let modes: Vec<bool> = probes.lines().map(|flags| flags.contains('i')).collect();
         assert_eq!(
-            modes,
-            vec![true, false],
-            "fallback outcome avoids retrying the rc"
+            fs::read_to_string(&entries_path).unwrap(),
+            entry_log,
+            "cached fallback must not launch either probe again"
+        );
+        assert_eq!(
+            fs::read_to_string(&probes_path).unwrap(),
+            probes,
+            "cached fallback must not re-enter the profile or rc"
         );
     }
 }
