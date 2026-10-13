@@ -82,9 +82,9 @@
 //! work this host's load forecast has room for, computed under the host
 //! admission lock just before it, and the owner admits only a task inside it.
 //! When nothing fits the pass requests nothing and records
-//! `forecast_no_headroom`. A claim that returns is reserved under that lock
-//! before the next request is forecast, so each request is one candidate
-//! against a fresh forecast. Shadow mode records the list as
+//! `forecast_no_headroom`. Pending request capacity is reserved in the fit's
+//! transaction, refreshed before carried re-sends, and atomically exchanged
+//! for precise task capacity before leaf creation. Shadow mode records the list as
 //! `pull_admission_fit` and requests as with `off`; with `off`, or before the
 //! host has resource profiles, requests carry no list. Every computed fit
 //! records one accuracy forecast with the request sent/no-headroom decision
@@ -193,6 +193,7 @@ pub(crate) fn pull_refill(
         ))
     })?;
     let peer = RoutedPullPeer {
+        runtime,
         transport: transport.clone(),
     };
     let launcher = LeafPullLauncher { runtime };
@@ -343,7 +344,7 @@ pub(crate) fn pull_refill(
                 refusal: None,
             }) => {
                 let forecasts = RefCell::new(Vec::new());
-                let template = || {
+                let template = |request_id: &str| {
                     let caller_before_pr = captured_before_pr(runtime, &run_id)?;
                     let window = crew_window(runtime, &run_id)?;
                     let capability = (!window.runs_nothing()).then(|| window.capability());
@@ -353,7 +354,7 @@ pub(crate) fn pull_refill(
                     };
                     // Forecast afresh for every request, after the claim
                     // before it was reserved.
-                    let fit = runtime.pull_work_fit()?;
+                    let fit = runtime.pull_work_fit(request_id)?;
                     let admissible = fit.as_ref().and_then(PullWorkFit::admissible);
                     let requests = fit.as_ref().is_none_or(PullWorkFit::requests);
                     if let Some(fit) = fit.as_ref() {
@@ -364,7 +365,7 @@ pub(crate) fn pull_refill(
                         return Ok(None);
                     }
                     Ok(Some(AdmissionRequest {
-                        request_id: String::new(),
+                        request_id: request_id.to_string(),
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                         caller_fingerprint: Some(
@@ -388,22 +389,16 @@ pub(crate) fn pull_refill(
                         admissible,
                     }))
                 };
-                // A claim the forecast described is reserved before the next
-                // request is forecast.
+                // Capacity is exchanged before CreateLeaf by the peer's
+                // reconciliation hooks; this hook records accuracy only.
                 let requested =
                     |receipt: Option<&orbit_store::contracts::AdmissionReceipt>,
-                     requested_at: chrono::DateTime<chrono::Utc>| {
+                     _requested_at: chrono::DateTime<chrono::Utc>| {
                         if let Some((_, sent, returned)) = forecasts.borrow_mut().last_mut() {
                             *sent = true;
                             *returned = receipt.cloned();
                         }
-                        if matches!(*work_fit.borrow(), Some(Some(_)))
-                            && let Some(receipt) = receipt
-                        {
-                            runtime.reserve_pulled_claim(receipt, requested_at)
-                        } else {
-                            Ok(())
-                        }
+                        Ok(())
                     };
                 // A stop or cancel recorded mid-pass ends it before the next
                 // request; one that cannot be read ends it too. So does the

@@ -41,6 +41,16 @@ impl FencedPeer<'_> {
 }
 
 impl PullPeer for FencedPeer<'_> {
+    fn prepare(&self, request: &AdmissionRequest) -> Result<bool, OrbitError> {
+        self.inner.prepare(request)
+    }
+    fn capacity(&self, admission: &LocalPullAdmission) -> Result<bool, OrbitError> {
+        self.inner.capacity(admission)
+    }
+    fn discard(&self, request: &AdmissionRequest) -> Result<(), OrbitError> {
+        self.inner.discard(request)
+    }
+
     fn request(
         &self,
         destination: &PullDestination,
@@ -204,8 +214,21 @@ impl PullDrain<'_> {
         record: &LocalPullAdmission,
         mutation: LocalPullMutation,
     ) -> Result<LocalPullAdmission, OrbitError> {
-        self.jobs
-            .mutate_local_pull(&record.destination, &record.request.request_id, &mutation)
+        let updated = self.jobs.mutate_local_pull(
+            &record.destination,
+            &record.request.request_id,
+            &mutation,
+        )?;
+        if matches!(
+            updated.phase,
+            LocalPullPhase::Idle
+                | LocalPullPhase::Refused
+                | LocalPullPhase::Settled
+                | LocalPullPhase::Settling
+        ) {
+            self.peer.capacity(&updated)?;
+        }
+        Ok(updated)
     }
 
     /// Send, or re-send, an unanswered request.
@@ -281,8 +304,18 @@ impl PullDrain<'_> {
                 record = settling;
             }
             record = match record.phase {
-                LocalPullPhase::Requested => self.request(&record)?,
-                LocalPullPhase::Claimed => self.update(&record, LocalPullMutation::CreateLeaf)?,
+                LocalPullPhase::Requested => {
+                    if !self.peer.prepare(&record.request)? {
+                        return Ok(Reconciled::Held);
+                    }
+                    self.request(&record)?
+                }
+                LocalPullPhase::Claimed => {
+                    if !self.peer.capacity(&record)? {
+                        return Ok(Reconciled::Held);
+                    }
+                    self.update(&record, LocalPullMutation::CreateLeaf)?
+                }
                 LocalPullPhase::Created => match self.try_bind(&record)? {
                     Bind::Bound(bound) => *bound,
                     Bind::Refused(refusal) => return self.close_refused_bind(&record, refusal),

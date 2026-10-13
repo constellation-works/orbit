@@ -90,5 +90,18 @@ pub trait AdmissionLoadStoreBackend: Send + Sync {
         &self,
         query: &AdmissionLoadQuery<'_>,
         decide: AdmissionDecision<'_>,
+    ) -> Result<Vec<AdmissionReservation>, OrbitError> {
+        self.admit_under_host_lock_replacing(query, &[], decide)
+    }
+
+    /// Remove each `(workspace, task)` reservation key before reading the
+    /// forecast, then decide and write replacements in the same host lock.
+    /// An error rolls back removals as well as writes. Used to refresh pending
+    /// requests and exchange their capacity for the granted task atomically.
+    fn admit_under_host_lock_replacing(
+        &self,
+        query: &AdmissionLoadQuery<'_>,
+        remove: &[(&str, &str)],
+        decide: AdmissionDecision<'_>,
     ) -> Result<Vec<AdmissionReservation>, OrbitError>;
 }

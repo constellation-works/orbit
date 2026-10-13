@@ -480,7 +480,10 @@ impl OrbitRuntime {
                 })
                 .collect();
         };
-        let peer = RoutedPullPeer { transport };
+        let peer = RoutedPullPeer {
+            transport,
+            runtime: self,
+        };
         let launcher = LeafPullLauncher { runtime: self };
         let drain = PullDrain {
             jobs: self.stores().jobs(),

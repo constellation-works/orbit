@@ -99,7 +99,10 @@ impl PullDrain<'_> {
                             )),
                         )?
                     }
-                    AdmissionLookup::Expired | AdmissionLookup::NotFound => return Ok(()),
+                    AdmissionLookup::Expired | AdmissionLookup::NotFound => {
+                        self.peer.discard(&record.request)?;
+                        return Ok(());
+                    }
                 },
                 LocalPullPhase::Claimed | LocalPullPhase::Requested => return Ok(()),
             };

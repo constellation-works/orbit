@@ -167,6 +167,8 @@ fn isolated(module_path: &str, test: &str) -> bool {
     false
 }
 
+type PullBarrier = Box<dyn FnOnce() -> Result<(), OrbitError> + Send>;
+
 /// The follower's route to the owner. Every call reaches the owner's tool
 /// boundary as the follower's SSH session would; a reply marked lost is
 /// dropped after the owner committed it.
@@ -209,6 +211,8 @@ struct Wire {
     /// Run once when the next settlement arrives, before the owner answers:
     /// an operator acting while a pass is delivering.
     before_settle: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Run once after the follower's fit, before the owner handles a pull.
+    before_pull: Mutex<Option<PullBarrier>>,
 }
 
 impl Wire {
@@ -308,6 +312,12 @@ impl DrainOwnerTransport for Wire {
             .lock()
             .unwrap()
             .push((name.to_string(), input.clone()));
+        if name == "orbit.task.pull" {
+            let barrier = self.before_pull.lock().unwrap().take();
+            if let Some(barrier) = barrier {
+                barrier()?;
+            }
+        }
         if *self.unreachable.lock().unwrap() {
             return Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
@@ -649,6 +659,7 @@ impl Pair {
             prefix_hosts: Mutex::default(),
             by_id_reads: Mutex::default(),
             before_settle: Mutex::default(),
+            before_pull: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower

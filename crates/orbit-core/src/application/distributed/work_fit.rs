@@ -20,16 +20,17 @@
 //! and the request goes out as with `off`. With `off`, or on a host with no
 //! profiles or no readable load, nothing is computed and no list is sent.
 //!
-//! A claim that returns is reserved under the same lock before the next
-//! request is forecast, so that forecast counts it. Each computed fit also
+//! An enforcing request holds pending capacity in the same transaction as
+//! its fit, priced by the maximum at each minute across its admissible profiles.
+//! A returned claim atomically replaces that capacity before leaf creation. Each computed fit also
 //! records accuracy points and its request decision; a returned claim is
 //! added to those points with the same profile lookup as its reservation.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionForecastRecord, AdmissionReceipt, AdmissionWorkFit, AdmissionWorkKey,
-    PullForecastDecision,
+    AdmissionForecastRecord, AdmissionReceipt, AdmissionRequest, AdmissionWorkFit,
+    AdmissionWorkKey, LocalPullAdmission, LocalPullPhase, PullForecastDecision,
 };
 use orbit_types::task::{
     CHANGE_WORK_CLASS, NO_DIFF_EXPECTED_TAG, NO_DIFF_WORK_CLASS, TaskComplexity, work_class,
@@ -39,6 +40,7 @@ use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, PullAdmissionFit, PullUnfitWor
 use crate::OrbitRuntime;
 use crate::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, ForecastGap, ForecastPoints, HostLoadForecast,
+    pending_pull_reservation_id,
 };
 use crate::runtime::host_resource::profile::{BaseClass, ProfileLookup};
 
@@ -61,6 +63,7 @@ pub(crate) struct PullWorkFit {
     pub(crate) fit: AdmissionWorkFit,
     pub(crate) record: PullAdmissionFit,
     accuracy: ForecastPoints,
+    pending: Vec<ProfileLookup>,
 }
 
 impl PullWorkFit {
@@ -115,7 +118,10 @@ impl OrbitRuntime {
     /// admission lock; `None` with `machine.auto_concurrency.mode = "off"`,
     /// on a host with no resource profiles, or when the host's load cannot be
     /// read, where pull admission stays as it is without the forecast.
-    pub(crate) fn pull_work_fit(&self) -> Result<Option<PullWorkFit>, OrbitError> {
+    pub(crate) fn pull_work_fit(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<PullWorkFit>, OrbitError> {
         let settings = self.context.settings().auto_concurrency().clone();
         let enforce = match settings.mode.as_str() {
             ENFORCE => true,
@@ -127,26 +133,160 @@ impl OrbitRuntime {
             let outcome = forecast
                 .gap(settings.admit_cpu_percent, settings.admit_memory_percent)
                 .and_then(|gap| work_fit(forecast, &gap, &workspace, enforce, &settings.mode));
-            Ok(ForecastDecision {
-                outcome,
-                admitted: Vec::new(),
-            })
+            let admitted = outcome
+                .as_ref()
+                .filter(|_| enforce)
+                .map_or_else(Vec::new, |fit| {
+                    fit.pending
+                        .iter()
+                        .cloned()
+                        .map(|lookup| AdmissionReservationRequest {
+                            task_id: pending_pull_reservation_id(request_id),
+                            lookup,
+                        })
+                        .collect()
+                });
+            Ok(ForecastDecision { outcome, admitted })
         })
     }
 
-    /// Reserve the task the owner just granted on `receipt`, stamped
-    /// `requested_at`, when the request went out. Its class comes from this
-    /// replica's copy of the task, as the leaf's worker captures it, and is
-    /// assumed to change code when the replica lacks it.
-    pub(crate) fn reserve_pulled_claim(
+    /// Refresh capacity before every send, including a carried unanswered
+    /// request whose earlier reservation expired. The request's durable
+    /// admissible set cannot change when its identity is replayed.
+    pub(crate) fn prepare_pull_capacity(
         &self,
-        receipt: &AdmissionReceipt,
-        requested_at: DateTime<Utc>,
-    ) -> Result<(), OrbitError> {
-        let Some(request) = self.pulled_claim_reservation(receipt)? else {
-            return Ok(());
+        request: &AdmissionRequest,
+    ) -> Result<bool, OrbitError> {
+        let settings = self.context.settings().auto_concurrency();
+        if settings.mode != ENFORCE {
+            return Ok(true);
+        }
+        let Some(fit) = request.admissible.as_ref() else {
+            return Ok(true); // No forecast was available when this request was made.
         };
-        self.reserve_admissions_at(requested_at, vec![request])
+        let workspace = self.workspace_id()?;
+        let pending = pending_pull_reservation_id(&request.request_id);
+        self.admit_against_forecast_replacing_at(
+            Utc::now(),
+            &[(&workspace, &pending)],
+            |forecast| {
+                let lookups = fit
+                    .keys
+                    .iter()
+                    .map(|key| {
+                        ProfileLookup::new(
+                            &workspace,
+                            &key.work_class,
+                            key.complexity.clone(),
+                            false,
+                        )
+                    })
+                    .chain(fit.templates.iter().map(|template| {
+                        let class = format!("{AUTO_TASK_TAG_PREFIX}{template}");
+                        let no_diff = forecast.profiles.profiles.iter().any(|profile| {
+                            profile.key.workspace_id == workspace
+                                && profile.key.work_class == class
+                                && profile.base_class == BaseClass::NoDiff
+                        });
+                        ProfileLookup::new(&workspace, class, None, no_diff)
+                    }))
+                    .collect::<Vec<_>>();
+                let gap = forecast.gap(settings.admit_cpu_percent, settings.admit_memory_percent);
+                if lookups.iter().any(|lookup| {
+                    forecast
+                        .profiles
+                        .lookup(lookup)
+                        .profile
+                        .as_ref()
+                        .is_some_and(|profile| {
+                            gap.as_ref().is_some_and(|gap| gap.fit(profile).is_err())
+                        })
+                }) {
+                    // A retry whose placeholder expired waits for capacity instead
+                    // of sending an already-priced request into somebody else's gap.
+                    return Ok(ForecastDecision {
+                        outcome: false,
+                        admitted: Vec::new(),
+                    });
+                }
+                Ok(ForecastDecision {
+                    outcome: true,
+                    admitted: lookups
+                        .into_iter()
+                        .map(|lookup| AdmissionReservationRequest {
+                            task_id: pending.clone(),
+                            lookup,
+                        })
+                        .collect(),
+                })
+            },
+        )
+    }
+
+    /// Exchange the placeholder for precise capacity before creating a leaf.
+    /// A response delayed beyond the TTL may find the gap filled: retain the
+    /// owner's claim locally and wait, never launch it without capacity.
+    pub(crate) fn reconcile_pull_capacity(
+        &self,
+        record: &LocalPullAdmission,
+    ) -> Result<bool, OrbitError> {
+        match record.phase {
+            LocalPullPhase::Idle
+            | LocalPullPhase::Refused
+            | LocalPullPhase::Settled
+            | LocalPullPhase::Settling => {
+                self.release_pull_capacity(&record.request)?;
+                return Ok(true);
+            }
+            LocalPullPhase::Claimed => {}
+            _ => return Ok(true),
+        }
+        let Some(receipt) = record.receipt.as_ref() else {
+            return Ok(false);
+        };
+        let Some(request) = self.pulled_claim_reservation(receipt)? else {
+            return Ok(false);
+        };
+        let settings = self.context.settings().auto_concurrency();
+        if !matches!(settings.mode.as_str(), ENFORCE | SHADOW) {
+            return Ok(true);
+        }
+        let workspace = self.workspace_id()?;
+        let pending = pending_pull_reservation_id(&record.request.request_id);
+        let task = request.task_id.clone();
+        self.admit_against_forecast_replacing_at(
+            Utc::now(),
+            &[(&workspace, &pending), (&workspace, &task)],
+            |forecast| {
+                let fits = settings.mode != ENFORCE
+                    || forecast
+                        .profiles
+                        .lookup(&request.lookup)
+                        .profile
+                        .as_ref()
+                        .is_none_or(|profile| {
+                            forecast
+                                .gap(settings.admit_cpu_percent, settings.admit_memory_percent)
+                                .is_none_or(|gap| gap.fit(profile).is_ok())
+                        });
+                Ok(ForecastDecision {
+                    outcome: fits,
+                    admitted: if fits { vec![request] } else { Vec::new() },
+                })
+            },
+        )
+    }
+
+    /// Release only the request placeholder; live leaves retain their own
+    /// forecast contribution. Unknown transport outcomes keep the placeholder
+    /// until a receipt is recovered or the normal five-minute TTL expires.
+    pub(crate) fn release_pull_capacity(
+        &self,
+        request: &AdmissionRequest,
+    ) -> Result<(), OrbitError> {
+        let workspace = self.workspace_id()?;
+        let pending = pending_pull_reservation_id(&request.request_id);
+        self.release_admission_reservations(&[(&workspace, &pending)])
     }
 
     fn pulled_claim_reservation(
@@ -193,6 +333,7 @@ fn work_fit(
     let mut fit = AdmissionWorkFit::default();
     let mut admissible = Vec::new();
     let mut unfit = Vec::new();
+    let mut pending = Vec::new();
     let mut judge = |work: String, lookup: ProfileLookup| -> bool {
         let verdict = profiles
             .lookup(&lookup)
@@ -201,6 +342,7 @@ fn work_fit(
         match verdict {
             Ok(_) => {
                 admissible.push(work);
+                pending.push(lookup);
                 true
             }
             Err(miss) => {
@@ -248,6 +390,7 @@ fn work_fit(
     }
     Some(PullWorkFit {
         accuracy: forecast.accuracy_points(),
+        pending,
         fit,
         record: PullAdmissionFit {
             mode: mode.to_string(),

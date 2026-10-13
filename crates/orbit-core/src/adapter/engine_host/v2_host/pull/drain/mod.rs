@@ -31,6 +31,19 @@ pub(crate) use failure::{
 /// must check current claim/run/phase on bind and settlement; replaying a receipt
 /// never supplies execution authority. There is no local fallback.
 pub(crate) trait PullPeer {
+    /// Reserve capacity before sending an unanswered request; false waits.
+    fn prepare(&self, _request: &AdmissionRequest) -> Result<bool, OrbitError> {
+        Ok(true)
+    }
+    /// Reconcile capacity at a durable checkpoint; false holds an unlaunched claim.
+    fn capacity(&self, _admission: &LocalPullAdmission) -> Result<bool, OrbitError> {
+        Ok(true)
+    }
+    /// Undo capacity for a request whose local allocation never succeeded.
+    fn discard(&self, _request: &AdmissionRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn request(
         &self,
         destination: &PullDestination,
