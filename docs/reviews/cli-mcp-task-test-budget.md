@@ -49,6 +49,37 @@ the acceptance ratio uses each binary's fresh baseline on the candidate host.
 Shared-host wall time and summed duration can vary independently. The report
 states both; a lower summed time is not a claim of equal wall-time improvement.
 
+### Drain adoption coverage repair
+
+One isolated process row restores drain executable handover without restoring
+the retired live-process matrices. It uses the production-built executable,
+a 300-second drain window and one-second admission cadence; successful runs
+cancel the adopted owner immediately, and an unwind guard cancels it on failure.
+Locked participant records prove the executable digest changed. The same run,
+PID and start time survive, and a later admission pass proves the new image
+continued execution before cancellation verifies its exit and terminal state.
+Candidate admission and MCP session continuity do not cover this run adoption.
+
+Sequential, build-budget-admitted Linux runs on base
+e705d95af261f1b78eab9f24717512575c8f8e5a and the repair measured:
+
+| MCP suite | Tests | Summed s | Test wall s |
+|---|---:|---:|---:|
+| Before repair | 60 | 119.888 | 33.783 |
+| After repair | 61 | 122.776 | 33.904 |
+
+The restored row took 3.225 seconds in nextest (3.15 seconds in the focused
+Cargo run). Summed time here adds nextest's per-test durations; wall time excludes
+compilation and build admission. Both runs deferred the same two existing
+Bubblewrap read-only fixtures because the host refused user namespaces; the
+drain row ran natively without deferral. These shared-host observations preserve
+the broader reduction and do not establish a speedup. A temporary control
+changed only the adoption environment key passed to `reexec`: the focused row
+failed with `drain exited before adoption` in 2.95 seconds. The production source
+was restored byte-for-byte before the candidate suite ran. macOS execution is
+not measured here; its existing `mcp_roundtrip::upgrade::` CI filter includes
+the restored row and its native candidate assessment/signing helpers.
+
 ## Retired tests
 
 Each line identifies a removed entry and its surviving coverage or redundancy
@@ -77,7 +108,7 @@ reason. Tables in the next section retain the bodies of consolidated entries.
 ### [crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs)
 
 - a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live: generation_admission::a_data_only_feature_migration_joins_beside_an_older_live_participant covers compatible live generations; persistent_client_hands_over_to_a_local_candidate_update retains production MCP handover. Dashboard/drain are unrelated to the MCP wire contract.
-- a_replaced_drain_hands_its_run_to_the_installed_executable: generation_admission::a_candidate_admission_admits_beside_a_server_that_hands_over_to_it covers candidate admission; persistent_client_hands_over_to_a_local_candidate_update covers the production handover. This row dispatches a drain rather than testing an MCP contract.
+- a_replaced_drain_hands_its_run_to_the_installed_executable: Restored here as one isolated process-boundary row covering `drain_upgrade_boundary`, `reexec` and run adoption through `ORBIT_ADOPT_PIPELINE_RUN`, followed by cancellation of the adopted owner. generation_admission::a_candidate_admission_admits_beside_a_server_that_hands_over_to_it covers candidate admission, and persistent_client_hands_over_to_a_local_candidate_update covers MCP session handover; neither replaces this drain contract.
 - a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points: generation_admission::a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield covers the shared switch gate; a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes retains the MCP safe-point boundary.
 - read_only_candidate_joins_a_v1_generation_without_rewriting_the_record: generation_admission::concurrent_readers_of_a_v1_record_read_the_store_schema_in_parallel exercises v1 read-only admission at the owning public API.
 - read_only_foreign_digest_refuses_when_store_schema_differs: generation_admission tests cover schema compatibility and fail-closed live admission at the owning public API; new_review_record_contract_refuses_a_live_old_client_before_mutation retains a production incompatible-client proof.

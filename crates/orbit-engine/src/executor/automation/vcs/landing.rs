@@ -188,7 +188,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
                     let mut pin = pin_for(candidate);
-                    adopt_base_update(&mut pin, context, &status);
+                    adopt_base_update(&mut pin, context, &status, view);
                     let evidence = match pin.ensure_delivered(&status, &number.to_string()) {
                         Ok(delivered) => json!({
                             "reconciled": "pull_request_merged",
@@ -308,7 +308,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         let state = classify_pr_state(&status);
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
-        let updated_head = adopt_base_update(&mut pin, context, &status);
+        let updated_head = adopt_base_update(&mut pin, context, &status, view);
         if let PrMergeState::Merged = state {
             let delivered = match pin.ensure_delivered(&status, &pr_number) {
                 Ok(delivered) => delivered,
@@ -852,16 +852,34 @@ fn contains_commit(workspace: &Path, reference: &str, commit: &str) -> Result<bo
 /// [ORB-15956] Pin the pull request's reported head instead of the accepted
 /// candidate when it is a verified provider branch update of that candidate.
 /// Returns the adopted head. Any other head is left to the pin to refuse.
+///
+/// The provider merges the base as it is when the update runs, which can be
+/// past the landing ref this attempt fetched, so a published landing ref is
+/// fetched again before a head not yet adopted is verified against it. A
+/// fetch that fails refuses the head.
 fn adopt_base_update(
     pin: &mut DeliveryPin,
     context: &HandoffLandingContext,
     status: &PullRequestStatus,
+    view: &LandingView,
 ) -> Option<String> {
     let candidate = &context.candidate;
     let head = status.head_sha.as_deref()?;
     if head == candidate.candidate.commit
         || status.head_branch.as_deref() != Some(candidate.source_branch.as_str())
     {
+        return None;
+    }
+    if view.refreshed
+        && pin.candidate_sha() != Some(head)
+        && let Err(error) = fetch_remote_base(&context.workspace_path, &candidate.landing_branch)
+    {
+        tracing::warn!(
+            head,
+            %error,
+            "handoff_land: the landing ref could not be refreshed to verify the pull request's \
+             updated head"
+        );
         return None;
     }
     let landing = resolve_landing_ref(

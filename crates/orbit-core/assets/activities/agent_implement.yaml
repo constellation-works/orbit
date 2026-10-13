@@ -53,6 +53,13 @@ spec:
       # deferred sandbox validation names it as its `base`.
       base_sha:
         type: [string, "null"]
+      # Set by a delivery pipeline whose deterministic `validate` step runs
+      # the required commands on the final candidate after this step. The
+      # envelope then lists that captured list as
+      # `task.final_validation_commands` (absent when it is empty, or for a
+      # claim that captured no owner gates).
+      final_validation:
+        type: boolean
   output_schema_json:
     type: object
     properties:
@@ -327,7 +334,20 @@ spec:
        do not defer a workspace-required
        check to review. Read required validation commands from a supplied
        delivery manifest's `required_validation_commands` or
-       `workflow.required_validation_commands`. If workspace guidance requires
+       `workflow.required_validation_commands`.
+       When `task.final_validation_commands` is present, the pipeline runs
+       each listed command itself, in order and outside the agent sandbox,
+       on the final committed candidate after base synchronization, and
+       attaches its log as delivery evidence. For a diff, do not run a
+       listed command whole or hand it off as `deferred_sandbox_validation`:
+       run focused checks (the tests, formatter or linter for what you
+       changed) that show each acceptance criterion, and every
+       workspace-required check the list does not name. Record each listed
+       command as `not_run` (pipeline final validation) in the execution
+       summary, never as passed. A clean no-op or already-landed handoff
+       skips that validation, so it runs and records every required check
+       (item 12). Without the field, you own every check.
+       If workspace guidance requires
        a check on another platform, record it as not run and arrange the
        evidence that guidance specifies rather than claiming it passed.
        When the workspace requires an affected-test gate, run full test
@@ -409,7 +429,8 @@ spec:
        assumption, recurring failure, incident root cause, or non-obvious
        gotcha that took over 10 minutes.
     10. Review the deliverable and diff for accuracy, unintended changes, and
-        stale material; run required checks unless tagged `no-diff-expected`.
+        stale material; run required checks unless tagged `no-diff-expected`,
+        leaving a diff's `task.final_validation_commands` to the pipeline.
         Run-owned non-deliverable output is only what `git status --short` adds to the
         item 3 baseline; ignored build output, caches, and sandbox-owned paths
         like `<worktree>/target` are not yours to remove and never block
