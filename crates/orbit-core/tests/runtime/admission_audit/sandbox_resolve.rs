@@ -678,6 +678,3 @@ fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
         "sandbox preparation must not create runtime stores at a redirect target"
     );
 }
-
-#[cfg(target_os = "macos")]
-use super::engine_support::runtime_with_workspace_config;
