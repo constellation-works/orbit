@@ -1,17 +1,17 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, generic tool and CLI adapters) as built on the friction noun, plus the planned input validation, aliases and richer CLI parameters and the planned migration of the remaining nouns.
+summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on the friction noun, plus the planned richer CLI parameters and the planned migration of the remaining nouns.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933]
 ---
 
 # Operations as Data — Design
@@ -19,8 +19,9 @@ related_artifacts: [ORB-10358, ORB-15932]
 This doc describes the friction implementation and the revisions accepted on
 2026-10-12 for every noun that migrates after it. Each section says whether it
 is **Implemented** (true of the code today, on friction only) or **Planned**
-(accepted but not yet built). Kernel v2's structure is implemented; its input
-validation and richer parameter kinds are planned. Both follow the rules in
+(accepted but not yet built). Kernel v2's structure and its input validation
+are implemented, the validation in warn mode for unknown fields; its richer
+parameter kinds are planned. Both follow the rules in
 [4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
 Planned to Implemented. The order in which nouns migrate is in §9;
 forward-looking questions are in
@@ -37,7 +38,7 @@ verb into exactly one of two homes:
 
 | Kind of fact | Home | Examples |
 |---|---|---|
-| Needed by two or more surfaces, or by the single tool entry every surface traverses | The spec, in `orbit-common` | names, parameters, effect, redaction class, MCP placement; later aliases and cross-field presence rules |
+| Needed by two or more surfaces, or by the single tool entry every surface traverses | The spec, in `orbit-common` | names, parameters, effect, redaction class, MCP placement, aliases, retired fields and cross-field presence rules |
 | Needed by one surface only | An exhaustive `match` on the verb enum, in that surface's crate | handlers (`orbit-core`), CLI renderers and CLI-only request shaping (`orbit-cli`), claimed-worker routing (`orbit-core`); later MCP schema extensions (`orbit-tools`) |
 
 The second home keeps the property that makes the split table work: adding a
@@ -74,12 +75,14 @@ pub struct OperationSpec<V: 'static> {
     pub cli_about: &'static str,
     pub effect: Effect,                // Read | Write
     pub params: &'static [&'static [ParamSpec]], // groups, concatenated in order
-    pub rejects_agent_field: bool,
+    pub at_least_one_of: &'static [&'static str],
+    pub retired_fields: &'static [RetiredField], // name + where it went
     pub mcp_scope: Option<McpToolScope>,
 }
 
 pub struct ParamSpec {
     pub name: &'static str,
+    pub aliases: &'static [&'static str], // accepted wire spellings, resolved at the tool entry
     pub param_type: ParamType,         // String | StringList | Integer | Boolean
     pub required: bool,
     pub preserve_empty: bool,
@@ -132,10 +135,20 @@ What each kernel v2 piece is for:
   [artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs)
   onto the parameters they name, so a new free-text parameter is redacted where
   it is declared. Friction's `add` and `update` mark `body` and `title`
-  `FreeText`. Two things stay in the core surface table: `add`'s undeclared
-  `description` alias for `body`, listed per verb until §2.2's `aliases` land,
-  and nested policies such as the auto-task template's `nested_objects`, until
+  `FreeText`, and an alias takes its parameter's class. Nested policies such as
+  the auto-task template's `nested_objects` stay in the core surface table until
   a second noun needs them.
+- **`aliases`** declares the alternative spellings a verb accepts: friction's
+  `description` for `body`, `task_id` for `during_task`, and `tag` for `tags`.
+  The tool entry (§4) renames them, so handlers read only canonical names.
+- **`at_least_one_of`** declares the one cross-field rule that recurs: friction
+  `update` refuses an edit that changes nothing. The tool entry names the input
+  fields; the CLI adapter checks the same list first and names the flags
+  instead. Richer cross-field rules stay in handlers.
+- **`retired_fields`** replaces `rejects_agent_field`: a field that used to be
+  accepted is refused with a message that names where it went. Friction `add`
+  retires `agent` (`RETIRED_AGENT_FIELD`); task's
+  `reject_retired_task_add_input_fields` moves here when task migrates.
 - **`CliGroup`** names an intermediate subcommand and its `--help` summary. No
   migrated noun declares one yet; the CLI adapter builds groups when the first
   nested noun (task, phase 3) needs them.
@@ -144,19 +157,12 @@ What each kernel v2 piece is for:
 
 `cli_render` left the spec: rendering is a single-surface fact (§7).
 
-### 2.2 Kernel v2 input and parameter kinds (Planned)
+### 2.2 Kernel v2 parameter kinds (Planned)
 
 ```rust
-pub struct OperationSpec<V: 'static> {
-    // … as built, plus:
-    pub at_least_one_of: &'static [&'static str],
-    pub retired_fields: &'static [RetiredField], // name + where it went
-}
-
 pub struct ParamSpec {
     // … as built, plus:
     pub param_type: ParamType,              // + Enum(&'static [&'static str]), Switch, Object
-    pub aliases: &'static [&'static str],   // accepted wire spellings, resolved at the tool entry
     pub default: Option<&'static str>,
     pub cli: Option<CliBinding>,            // CliArgKind::Flag gains `aliases` and `short`
 }
@@ -164,18 +170,6 @@ pub struct ParamSpec {
 
 What each addition is for:
 
-- **`at_least_one_of`** declares the one cross-field rule that recurs:
-  friction `update` refuses an edit that changes nothing, and today the CLI
-  restates that rule by hand (`require_update_field` in
-  [friction.rs](../../../crates/orbit-cli/src/command/friction.rs), called from
-  the CLI's `prepare` table). Richer cross-field rules stay in handlers.
-- **`retired_fields`** generalizes both `rejects_agent_field` and
-  `reject_retired_task_add_input_fields`: a field that used to be accepted is
-  refused with a message that names where it went.
-- **`aliases`** declares the alternative spellings handlers already accept
-  silently: `description` for `body`, `task_id` for `during_task`, `tag` for
-  `tags`. §4 uses them, and redaction then derives an alias's class from its
-  parameter.
 - **`default`**, **`Enum`**, **`Switch`**, and flag `aliases`/`short` are the
   clap features the task and auto-task commands use and the friction kernel
   cannot express: `value_enum` with `default_value_t`, presence flags such as
@@ -213,31 +207,27 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 
 ## 4. Input validation at the tool entry
 
-**Planned.**
+**Implemented (warn mode)** on friction: unknown fields are reported, not yet
+refused.
 
-Today the spec describes a verb's input, but nothing checks the input against
-the spec. Each handler re-reads it by string name
-(`required_string(&input, &["body", "description"], "body")` in
-[friction_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/friction_tools.rs)),
-which restates every parameter name a fifth time and keeps the accepted aliases
-out of the spec. Unknown fields are refused only where a tool calls
-`reject_unknown_tool_fields` itself; for friction they are ignored. The
-dashboard compensates with its own name check (`FrictionCall::set`).
-
-Kernel v2 adds `OperationSpec::parse_input(&self, input: Value) ->
-Result<OperationInput, OrbitError>` in `orbit-common`, built from the existing
+`OperationSpec::parse_input(&self, input: Value) -> Result<OperationInput,
+OrbitError>` in `orbit-common` checks a call against its spec, reusing the
 helpers in [tool_input.rs](../../../crates/orbit-common/src/protocol/tool_input.rs).
 In order, it:
 
-1. requires a JSON object;
+1. requires a JSON object (an absent input counts as `{}`);
 2. resolves each declared alias to its canonical name, refusing input that sets
-   both;
-3. refuses retired fields with their hint, then unknown fields with the existing
-   did-you-mean suggestion;
-4. checks each present value against its `ParamType` (`StringList` keeps
-   accepting a string, an array, or a comma-separated string);
-5. checks that required parameters are present and that `at_least_one_of` is
-   met.
+   both and naming both;
+3. refuses retired fields with their hint;
+4. collects unknown fields — anything that is not a parameter, an alias, a
+   retired field, a transport wrapper key (`_meta`, `workspace`) or an identity
+   key (`model`, `agent`, which session identity may also supply);
+5. checks each present value against its `ParamType` (`StringList` keeps
+   accepting a string, an array, or a comma-separated string) and drops `null`
+   values, which mean "absent";
+6. checks that required parameters are present, with the existing did-you-mean
+   hint, and that `at_least_one_of` is met. An identity key that is a required
+   parameter is left to identity resolution, because the session may supply it.
 
 It checks presence and shape only. Content rules, such as refusing a
 whitespace-only required value or validating a status name, stay in the handler
@@ -247,12 +237,20 @@ migration was careful to keep.
 The generic operation tool (§6) calls `parse_input` before dispatch. Every
 surface reaches a tool through `Tool::execute`: MCP, `orbit tool run`, the CLI's
 `run_tool`, the dashboard, and the deterministic dispatcher. So one call site
-gives every surface the same validation. Handlers then read canonical names from
-`OperationInput` and never see an alias.
+gives every surface the same validation. Handlers read canonical names from
+`OperationInput` and never see an alias; the friction handlers re-parse at
+their own entry, which is idempotent, so a direct core call gets the same
+canonical input.
 
 Refusing unknown fields is a wire change for any caller that sends extra fields
 today. Each noun turns it on in two steps: first a `warn!` and an audit row per
-unknown field, then refusal after the 30-day compatibility window. See
+unknown field, then refusal after the 30-day compatibility window. In warn mode
+the tool entry logs `<tool> ignored unknown input field `<field>`` and writes
+one system audit row per field (`command` `tool_input`, `subcommand`
+`unknown_field`, `tool_name` the tool, arguments naming the tool, field and
+actor), then runs the call. The field stays in the input during warn mode, so
+behaviour that already read it, such as a claimed worker's argument binding
+check, is unchanged. See
 [Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](./4_decisions.md#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry).
 
 ## 5. Effect-derived runtime wiring
@@ -318,8 +316,8 @@ adapter. `OperationTool<V>(&'static OperationSpec<V>)` is the one `Tool` impl
 every registry operation is served by, for any `V: OperationVerb` with
 `From<V> for OrbitBuiltinAction`. Its schema projects the spec's MCP parameters
 into a `ToolSchema` in declaration order; its `execution_kind` comes from
-`effect` (§5); `execute` refuses a legacy `agent` field when the spec says so
-and dispatches the verb's action. `register_noun(registry, &NOUN)` registers
+`effect` (§5); `execute` checks the input with `parse_input` (§4), reports any
+unknown fields, and dispatches the verb's action with the canonical input. `register_noun(registry, &NOUN)` registers
 each operation of a noun at its `mcp_scope`, or keeps it off MCP when the value
 is `None`. The scope says only whether dispatch is global or requires a
 workspace; it carries no placement or capability policy beyond that.
@@ -336,8 +334,6 @@ explicit `with_notes` mode has one stable object shape, `{records, notes}`.
 
 **Planned:**
 
-- **Validate at the tool entry.** `OperationTool::execute` calls `parse_input`
-  (§4) before dispatch.
 - **Schema extensions as a surface table.** `orbit.task.add` and
   `orbit.task.update` override `Tool::input_schema()` to add JSON Schema
   conditionals for guarded creation
@@ -381,10 +377,16 @@ same handler through the same capability chokepoint.
 
 [friction.rs](../../../crates/orbit-cli/src/command/friction.rs) keeps only
 friction's two CLI surface tables, both exhaustive matches on `FrictionVerb`:
-`prepare(verb, &mut Map)` shapes the request (`list` injects `response_mode`;
-`update` refuses an edit that changes nothing, naming CLI flags) and
-`render(verb, &Value)` picks the record, table, tag-list or JSON rendering. The
-kernel carries no rendering vocabulary.
+`prepare(verb, &mut Map)` shapes the request (`list` injects `response_mode`)
+and `render(verb, &Value)` picks the record, table, tag-list or JSON rendering.
+The kernel carries no rendering vocabulary.
+
+Cross-field errors are named in CLI terms. Before the call,
+`Invocation::require_at_least_one_of` checks the spec's `at_least_one_of` and,
+when nothing is set, names each field by its flag spelling from the spec's
+bindings (`tags` → `--tag`): `nothing to update; pass at least one of
+`--status`, `--tag`, …`. The same call over MCP or `orbit tool run` is refused
+by the tool entry naming the fields.
 
 The `Commands::Friction` arm in
 [registry.rs](../../../crates/orbit-cli/src/command/operation/registry.rs)
@@ -401,10 +403,6 @@ flag-gated destructive command, add it around the helper.
   `default_value`, rendering `[default: …]`; flag `aliases` → `.alias()`
   (hidden, like derive's `alias`); `cli_path` → intermediate subcommands built
   from `NounSpec::cli_groups`.
-- **Cross-field errors named in CLI terms.** When `parse_input` refuses an
-  `at_least_one_of` violation, the CLI maps each field to its flag spelling from
-  the spec's bindings (`tags` → `--tag`). `require_update_field` and its
-  hand-maintained `UPDATE_FIELD_KEYS` list are deleted.
 - **The CLI always goes through the tool.** Every migrated verb executes by
   `run_tool`. For nouns whose CLI calls core services directly today (task,
   auto-task, routine, workflow run) this is a behaviour change, not a refactor:
@@ -428,13 +426,20 @@ interface design choice, not a property of the verb; see
 The dashboard list adapter explicitly requests `with_notes`, maps `records` to
 its `items` field, and forwards non-empty notes for the hint UI.
 
-**Planned:** once §4 lands, the tool entry refuses an undeclared field for every
-caller, and `FrictionCall::set`'s own check becomes redundant. It stays as a
-thin builder; it is not copied to other nouns.
+Request-body fields the verb's spec does not declare are kept by a flattened
+`extra` map on the create and patch bodies and forwarded to the call, so the
+tool entry reports them (§4) as it does for every other surface. Declared
+fields a route does not model stay out of the call, so forwarding adds no
+dashboard capability.
+
+**Planned:** once unknown fields are refused (phase 0b's second step), the tool
+entry refuses an undeclared field for every caller, and `FrictionCall::set`'s
+own check becomes redundant. It stays as a thin builder; it is not copied to
+other nouns.
 
 ## 9. Migration plan
 
-**Planned**, except phase 0a, which is implemented. This replaces the
+**Planned**, except phase 0a and phase 0b's warn mode, which are implemented. This replaces the
 touch-it-move-it ratchet; see
 [Migrate the remaining nouns on a plan, not on contact](./4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
 
@@ -444,7 +449,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | Phase | Scope | Why here |
 |---|---|---|
 | 0a (done) | Kernel v2 structure, ported onto friction: noun spec, `cli_path`, `effect`, parameter groups, `redact`, the registry macro, generic tool and CLI adapters, CLI surface tables | Proves v2 against existing goldens with no new noun at stake; the only behaviour change is §5's read-only runtime for three verbs |
-| 0b | Kernel v2 input validation on friction: `parse_input`, aliases, retired fields, `at_least_one_of`, unknown-field warnings | Moves the friction handlers onto canonical names and the warn-then-refuse rollout onto the one migrated noun |
+| 0b (warn mode done) | Kernel v2 input validation on friction: `parse_input`, aliases, retired fields, `at_least_one_of`, unknown-field warnings | Moves the friction handlers onto canonical names and the warn-then-refuse rollout onto the one migrated noun |
 | 1 | auto-task: 5 tools (`show` inactive), 10 CLI verbs | Second pilot. First noun whose CLI calls core directly; exercises `Enum`, `default`, parameter groups, CLI-only verbs (`toggle`, `delete`, `restore`, `recover`, `reset` with `mcp_scope: None`) and the tool-path rule |
 | 2 | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
 | 3 | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
@@ -452,7 +457,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
 
 Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
-[ORB-15933] (input validation, warn mode) and [ORB-15934] (refuse unknown
+[ORB-15933] (input validation, warn mode, done) and [ORB-15934] (refuse unknown
 fields after the window); phase 1
 [ORB-15935]; phase 2 [ORB-15936]; phase 3 [ORB-15937] (reads), [ORB-15938]
 (add/update), [ORB-15939] (artifact and locks), [ORB-15940] (review and
@@ -510,8 +515,9 @@ gate.
   described as Implemented above.
 - [ORB-15932] — phase 0a: built kernel v2's structure and ported friction onto
   it.
-- [ORB-15933], [ORB-15934] — phase 0b: input validation in warn mode, then
-  unknown-field refusal.
+- [ORB-15933] — phase 0b: built input validation at the tool entry in warn
+  mode, with aliases, retired fields and `at_least_one_of`.
+- [ORB-15934] — phase 0b: unknown-field refusal after the compatibility window.
 - [ORB-15935] — phase 1, auto-task.
 - [ORB-15936] — phase 2, drain and workspace claim.
 - [ORB-15937], [ORB-15938], [ORB-15939], [ORB-15940] — phase 3, the task noun in

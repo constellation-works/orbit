@@ -784,6 +784,34 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     );
 }
 
+fn stdio_friction_add_reports_unknown_fields_without_refusing() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let created = client.call_tool_ok(
+        "orbit_friction_add",
+        json!({"body":"Unknown MCP field","model":"codex","severity":"high"}),
+    );
+    assert_eq!(created["body"], "Unknown MCP field");
+    drop(client);
+
+    let connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open audit store");
+    let mut statement = connection
+        .prepare(
+            "SELECT arguments_json FROM audit_events
+             WHERE command = 'tool_input' AND tool_name = 'orbit.friction.add'",
+        )
+        .unwrap();
+    let fields = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|arguments| {
+            serde_json::from_str::<Value>(&arguments.unwrap()).unwrap()["field"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fields, [json!("severity")]);
+}
+
 #[test]
 fn artifact_and_auto_task_stdio_contracts() {
     for (name, check) in [
@@ -798,6 +826,10 @@ fn artifact_and_auto_task_stdio_contracts() {
         (
             "stdio_drain_and_ship_starts_report_their_notices",
             stdio_drain_and_ship_starts_report_their_notices as fn(),
+        ),
+        (
+            "stdio_friction_add_reports_unknown_fields_without_refusing",
+            stdio_friction_add_reports_unknown_fields_without_refusing as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

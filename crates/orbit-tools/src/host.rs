@@ -164,5 +164,18 @@ pub trait OrbitToolHost: Send + Sync {
         self.execute(action, input, None, Some(actor_label), reservation_owner)
     }
 
+    /// Record that a call to `tool_name` carried input fields its operation
+    /// does not declare, one audit row per field. `actor` is the caller's
+    /// resolved attribution, when it has one. Hosts without an audit store
+    /// record nothing.
+    fn record_unknown_input_fields(
+        &self,
+        _tool_name: &str,
+        _fields: &[String],
+        _actor: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn task_scope(&self) -> OrbitTaskScope;
 }

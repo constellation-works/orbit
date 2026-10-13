@@ -102,12 +102,16 @@ pub(super) fn sanitize_tool_input(
             Redaction::FreeText => TextMode::Free,
             Redaction::Path => TextMode::PathOnly,
         };
-        match param.param_type {
-            ParamType::StringList => {
-                sanitize_string_array_field(&mut object, param.name, param.name, mode, &mut report)?
-            }
-            ParamType::String | ParamType::Integer | ParamType::Boolean => {
-                sanitize_string_field(&mut object, param.name, param.name, mode, &mut report)?
+        // The tool entry renames aliases before dispatch; an alias takes its
+        // parameter's class all the same.
+        for field in std::iter::once(&param.name).chain(param.aliases) {
+            match param.param_type {
+                ParamType::StringList => {
+                    sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
+                }
+                ParamType::String | ParamType::Integer | ParamType::Boolean => {
+                    sanitize_string_field(&mut object, field, field, mode, &mut report)?
+                }
             }
         }
     }
@@ -294,7 +298,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         },
         OrbitBuiltinAction::Friction(verb) => ActionPolicy {
             declared: verb.spec().params,
-            free_text_fields: undeclared_friction_free_text(verb),
             ..NO_REDACTION
         },
         OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => ActionPolicy {
@@ -351,24 +354,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         // already operator-only, and the provider argv/stdout paths keep their
         // own redactors.
         | OrbitBuiltinAction::AgentInvoke => NO_REDACTION,
-    }
-}
-
-/// Input spellings a friction handler accepts beyond its declared parameters,
-/// which must be redacted like the parameter they stand for.
-///
-/// `add` reads `description` as an alias for `body`. Declared aliases replace
-/// this table when the kernel learns them.
-fn undeclared_friction_free_text(verb: FrictionVerb) -> &'static [&'static str] {
-    match verb {
-        FrictionVerb::Add => &["description"],
-        FrictionVerb::List
-        | FrictionVerb::Show
-        | FrictionVerb::Stats
-        | FrictionVerb::Tags
-        | FrictionVerb::Update
-        | FrictionVerb::Resolve
-        | FrictionVerb::Rehome => &[],
     }
 }
 

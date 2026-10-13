@@ -32,9 +32,23 @@
 //! the handler table is one exhaustive `match` on `V` in `orbit-core`. The
 //! compiler rejects a verb that has a spec but no handler.
 //!
+//! # Input
+//!
+//! [`OperationSpec::parse_input`] is the one place a call's input is checked
+//! against its spec. The generic operation tool runs it before dispatch, so
+//! every surface that reaches a tool gets the same validation, and handlers
+//! read canonical parameter names from the [`OperationInput`] it returns.
+//!
 //! See `docs/design/operations-as-data/` for the migration cookbook.
 
 use orbit_types::tool::McpToolScope;
+use serde_json::{Map, Value};
+
+use crate::OrbitError;
+use crate::protocol::tool_input::{
+    TOOL_INPUT_IDENTITY_KEYS, TOOL_INPUT_TRANSPORT_WRAPPER_KEYS, missing_tool_field,
+    optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
+};
 
 /// Wire type of an operation parameter.
 ///
@@ -131,6 +145,11 @@ pub enum Redaction {
 pub struct ParamSpec {
     /// The wire field name carried in the operation's JSON input.
     pub name: &'static str,
+    /// Other wire spellings the operation accepts for this parameter.
+    /// [`OperationSpec::parse_input`] renames each to `name`, so handlers and
+    /// redaction see only the canonical name, and refuses input that sets
+    /// both. Aliases appear on no schema and no CLI flag.
+    pub aliases: &'static [&'static str],
     /// Wire type.
     pub param_type: ParamType,
     /// Whether the operation rejects input that omits this parameter.
@@ -173,6 +192,31 @@ pub enum Effect {
     Write,
 }
 
+/// A field an operation used to accept and now refuses.
+#[derive(Debug, Clone, Copy)]
+pub struct RetiredField {
+    /// The retired wire field name.
+    pub name: &'static str,
+    /// What to send instead; the refusal ends with it.
+    pub replacement: &'static str,
+}
+
+impl RetiredField {
+    fn refusal(&self, tool_name: &str) -> OrbitError {
+        OrbitError::InvalidInput(format!(
+            "{tool_name} no longer accepts `{}`; {}",
+            self.name, self.replacement
+        ))
+    }
+}
+
+/// The legacy top-level `agent` field: attribution was consolidated to
+/// `model`-only.
+pub const RETIRED_AGENT_FIELD: RetiredField = RetiredField {
+    name: "agent",
+    replacement: "use `model` with the agent family for attribution",
+};
+
 /// One verb on one noun, declared once.
 ///
 /// `V` is the noun's verb enum. Keeping it typed (rather than a bare string)
@@ -198,9 +242,12 @@ pub struct OperationSpec<V: 'static> {
     /// run of parameters without functional record update, which `const` does
     /// not allow.
     pub params: &'static [&'static [ParamSpec]],
-    /// Whether the operation rejects a legacy top-level `agent` field
-    /// (attribution was consolidated to `model`-only).
-    pub rejects_agent_field: bool,
+    /// Parameters of which a call must set at least one, such as the edits an
+    /// `update` applies. Empty when the operation has no such rule.
+    pub at_least_one_of: &'static [&'static str],
+    /// Fields the operation used to accept and now refuses, naming where each
+    /// went.
+    pub retired_fields: &'static [RetiredField],
     /// MCP scope when advertised. `None` keeps the operation off MCP while it
     /// remains reachable through its other registered surfaces.
     ///
@@ -240,6 +287,255 @@ impl<V: 'static> OperationSpec<V> {
                 Some(CliArgKind::Positional)
             )
         })
+    }
+
+    /// Whether `field` is an input key this operation does not declare.
+    ///
+    /// A key is declared when it is a parameter name or alias, a retired
+    /// field, a transport wrapper (`workspace`, `_meta`) or an attribution key
+    /// (`model`, `agent`) that the tool boundary reads for every builtin.
+    pub fn is_undeclared_field(&self, field: &str) -> bool {
+        !TOOL_INPUT_TRANSPORT_WRAPPER_KEYS.contains(&field)
+            && !TOOL_INPUT_IDENTITY_KEYS.contains(&field)
+            && !self
+                .retired_fields
+                .iter()
+                .any(|retired| retired.name == field)
+            && !self
+                .params()
+                .any(|param| param.name == field || param.aliases.contains(&field))
+    }
+
+    /// Whether canonical `input` sets none of [`Self::at_least_one_of`].
+    /// Always false for an operation that declares no such rule.
+    pub fn misses_at_least_one_of(&self, input: &Map<String, Value>) -> bool {
+        !self.at_least_one_of.is_empty()
+            && !self
+                .at_least_one_of
+                .iter()
+                .any(|field| input.get(*field).is_some_and(|value| !value.is_null()))
+    }
+
+    /// Check a call's input against this spec and canonicalize it.
+    ///
+    /// In order: the input must be a JSON object (`null` reads as `{}`);
+    /// declared aliases are renamed to their parameter, refusing input that
+    /// sets both; retired fields are refused with their replacement;
+    /// undeclared fields are reported on [`OperationInput::unknown_fields`]
+    /// and left in place; each present value must match its [`ParamType`],
+    /// where an explicit `null` means absent; required parameters must be
+    /// present, and so must one of [`Self::at_least_one_of`].
+    ///
+    /// Only presence and shape are checked. Content rules, such as refusing a
+    /// whitespace-only value or an unknown status name, belong to the handler.
+    /// An attribution key is never required here: the session may assert it
+    /// instead, and the handler refuses a call that resolves none.
+    ///
+    /// Parsing canonical input again yields the same input, so a host may
+    /// re-wrap what the tool entry already parsed.
+    pub fn parse_input(&self, input: Value) -> Result<OperationInput, OrbitError> {
+        let mut object = match input {
+            Value::Object(object) => object,
+            Value::Null => Map::new(),
+            _ => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{} input must be a JSON object",
+                    self.tool_name
+                )));
+            }
+        };
+
+        for param in self.params() {
+            for alias in param.aliases {
+                let Some(value) = object.remove(*alias) else {
+                    continue;
+                };
+                if object.contains_key(param.name) {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "`{alias}` is an alias of `{}`; set one or the other, not both",
+                        param.name
+                    )));
+                }
+                object.insert(param.name.to_string(), value);
+            }
+        }
+
+        if let Some(retired) = self
+            .retired_fields
+            .iter()
+            .find(|retired| object.contains_key(retired.name))
+        {
+            return Err(retired.refusal(self.tool_name));
+        }
+
+        // Warn mode: the tool entry reports these and the call proceeds.
+        // Handlers read declared names only, so the fields have no effect.
+        let unknown_fields = object
+            .keys()
+            .filter(|field| self.is_undeclared_field(field))
+            .cloned()
+            .collect();
+
+        for param in self.params() {
+            match object.get(param.name) {
+                None => {}
+                Some(Value::Null) => {
+                    object.remove(param.name);
+                }
+                Some(value) => check_param_type(param, value)?,
+            }
+        }
+
+        let input = Value::Object(object);
+        if let Some(missing) = self.params().find(|param| {
+            param.required
+                && !TOOL_INPUT_IDENTITY_KEYS.contains(&param.name)
+                && input.get(param.name).is_none()
+        }) {
+            return Err(missing_tool_field(&input, missing.name));
+        }
+        if let Value::Object(object) = &input
+            && self.misses_at_least_one_of(object)
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "{} requires {}",
+                self.tool_name,
+                alternatives(
+                    self.at_least_one_of
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                )
+            )));
+        }
+
+        Ok(OperationInput {
+            input,
+            unknown_fields,
+        })
+    }
+}
+
+/// Join labels as alternatives: `a`, `a or b`, `a, b, or c`.
+pub fn alternatives(labels: impl IntoIterator<Item = String>) -> String {
+    let labels = labels.into_iter().collect::<Vec<_>>();
+    match labels.as_slice() {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first, second] => format!("{first} or {second}"),
+        [init @ .., last] => format!("{}, or {last}", init.join(", ")),
+    }
+}
+
+fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> {
+    let name = param.name;
+    let (valid, expected) = match param.param_type {
+        ParamType::String => (value.is_string(), "a string"),
+        ParamType::StringList => match value {
+            Value::Array(items) if !items.iter().all(Value::is_string) => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "`{name}` entries must be strings"
+                )));
+            }
+            _ => (
+                value.is_string() || value.is_array(),
+                "a string or array of strings",
+            ),
+        },
+        ParamType::Integer => (
+            non_negative_integer(value).is_some(),
+            "a non-negative integer",
+        ),
+        ParamType::Boolean => (value.is_boolean(), "a boolean"),
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "`{name}` must be {expected}"
+    )))
+}
+
+/// An integer parameter's value: a JSON number or a numeric string.
+fn non_negative_integer(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(raw) => raw.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// A call's input after [`OperationSpec::parse_input`]: a JSON object keyed by
+/// canonical parameter names, whose present values match their declared types.
+///
+/// The accessors apply the content rules every handler shared before the
+/// kernel checked input: trimmed strings, non-empty unless read raw, and the
+/// lenient string-list forms.
+#[derive(Debug, Clone)]
+pub struct OperationInput {
+    input: Value,
+    unknown_fields: Vec<String>,
+}
+
+impl OperationInput {
+    /// Undeclared fields the input carried, in input order. They are reported
+    /// by the tool entry and ignored by handlers.
+    pub fn unknown_fields(&self) -> &[String] {
+        &self.unknown_fields
+    }
+
+    /// The canonical input object.
+    pub fn as_value(&self) -> &Value {
+        &self.input
+    }
+
+    /// The canonical input object, for a host that takes JSON.
+    pub fn into_value(self) -> Value {
+        self.input
+    }
+
+    /// A trimmed, non-empty string the operation requires.
+    pub fn required_string(&self, name: &str) -> Result<String, OrbitError> {
+        required_string(&self.input, &[name], name)
+    }
+
+    /// A trimmed string; present but blank is refused.
+    pub fn optional_string(&self, name: &str) -> Result<Option<String>, OrbitError> {
+        optional_string(&self.input, name)
+    }
+
+    /// A string exactly as sent, for parameters where blank has meaning.
+    pub fn optional_raw_string(&self, name: &str) -> Result<Option<String>, OrbitError> {
+        optional_raw_string(&self.input, name)
+    }
+
+    /// A string list from an array, a string, a comma-separated string or a
+    /// JSON-encoded array string.
+    pub fn optional_string_list(&self, name: &str) -> Result<Option<Vec<String>>, OrbitError> {
+        optional_csv_or_string_list_alias(&self.input, &[name])
+    }
+
+    /// A non-negative integer from a number or a numeric string.
+    pub fn optional_count(&self, name: &str) -> Result<Option<usize>, OrbitError> {
+        let Some(value) = self.input.get(name) else {
+            return Ok(None);
+        };
+        non_negative_integer(value)
+            .and_then(|count| usize::try_from(count).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!("`{name}` must be a non-negative integer"))
+            })
+    }
+
+    /// A boolean.
+    pub fn optional_bool(&self, name: &str) -> Result<Option<bool>, OrbitError> {
+        match self.input.get(name) {
+            None => Ok(None),
+            Some(Value::Bool(value)) => Ok(Some(*value)),
+            Some(_) => Err(OrbitError::InvalidInput(format!(
+                "`{name}` must be a boolean"
+            ))),
+        }
     }
 }
 

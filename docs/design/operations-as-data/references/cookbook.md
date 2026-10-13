@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Migration Cookbook
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -11,7 +11,7 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -20,11 +20,12 @@ Written from the friction migration ([ORB-10358]) and updated for the accepted
 kernel v2 in [2_design.md](../2_design.md). Phase 0a of
 [2_design.md §9](../2_design.md#9-migration-plan) built kernel v2's structure
 ([ORB-15932]): `NounSpec`, `cli_path`, `effect`, parameter groups, `redact`,
-the `operation_registry!` macro and the generic adapters. Steps that use the
-still-planned input validation (`parse_input`, `aliases`, `at_least_one_of`,
-`retired_fields`) or parameter kinds (`Enum`, `Switch`, `Object`, `default`,
-nested `cli_path`) say so; until a phase builds them, a noun that needs one
-extends the kernel first. Two recipes: migrating a noun that is still
+the `operation_registry!` macro and the generic adapters. Phase 0b built input
+validation at the tool entry in warn mode ([ORB-15933]): `parse_input`,
+`aliases`, `at_least_one_of` and `retired_fields`. Steps that use the
+still-planned parameter kinds (`Enum`, `Switch`, `Object`, `default`, nested
+`cli_path`) say so; until a phase builds them, a noun that needs one extends the
+kernel first. Two recipes: migrating a noun that is still
 hand-wired, and adding a verb to a noun that is already migrated.
 
 ---
@@ -97,8 +98,11 @@ groups, and the operations list. `friction/operations.rs` is the example.
 
 For each verb, fill `cli_path`, `effect` and its parameter groups. For each
 parameter, fill `redact` in addition to the friction-era fields: `FreeText` for
-prose a caller writes, `Path` for a path or URL, `None` otherwise. Once phase 0b
-lands, also fill `at_least_one_of`, `retired_fields`, `aliases` and `default`.
+prose a caller writes, `Path` for a path or URL, `None` otherwise. Also fill
+`aliases` with every alternative spelling the handlers accept today,
+`retired_fields` with every field they refuse with a pointer to its
+replacement, and `at_least_one_of` with any "change something" rule; `default`
+waits for its phase.
 Choose `effect` from what the verb does, not from what the old CLI arm happened
 to open; where they differ, say so in the PR, with evidence that a verb moving
 to the read-only runtime does not rely on stale-run reconciliation on open.
@@ -139,10 +143,9 @@ fallout mechanically:
   [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](../4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)
   this includes `worker_tools.rs` and `artifact_redaction.rs`. The redaction
   field lists come from the parameters' `redact` class: give the noun's arm in
-  `policy_for_action` its spec's `params` and delete its hand-written lists. An
-  input spelling the handler accepts but the spec does not declare must stay
-  redacted, as an explicit per-verb entry until phase 0b declares aliases
-  (friction `add`'s `description`).
+  `policy_for_action` its spec's `params` and delete its hand-written lists. A
+  declared alias takes its parameter's class, so an accepted spelling is
+  redacted once it is in `aliases` (friction `add`'s `description`).
 
 ### Step 5. Derive MCP
 
@@ -150,7 +153,8 @@ Delete the per-verb `Tool` files. Register the noun with
 `operation::register_noun(registry, &NOUN)`, which serves every operation with
 the generic `OperationTool<V>`; it takes `execution_kind` from `effect` and
 dispatches through the `From<<Noun>Verb> for OrbitBuiltinAction` impl from
-Step 4. Once phase 0b lands it also validates input with `parse_input`.
+Step 4. It also validates input with `parse_input` and reports unknown fields
+(a `warn!` and one audit row each) before dispatch.
 Delete the noun's block from `register_builtins`.
 
 If a verb overrode `input_schema()`, move the override into the noun's exhaustive
@@ -196,15 +200,19 @@ in `crates/orbit-cli/tests/output/help_goldens.rs`.
 
 Add `dispatch(runtime, verb, input, model)` to `<noun>_tools.rs` with one
 exhaustive `match` on the verb, make the per-verb handlers private to it, and
-reduce `dispatch.rs` to a single arm. Once phase 0b lands, handlers take
-`OperationInput` and read canonical names only; delete their alias lists and
-any presence check `parse_input` then performs. Keep content checks.
+reduce `dispatch.rs` to a single arm. Handlers take `OperationInput` and read
+canonical names only; delete their alias lists and any presence or type check
+`parse_input` performs. Keep content checks. Delete any CLI-side restatement of
+`at_least_one_of`: the CLI adapter's `Invocation::require_at_least_one_of`
+words the refusal in flags.
 
 ### Step 8. Point the dashboard at the registry
 
 Take tool names from `<Noun>Verb::tool_name()` (an `OperationVerb` method).
 Leave route shapes, serde bodies and HTTP-specific defaults alone — they are not
-verb data. Once the tool entry refuses undeclared fields (phase 0b), the
+verb data, except that a serde body must forward the fields its verb does not
+declare (a flattened `extra` map passed through `forward_undeclared`), or the
+tool entry never sees them. Once the tool entry refuses undeclared fields, the
 dashboard needs no field-name check of its own.
 
 ### Step 9. Verify contract stability
@@ -273,5 +281,7 @@ runtime need all come from the spec.
 
 - [ORB-10358] — the friction migration this cookbook is drawn from.
 - [ORB-15932] — built kernel v2's structure on friction.
+- [ORB-15933] — built input validation at the tool entry on friction, in warn
+  mode.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

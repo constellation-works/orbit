@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::governance::operation::OperationInput;
 use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -28,6 +29,37 @@ pub(super) fn reject_unknown_tool_arguments(
         .map(|param| param.name.as_str())
         .collect::<Vec<_>>();
     reject_unknown_tool_fields(input, &allowed)
+}
+
+/// Warn about and audit each undeclared field an operation call carried.
+///
+/// Unknown fields are accepted during the compatibility window; this is how
+/// callers that send them are found before they are refused. The call goes
+/// ahead even when the audit row cannot be written.
+pub(super) fn report_unknown_fields(ctx: &ToolContext, tool_name: &str, input: &OperationInput) {
+    let fields = input.unknown_fields();
+    if fields.is_empty() {
+        return;
+    }
+    for field in fields {
+        tracing::warn!(
+            tool = tool_name,
+            field = field.as_str(),
+            "{tool_name} ignored unknown input field `{field}`; it will be refused in a later release"
+        );
+    }
+    let actor = resolve_identity(ctx, input.as_value())
+        .ok()
+        .and_then(|identity| identity.actor_label);
+    if let Some(host) = ctx.orbit_host.as_deref()
+        && let Err(error) = host.record_unknown_input_fields(tool_name, fields, actor.as_deref())
+    {
+        tracing::warn!(
+            tool = tool_name,
+            error = %error,
+            "could not audit unknown input fields"
+        );
+    }
 }
 
 pub(super) fn execute_host_action(

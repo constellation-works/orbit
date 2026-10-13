@@ -734,14 +734,176 @@ fn friction_add_description_alias_is_redacted_like_body() {
     );
     assert_eq!(created["redactions_applied"], true);
     let redactions = created["redactions"].as_array().expect("redactions array");
+    // The tool entry renames the alias before redaction, so the report names
+    // the canonical field.
     assert!(
-        redactions.iter().any(|r| r["field_path"] == "description"),
-        "expected description in redactions report: {redactions:?}"
+        redactions.iter().any(|r| r["field_path"] == "body"),
+        "expected body in redactions report: {redactions:?}"
     );
 
     let id = created["id"].as_str().expect("friction id");
     let shown = fixture.json(&["friction", "show", id, "--json"]);
     assert!(!shown.to_string().contains(&token));
+}
+
+fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
+    let fixture = Fixture::new();
+    let task = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Alias fixture task",
+        "--complexity",
+        "low",
+        "--json",
+    ]);
+    let task_id = task["id"].as_str().unwrap();
+
+    let input = json!({
+        "description": "Alias fixture body",
+        "task_id": task_id,
+        "tag": "tooling",
+        "model": "codex",
+    })
+    .to_string();
+    let created = fixture.json(&["tool", "run", "orbit.friction.add", "--input", &input]);
+    assert_eq!(created["body"], "Alias fixture body");
+    assert_eq!(created["during_task"], task_id);
+    assert_eq!(created["tags"], json!(["tooling"]));
+    let id = created["id"].as_str().unwrap();
+
+    let input = json!({"id": id, "tag": ["docs"], "model": "codex"}).to_string();
+    let updated = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &input]);
+    assert_eq!(updated["tags"], json!(["docs"]));
+
+    for (input, alias, field) in [
+        (
+            json!({"body": "b", "description": "d", "model": "codex"}),
+            "description",
+            "body",
+        ),
+        (
+            json!({"body": "b", "tags": "docs", "tag": "build", "model": "codex"}),
+            "tag",
+            "tags",
+        ),
+        (
+            json!({"body": "b", "during_task": task_id, "task_id": task_id, "model": "codex"}),
+            "task_id",
+            "during_task",
+        ),
+    ] {
+        let output = fixture
+            .command(&[
+                "tool",
+                "run",
+                "orbit.friction.add",
+                "--input",
+                &input.to_string(),
+            ])
+            .assert()
+            .failure();
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr).into_owned();
+        assert!(
+            stderr.contains(&format!("`{alias}`")) && stderr.contains(&format!("`{field}`")),
+            "a refusal of both `{alias}` and `{field}` names both: {stderr}"
+        );
+    }
+
+    let input = json!({"body": "b", "model": "codex", "agent": "codex"}).to_string();
+    fixture
+        .command(&["tool", "run", "orbit.friction.add", "--input", &input])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "orbit.friction.add no longer accepts `agent`; use `model` with the agent family for attribution",
+        ));
+}
+
+fn friction_unknown_tool_fields_warn_and_audit_without_refusing() {
+    let fixture = Fixture::new();
+    let input = json!({"body": "Unknown field fixture", "model": "codex", "severity": "high"});
+    let output = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.friction.add",
+            "--input",
+            &input.to_string(),
+        ])
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("orbit.friction.add ignored unknown input field `severity`"),
+        "the call warns about the unknown field: {stderr}"
+    );
+    let created: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(created["body"], "Unknown field fixture");
+
+    let audit = fixture.json(&["audit", "list", "--json"]);
+    let rows = audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["command"] == "tool_input")
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "one audit row per unknown field: {audit}");
+    assert_eq!(rows[0]["tool_name"], "orbit.friction.add");
+    let arguments: serde_json::Value =
+        serde_json::from_str(rows[0]["arguments_json"].as_str().unwrap()).unwrap();
+    assert_eq!(arguments["field"], "severity");
+    assert_eq!(arguments["tool_name"], "orbit.friction.add");
+}
+
+fn friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool() {
+    let fixture = Fixture::new();
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        "No-edit fixture",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+    fixture
+        .command(&["friction", "update", id])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "nothing to update; pass at least one of `--status`, `--tag`, `--body`, `--title`, or `--rehome-to`",
+        ));
+    let input = json!({"id": id, "model": "codex"}).to_string();
+    fixture
+        .command(&["tool", "run", "orbit.friction.update", "--input", &input])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "orbit.friction.update requires `status`, `tags`, `body`, `title`, or `rehome_to`",
+        ));
+}
+
+#[test]
+fn friction_tool_input_is_checked_against_the_spec() {
+    for (name, check) in [
+        (
+            "friction_aliases_behave_as_their_parameters_and_conflicts_are_refused",
+            friction_aliases_behave_as_their_parameters_and_conflicts_are_refused as fn(),
+        ),
+        (
+            "friction_unknown_tool_fields_warn_and_audit_without_refusing",
+            friction_unknown_tool_fields_warn_and_audit_without_refusing as fn(),
+        ),
+        (
+            "friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool",
+            friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }
 
 #[test]
