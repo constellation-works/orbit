@@ -77,7 +77,16 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
     }
     let input = TaskVerb::ArtifactPut.spec().parse_input(input)?;
     let id = input.required_string("id")?;
-    let source_path = input.required_string("source_path")?;
+    let normalized_source_path = input.required_string("source_path")?;
+    // Local CLI calls select an exact filesystem name; MCP retains its
+    // shipped string normalization. Neither changes artifact-name handling.
+    let source_path = if ctx.session_context.transport.is_none() {
+        input
+            .optional_raw_string("source_path")?
+            .unwrap_or(normalized_source_path)
+    } else {
+        normalized_source_path
+    };
     let artifact_path = input.optional_string("path")?;
     let resolved_source_path = confine_source_path(
         ctx,

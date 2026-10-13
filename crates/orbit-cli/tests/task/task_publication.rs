@@ -544,6 +544,58 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
         runtime_identity,
         "publication must not rewrite the task partition identity"
     );
+    // Exact source selection must not normalize filesystem whitespace. Cover
+    // both silent selection of a trimmed sibling and a source with no sibling.
+    for (source, sibling, artifact_path) in [
+        ("note.txt ", Some("note.txt"), "notes/selected.txt"),
+        ("lone-note.txt ", None, "notes/lone-selected.txt"),
+    ] {
+        fs::write(scratch.join(source), b"requested\n").expect("exact source");
+        if let Some(sibling) = sibling {
+            fs::write(scratch.join(sibling), b"wrong\n").expect("trimmed sibling");
+        } else {
+            assert!(!scratch.join(source.trim()).exists());
+        }
+        orbit(
+            &source_repo,
+            &owner_home,
+            &publication_bare,
+            &[
+                "task",
+                "artifact",
+                "put",
+                &first,
+                &format!(".orbit/tmp/{source}"),
+                "--path",
+                &format!(" {artifact_path} "),
+                "--model",
+                "codex",
+            ],
+        )
+        .success();
+        let readback = scratch.join("selected-readback.txt");
+        orbit(
+            &source_repo,
+            &owner_home,
+            &publication_bare,
+            &[
+                "task",
+                "artifact",
+                "get",
+                &first,
+                artifact_path,
+                "--out",
+                readback.to_str().expect("readback path"),
+            ],
+        )
+        .success();
+        assert_eq!(
+            fs::read(readback).expect("artifact readback"),
+            b"requested\n",
+            "artifact put must read the exact supplied filename: {source:?}"
+        );
+    }
+
     assert_eq!(repository_state(&source_repo), source_before);
 }
 
