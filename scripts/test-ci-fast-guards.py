@@ -145,7 +145,8 @@ else:
         for call in self.guard_calls.iterdir():
             call.unlink()
         shutil.copy2(SCRIPTS / name, self.scripts / name)
-        return subprocess.run(["/bin/bash", str(self.scripts / name), *arguments],
+        interpreter = "python3" if name.endswith(".py") else "/bin/bash"
+        return subprocess.run([interpreter, str(self.scripts / name), *arguments],
                               env=dict(self.env, **(env_overrides or {})),
                               text=True, capture_output=True)
 
@@ -365,10 +366,14 @@ raise SystemExit({17+index})
             'let script = r#"while true; do "/bin/sleep" 0.1; done"#;',
             'let script = "while true; do sh -c \'sleep 0.1\'; done";',
         ]
-        for source in cases:
+        # Keep one full runner failure to verify wiring and propagation. The
+        # remaining syntax rows exercise the same checker directly rather
+        # than launching every unrelated guard stub again.
+        for index, source in enumerate(cases):
             with self.subTest(source=source):
                 fixture.write_text(source)
-                result = self.run_guard("ci-guardrails.sh", "--fast")
+                result = (self.run_guard("ci-guardrails.sh", "--fast") if index == 0
+                          else self.run_guard("check-test-shell-waits.py"))
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn("fixture.rs:", result.stderr)
                 self.assertIn("shell sleep poll", result.stderr)
@@ -377,7 +382,7 @@ raise SystemExit({17+index})
         fixture = self.root / "crates/example/src/process/tests/wait.rs"
         fixture.parent.mkdir(parents=True)
         fixture.write_text(cases[0])
-        result = self.run_guard("ci-guardrails.sh", "--fast")
+        result = self.run_guard("check-test-shell-waits.py")
         self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_fast_allows_nonpolling_sleep_and_narrow_reasoned_exception(self):
@@ -392,23 +397,25 @@ raise SystemExit({17+index})
                            'let prose = "we sleep while waiting";')
         result = self.run_guard("ci-guardrails.sh", "--fast")
         self.assertEqual(result.returncode, 0, result.stderr)
+        # The clean row above checks full runner wiring; exception policy is
+        # checked at the executable boundary without repeating that runner.
         fixture.write_text('let script = "while [ ! -e x ]; do sleep 0.1; done";')
         exception = dict(path="crates/example/tests/fixture.rs",
                          loop="while [ ! -e x ]; do", reason="bounded sandbox fixture")
         allowlist.write_text(json.dumps([exception]))
-        result = self.run_guard("ci-guardrails.sh", "--fast")
+        result = self.run_guard("check-test-shell-waits.py")
         self.assertEqual(result.returncode, 0, result.stderr)
         # An exception grants one exact loop, not the entire file or duplicates.
         fixture.write_text(fixture.read_text() + '\nlet other = "until true; do sleep 1; done";')
-        result = self.run_guard("ci-guardrails.sh", "--fast")
+        result = self.run_guard("check-test-shell-waits.py")
         self.assertEqual(result.returncode, 1, result.stderr)
         fixture.write_text("")
-        result = self.run_guard("ci-guardrails.sh", "--fast")
+        result = self.run_guard("check-test-shell-waits.py")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("stale shell-wait exception", result.stderr)
         exception["reason"] = ""
         allowlist.write_text(json.dumps([exception]))
-        result = self.run_guard("ci-guardrails.sh", "--fast")
+        result = self.run_guard("check-test-shell-waits.py")
         self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_fast_propagates_desktop_ui_failure(self):
@@ -855,6 +862,10 @@ class WorkflowActionPinGuardrailTests(unittest.TestCase):
             FAKE_CURL_STATUS_MAP_FILE=str(self.status_map),
         )
         self.env.pop("ORBIT_STRICT_WORKFLOW_ACTION_PINS", None)
+        # Curl is already simulated. Record the real guard's requested waits
+        # in the same log so ordering/backoff remain observable without sleep.
+        self.write_executable(self.bin / "sleep",
+                              '#!/bin/sh\nprintf "sleep %s\\n" "$*" >> "$FAKE_CURL_LOG"\n')
         self.write_executable(self.bin / "curl", '''#!/usr/bin/env python3
 import json, os, sys
 url = sys.argv[-1]
@@ -916,6 +927,7 @@ if status == "000":
         })
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [self.pin_url("actions/checkout", good_sha)])
 
     def test_fails_when_a_pin_does_not_resolve(self):
         bad_sha = "b" * 40
@@ -930,6 +942,7 @@ if status == "000":
                 self.assertIn(f"actions/setup-node@{bad_sha} does not resolve (status {status})", result.stderr)
                 self.assertIn(".github/workflows/check.yml:", result.stderr)
                 self.assertEqual(self.pin_call_count(url), 1)
+                self.assertEqual(self.log.read_text().splitlines(), [url])
 
     def test_retries_curl_000_then_skips_with_warning(self):
         bad_sha = "c" * 40
@@ -942,6 +955,7 @@ if status == "000":
         self.assertIn("status 000 after 3 attempts", result.stderr)
         self.assertIn("skipping", result.stderr)
         self.assertEqual(self.pin_call_count(url), 3)
+        self.assertEqual(self.log.read_text().splitlines(), [url, "sleep 0.25", url, "sleep 0.5", url])
 
     def test_retries_rate_limits_and_server_errors_then_skips(self):
         sha = "e" * 40
@@ -956,6 +970,8 @@ if status == "000":
                 self.assertIn(f"status {status} after 3 attempts", result.stderr)
                 self.assertIn("skipping", result.stderr)
                 self.assertEqual(self.pin_call_count(url), 3)
+                self.assertEqual(self.log.read_text().splitlines(),
+                                 [url, "sleep 0.25", url, "sleep 0.5", url])
 
     def test_strict_mode_fails_when_result_remains_inconclusive(self):
         sha = "f" * 40
@@ -966,6 +982,7 @@ if status == "000":
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("strict mode requires resolution", result.stderr)
         self.assertEqual(self.pin_call_count(url), 3)
+        self.assertEqual(self.log.read_text().splitlines(), [url, "sleep 0.25", url, "sleep 0.5", url])
 
     def test_dedupes_repeated_pins(self):
         sha = "d" * 40
