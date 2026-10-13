@@ -149,3 +149,14 @@ worker scope/counters, keyed admission, injected stop/clock/probe behavior and r
 confined writers retain their required child fixtures and seams. Copying a private
 implementation into an integration fixture or widening its visibility is not a
 public-boundary migration.
+
+## Public API integration suites
+
+Tests of an exported crate API belong in the crate-root integration suite even
+when they use only an in-memory definition or a temporary directory. For
+example, `orbit-policy`'s validation, precedence and symlink checks exercise
+`PolicyEngine` and `PolicyDef` through `tests/policy/admission.rs`; putting
+those cases under `src/tests/` would not expose a private seam that the public
+boundary needs. Keep `src/<module>/tests/` for admitted private logic,
+deterministic interleavings, fault injection and platform behavior that the
+crate-root boundary cannot reach economically.

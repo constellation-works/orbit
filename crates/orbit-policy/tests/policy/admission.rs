@@ -1,22 +1,13 @@
-#![allow(missing_docs)]
+#![allow(clippy::expect_used)]
 
-//! Boundary tests for `PolicyEngine::check`. These guard the global
-//! `denyRead` / `denyModify` last-match-wins semantics, the unknown-profile
-//! error path, and matched_rule observability for audit attribution.
-//! See task T20260509-7.
-//!
-//! Consolidated from the prior nested engine/tests/ layout (check, errors, overrides)
-//! into sibling tests/engine.rs per ORB-00242 / docs/design-patterns/test_layout.md.
+//! Existing `PolicyEngine` behavior exercised through the crate-root public API.
 
-use super::super::engine::PolicyEngine;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::policy::FsProfile;
-use orbit_types::policy::{FsOperation, PolicyDef};
+use orbit_policy::PolicyEngine;
+use orbit_types::policy::{FsOperation, FsProfile, PolicyDef};
 use std::collections::HashMap;
 
-/// Shared test fixture builder. Constructs a minimal `PolicyDef` for
-/// exercising `PolicyEngine::check` against profile rules and global denies.
 fn make_def(
     deny_read: Vec<&str>,
     deny_modify: Vec<&str>,
@@ -43,7 +34,60 @@ fn make_def(
     }
 }
 
-// --- Error and special-case paths (from errors.rs) ---
+fn engine(
+    deny_read: &[&str],
+    deny_modify: &[&str],
+    read: &[&str],
+    modify: &[&str],
+) -> PolicyEngine {
+    let mut fs_profiles = HashMap::new();
+    fs_profiles.insert(
+        "p".to_string(),
+        FsProfile {
+            read: read.iter().map(|s| (*s).to_string()).collect(),
+            modify: modify.iter().map(|s| (*s).to_string()).collect(),
+        },
+    );
+    let def = PolicyDef {
+        name: "matrix".to_string(),
+        description: None,
+        deny_read: deny_read.iter().map(|s| (*s).to_string()).collect(),
+        deny_modify: deny_modify.iter().map(|s| (*s).to_string()).collect(),
+        fs_profiles,
+        created_at: Some(Utc::now()),
+        updated_at: Some(Utc::now()),
+    };
+    PolicyEngine::from_def(&def).expect("valid policy def")
+}
+
+struct Case {
+    /// Profile `read` rules (modify mirrors read so validation passes).
+    rules: &'static [&'static str],
+    path: &'static str,
+    allowed: bool,
+    note: &'static str,
+}
+
+fn run_read_cases(cases: &[Case]) {
+    for case in cases {
+        let engine = engine(&[], &[], case.rules, &[]);
+        let result = engine
+            .check("p", FsOperation::Read, case.path)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "{}: rules {:?} path `{}`: {err}",
+                    case.note, case.rules, case.path
+                )
+            });
+        assert_eq!(
+            result.allowed, case.allowed,
+            "{}: rules {:?} path `{}` matched_rule `{}`",
+            case.note, case.rules, case.path, result.matched_rule
+        );
+    }
+}
+
+// Path validation and host exception behavior.
 
 #[test]
 fn check_rejects_parent_traversal_for_read_and_modify_paths() {
@@ -374,7 +418,7 @@ fn modify_exception_validation_is_fail_closed() {
     }
 }
 
-// --- [ORB-00418] Symlink-safe evaluation (check_resolved) ---
+// Symlink resolution behavior at the exported `check_resolved` boundary.
 
 #[cfg(unix)]
 #[test]
@@ -585,4 +629,127 @@ fn resolved_symlink_cycle_fails_closed() {
         result.is_err(),
         "a symlink cycle must fail closed (error), got {result:?}"
     );
+}
+
+// Glob newline and precedence behavior through `PolicyEngine::check`.
+
+#[test]
+fn newline_segment_request_matrix() {
+    let newline = "secrets/a\nb";
+    let sibling = "secrets/ab";
+    let denied = engine(&["secrets/**"], &[], &["secrets/*"], &[]);
+
+    let newline_decision = denied
+        .check("p", FsOperation::Read, newline)
+        .expect("newline name");
+    let sibling_decision = denied
+        .check("p", FsOperation::Read, sibling)
+        .expect("ordinary sibling");
+    assert!(!newline_decision.allowed, "{newline_decision:?}");
+    assert!(!sibling_decision.allowed, "{sibling_decision:?}");
+    assert_eq!(newline_decision.matched_rule, "secrets/**");
+    assert_eq!(sibling_decision.matched_rule, newline_decision.matched_rule);
+
+    let outside = denied
+        .check("p", FsOperation::Read, "notes/a\nb")
+        .expect("outside the grant");
+    assert!(!outside.allowed, "{outside:?}");
+    assert_eq!(outside.matched_rule, "<no matching rule>");
+
+    run_read_cases(&[
+        Case {
+            rules: &["**"],
+            path: "a\nb/c",
+            allowed: true,
+            note: "** matches a newline inside a segment",
+        },
+        Case {
+            rules: &["**/leaf"],
+            path: "a\nb/leaf",
+            allowed: true,
+            note: "**/ matches a newline inside a directory segment",
+        },
+        Case {
+            rules: &["**/leaf"],
+            path: "a\nbleaf",
+            allowed: false,
+            note: "**/ still requires the slash before the literal",
+        },
+        Case {
+            rules: &["secrets/**"],
+            path: "secrets/a\nb",
+            allowed: true,
+            note: "trailing /** matches a newline inside the filename",
+        },
+        Case {
+            rules: &["secrets/**"],
+            path: "secrets/a\nb/c",
+            allowed: true,
+            note: "trailing /** matches a newline at any depth",
+        },
+        Case {
+            rules: &["secrets/*"],
+            path: "secrets/a\nb/c",
+            allowed: false,
+            note: "* still stops at / when the segment contains a newline",
+        },
+        Case {
+            rules: &["a?b"],
+            path: "a\nb",
+            allowed: true,
+            note: "? matches one newline",
+        },
+        Case {
+            rules: &["a?b"],
+            path: "a/b",
+            allowed: false,
+            note: "? still does not match /",
+        },
+    ]);
+}
+#[test]
+fn precedence_matrix() {
+    // Within a profile, evaluation is last-match-wins over the rule list:
+    // a negation listed after the allow carves out the subtree...
+    let carved = engine(&[], &[], &["src/**", "!src/secret/**"], &[]);
+    let result = carved
+        .check("p", FsOperation::Read, "src/secret/key")
+        .expect("check");
+    assert!(!result.allowed, "trailing negation must win: {result:?}");
+    assert_eq!(result.matched_rule, "src/secret/**");
+    let still_allowed = carved
+        .check("p", FsOperation::Read, "src/lib.rs")
+        .expect("check");
+    assert!(still_allowed.allowed, "{still_allowed:?}");
+
+    // NOTE: ...and rule order is load-bearing: the same rules reversed let
+    // the broad allow override the negation. Profile authors must list
+    // carve-outs last.
+    let reversed = engine(&[], &[], &["!src/secret/**", "src/**"], &[]);
+    let result = reversed
+        .check("p", FsOperation::Read, "src/secret/key")
+        .expect("check");
+    assert!(
+        result.allowed,
+        "last-match-wins: a later allow overrides an earlier profile negation: {result:?}"
+    );
+
+    // Global denies are appended after all profile rules, so they always win
+    // regardless of profile rule order.
+    let global = engine(&["src/secret/**"], &[], &["src/**"], &[]);
+    let result = global
+        .check("p", FsOperation::Read, "src/secret/key")
+        .expect("check");
+    assert!(
+        !result.allowed,
+        "global deny must beat profile allow: {result:?}"
+    );
+
+    // A profile listing only negations denies everything (no positive rule
+    // ever matches) — fail closed.
+    let negations_only = engine(&[], &[], &["!tmp/**"], &[]);
+    let result = negations_only
+        .check("p", FsOperation::Read, "src/lib.rs")
+        .expect("check");
+    assert!(!result.allowed, "{result:?}");
 }
