@@ -9,16 +9,39 @@ use std::os::unix::fs::PermissionsExt;
 use orbit_common::OrbitError;
 use tempfile::TempDir;
 
-use super::super::enable::set_clock_enabled_with;
+use super::super::enable::set_clock_enabled_with_version_probe;
 use super::super::install::{launchd_plist_path, write_launchd_unit};
 use super::super::manager::{ClockPlatform, ManagerCommandOutput};
 use super::super::program::discover_clock_unit_program;
 use super::super::settings::ClockSettings;
 use super::support::MockRunner;
 
+type VersionProbe = fn(&std::path::Path) -> Result<String, String>;
+
+fn fixture_version(path: &std::path::Path) -> Result<String, String> {
+    if path.exists() {
+        Ok("orbit 0.0.1".into())
+    } else {
+        Err(format!("program does not exist: {}", path.display()))
+    }
+}
+
+fn timed_out_version(_: &std::path::Path) -> Result<String, String> {
+    Err("--version timed out after 3s".into())
+}
+
+fn malformed_version(_: &std::path::Path) -> Result<String, String> {
+    Err("empty --version output".into())
+}
+
+fn unreachable_version(_: &std::path::Path) -> Result<String, String> {
+    Err("could not run installed program: Permission denied".into())
+}
+
 struct Fixture {
     root: TempDir,
     home: TempDir,
+    version_probe: VersionProbe,
 }
 
 impl Fixture {
@@ -26,6 +49,7 @@ impl Fixture {
         let fixture = Self {
             root: tempfile::tempdir().unwrap(),
             home: tempfile::tempdir().unwrap(),
+            version_probe: fixture_version,
         };
         let program = fixture.home.path().join("installed-orbit");
         if !unrunnable {
@@ -43,12 +67,13 @@ impl Fixture {
     }
 
     fn enable(&self, enabled: bool, runner: &MockRunner) -> Result<bool, OrbitError> {
-        set_clock_enabled_with(
+        set_clock_enabled_with_version_probe(
             self.root.path(),
             enabled,
             ClockPlatform::Launchd,
             runner,
             self.home.path(),
+            self.version_probe,
         )
         .map(|status| status.enabled)
     }
@@ -76,21 +101,44 @@ fn dump(success: bool, stdout: &str) -> Result<ManagerCommandOutput, OrbitError>
 
 #[test]
 fn loaded_unhealthy_launchd_is_rewritten_and_reloaded_or_reports_load_failure() {
-    for (unrunnable, probe) in [
-        (true, None),
-        (false, Some(dump(false, ""))),
+    for (case, unrunnable, version_probe, probe) in [
         (
+            "missing program",
+            true,
+            fixture_version as VersionProbe,
+            None,
+        ),
+        ("version timeout", false, timed_out_version, None),
+        ("malformed version output", false, malformed_version, None),
+        ("unreachable program", false, unreachable_version, None),
+        (
+            "print failure",
             false,
+            fixture_version,
+            Some(dump(false, "")),
+        ),
+        (
+            "print transport failure",
+            false,
+            fixture_version,
             Some(Err(OrbitError::Execution("print transport failed".into()))),
         ),
-        (false, Some(dump(true, "last exit code = 78: EX_CONFIG\n"))),
         (
+            "failed last run",
             false,
+            fixture_version,
+            Some(dump(true, "last exit code = 78: EX_CONFIG\n")),
+        ),
+        (
+            "penalty box",
+            false,
+            fixture_version,
             Some(dump(true, "properties = penalty box | inferred program\n")),
         ),
     ] {
         for loaded in [true, false] {
-            let fixture = Fixture::new(unrunnable);
+            let mut fixture = Fixture::new(unrunnable);
+            fixture.version_probe = version_probe;
             let probes = match &probe {
                 None => Vec::new(),
                 Some(Ok(output)) => vec![Ok(output.clone())],
@@ -112,6 +160,11 @@ fn loaded_unhealthy_launchd_is_rewritten_and_reloaded_or_reports_load_failure() 
                     .unwrap();
             assert_eq!(program, std::env::current_exe().unwrap());
             let commands = runner.commands();
+            assert_eq!(
+                commands.len(),
+                3 + usize::from(probe.is_some()),
+                "{case}: exactly one recovery attempt; version failures bypass print"
+            );
             assert_eq!(commands.first().unwrap(), "launchctl list com.orbit.sweep");
             assert_eq!(
                 &commands[commands.len() - 2..],
@@ -128,6 +181,13 @@ fn loaded_unhealthy_launchd_is_rewritten_and_reloaded_or_reports_load_failure() 
 #[test]
 fn loaded_healthy_launchd_keeps_its_plist_and_is_not_reloaded() {
     let fixture = Fixture::new(false);
+    // A real probe would time out. Healthy means the injected version result,
+    // independent of executable startup and contention (F2026-10-329).
+    fs::write(
+        fixture.home.path().join("installed-orbit"),
+        "#!/bin/sh\nexec /bin/sleep 30\n",
+    )
+    .unwrap();
     let before = fixture.plist();
     let runner = MockRunner::with_probes(
         vec![dump(

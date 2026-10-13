@@ -470,7 +470,9 @@ program that cannot report a version (the same detection behind `orbit doctor`'s
 `properties`, or when the dump cannot be read at all. Each case prints the reason and the
 same recovery: `orbit clock enable` rewrites the unit to this binary and reloads it.
 Enable checks these signals even when the agent is already loaded; a healthy loaded
-agent keeps running without a rewrite or reload. Pause unloads the agent without
+agent keeps running without a rewrite or reload. The version probe retains its
+three-second deadline and process-group cleanup; debug tracing records the health
+reason before an enable operation rewrites and reloads the agent. Pause unloads the agent without
 rewriting it or trying to repair its health. The
 dashboard's Host Sweep Clock card shows the same states — a degraded clock is badged
 `missed`, not `healthy`, even though the launchd service itself is still enabled.
