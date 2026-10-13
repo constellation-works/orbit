@@ -3,11 +3,11 @@ title: Operations as Data — Overview
 owner: claude
 last_updated: 2026-10-12
 last_validated: 2026-10-12
-status: Draft
+status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction is migrated, kernel v2 and a planned noun-by-noun migration are proposed.
+summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction is migrated, kernel v2 and a planned noun-by-noun migration are accepted and in progress.
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data, orbit-core]
@@ -30,10 +30,11 @@ run, drain, workspace claim, and the single-verb tools) is hand-wired. A
 2026-10-12 review found that the friction kernel declares a verb's *names* once
 but still restates its *behaviour* — read/write class, redaction, accepted
 aliases, cross-field rules — on several surfaces, and that it cannot yet express
-what the task and auto-task commands need. This folder is `Draft` while the
-revised design (kernel v2) and a planned migration replace the touch-it-move-it
-ratchet, which migrated no noun in the eleven weeks it governed. Each section of
-[2_design.md](./2_design.md) is marked **Implemented** or **Proposed**.
+what the task and auto-task commands need. The revised design (kernel v2) and a planned
+migration were accepted on 2026-10-12, replacing the touch-it-move-it ratchet,
+which migrated no noun in the eleven weeks it governed. The work is tracked as
+Orbit tasks tagged `operations-as-data`, starting with [ORB-15932]. Each section
+of [2_design.md](./2_design.md) is marked **Implemented** or **Planned**.
 
 ## 1. Motivation
 
@@ -60,13 +61,13 @@ and again in the tool handler.
 - **Operation** — one verb on one noun (`friction add`). The unit of declaration.
 - **`OperationSpec<V>`** — the declaration: names, parameters, effect, MCP
   placement. Pure data; no transport types, no runtime handle.
-- **`NounSpec<V>`** *(proposed)* — the noun-level declaration: CLI name, tool
+- **`NounSpec<V>`** *(planned)* — the noun-level declaration: CLI name, tool
   prefix, `--help` summary, audit target type, and the operation table.
 - **Verb enum (`V`)** — the noun's typed verb list (`FrictionVerb`). The join
   between the spec table and every per-surface table.
 - **Registry** — a noun's `&'static [OperationSpec<V>]`, in declaration order.
   Order is contract: it is `--help` order and MCP schema order.
-- **Effect** *(proposed)* — whether a verb reads or writes. The one behavioural
+- **Effect** *(planned)* — whether a verb reads or writes. The one behavioural
   fact every surface needs, so it lives in the spec.
 - **Derived adapter** — a surface that reads the registry instead of restating
   it. Generic over `V`, so the next noun reuses it unchanged.
@@ -74,7 +75,7 @@ and again in the tool handler.
   surface needs: the `orbit-core` handler table, the CLI renderers, MCP schema
   extensions. The placement rule is
   [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](./4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface).
-- **Operation input** *(proposed)* — the tool input after the spec has
+- **Operation input** *(planned)* — the tool input after the spec has
   validated it once at the tool entry: aliases resolved, unknown fields refused,
   types and required fields checked.
 
@@ -97,6 +98,7 @@ and again in the tool handler.
 
 ## Task References
 
+- [ORB-15932] — first task of the accepted kernel v2 migration (phase 0a).
 - [ORB-10358] — piloted bearing 1 of [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)
   on the friction noun: built the operations-as-data kernel, the friction
   registry, and the derived CLI, MCP, dashboard, and runtime adapters.

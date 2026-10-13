@@ -3,11 +3,11 @@ title: Operations as Data — Decisions
 owner: claude
 last_updated: 2026-10-12
 last_validated: 2026-10-12
-status: Draft
+status: Accepted
 feature: operations-as-data
 doc_role: decisions
 type: design
-summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the proposed kernel v2 rules and planned migration.
+summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
@@ -23,23 +23,23 @@ related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 The parent bearing is **[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)** (north-star: operations as data behind an
 operation registry), whose stored body carries the friction pilot outcome and
 the touch-it-move-it ratchet. [Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)
-proposes replacing that ratchet.
+replaces that ratchet.
 
-The last four entries are proposals from the 2026-10-12 design review. They
-describe kernel v2 and the migration plan in [2_design.md](./2_design.md) and
-stay proposed while this folder is `Draft`.
+The last four entries came from the 2026-10-12 design review and were accepted
+the same day. They govern kernel v2 and the migration plan in
+[2_design.md](./2_design.md).
 
 - **[Split spec/handler table joined by a typed verb enum](#split-spechandler-table-joined-by-a-typed-verb-enum)** — Accepted.
-- **[Renderers and HTTP routes stay hand-written](#renderers-and-http-routes-stay-hand-written)** — Accepted; renderer selection amended by a proposed entry.
+- **[Renderers and HTTP routes stay hand-written](#renderers-and-http-routes-stay-hand-written)** — Accepted; renderer selection amended by a later entry.
 - **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating)** — Accepted.
 - **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp)** — Accepted.
 - **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission)** — Accepted.
 - **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default)** — Accepted.
 - **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
-- **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Proposed.
-- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Proposed.
-- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Proposed.
-- **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Proposed.
+- **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted.
+- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted.
+- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted.
+- **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
 
 ## Split spec/handler table joined by a typed verb enum
 
@@ -82,7 +82,7 @@ verb that is declared but not implemented fails to compile.
 
 ## Renderers and HTTP routes stay hand-written
 
-**Amended by (proposed):** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. Routes and renderers stay hand-written.
+**Amended by:** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. Routes and renderers stay hand-written.
 
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
 **Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
@@ -309,7 +309,7 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 
 ## The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface
 
-**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15932]
 
 ### Context
 
@@ -360,7 +360,7 @@ including ones nobody has met yet: ask which surfaces need it, then place it.
 
 ## Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry
 
-**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; implemented by [ORB-15932] and [ORB-15933]
 **Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/friction/mod.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
 
 ### Context
@@ -416,7 +416,7 @@ drift the tool entry does not.
 
 ## Migrated CLI verbs execute through the tool path
 
-**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935]
 **Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/task/add.rs`, `crates/orbit-core/src/adapter/tool_host/task_tools.rs`
 
 ### Context
@@ -458,7 +458,7 @@ not a migration.
 
 ## Migrate the remaining nouns on a plan, not on contact
 
-**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
 
 ### Context
 
@@ -498,6 +498,8 @@ only; the migration is still incremental, one noun at a time.
 
 ## Task References
 
+- [ORB-15932], [ORB-15933], [ORB-15935] — first applications of the 2026-10-12
+  kernel v2 decisions (friction kernel port, input validation, auto-task).
 - [ORB-10358] — piloted [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 on the friction noun; produced the
   split table, the derived adapters, and the frozen-surface method.
 

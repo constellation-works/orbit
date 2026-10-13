@@ -3,7 +3,7 @@ title: Operations as Data — Vision
 owner: claude
 last_updated: 2026-10-12
 last_validated: 2026-10-12
-status: Draft
+status: Accepted
 feature: operations-as-data
 doc_role: vision
 type: design
@@ -18,7 +18,7 @@ related_artifacts: [ORB-10358]
 
 Forward-looking only. Everything below is a question or an option, not a plan.
 The friction pilot is the only part that is built; kernel v2 and the migration
-order are proposed in [2_design.md](./2_design.md), which records what this doc
+order are accepted and planned in [2_design.md](./2_design.md), which records what this doc
 used to leave open:
 
 - *Which nouns migrate next, and when?* Answered by

@@ -3,7 +3,7 @@ title: Operations as Data — Migration Cookbook
 owner: claude
 last_updated: 2026-10-12
 last_validated: 2026-10-12
-status: Draft
+status: Accepted
 feature: operations-as-data
 doc_role: reference
 type: design
@@ -16,7 +16,7 @@ related_artifacts: [ORB-10358]
 
 # Operations as Data — Migration Cookbook
 
-Written from the friction migration ([ORB-10358]) and updated for the proposed
+Written from the friction migration ([ORB-10358]) and updated for the accepted
 kernel v2 in [2_design.md](../2_design.md). Steps that need kernel v2 say so;
 until phase 0 of [2_design.md §9](../2_design.md#9-migration-plan) lands, only
 the friction-era kernel exists. Two recipes: migrating a noun that is still
@@ -208,7 +208,7 @@ consumer-visible change that the PR description lists.
 ### Step 10. Record the outcome
 
 Update this feature's docs: move the noun's rows in [2_design.md](../2_design.md)
-from Proposed to Implemented, update the §9 progress counts, and add the noun to
+from Planned to Implemented, update the §9 progress counts, and add the noun to
 [1_overview.md](../1_overview.md)'s At a Glance table. If the migration
 surfaced a cost the decisions do not already name, name it in
 [4_decisions.md](../4_decisions.md).

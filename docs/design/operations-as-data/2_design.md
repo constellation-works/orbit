@@ -3,11 +3,11 @@ title: Operations as Data — Design
 owner: claude
 last_updated: 2026-10-12
 last_validated: 2026-10-12
-status: Draft
+status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel, the split spec/handler table and the derived adapters as built on the friction noun, plus the proposed kernel v2 (effect, aliases, input validation, noun spec, richer CLI parameters) and the planned migration of the remaining nouns.
+summary: The operation spec kernel, the split spec/handler table and the derived adapters as built on the friction noun, plus the accepted kernel v2 (effect, aliases, input validation, noun spec, richer CLI parameters) and the planned migration of the remaining nouns.
 tags: [operations-as-data, architecture]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs"]
 related_features: [operations-as-data, orbit-core]
@@ -16,17 +16,17 @@ related_artifacts: [ORB-10358]
 
 # Operations as Data — Design
 
-This doc describes the friction implementation and the revisions proposed before
-any other noun migrates. Each section says whether it is **Implemented** (true
-of the code today, on friction only) or **Proposed** (kernel v2, not yet built).
-Proposed sections follow the rules in [4_decisions.md](./4_decisions.md), and
-those entries are also proposed until the folder returns to `Accepted`. The
-order in which nouns migrate is in §9; forward-looking questions are in
+This doc describes the friction implementation and the revisions accepted on
+2026-10-12 for every noun that migrates after it. Each section says whether it
+is **Implemented** (true of the code today, on friction only) or **Planned**
+(kernel v2, accepted but not yet built). Planned sections follow the rules in
+[4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
+Planned to Implemented. The order in which nouns migrate is in §9; forward-looking questions are in
 [3_vision.md](./3_vision.md).
 
 ## 1. Where a fact lives
 
-**Proposed** as a rule; the handler table already follows it.
+**Planned** as a rule; the handler table already follows it.
 
 The friction pilot put every fact it could into the spec, including the CLI's
 rendering choice. Facts it could not express as data stayed behind on several
@@ -79,7 +79,7 @@ The computed form exists because some descriptions interpolate live
 configuration (the friction taxonomy list). Both forms are const-constructible,
 so a whole registry stays a `const` item.
 
-### 2.2 Kernel v2 (Proposed)
+### 2.2 Kernel v2 (Planned)
 
 ```rust
 pub struct NounSpec<V: 'static> {
@@ -190,7 +190,7 @@ three from a single list, so the invariant holds by construction.
 
 ## 4. Input validation at the tool entry
 
-**Proposed.**
+**Planned.**
 
 Today the spec describes a verb's input, but nothing checks the input against
 the spec. Each handler re-reads it by string name
@@ -234,7 +234,7 @@ unknown field, then refusal after the 30-day compatibility window. See
 
 ## 5. Effect-derived runtime wiring
 
-**Proposed.**
+**Planned.**
 
 Whether a friction verb reads or writes is declared four times today:
 
@@ -293,7 +293,7 @@ flag; `list` is not advertised over MCP, where agents list frictions with
 `orbit.search`). Omitting it preserves the legacy record-array response. The
 explicit `with_notes` mode has one stable object shape, `{records, notes}`.
 
-**Proposed:**
+**Planned:**
 
 - **One generic tool.** `OperationTool<V>` replaces the per-noun tool type. A
   kernel trait implemented by each verb enum (emitted by the §3 macro) supplies
@@ -338,7 +338,7 @@ through verbatim so the handler reports "you passed only whitespace". The
 friction CLI executes through `runtime.run_tool`, so the CLI and MCP reach the
 same handler through the same capability chokepoint.
 
-**Proposed:**
+**Planned:**
 
 - **One generic `Subcommand` impl.** `Invocation<V>` is local to `orbit-cli`, so
   one `impl<V: Verb> Subcommand for Invocation<V>` (and `FromArgMatches`) reads
@@ -391,17 +391,17 @@ interface design choice, not a property of the verb; see
 The dashboard list adapter explicitly requests `with_notes`, maps `records` to
 its `items` field, and forwards non-empty notes for the hint UI.
 
-**Proposed:** once §4 lands, the tool entry refuses an undeclared field for every
+**Planned:** once §4 lands, the tool entry refuses an undeclared field for every
 caller, and `FrictionCall::set`'s own check becomes redundant. It stays as a
 thin builder; it is not copied to other nouns.
 
 ## 9. Migration plan
 
-**Proposed.** This replaces the touch-it-move-it ratchet; see
+**Planned.** This replaces the touch-it-move-it ratchet; see
 [Migrate the remaining nouns on a plan, not on contact](./4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
 
 Each phase is one Orbit task tagged `operations-as-data` (large nouns split per
-slice). Each starts with cookbook Step 0 and puts its behaviour diff in the PR.
+slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts its behaviour diff in the PR.
 
 | Phase | Scope | Why here |
 |---|---|---|
@@ -411,6 +411,13 @@ slice). Each starts with cookbook Step 0 and puts its behaviour diff in the PR.
 | 3 | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
 | 4 | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
+
+Tasks: phase 0 is [ORB-15932] (kernel v2), [ORB-15933] (input validation, warn
+mode) and [ORB-15934] (refuse unknown fields after the window); phase 1
+[ORB-15935]; phase 2 [ORB-15936]; phase 3 [ORB-15937] (reads), [ORB-15938]
+(add/update), [ORB-15939] (artifact and locks), [ORB-15940] (review and
+lifecycle); phase 4 [ORB-15941]; phase 5 [ORB-15942]. [ORB-15943] verifies the
+authorization golden that phases 1 and 4 rely on.
 
 Out of scope: the `Desktop*` host actions (a separate host protocol), GitHub and
 process tools, and plugin tools, which have their own declaration format.
@@ -461,5 +468,15 @@ gate.
 
 - [ORB-10358] — built the friction kernel, registry and derived adapters
   described as Implemented above.
+- [ORB-15932], [ORB-15933], [ORB-15934] — phase 0: kernel v2 on friction, input
+  validation in warn mode, then unknown-field refusal.
+- [ORB-15935] — phase 1, auto-task.
+- [ORB-15936] — phase 2, drain and workspace claim.
+- [ORB-15937], [ORB-15938], [ORB-15939], [ORB-15940] — phase 3, the task noun in
+  four slices.
+- [ORB-15941] — phase 4, workflow run.
+- [ORB-15942] — phase 5, routine control and search.
+- [ORB-15943] — verifies the authorization golden still catches placement and
+  permission drift.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
