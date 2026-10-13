@@ -193,26 +193,101 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
 #[cfg(unix)]
 #[test]
 fn capture_limits_are_reported_after_child_exit() {
-    use super::super::ProcessStopCause;
+    use std::os::unix::process::ExitStatusExt;
+    use std::sync::mpsc;
 
-    let cases: [(&str, bool, &[&str]); 5] = [
-        ("exec yes", false, &["stdout"]),
-        ("printf '%065d' 0", true, &["stdout"]),
-        ("printf '%065d' 0 >&2", true, &["stderr"]),
+    use super::super::{OutputSink, SinkVerdict};
+    use crate::test_env::{SupervisorSeam, with_supervisor_seam};
+
+    struct AfterWait {
+        capture: CaptureSink,
+        waited: Option<mpsc::Receiver<()>>,
+    }
+    impl AfterWait {
+        fn wait(&mut self) {
+            if let Some(waited) = self.waited.take() {
+                waited
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the supervisor observes the signal before capture stops");
+            }
+        }
+    }
+    impl OutputSink for AfterWait {
+        fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+            self.wait();
+            self.capture.push(bytes)
+        }
+
+        fn finish(mut self: Box<Self>) -> Vec<u8> {
+            self.wait();
+            Box::new(self.capture).finish()
+        }
+    }
+
+    let cases: [(&str, bool, Option<i32>, &[&str]); 8] = [
+        // Reaping before pipe setup and gating the sink forces the
+        // signal-before-capture ordering without scheduler assumptions.
+        (
+            "printf '%065d' 0 >&2; kill -PIPE $$",
+            true,
+            Some(libc::SIGPIPE),
+            &["stderr"],
+        ),
+        ("exec yes", false, None, &["stdout"]),
+        ("printf '%065d' 0", true, None, &["stdout"]),
+        ("printf '%065d' 0 >&2", true, None, &["stderr"]),
         (
             "printf '%065d' 0; printf '%065d' 0 >&2",
             true,
+            None,
             &["stderr", "stdout"],
         ),
-        ("printf '%064d' 0; printf '%064d' 0 >&2", true, &[]),
+        ("printf '%064d' 0; printf '%064d' 0 >&2", true, None, &[]),
+        ("kill -PIPE $$", true, Some(libc::SIGPIPE), &[]),
+        (
+            "printf '%065d' 0 >&2; kill -KILL $$",
+            true,
+            Some(libc::SIGKILL),
+            &["stderr"],
+        ),
     ];
-    for (script, exited, limited_streams) in cases {
+    for (script, exited, signal, limited_streams) in cases {
         let mut child = shell(script);
         if exited {
-            assert!(child.wait().expect("finite child exit").success());
+            let status = child.wait().expect("finite child exit");
+            assert_eq!(status.signal(), signal, "{script:?}");
+            assert_eq!(status.success(), signal.is_none(), "{script:?}");
         }
 
-        let result = supervise(child, Some(Duration::from_secs(5)), Stdin::Null, 64);
+        let result = if signal.is_some() {
+            let (waited, after_wait) = mpsc::sync_channel(1);
+            let mut request =
+                supervision(Some(Duration::from_secs(5)), Stdin::Null, 64, None, None);
+            request.stderr = Stream::Sink(Box::new(AfterWait {
+                capture: CaptureSink::new("stderr", 64),
+                waited: Some(after_wait),
+            }));
+            with_supervisor_seam(
+                SupervisorSeam {
+                    wait: Some(Box::new(move |child| {
+                        let status = child.try_wait()?;
+                        assert!(status.is_some(), "the finite child was already reaped");
+                        // The loop has checked drain events already. Let the
+                        // sink report only after it commits to this status.
+                        waited.send(()).expect("release the capture worker");
+                        Ok(status)
+                    })),
+                    ..Default::default()
+                },
+                || {
+                    SupervisedChild::adopt(child)
+                        .supervise(request)
+                        .expect("supervised wait")
+                },
+            )
+        } else {
+            supervise(child, Some(Duration::from_secs(5)), Stdin::Null, 64)
+        };
         let mut reported: Vec<&str> = result
             .stop_causes
             .iter()
@@ -229,9 +304,36 @@ fn capture_limits_are_reported_after_child_exit() {
         );
         assert_eq!(
             result.success,
-            limited_streams.is_empty(),
+            limited_streams.is_empty() && signal.is_none(),
             "truncated output must fail even when the child exited successfully: {script:?}"
         );
+        if signal.is_some() {
+            assert_eq!(result.status.and_then(|status| status.signal()), signal);
+            assert!(
+                result.stop_causes.iter().any(|cause| matches!(
+                    cause,
+                    ProcessStopCause::TerminationStatus { status } if status.signal() == signal
+                )),
+                "retain the actual signal alongside capture metadata: {result:?}"
+            );
+        }
+        if !limited_streams.is_empty() && signal.is_none_or(|signal| signal == libc::SIGPIPE) {
+            assert!(
+                matches!(
+                    result.stop_cause(),
+                    Some(ProcessStopCause::OutputCaptureLimit { .. })
+                ),
+                "capture closure must not be diagnosed as its producer's SIGPIPE: {result:?}"
+            );
+        } else if let Some(signal) = signal {
+            assert!(
+                matches!(
+                    result.stop_cause(),
+                    Some(ProcessStopCause::TerminationStatus { status }) if status.signal() == Some(signal)
+                ),
+                "an unrelated signal keeps its own diagnostic: {result:?}"
+            );
+        }
         assert!(!result.timed_out, "capture must finish before the deadline");
     }
 }

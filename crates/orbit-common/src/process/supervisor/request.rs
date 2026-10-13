@@ -127,9 +127,9 @@ pub struct Outcome {
     pub stderr: Vec<u8>,
     /// The deadline elapsed and the supervisor ended the child's group.
     pub timed_out: bool,
-    /// Every stop the supervisor observed, most significant first: a
-    /// termination without an exit code, then periodic and sink stops, then an
-    /// intercepted signal.
+    /// Every stop the supervisor observed: a termination without an exit code,
+    /// then periodic and sink stops, then an intercepted signal. [`Self::stop_cause`]
+    /// resolves capture closure racing the producer's SIGPIPE.
     pub stop_causes: Vec<ProcessStopCause>,
     /// Descendants the stopped-descendant watch ended.
     pub stopped_descendants: Vec<StoppedDescendant>,
@@ -139,8 +139,27 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// The most significant stop cause, if any.
+    /// The most significant stop cause, if any. An observed capture limit
+    /// takes precedence over SIGPIPE: closing the captured pipe can terminate
+    /// its writer before the supervisor receives the sink stop. Both causes
+    /// remain in [`Self::stop_causes`]; other signals keep their priority.
     pub fn stop_cause(&self) -> Option<ProcessStopCause> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+
+            if matches!(
+                self.stop_causes.first(),
+                Some(ProcessStopCause::TerminationStatus { status })
+                    if status.signal() == Some(libc::SIGPIPE)
+            ) && let Some(cause) = self
+                .stop_causes
+                .iter()
+                .find(|cause| matches!(cause, ProcessStopCause::OutputCaptureLimit { .. }))
+            {
+                return Some(*cause);
+            }
+        }
         self.stop_causes.first().copied()
     }
 }
