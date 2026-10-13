@@ -445,6 +445,8 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
 /// Run one required command in `workspace_path`, handing it `selection`
 /// to test when one is given, for at most `timeout_ms` (normally
 /// [`VALIDATION_TIMEOUT_MS`]).
+/// On Linux, `workspace_path` must be a Git checkout whose common directory
+/// belongs to a primary checkout, for host-owned Cargo target isolation.
 pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
