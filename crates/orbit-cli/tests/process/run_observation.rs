@@ -181,13 +181,13 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
     ] {
         fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
         let mut command = fixture.orbit();
-        command.args([
-            "run",
-            "job",
-            "dependabot_alert_sweep_pipeline",
-            "--wait",
-            "--json",
-        ]);
+        command.args(["run", "job", "dependabot_alert_sweep_pipeline", "--json"]);
+        // Keep a real CLI --wait route. The remaining precedence rows still
+        // submit and parse their inputs through this same CLI job route, then
+        // observe the real worker through the public wait boundary.
+        if source == "built-in" {
+            command.arg("--wait");
+        }
         if let Some(input) = input {
             command.args(["--input", input]);
         }
@@ -200,6 +200,30 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
             String::from_utf8_lossy(&result.stderr)
         );
         let submitted: Value = serde_json::from_slice(&result.stdout).unwrap();
+        if source != "built-in" {
+            let runtime =
+                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+                    orbit_core::runtime::OrbitRuntimeRoots {
+                        global_root: fixture.home.join(".orbit"),
+                        shared_root: fixture.work.join(".orbit"),
+                        local_root: fixture.work.join(".orbit"),
+                    },
+                )
+                .expect("registered security fixture runtime");
+            let waited = runtime
+                .wait_pipeline_runs(
+                    &[submitted["run_id"]
+                        .as_str()
+                        .expect("submitted sweep")
+                        .to_string()],
+                    30,
+                    1,
+                    None,
+                )
+                .expect("wait for the actual CLI-submitted security sweep");
+            assert_eq!(waited.results.len(), 1);
+            assert_eq!(waited.results[0].status, "success", "{waited:?}");
+        }
         let shown = fixture.json(&[
             "run",
             "show",
