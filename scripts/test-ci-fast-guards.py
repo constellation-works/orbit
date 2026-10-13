@@ -558,7 +558,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     def test_dependency_direction_fails_when_ripgrep_is_missing(self):
         without_rg = self.root / "without-rg"
         without_rg.mkdir()
-        shutil.copy2(shutil.which("dirname"), without_rg / "dirname")
+        shutil.copy(shutil.which("dirname"), without_rg / "dirname")
 
         result = self.run_guard("check-dependency-direction.sh",
                                 env_overrides={"PATH": str(without_rg)})
