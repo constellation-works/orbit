@@ -264,6 +264,39 @@ actually used.
 
 ### 3.3 The profile
 
+Worker minutes now carry nullable `cpu_accounting` provenance. New Linux
+minutes use `linux-cgroup-v1`; corrected Mac minutes use `macos-mach-ns-v1`.
+The Mac sampler converts its own user plus system Mach absolute ticks using
+the host's `mach_timebase_info` ratio, with wide integer arithmetic. It never
+adds child totals. An unavailable/zero timebase or a result beyond `u64`
+invalidates the sample, preserving the unreadable-tree behavior.
+Apple's [fill_task_rusage implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
+copies task power totals into these counters; their units must not be assumed
+to be nanoseconds. For example, a 125/3 host needs its actual ratio.
+
+The bounded native calibration lives in the existing `orbit-common` test
+binary and is ignored by recurring gates. Run it explicitly with
+`./scripts/build-budget.py -- cargo test -p orbit-common --lib process::tests::ancestry::native_cpu_time_agrees_with_getrusage -- --ignored --exact --nocapture`.
+It isolates one process, targets 250 ms of single-thread wall time, and compares
+the public tree's own CPU delta with `getrusage(RUSAGE_SELF)`. The documented
+tolerance is 5% plus 5 ms for sequential readings, with at least 100 ms of CPU
+work required. Its JSON output retains the actual timebase, raw tick delta,
+corrected nanoseconds, reference delta and error.
+
+The additive storage migration leaves every historical counter and its
+nullable provenance unchanged. On Mac, profiles exclude the entire delivery
+if any minute lacks recognized provenance, including otherwise valid sibling
+runs. Unknown provenance is excluded on every platform. Legacy unmarked
+Linux minutes remain eligible on Linux because their cgroup units did not
+change. This compatibility rule supports host-local history; importing
+unmarked Mac history into a Linux store is unsupported. Raw minute reads
+continue to expose excluded evidence. There is no backfill, historical
+relabeling, or universal multiplier: old Mac timebases were not recorded,
+so those deliveries age out under the existing retention and corrected
+deliveries rebuild the profile window. Already recorded forecasts remain
+historical evidence. This changes profile inputs only; admission mode and
+the shadow98 rollout remain unchanged.
+
 A **resource profile** for one key is built from that key's most recent
 completed deliveries: the last 50, within 30 days.
 

@@ -144,6 +144,7 @@ impl Fixture {
                     resumed: seed.resumed,
                     delivery_admitted_at: Some(admitted),
                     cpu_cores: *cpu,
+                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                     memory_bytes: *memory,
                     samples: 12,
                 })
@@ -854,6 +855,66 @@ fn no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_de
     );
 }
 
+/// Persisted provenance rejects partial or legacy Mac deliveries without
+/// changing raw evidence. Linux legacy rows remain usable on Linux.
+fn profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes() {
+    use orbit_store::contracts::{CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS};
+
+    for (accounting, eligible) in [
+        (Some(CPU_ACCOUNTING_MACOS), true),
+        (Some(CPU_ACCOUNTING_LINUX), true),
+        (None, cfg!(target_os = "linux")),
+        (Some("macos-absolute-v0"), false),
+        (Some("unknown"), false),
+    ] {
+        let fixture = Fixture::new("min_profile_deliveries = 1\n");
+        fixture.delivery(
+            &fixture.workspace,
+            "good",
+            "change",
+            None,
+            vec![RunSeed::flat(2, 1.0, GIB)],
+        );
+        let runs = fixture.delivery(
+            &fixture.workspace,
+            "mixed",
+            "change",
+            None,
+            vec![RunSeed::flat(2, 2.0, GIB), RunSeed::flat(2, 3.0, GIB)],
+        );
+        // Only one minute of one sibling changes: the entire delivery must
+        // be excluded when it is untrusted, not just that run or minute.
+        let mut rows = fixture
+            .store
+            .run_resource_minutes(&fixture.workspace, &runs[0])
+            .unwrap();
+        rows[1].cpu_accounting = accounting.map(str::to_string);
+        fixture.store.record_run_resource_minute(&rows[1]).unwrap();
+        assert_eq!(
+            fixture
+                .store
+                .run_resource_minutes(&fixture.workspace, &runs[0])
+                .unwrap(),
+            rows,
+            "raw counters, footprint and provenance remain readable"
+        );
+        let profile = fixture.profile("change", None);
+        assert_eq!(
+            profile.delivery_count,
+            if eligible { 2 } else { 1 },
+            "{accounting:?}"
+        );
+        assert_eq!(
+            profile.series[0].cpu_cores,
+            if eligible { 3.0 } else { 1.0 },
+            "{accounting:?}"
+        );
+        let rollup = fixture.runtime.resource_profiles().unwrap().class_profiles[0].clone();
+        assert_eq!(rollup.delivery_count, profile.delivery_count);
+        assert_eq!(rollup.series, profile.series);
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon_scenarios,
@@ -866,5 +927,6 @@ crate::scenario_table!(
     local_base_class_rollups_include_template_only_history,
     a_class_with_no_profile_borrows_the_heaviest_on_the_host,
     profiles_stay_cached_until_a_delivery_finishes,
-    no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design
+    no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design,
+    profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes
 );

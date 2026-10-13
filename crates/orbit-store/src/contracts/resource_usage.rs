@@ -10,6 +10,11 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
+/// CPU accounting from the Linux cgroup microsecond counter.
+pub const CPU_ACCOUNTING_LINUX: &str = "linux-cgroup-v1";
+/// CPU accounting from macOS own Mach ticks converted with the host timebase.
+pub const CPU_ACCOUNTING_MACOS: &str = "macos-mach-ns-v1";
+
 /// One minute of one run's worker.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResourceMinute {
@@ -32,6 +37,9 @@ pub struct RunResourceMinute {
     pub delivery_admitted_at: Option<DateTime<Utc>>,
     /// Mean cores used over the minute.
     pub cpu_cores: f64,
+    /// Counter provenance. `None` preserves an older writer's raw evidence;
+    /// legacy minutes are eligible for profiles only on Linux.
+    pub cpu_accounting: Option<String>,
     /// Maximum non-reclaimable bytes seen in the minute. Linux reads
     /// `memory.current - file + shmem`. macOS sums each process's
     /// `ri_phys_footprint`.
@@ -60,6 +68,8 @@ pub struct HostResourceMinute {
 pub struct ResourceMinuteLoad {
     pub minute_started_at: DateTime<Utc>,
     pub cpu_cores: f64,
+    /// Counter provenance, unchanged from the stored raw minute.
+    pub cpu_accounting: Option<String>,
     pub memory_bytes: u64,
 }
 
