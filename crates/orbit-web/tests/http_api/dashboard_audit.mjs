@@ -112,6 +112,13 @@ assert.equal(audit.namespace.effectiveAuditWindow(), '24h', 'drill-down keeps th
 assert.equal(route.get('tool'), 'orbit.workflow.run.list');
 audit.namespace.renderAuditSummary(payload);
 assert.equal(container.children.find(node => node.dataset.key === 'tool-call-failures-by-tool'), card, 'unchanged refresh keeps the rendered card');
+audit.namespace.applyAuditHashQuery(new URLSearchParams('since=1h&status=denied'));
+audit.namespace.renderAuditSummary({ ...payload, window: '7d' });
+container.children.find(node => node.dataset.key === 'tool-call-failures-by-tool').children[1].children[0].children[1].children[0].listeners.get('click')();
+const toolRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+assert.equal(toolRoute.get('since'), '7d', 'a Tools row carries its displayed window rather than the prior Events cutoff');
+assert.equal(toolRoute.get('status'), 'denied', 'a Tools row keeps the prior Events status filter');
+audit.namespace.renderAuditSummary(payload);
 audit.namespace.renderAuditSummary({ ...payload, tool_call_failures_by_tool: [] });
 assert.equal(container.children.some(node => node.dataset.key === 'tool-call-failures-by-tool'), false, 'empty refresh removes the stale table');
 const categoryPayload = {
