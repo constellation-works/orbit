@@ -169,8 +169,8 @@ check-ci-macos:
 # Full make ci runs on PRs.
 ci-fast:
 	./scripts/require-python.sh
-	@bash -c 'TIMEFORMAT="ci-fast: MSRV check %3R s"; time "$$@"' bash $(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 	./scripts/ci-guardrails.sh --fast
+	@bash -c 'TIMEFORMAT="ci-fast: MSRV check %3R s"; time "$$@"' bash $(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 
 # Full test targets of changed crates and all reverse workspace dependents.
 # The selector includes committed and working-tree changes against the base.

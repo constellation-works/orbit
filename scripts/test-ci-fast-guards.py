@@ -299,7 +299,11 @@ raise SystemExit({17+index})
     def test_make_ci_fast_reports_failing_guard_name(self):
         self.prepare_ci()
         shutil.copy2(SCRIPTS.parent / "Makefile", self.root / "Makefile")
-        self.write_executable(self.bin / "budget", '#!/bin/sh\nshift\nexec "$@"\n')
+        self.write_executable(
+            self.bin / "budget",
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$GUARD_TEST_CALLS/build-budget"\n'
+            'shift\nexec "$@"\n',
+        )
         self.write_executable(self.scripts / "check-doc-links.py", "#!/bin/sh\nexit 18\n")
         # Copy the runner before make invokes it; the other executables are stubs.
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts)
@@ -307,11 +311,35 @@ raise SystemExit({17+index})
                                 cwd=self.root, env=self.env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAILED check-doc-links.py (exit 18)", result.stderr)
-        msrv = [line for line in result.stderr.splitlines() if line.startswith("ci-fast: MSRV check ")]
+        self.assertRegex(result.stderr, r"ci-guardrails: check-doc-links.py [0-9]+(?:\.[0-9]+)? s")
+        self.assertFalse(any(line.startswith("ci-fast: MSRV check ")
+                             for line in result.stderr.splitlines()), result.stderr)
+        cargo_calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(cargo_calls, [["fmt", "--all", "--", "--check"]])
+        self.assertFalse((self.guard_calls / "build-budget").exists(),
+                         "a failing fast guard must not invoke the MSRV build-budget command")
+
+        # The same fixture with guard success must make the unchanged MSRV
+        # command exactly once through the build-budget wrapper.
+        self.write_executable(self.scripts / "check-doc-links.py", "#!/bin/sh\nexit 0\n")
+        self.log.unlink(missing_ok=True)
+        (self.guard_calls / "build-budget").unlink(missing_ok=True)
+        result = subprocess.run(["make", "ci-fast", f"BUILD_BUDGET={self.bin / 'budget'}"],
+                                cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        msrv = [line for line in result.stderr.splitlines()
+                if line.startswith("ci-fast: MSRV check ")]
         self.assertEqual(len(msrv), 1, result.stderr)
         self.assertRegex(msrv[0], r"^ci-fast: MSRV check [0-9]+(?:\.[0-9]+)? s$")
         self.assertNotIn("ci-guardrails:", msrv[0])
-        self.assertRegex(result.stderr, r"ci-guardrails: check-doc-links.py [0-9]+(?:\.[0-9]+)? s")
+        cargo_calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(cargo_calls, [
+            ["fmt", "--all", "--", "--check"],
+            ["+1.89", "check", "--workspace", "--locked"],
+        ])
+        self.assertEqual((self.guard_calls / "build-budget").read_text().splitlines(), [
+            "-- cargo +1.89 check --workspace --locked",
+        ])
 
     def test_fast_does_not_enumerate_or_compile_tests(self):
         self.prepare_ci()
