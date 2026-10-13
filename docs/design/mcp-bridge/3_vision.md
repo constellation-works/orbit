@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Vision
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-10-09
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -59,17 +59,20 @@ launching SSH.
 
 V1 remains one chosen destination answering only from its own state. The
 client-side proxy stays byte-transparent and does not relay a call onward.
-That rule continues to describe **current behavior** in [`2_design.md`](./2_design.md);
-this section does not claim a mux is implemented.
+That rule continues to describe **current direct behavior** in
+[`2_design.md`](./2_design.md); the federated namespace follows the separate
+exception described below.
 
 The implemented federated MCP surface is an **explicit exception** to those v1
 no-relay / byte-transparent rules, **for the federated namespace only**. A mux
-in front of operator-configured destinations inspects a host-qualified selector
-and forwards the call to the encoded destination. Direct SSH stdio to one chosen
-host is unchanged.
+in front of operator-configured destinations routes workspace-scoped calls by
+host-qualified selector. Id-only calls to id-routed task tools instead follow
+the configured task-ID prefix to the host that holds the task [ORB-14449]. Direct
+SSH stdio to one chosen host is unchanged.
 
-The exception does **not** admit automatic owner discovery, replication,
-relays-as-product, or fleet placement. Those stay out. The contract is
+The exception does **not** admit general workspace-owner discovery from
+repository identity, replication, relays-as-product, or fleet placement. Those
+stay out. The contract is
 [federated-mcp](../federated-mcp/specs/federated-workspace-mcp.md)
 ([ORB-11009], citing [ORB-11008]).
 
