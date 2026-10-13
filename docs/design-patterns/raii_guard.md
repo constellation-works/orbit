@@ -55,7 +55,7 @@ impl Drop for AuditGuard<'_> {
 
 Patterns to copy:
 
-- **Default to the "bad" outcome.** Status starts as `Failure`/`-1`; scope exits without an explicit `mark_*` correctly reflect "process died mid-command."
+- **Default to the "bad" outcome.** Status starts as `Failure`/`-1`; returning or unwinding without an explicit `mark_*` retains that failure outcome. Abrupt process termination does not run `Drop`, so the guard cannot emit an audit record on that path.
 - **Mutation methods on `&mut self`, not constructor params.** Caller updates the outcome as it learns; `Drop` reads final state.
 - **`catch_unwind` around the side effect.** A panic *during audit emission* can't double-panic the unwind.
 
