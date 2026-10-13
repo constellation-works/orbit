@@ -59,6 +59,16 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-registry/src/tests/workspace_registry.rs` retains two criterion 2
+  harnesses. `injected_migration_write_failure_preserves_readable_legacy_registry`
+  injects a migration writer error and proves the original bytes remain readable.
+  `migrating_read_rechecks_under_lock_and_preserves_interleaved_registration`
+  completes a locked registration between the legacy read and the migration
+  recheck. The public loader supplies the real writer and cannot choose that
+  fault or the observation order. The other nine identity, publication and
+  registry cases use exported APIs in the crate-root `tests/registry/main.rs`
+  binary, preserving their original behavior and platform guards.
+
 - `orbit-exec` retains six corrected security-seam admissions from the
   [applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md).
   `build_sandbox/tests/supervise.rs` checks host process-group reaping before
