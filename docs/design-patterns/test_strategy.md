@@ -333,3 +333,15 @@ Five audited moves stay unit tests, with corrected rationale:
 - The three `bounded_run_*` cases admitted above, whose leak checks and
   watchdog are the argv-identity harness the other admitted `bounded.rs`
   tests guard.
+
+## Search-crate admission audit reconciliation
+
+The two `orbit-search` LexicalStore cases live in the crate-root
+[`lexical` integration suite](../../crates/orbit-search/tests/lexical/main.rs).
+It uses `LexicalIndex` and the exported BM25 helpers to prove legacy-schema
+migration preserves search and can reopen the migrated store, and to prove
+task indexing, updates, deletion, and full reindexing keep FTS synchronous.
+The migration fixture inspects its temporary SQLite file to retain the
+existing obsolete-table and space-reclamation assertions. This public helper
+boundary costs no extra process or test-only visibility, so the source tests
+do not need a private `LexicalStore` or migration seam.

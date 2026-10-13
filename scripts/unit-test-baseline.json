@@ -723,10 +723,7 @@
       ]
     },
     "orbit-search": {
-      "test_function_paths": [
-        "lexical/tests/store.rs::first_open_migrates_legacy_vectors_and_preserves_search",
-        "lexical/tests/store.rs::writes_updates_deletes_and_rebuilds_fts_synchronously"
-      ]
+      "test_function_paths": []
     },
     "orbit-store": {
       "test_function_paths": [
