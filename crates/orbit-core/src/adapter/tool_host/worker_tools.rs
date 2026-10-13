@@ -3,6 +3,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
@@ -35,14 +36,13 @@ pub(crate) fn execute(
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
         },
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => true,
+        },
         action => matches!(
             action,
             OrbitBuiltinAction::TaskUpdate
-                | OrbitBuiltinAction::TaskShow
-                | OrbitBuiltinAction::TaskList
-                | OrbitBuiltinAction::TaskEligible
                 | OrbitBuiltinAction::TaskArtifactGet
-                | OrbitBuiltinAction::TaskLint
                 | OrbitBuiltinAction::TaskLocks
                 | OrbitBuiltinAction::TaskAdd
                 | OrbitBuiltinAction::TaskDelete
@@ -82,7 +82,7 @@ pub(crate) fn execute(
             "worker owner destination mismatch".into(),
         ));
     }
-    if action == OrbitBuiltinAction::TaskShow
+    if action == OrbitBuiltinAction::Task(TaskVerb::Show)
         && let Some(projection) = input.get("_worker_read").and_then(Value::as_str)
     {
         let id = input.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -271,11 +271,12 @@ pub(crate) fn execute(
                 ));
             }
         },
-        OrbitBuiltinAction::TaskShow
-        | OrbitBuiltinAction::TaskList
-        | OrbitBuiltinAction::TaskEligible
-        | OrbitBuiltinAction::TaskLint
-        | OrbitBuiltinAction::TaskLocks => return Ok(None),
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => {
+                return Ok(None);
+            }
+        },
+        OrbitBuiltinAction::TaskLocks => return Ok(None),
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
         OrbitBuiltinAction::AutoTask(verb) => match verb {

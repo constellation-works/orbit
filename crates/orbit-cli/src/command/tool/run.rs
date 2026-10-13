@@ -219,7 +219,7 @@ impl Execute for ToolRunArgs {
             self.model,
             session_context,
         )?;
-        let output = crate::command::task::show::attach_bound_workspace_identity(
+        let output = crate::command::task::support::attach_bound_workspace_identity(
             &self.name,
             &input,
             owner.as_ref(),

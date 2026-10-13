@@ -124,11 +124,11 @@ pub(super) fn execute(
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
         }
+        OrbitBuiltinAction::Task(verb) => {
+            super::task_operation_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
-        OrbitBuiltinAction::TaskEligible => super::task_tools::eligible(runtime, input),
-        OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
-        OrbitBuiltinAction::TaskList => super::task_tools::list(runtime, input),
         OrbitBuiltinAction::TaskLocks => crate::runtime::task::locks::list(runtime),
         OrbitBuiltinAction::TaskLocksRelease => {
             crate::runtime::task::locks::release(runtime, input, agent, model)
@@ -161,7 +161,6 @@ pub(super) fn execute(
                 .map(ToOwned::to_owned);
             Ok(result)
         }
-        OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
         OrbitBuiltinAction::TaskUpdate => {
             // An operator is a caller holding operator capability and naming
             // no agent identity; only such a caller can close out a rescued

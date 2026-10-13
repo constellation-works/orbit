@@ -1,13 +1,9 @@
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::application::task::{ScreenedTaskWrite, task_record_json, task_show_field_json};
-use orbit_core::{OrbitError, OrbitRuntime, TaskStatus, resolve_task_relations};
-use orbit_types::task::{
-    TaskComment, TaskHistoryEntry, task_dependency_labels, task_show_record_field_json,
-    unknown_task_show_field_message,
-};
+use orbit_core::application::task::{ScreenedTaskWrite, task_record_json};
+use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_types::task::TaskHistoryEntry;
 use serde_json::{Value, json};
 
 use crate::output::color::Domain;
@@ -35,24 +31,25 @@ pub(super) fn format_task_history_event(entry: &TaskHistoryEntry) -> String {
     }
 }
 
-pub(crate) fn task_to_signal_json(task: &orbit_core::Task) -> Value {
-    json!({
-        "id": task.id,
-        "parent_id": task.parent_id(),
-        "title": task.title,
-        "type": task.task_type.to_string(),
-        "status": task.status.to_string(),
-        "priority": task.priority.to_string(),
-        "complexity": task.complexity.map(|value| value.to_string()),
-    })
-}
-
 pub(crate) fn task_to_json_for_runtime(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
     let status_by_id = runtime.dependency_status_index([task])?;
-    Ok(task_to_json_with_sidecars(runtime, task, &status_by_id)?.doc)
+    let row = runtime.task_row_with_sidecars(task.clone())?;
+    let doc = task_record_json(runtime, &row, &status_by_id)?;
+    warn_unresolved_crew(&doc);
+    Ok(Value::Object(doc))
+}
+
+/// A crew this host cannot resolve is a configuration gap, not a corrupt
+/// task, so the record still renders (ORB-10968); the reason also goes to
+/// stderr rather than being swallowed.
+pub(super) fn warn_unresolved_crew(doc: &serde_json::Map<String, Value>) {
+    if let Some(reason) = doc.get("crew_unresolved").and_then(Value::as_str) {
+        let id = doc.get("id").and_then(Value::as_str).unwrap_or_default();
+        eprintln!("warning: crew for task {id} could not be resolved: {reason}");
+    }
 }
 
 /// A screened write's task document, carrying the write's `warnings` and
@@ -86,35 +83,6 @@ pub(super) fn screened_write_json(
     Ok(document)
 }
 
-pub(crate) struct TaskJsonWithSidecars {
-    pub(crate) doc: Value,
-    pub(crate) comments: Vec<TaskComment>,
-    pub(crate) history: Vec<TaskHistoryEntry>,
-}
-
-pub(crate) fn task_to_json_with_sidecars(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Result<TaskJsonWithSidecars, OrbitError> {
-    let row = runtime.task_row_with_sidecars(task.clone())?;
-    let doc = task_record_json(runtime, &row, status_by_id)?;
-    // A crew this host cannot resolve is a configuration gap, not a corrupt
-    // task, so the record still renders (ORB-10968); the reason also goes to
-    // stderr rather than being swallowed.
-    if let Some(reason) = doc.get("crew_unresolved").and_then(Value::as_str) {
-        eprintln!(
-            "warning: crew for task {} could not be resolved: {reason}",
-            task.id
-        );
-    }
-    Ok(TaskJsonWithSidecars {
-        doc: Value::Object(doc),
-        comments: row.comments,
-        history: row.history,
-    })
-}
-
 /// Which columns the caller filtered on, and so must keep even when the filter
 /// left them carrying a single value.
 #[derive(Clone, Copy, Default)]
@@ -124,10 +92,11 @@ pub(super) struct TaskTableFilters {
     pub(super) task_type: bool,
 }
 
-/// Build the list view for `orbit task list`. The renderer decides how it is
-/// projected; this only describes the columns and the rows.
+/// Build the list view for `orbit task list` from the tool's task records.
+/// The renderer decides how it is projected; this only describes the columns
+/// and the rows.
 pub(super) fn task_table(
-    tasks: &[orbit_core::Task],
+    tasks: &[Value],
     full: bool,
     filtered: TaskTableFilters,
 ) -> crate::output::table::Table {
@@ -151,18 +120,23 @@ pub(super) fn task_table(
     let mut table = crate::output::table::Table::new(columns)
         .empty_message("no tasks matching the given filters");
     for task in tasks {
+        let field = |key: &str| task.get(key).and_then(Value::as_str).unwrap_or_default();
         let mut row = vec![
-            Cell::new(&task.id),
-            Cell::new(&task.title),
-            crate::output::color::cell(&task.status.to_string(), Domain::TaskStatus),
-            crate::output::color::cell(&task.priority.to_string(), Domain::Priority),
-            crate::output::color::cell(&task.task_type.to_string(), Domain::TaskType),
+            Cell::new(field("id")),
+            Cell::new(field("title")),
+            crate::output::color::cell(field("status"), Domain::TaskStatus),
+            crate::output::color::cell(field("priority"), Domain::Priority),
+            crate::output::color::cell(field("type"), Domain::TaskType),
         ];
         if full {
             row.extend([
-                Cell::new(task.implemented_by.as_deref().unwrap_or("-")),
-                Cell::new(format_task_table_timestamp(task.created_at)),
-                Cell::new(format_task_table_timestamp(task.updated_at)),
+                Cell::new(
+                    task.get("implemented_by")
+                        .and_then(Value::as_str)
+                        .unwrap_or("-"),
+                ),
+                Cell::new(format_task_table_timestamp(field("created_at"))),
+                Cell::new(format_task_table_timestamp(field("updated_at"))),
             ]);
         }
         table.add_row(row);
@@ -249,241 +223,16 @@ fn json_str_list(value: &Value) -> String {
         .unwrap_or_default()
 }
 
-pub(super) fn task_fields_to_json(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-    fields: &[String],
-    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-) -> Result<Value, OrbitError> {
-    if fields.len() == 1 {
-        return task_show_field_json(runtime, task, &fields[0], status_by_id);
-    }
-
-    let mut object = serde_json::Map::new();
-    for field in fields {
-        object.insert(
-            field.clone(),
-            task_show_field_json(runtime, task, field, status_by_id)?,
-        );
-    }
-    Ok(Value::Object(object))
+fn format_task_table_timestamp(value: &str) -> String {
+    parse_timestamp(value).map_or_else(
+        || value.to_string(),
+        |at| at.format("%Y-%m-%d %H:%M").to_string(),
+    )
 }
 
-pub(super) fn format_task_fields(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-    fields: &[String],
-    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-) -> Result<String, OrbitError> {
-    let mut text = String::new();
-    if fields.len() == 1 {
-        write_single_task_field(runtime, task, &fields[0], status_by_id, &mut text)?;
-        return Ok(text);
-    }
-
-    use crate::output::color::bold;
-    for (index, field) in fields.iter().enumerate() {
-        if index > 0 {
-            text.push('\n');
-        }
-        let _ = writeln!(text, "{} {}", bold("Field:"), field);
-        write_single_task_field(runtime, task, field, status_by_id, &mut text)?;
-    }
-    Ok(text)
-}
-
-fn write_single_task_field(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-    field: &str,
-    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-    text: &mut String,
-) -> Result<(), OrbitError> {
-    match field {
-        "comments" => {
-            use crate::output::color::dimmed;
-            for comment in runtime.get_task_comments(&task.id)? {
-                let _ = writeln!(
-                    text,
-                    "{} {}: {}",
-                    dimmed(&format!("[{}]", format_task_show_timestamp(comment.at))),
-                    comment.by,
-                    super::pilot_comment::comment_presentation(&comment)
-                );
-            }
-            Ok(())
-        }
-        "plan" => {
-            text.push_str(&task.plan);
-            Ok(())
-        }
-        "execution_summary" => {
-            text.push_str(&task.execution_summary);
-            Ok(())
-        }
-        "description" => {
-            text.push_str(&task.description);
-            Ok(())
-        }
-        "acceptance_criteria" => {
-            for criterion in &task.acceptance_criteria {
-                let _ = writeln!(text, "- {}", criterion);
-            }
-            Ok(())
-        }
-        "dependencies" => {
-            for dependency in task.dependencies() {
-                let _ = writeln!(text, "{}", dependency);
-            }
-            Ok(())
-        }
-        "tags" => {
-            for tag in &task.tags {
-                let _ = writeln!(text, "{}", tag);
-            }
-            Ok(())
-        }
-        "required_tools" => {
-            for tool in &task.required_tools {
-                let _ = writeln!(text, "{}", tool);
-            }
-            Ok(())
-        }
-        "resolved_dependencies" => {
-            for dependency in task_dependency_labels(
-                task,
-                status_by_id.ok_or_else(|| {
-                    OrbitError::Execution(
-                        "missing dependency status index for resolved_dependencies".to_string(),
-                    )
-                })?,
-            ) {
-                let _ = writeln!(text, "{}", dependency);
-            }
-            Ok(())
-        }
-        "relations" => {
-            for relation in resolve_task_relations(
-                task,
-                status_by_id.ok_or_else(|| {
-                    OrbitError::Execution("missing task status index for relations".to_string())
-                })?,
-            ) {
-                let _ = writeln!(
-                    text,
-                    "{}",
-                    serde_json::to_string(&relation).map_err(|e| OrbitError::Io(e.to_string()))?
-                );
-            }
-            Ok(())
-        }
-        "history" => {
-            use crate::output::color::dimmed;
-            for entry in runtime.get_task_history(&task.id)? {
-                if !is_human_visible_history_event(&entry.event) {
-                    continue;
-                }
-                if let Some(note) = &entry.note {
-                    let _ = writeln!(
-                        text,
-                        "{} {}: {} ({})",
-                        dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
-                        entry.by,
-                        format_task_history_event(&entry),
-                        note
-                    );
-                } else {
-                    let _ = writeln!(
-                        text,
-                        "{} {}: {}",
-                        dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
-                        entry.by,
-                        format_task_history_event(&entry)
-                    );
-                }
-            }
-            Ok(())
-        }
-        "context_files" => {
-            for path in &task.context_files {
-                let _ = writeln!(text, "{}", path);
-            }
-            Ok(())
-        }
-        "crew" => {
-            text.push_str(task.crew.as_deref().unwrap_or_default());
-            Ok(())
-        }
-        "orchestrator" => {
-            text.push_str(task.orchestrator.as_deref().unwrap_or_default());
-            Ok(())
-        }
-        "readiness" => {
-            if let Some(readiness) = format_task_readiness(task) {
-                text.push_str(&readiness);
-            }
-            Ok(())
-        }
-        "artifacts" => {
-            use crate::output::color::bold;
-            let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
-            for (index, artifact) in artifacts.iter().enumerate() {
-                if index > 0 {
-                    text.push('\n');
-                }
-                let _ = writeln!(
-                    text,
-                    "{} {} ({}, {} bytes)",
-                    bold("Artifact:"),
-                    artifact.path,
-                    artifact.media_type,
-                    artifact.size_bytes
-                );
-            }
-            Ok(())
-        }
-        other => match task_show_record_field_json(task, other)
-            .or_else(|| runtime.task_crew_field_json(task, other))
-        {
-            Some(Value::String(value)) => {
-                text.push_str(&value);
-                Ok(())
-            }
-            Some(Value::Null) => Ok(()),
-            Some(value) => {
-                let _ = write!(text, "{value}");
-                Ok(())
-            }
-            None => Err(OrbitError::InvalidInput(unknown_task_show_field_message(
-                other,
-            ))),
-        },
-    }
-}
-
-/// The human readiness readout of a `proposed` or `backlog` task: `ready` or
-/// `not ready`, then one indented line per gap with its fix. `None` for any
-/// other status.
-pub(crate) fn format_task_readiness(task: &orbit_core::Task) -> Option<String> {
-    let readiness = orbit_types::task::task_readiness(task)?;
-    let mut text = String::from(if readiness.ready() {
-        "ready"
-    } else {
-        "not ready"
-    });
-    for gap in &readiness.gaps {
-        let _ = write!(
-            text,
-            "\n  - {} [{}]: {} Fix: {}.",
-            gap.code.as_str(),
-            gap.severity.as_str(),
-            gap.message,
-            gap.fix
-        );
-    }
-    Some(text)
-}
-
-fn format_task_table_timestamp(value: DateTime<Utc>) -> String {
-    value.format("%Y-%m-%d %H:%M").to_string()
+/// A record timestamp as the tool serializes it (RFC 3339).
+pub(super) fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
 }

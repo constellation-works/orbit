@@ -1173,7 +1173,19 @@
       },
       {
         "name": "priority",
-        "description": "Bounded view priority filter",
+        "description": "Optional task priority filter",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "external_ref",
+        "description": "Optional exact external reference filter in `system:id` form",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "has_ref",
+        "description": "Optional external reference system filter: keep tasks with any reference in this system",
         "param_type": "string",
         "required": false
       },

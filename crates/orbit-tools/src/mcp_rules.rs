@@ -23,10 +23,6 @@ pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
 /// id-routed, each with the reason.
 pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
     (
-        "orbit.task.lint",
-        "lints a task against the selected workspace's configuration; it keeps selector behavior",
-    ),
-    (
         "orbit.friction.show",
         "a friction id is workspace-local and carries no host prefix",
     ),

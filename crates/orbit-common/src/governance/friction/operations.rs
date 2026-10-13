@@ -10,8 +10,8 @@
 //! Changing one is a consumer-visible break, not a rename.
 
 use crate::governance::operation::{
-    CliArgKind, CliBinding, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
-    RETIRED_AGENT_FIELD, Redaction, operation_registry,
+    CliArgKind, CliBinding, CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec,
+    ParamType, RETIRED_AGENT_FIELD, Redaction, operation_registry,
 };
 use orbit_types::tool::McpToolScope;
 
@@ -74,6 +74,7 @@ const ADD: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.add",
     tool_description: "Append a friction report",
     cli_about: "Append a friction report",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         ParamSpec {
@@ -120,6 +121,7 @@ const ADD: FrictionOperation = FrictionOperation {
                     aliases: &[],
                     visible_aliases: &[],
                     value_name: None,
+                    multiple: false,
                 },
                 help: Description::Static(
                     "Friction taxonomy tag; repeat or comma-separate for multiple tags",
@@ -170,6 +172,7 @@ const LIST: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.list",
     tool_description: "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     cli_about: "List friction records",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
         text_param("model", "Optional model filter"),
@@ -217,6 +220,7 @@ const SHOW: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.show",
     tool_description: "Fetch a single friction record by id",
     cli_about: "Show a single friction record",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[BARE_ID_PARAM]],
     at_least_one_of: &[],
@@ -232,6 +236,7 @@ const STATS: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.stats",
     tool_description: "Compute friction rates from the friction and task stores",
     cli_about: "Compute friction rates",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[],
     at_least_one_of: &[],
@@ -246,6 +251,7 @@ const TAGS: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.tags",
     tool_description: "List configured friction taxonomy tags",
     cli_about: "List configured friction taxonomy tags",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[],
     at_least_one_of: &[],
@@ -261,6 +267,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.update",
     tool_description: "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
     cli_about: "Update triage metadata for a friction record",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         ParamSpec {
@@ -294,6 +301,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
                     aliases: &[],
                     visible_aliases: &[],
                     value_name: None,
+                    multiple: false,
                 },
                 help: Description::Static(
                     "Optional replacement taxonomy tag; repeat or comma-separate for multiple tags",
@@ -368,6 +376,7 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.resolve",
     tool_description: "Mark a friction record as resolved",
     cli_about: "Mark a friction record as resolved",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[BARE_ID_PARAM]],
     at_least_one_of: &[],
@@ -382,6 +391,7 @@ const REHOME: FrictionOperation = FrictionOperation {
     tool_name: "orbit.friction.rehome",
     tool_description: "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
     cli_about: "Move a friction record into the registered workspace that owns it",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         ParamSpec {

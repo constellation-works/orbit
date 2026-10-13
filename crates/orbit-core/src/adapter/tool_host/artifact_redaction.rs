@@ -5,6 +5,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
+use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
@@ -109,7 +110,7 @@ pub(super) fn sanitize_tool_input(
         // parameter's class all the same.
         for field in std::iter::once(&param.name).chain(param.aliases) {
             match param.param_type {
-                ParamType::StringList => {
+                ParamType::StringList | ParamType::EnumList(_) => {
                     sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
                 }
                 ParamType::String
@@ -340,6 +341,15 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
         },
+        // The task reads persist nothing; lint writes only recorded selectors.
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => {
+                ActionPolicy {
+                    declared: verb.spec().params,
+                    ..NO_REDACTION
+                }
+            }
+        },
         OrbitBuiltinAction::AutoTask(verb) => match verb {
             AutoTaskVerb::Add | AutoTaskVerb::Update => ActionPolicy {
                 declared: verb.spec().params,
@@ -369,13 +379,9 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::Search
         | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskDelete
-        | OrbitBuiltinAction::TaskEligible
-        | OrbitBuiltinAction::TaskLint
-        | OrbitBuiltinAction::TaskList
         | OrbitBuiltinAction::TaskLocks
         | OrbitBuiltinAction::TaskLocksRelease
         | OrbitBuiltinAction::TaskLocksReserve
-        | OrbitBuiltinAction::TaskShow
         | OrbitBuiltinAction::WorkflowRunList
         | OrbitBuiltinAction::WorkflowRunResume
         | OrbitBuiltinAction::WorkflowRunShow
@@ -415,6 +421,9 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => false,
         },
         action => matches!(
             action,

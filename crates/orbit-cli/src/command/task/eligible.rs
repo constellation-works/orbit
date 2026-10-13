@@ -1,68 +1,16 @@
-use clap::{Args, ValueEnum};
-use comfy_table::Cell;
-use orbit_core::{DEFAULT_TASK_LIST_LIMIT, OrbitRuntime};
-use serde_json::{Value, json};
+//! `orbit task eligible` rendering.
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use comfy_table::Cell;
+use serde_json::{Map, Value};
+
+use crate::command::{Block, CommandOut, Payload};
 use crate::output::color::Domain;
 use crate::output::table::{Column, Table};
 
-/// The statuses a candidate can have: work nobody has taken yet.
-#[derive(Clone, Copy, ValueEnum)]
-pub enum EligibleStatus {
-    Backlog,
-    Proposed,
-}
-
-impl EligibleStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Backlog => "backlog",
-            Self::Proposed => "proposed",
-        }
-    }
-}
-
-// Help text lives on the `TaskSubcommand::Eligible` variant.
-#[derive(Args)]
-#[command(
-    after_help = "Examples:\n  orbit task eligible\n  orbit task eligible --status proposed\n  orbit task eligible --path crates/orbit-cli\n  orbit task eligible --explain\n  orbit task eligible --json"
-)]
-pub struct TaskEligibleArgs {
-    /// Candidate statuses (comma-separated). Default: backlog and proposed.
-    #[arg(long, value_enum, value_delimiter = ',')]
-    pub status: Vec<EligibleStatus>,
-    /// Keep only candidates whose `context_files` selectors apply to this
-    /// path, matched as `orbit task list --path` matches.
-    #[arg(long)]
-    pub path: Option<String>,
-    /// Maximum eligible tasks to list (default 50). Must be at least 1.
-    #[arg(long, default_value_t = DEFAULT_TASK_LIST_LIMIT, value_parser = crate::parse::positive_limit)]
-    pub limit: usize,
-    /// Also list the held-back candidates, each with the overlapping file and
-    /// the in-progress or review task holding it
-    #[arg(long)]
-    pub explain: bool,
-}
-
-impl Execute for TaskEligibleArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut input = json!({
-            "limit": self.limit,
-            "explain": self.explain,
-        });
-        if !self.status.is_empty() {
-            input["status"] = self.status.iter().map(|s| s.as_str()).collect();
-        }
-        if let Some(path) = self.path {
-            input["path"] = Value::String(path);
-        }
-        // One contract: the CLI document is exactly what `orbit.task.eligible`
-        // returns over MCP.
-        let doc = runtime.run_tool("orbit.task.eligible", input)?;
-        let blocks = eligible_blocks(&doc, self.explain);
-        Ok(Payload::blocks(doc, blocks).into())
-    }
+pub(super) fn render(input: &Map<String, Value>, value: Value) -> CommandOut {
+    let explain = input.get("explain") == Some(&Value::Bool(true));
+    let blocks = eligible_blocks(&value, explain);
+    Ok(Payload::blocks(value, blocks).into())
 }
 
 fn eligible_blocks(doc: &Value, explain: bool) -> Vec<Block> {

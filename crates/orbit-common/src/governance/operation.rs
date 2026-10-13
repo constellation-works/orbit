@@ -73,6 +73,9 @@ pub enum ParamType {
     /// values; the wire carries the string. The tool entry checks only that a
     /// string arrived: membership is a content rule the handler owns.
     Enum(&'static [EnumValue]),
+    /// Several values of one fixed set. Carried as a [`Self::StringList`]; on
+    /// the CLI each value is offered and checked as for [`Self::Enum`].
+    EnumList(&'static [EnumValue]),
     /// A JSON object, for structured input such as a schedule.
     Object,
 }
@@ -114,7 +117,7 @@ impl ParamType {
     pub fn as_tool_param_type(self) -> &'static str {
         match self {
             ParamType::String => "string",
-            ParamType::StringList => "string_list",
+            ParamType::StringList | ParamType::EnumList(_) => "string_list",
             ParamType::Integer => "integer",
             ParamType::UnsignedInteger => "u64",
             ParamType::Boolean | ParamType::Switch => "boolean",
@@ -152,7 +155,7 @@ impl Description {
 /// How a parameter appears on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliArgKind {
-    /// A required positional argument.
+    /// A positional argument, optional (`[ID]`) when its parameter is.
     Positional,
     /// A `--long` flag taking one value.
     Flag {
@@ -170,6 +173,10 @@ pub enum CliArgKind {
         /// The `<VALUE_NAME>` `--help` shows, when it is not the parameter name
         /// in SCREAMING_SNAKE.
         value_name: Option<&'static str>,
+        /// Whether one occurrence takes every value up to the next flag
+        /// (`--fields id title`), shown as `<VALUE_NAME>...`. Only meaningful
+        /// for list parameters.
+        multiple: bool,
     },
 }
 
@@ -182,6 +189,7 @@ impl CliArgKind {
             aliases: &[],
             visible_aliases: &[],
             value_name: None,
+            multiple: false,
         }
     }
 }
@@ -194,6 +202,29 @@ pub struct CliBinding {
     /// Help text shown by `--help`. Frequently differs from the MCP description
     /// because the audiences differ; both are contract once shipped.
     pub help: Description,
+}
+
+/// A verb's `--help` beyond its summary and its parameters' help.
+#[derive(Debug, Clone, Copy)]
+pub struct CliHelp {
+    /// The description `--help` prints in place of
+    /// [`OperationSpec::cli_about`]; `-h` keeps the summary.
+    pub long_about: Option<&'static str>,
+    /// Text `--help` prints after the options, such as examples.
+    pub after_help: Option<&'static str>,
+    /// CLI parameter names in `--help` order, when that differs from the
+    /// declaration order the MCP schema follows. Empty keeps declaration
+    /// order; otherwise it names every CLI-bound parameter once.
+    pub flag_order: &'static [&'static str],
+}
+
+impl CliHelp {
+    /// No help beyond the summary, in declaration order.
+    pub const NONE: Self = Self {
+        long_about: None,
+        after_help: None,
+        flag_order: &[],
+    };
 }
 
 /// How a parameter's value is redacted before an operation persists it.
@@ -325,10 +356,13 @@ pub struct OperationSpec<V: 'static> {
     pub tool_description: &'static str,
     /// `--help` summary for the CLI subcommand.
     pub cli_about: &'static str,
+    /// The rest of the CLI subcommand's `--help`.
+    pub cli_help: CliHelp,
     /// Whether the operation reads or writes.
     pub effect: Effect,
     /// Parameter groups, concatenated in order. Order is contract: it drives
-    /// both MCP schema order and CLI `--help` order. A group lets verbs share a
+    /// MCP schema order, and CLI `--help` order unless
+    /// [`CliHelp::flag_order`] overrides it. A group lets verbs share a
     /// run of parameters without functional record update, which `const` does
     /// not allow.
     pub params: &'static [&'static [ParamSpec]],
@@ -372,6 +406,23 @@ impl<V: 'static> OperationSpec<V> {
     pub fn cli_params(&self) -> impl Iterator<Item = (&'static ParamSpec, CliBinding)> {
         self.params()
             .filter_map(|param| param.cli.map(|binding| (param, binding)))
+    }
+
+    /// Parameters bound to the command line, in `--help` order: the
+    /// [`CliHelp::flag_order`] when the spec declares one, else declaration
+    /// order.
+    pub fn cli_params_in_help_order(&self) -> Vec<(&'static ParamSpec, CliBinding)> {
+        let mut params = self.cli_params().collect::<Vec<_>>();
+        let order = self.cli_help.flag_order;
+        if !order.is_empty() {
+            params.sort_by_key(|(param, _)| {
+                order
+                    .iter()
+                    .position(|name| *name == param.name)
+                    .unwrap_or(order.len())
+            });
+        }
+        params
     }
 
     /// Whether the CLI takes a positional `id`, which is also the audit target.
@@ -525,7 +576,7 @@ fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> 
     let name = param.name;
     let (valid, expected) = match param.param_type {
         ParamType::String => (value.is_string(), "a string"),
-        ParamType::StringList => match value {
+        ParamType::StringList | ParamType::EnumList(_) => match value {
             Value::Array(items) if !items.iter().all(Value::is_string) => {
                 return Err(OrbitError::InvalidInput(format!(
                     "`{name}` entries must be strings"
@@ -696,6 +747,96 @@ pub trait OperationVerb: Copy + Eq + std::fmt::Debug + Send + Sync + 'static {
     fn tool_name(self) -> &'static str {
         self.spec().tool_name
     }
+}
+
+// Const builders the registries declare their parameters with.
+
+/// A parameter on both MCP and the CLI.
+pub(crate) const fn both(
+    name: &'static str,
+    param_type: ParamType,
+    mcp_description: &'static str,
+    kind: CliArgKind,
+    cli_help: &'static str,
+) -> ParamSpec {
+    let mut param = mcp_only(name, param_type, mcp_description);
+    param.cli = Some(CliBinding {
+        kind,
+        help: Description::Static(cli_help),
+    });
+    param
+}
+
+/// A parameter the tool accepts and the CLI does not bind.
+pub(crate) const fn mcp_only(
+    name: &'static str,
+    param_type: ParamType,
+    mcp_description: &'static str,
+) -> ParamSpec {
+    ParamSpec {
+        name,
+        aliases: &[],
+        param_type,
+        required: false,
+        preserve_empty: false,
+        default: None,
+        redact: Redaction::None,
+        mcp_description: Some(Description::Static(mcp_description)),
+        cli: None,
+    }
+}
+
+/// A CLI-only flag the CLI surface table consumes before the call.
+pub(crate) const fn cli_only(
+    name: &'static str,
+    param_type: ParamType,
+    kind: CliArgKind,
+    help: &'static str,
+) -> ParamSpec {
+    ParamSpec {
+        name,
+        aliases: &[],
+        param_type,
+        required: false,
+        preserve_empty: false,
+        default: None,
+        redact: Redaction::None,
+        mcp_description: None,
+        cli: Some(CliBinding {
+            kind,
+            help: Description::Static(help),
+        }),
+    }
+}
+
+/// Mark a parameter required.
+pub(crate) const fn required(mut param: ParamSpec) -> ParamSpec {
+    param.required = true;
+    param
+}
+
+/// Give a parameter the value the CLI sends when its flag is omitted.
+pub(crate) const fn defaulted(mut param: ParamSpec, default: &'static str) -> ParamSpec {
+    param.default = Some(default);
+    param
+}
+
+/// Redact a parameter as free text.
+pub(crate) const fn free_text(mut param: ParamSpec) -> ParamSpec {
+    param.redact = Redaction::FreeText;
+    param
+}
+
+/// Keep an explicitly empty string the CLI was given.
+pub(crate) const fn preserve_empty(mut param: ParamSpec) -> ParamSpec {
+    param.preserve_empty = true;
+    param
+}
+
+/// Accept other wire spellings for a parameter.
+pub(crate) const fn aliased(mut param: ParamSpec, aliases: &'static [&'static str]) -> ParamSpec {
+    param.aliases = aliases;
+    param
 }
 
 /// Declare a noun's verb enum, its [`OperationVerb`] impl and its ordered

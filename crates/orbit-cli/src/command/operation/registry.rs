@@ -323,6 +323,11 @@ impl Commands {
                 use super::super::task::TaskSubcommand;
                 use super::super::task::artifact::TaskArtifactSubcommand;
                 let (subcommand, target_type, target_id) = match &command.command {
+                    // The registry-derived task verbs take their runtime need,
+                    // audit metadata and id routing from the spec.
+                    TaskSubcommand::Operation(invocation) => {
+                        return task_operation(invocation, boxed_runtime_dispatch!(Task));
+                    }
                     TaskSubcommand::Add(_) => ("add", Some("task"), None),
                     TaskSubcommand::Artifact(command) => match &command.command {
                         TaskArtifactSubcommand::Put(args) => {
@@ -342,11 +347,7 @@ impl Commands {
                             Some(args.reservation_id.as_str()),
                         ),
                     },
-                    TaskSubcommand::List(_) => ("list", None, None),
-                    TaskSubcommand::Eligible(_) => ("eligible", None, None),
                     TaskSubcommand::Flow(_) => ("flow", None, None),
-                    TaskSubcommand::Show(args) => ("show", Some("task"), Some(args.id.as_str())),
-                    TaskSubcommand::Lint(args) => ("lint", Some("task"), args.id.as_deref()),
                     TaskSubcommand::Update(args) => {
                         ("update", Some("task"), Some(args.id.as_str()))
                     }
@@ -384,12 +385,7 @@ impl Commands {
                     TaskSubcommand::RecheckBlocked(_) => ("recheck-blocked", None, None),
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };
-                let task_owner_id = match &command.command {
-                    TaskSubcommand::Show(args) => Some(args.id.clone()),
-                    _ => None,
-                };
                 let runtime_need = match &command.command {
-                    TaskSubcommand::Show(_) => RuntimeNeed::ReadOnly,
                     // `orbit.task.artifact.get` shares `orbit.task.show`'s
                     // resolved-globally-by-default schema wording, so `orbit
                     // task artifact get` must resolve the same way rather than
@@ -401,12 +397,7 @@ impl Commands {
                         },
                         TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
                     },
-                    // `eligible` promises to reconcile nothing, so it opens
-                    // without the stale-run reconciliation a required runtime runs.
-                    TaskSubcommand::List(_)
-                    | TaskSubcommand::Eligible(_)
-                    | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
-                    TaskSubcommand::Lint(args) if !args.restore_pruned => RuntimeNeed::ReadOnly,
+                    TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
                     TaskSubcommand::RecheckBlocked(args) if !args.confirm => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its
                     // binding: only a read addressed by a globally unique ID can
@@ -419,7 +410,6 @@ impl Commands {
                     None,
                     boxed_runtime_dispatch!(Task),
                 )
-                .with_task_owner_id(task_owner_id)
                 .governed_when(
                     matches!(
                         &command.command,

@@ -4,7 +4,7 @@
 //! tool contract. These operations have no derived CLI or dashboard surface.
 
 use crate::governance::operation::{
-    Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
+    CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
     ToolOnlyRegistration, operation_registry,
 };
 
@@ -50,6 +50,7 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
     tool_name: "orbit.drain.probe",
     tool_description: "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.before_pr` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
         param(
@@ -100,6 +101,7 @@ const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
     tool_name: "orbit.drain.receipt.lookup",
     tool_description: "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
         param(
@@ -132,6 +134,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
     tool_name: "orbit.task.pull",
     tool_description: "Distributed-drain admission, served by the workspace owner. Selects the first ready, valid, conflict-free backlog task in the owner's order and, in one transaction, reserves its footprint, records an execution claim for the calling machine, moves it to `in-progress` and stores the request receipt. Answers `idle` (a receipt with no claim) when nothing is admissible. The calling machine is the session's, never a field of this input. A claim grants execution of that one attempt only; completion still needs owner approval.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         param(
@@ -212,6 +215,7 @@ const CLAIM_BIND: OperationSpec<DrainVerb> = OperationSpec {
     tool_name: "orbit.drain.claim.bind",
     tool_description: "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         param(
@@ -244,6 +248,7 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
     tool_name: "orbit.drain.claim.settle",
     tool_description: "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. A release (a cancelled drain giving back work it will not finish) returns the task to the backlog with its reason as a comment. Each releases only this claim's reservation. Retries replay the recorded outcome.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
         ParamSpec {
@@ -281,6 +286,7 @@ const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
     tool_name: "orbit.drain.claims",
     tool_description: "List this workspace's execution claims for inspection and deliberate recovery: phase, age, reservation expiry, execution machine, bound run, last recorded event, unresolved merge intent, and landing invalidation. Age, an expired reservation, and an absent local run are diagnostics, not proof that a worker died — nothing here reclaims, rebinds, or repairs a claim.",
     cli_about: "",
+    cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[]],
     at_least_one_of: &[],

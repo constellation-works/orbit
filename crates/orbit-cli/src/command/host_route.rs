@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
+use orbit_common::governance::task::TaskVerb;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
@@ -149,7 +150,10 @@ fn may_route(cli: &Cli) -> bool {
 fn requested_host(command: &Commands) -> Option<String> {
     let host = match command {
         Commands::Task(task) => match &task.command {
-            TaskSubcommand::Show(args) => args.routing.host.as_deref(),
+            // A registry-derived verb takes `--host` as a CLI-only parameter.
+            TaskSubcommand::Operation(invocation) => {
+                invocation.input.get("host").and_then(Value::as_str)
+            }
             TaskSubcommand::Update(args) => args.routing.host.as_deref(),
             TaskSubcommand::Artifact(command) => command.routing.host.as_deref(),
             TaskSubcommand::ReviewReset(args) => args.routing.host.as_deref(),
@@ -178,7 +182,10 @@ fn explicit_root(cli: &Cli) -> bool {
 /// The id an id-routed `orbit task` subcommand addresses.
 fn routed_command_id(command: &TaskSubcommand) -> Option<&str> {
     match command {
-        TaskSubcommand::Show(args) => Some(&args.id),
+        // A registry-derived verb routes by id when its tool does.
+        TaskSubcommand::Operation(invocation) if is_id_routed_tool(invocation.spec.tool_name) => {
+            invocation.target_id()
+        }
         TaskSubcommand::Update(args) => Some(&args.id),
         TaskSubcommand::Artifact(artifact) => Some(match &artifact.command {
             TaskArtifactSubcommand::Put(args) => &args.id,
@@ -333,25 +340,33 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
 
 fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
     Ok(match command {
-        TaskSubcommand::Show(args) => {
-            let fields = args
-                .fields
-                .iter()
-                .flat_map(|field| field.split(','))
-                .map(str::trim)
-                .filter(|field| !field.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>();
-            let mut input = json!({ "id": args.id });
-            if !fields.is_empty() {
-                input["fields"] = json!(fields);
+        TaskSubcommand::Operation(invocation) => match invocation.spec.verb {
+            TaskVerb::Show => {
+                let id = invocation.target_id().unwrap_or_default();
+                let fields = invocation
+                    .input
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let mut input = json!({ "id": id });
+                if !fields.is_empty() {
+                    input["fields"] = json!(fields);
+                }
+                RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input,
+                    render: Render::TaskShow { fields },
+                }
             }
-            RoutedCall {
-                name: "orbit.task.show".into(),
-                input,
-                render: Render::TaskShow { fields },
-            }
-        }
+            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => return Err(not_routable()),
+        },
         TaskSubcommand::Update(args) => RoutedCall {
             name: "orbit.task.update".into(),
             input: args.remote_tool_input(&holder.ssh)?,
