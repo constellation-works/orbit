@@ -83,6 +83,22 @@ impl OrbitRuntime {
         self.claim_validation_gates(owner)
     }
 
+    /// The required commands this host's final validation holds a delivered
+    /// candidate to, when that list is one an implementer may leave to it:
+    /// this host's configuration for its own runs, the owner's captured gates
+    /// for a claimed leaf. A claim that captured none (an older owner)
+    /// validates against this replica's copy, which the owner may refuse at
+    /// acceptance, so it yields nothing and the implementer keeps every check.
+    pub(crate) fn captured_final_validation_commands(&self) -> Vec<String> {
+        let gates = self.host_validation_gates();
+        match gates.source {
+            ValidationGateSource::LocalConfig | ValidationGateSource::OwnerContract => {
+                gates.gates.required_validation_commands
+            }
+            ValidationGateSource::ReplicaConfig => Vec::new(),
+        }
+    }
+
     /// [`Self::host_validation_gates`] for a claimed leaf, given what its
     /// claim captured.
     pub(crate) fn claim_validation_gates(

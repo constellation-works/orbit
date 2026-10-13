@@ -434,6 +434,122 @@ fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
     crate::generation_fixture::running_digest(&authority_root(workspace), pid)
 }
 
+/// Settle the detached fixture worker even when a handover assertion unwinds.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct DrainCleanup<'a> {
+    workspace: &'a McpWorkspace,
+    run_id: String,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for DrainCleanup<'_> {
+    fn drop(&mut self) {
+        let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
+        command.args(["run", "cancel", &self.run_id, "--confirm"]);
+        // Production cancellation waits for the verified owner to exit. Keep
+        // cleanup bounded without a second panic during assertion unwinding.
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            test_env::FIXTURE_STEP_DEADLINE,
+            64 * 1024,
+        );
+        if !matches!(&output, Ok(output) if output.status.success()) {
+            tracing::warn!(?output, "drain fixture cleanup failed");
+        }
+    }
+}
+
+/// Candidate admission and MCP session continuity do not exercise a drain's
+/// run adoption. Keep that distinct process contract as one finite fixture.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::upgrade::a_replaced_drain_hands_its_run_to_the_installed_executable",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let installed = workspace.home.join("installation/orbit");
+    std::fs::create_dir_all(installed.parent().expect("install directory")).expect("installation");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("installed executable");
+    let old_digest = executable_generation(&installed).expect("old digest");
+    let submitted = candidate_ok(
+        &workspace,
+        &installed,
+        &[
+            "job",
+            "run",
+            "workspace_auto_pipeline",
+            "--input",
+            "for_seconds=300",
+            "--input",
+            "idle_sleep_seconds=1",
+            "--input",
+            "poll_sleep_seconds=1",
+            "--json",
+        ],
+    );
+    let submitted: Value = serde_json::from_slice(&submitted.stdout).expect("submission");
+    let drain = DrainCleanup {
+        workspace: &workspace,
+        run_id: submitted["run_id"].as_str().expect("run ID").to_owned(),
+    };
+    let show = || {
+        let output = candidate_ok(
+            &workspace,
+            Path::new(env!("CARGO_BIN_EXE_orbit")),
+            &["run", "show", &drain.run_id, "--json"],
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("run JSON")
+    };
+    let mut before = Value::Null;
+    test_env::wait_until("the drain's first admission pass", || {
+        before = show();
+        before["run"]["state"] == "running"
+            && before["pipeline_state"]["drain_last_pass"]["recorded_at"].is_string()
+    });
+    let pid =
+        u32::try_from(before["run"]["pid"].as_u64().expect("worker PID")).expect("PID fits u32");
+    assert_eq!(running_digest(&workspace, pid), Some(old_digest.clone()));
+    let candidate = distinct_candidate(&workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    assert_ne!(new_digest, old_digest, "the fixture must replace the image");
+    crate::generation_fixture::install_over(&candidate, &installed);
+    test_env::wait_until("the drain to re-exec the changed installation", || {
+        assert!(
+            orbit_common::process::identity::process_is_alive(pid),
+            "drain exited before adoption"
+        );
+        running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str())
+    });
+
+    // A registration alone can precede adoption. Require a *later* admission
+    // pass from the new image, so dropping ADOPT_RUN_ENV cannot race a cancel
+    // and masquerade as a successful handover.
+    let registered = show();
+    let mut adopted = Value::Null;
+    test_env::wait_until("the adopted image to continue admission", || {
+        adopted = show();
+        assert_eq!(adopted["run"]["state"], "running", "{adopted}");
+        adopted["pipeline_state"]["drain_last_pass"]["recorded_at"]
+            != registered["pipeline_state"]["drain_last_pass"]["recorded_at"]
+    });
+    assert_eq!(adopted["run"]["run_id"], drain.run_id);
+    assert_eq!(adopted["run"]["pid"], u64::from(pid));
+    assert_eq!(adopted["run"]["started_at"], before["run"]["started_at"]);
+    assert_eq!(running_digest(&workspace, pid), Some(new_digest));
+    candidate_ok(
+        &workspace,
+        &installed,
+        &["run", "cancel", &drain.run_id, "--confirm"],
+    );
+    test_env::wait_until("the cancelled adopted owner to exit", || {
+        !orbit_common::process::identity::process_is_alive(pid)
+    });
+    assert_eq!(show()["run"]["state"], "cancelled");
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes() {
     let workspace = McpWorkspace::init();

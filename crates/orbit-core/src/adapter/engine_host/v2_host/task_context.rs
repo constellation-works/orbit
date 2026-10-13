@@ -87,13 +87,31 @@ pub(crate) fn task_context_for_agent_input(
             "load task `{task_id}` comments for agent envelope: {err}"
         ))
     })?;
-    Ok(Some(agent_task_context_json(
+    let mut context = agent_task_context_json(
         &task,
         &task_history,
         &comments,
         input,
         &runtime.paths().repo_root,
-    )))
+    );
+    if let Some(commands) = final_validation_commands(runtime, input)
+        && let Some(map) = context.as_object_mut()
+    {
+        map.insert("final_validation_commands".to_string(), commands.into());
+    }
+    Ok(Some(context))
+}
+
+/// The required commands this invocation's pipeline runs itself on the final
+/// candidate, for an implementer that need not run them first. Only a
+/// delivery pipeline whose deterministic final validation follows the
+/// implementer sets `final_validation` on its input.
+fn final_validation_commands(runtime: &OrbitRuntime, input: &Value) -> Option<Vec<String>> {
+    if input.get("final_validation").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let commands = runtime.captured_final_validation_commands();
+    (!commands.is_empty()).then_some(commands)
 }
 
 fn agent_task_context_json(

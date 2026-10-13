@@ -15,9 +15,16 @@
 //! - **transient**: the log shows the network or the runner failing, by the
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
-//! - **candidate**: anything else. The landing stops for the same single
-//!   automatic repair a conflicting base gets, with the failed step's
+//! - **candidate**: the failed step names a diagnostic, and the base's own
+//!   jobs were read and do not explain it. The landing stops for the same
+//!   single automatic repair a conflicting base gets, with the failed step's
 //!   signature and log excerpt in the stop evidence the repair leaf reads.
+//! - **inconclusive**: the evidence for any of the above could not be read:
+//!   a job query or log read failed, a log read recovered no text, or a log
+//!   names no diagnostic, so its signature is only the failed step's name.
+//!   A failed read is not a successful empty answer, and neither proves the
+//!   base or the candidate at fault, so the landing stops in review and
+//!   spends nothing.
 //!
 //! The rerun, the branch update and the repair are each spent once; a
 //! failure past that, or one this module cannot classify, stops the landing
@@ -27,8 +34,10 @@
 //! [`verified_base_update`] accepts the new head only when it is a merge of
 //! that candidate with a commit already on the landing branch whose tree is
 //! exactly the clean merge of the two, so nothing but the base's own advance
-//! reaches the merge. The owner's accepted candidate, its validation evidence
-//! and the observation the store rechecks stay the validated commit.
+//! reaches the merge. The provider merges the base as it is when the update
+//! runs, so the caller refreshes the landing ref before asking. The owner's
+//! accepted candidate, its validation evidence and the observation the store
+//! rechecks stay the validated commit.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -56,12 +65,14 @@ const RUNNER_LOSS: &[&str] = &[
     "the hosted runner encountered an error",
 ];
 
-/// The class of one failed hosted check.
+/// The class of one failed hosted check, ordered so the class that decides
+/// for several jobs is the greatest: one unreadable job spends nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CheckFailureClass {
     Transient,
     Inherited,
     Candidate,
+    Inconclusive,
 }
 
 impl CheckFailureClass {
@@ -70,6 +81,7 @@ impl CheckFailureClass {
             Self::Transient => "transient",
             Self::Inherited => "inherited",
             Self::Candidate => "candidate",
+            Self::Inconclusive => "inconclusive",
         }
     }
 }
@@ -202,44 +214,47 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                 )));
             }
         };
-        let step = job["failed_step"]
-            .as_str()
-            .or_else(|| job["name"].as_str())
-            .unwrap_or_default();
-        let signature = error_signature(&log, step).text;
+        let signature = error_signature(&log, failed_step(job));
         let (class, why) = if let Some(evidence) = transient_evidence(&log) {
             (
                 CheckFailureClass::Transient,
                 format!("the log shows `{evidence}`"),
             )
-        } else if let Some(why) = inherited(
-            host,
-            workspace,
-            job,
-            &signature,
-            base,
-            moved_tip,
-            &mut base_jobs,
-            &mut tip_jobs,
-        ) {
-            (CheckFailureClass::Inherited, why)
-        } else {
+        } else if signature.step_fallback {
             (
-                CheckFailureClass::Candidate,
-                format!(
-                    "base {base} does not fail it that way{}",
-                    moved_tip.map_or_else(String::new, |tip| format!(
-                        " and it does not pass on the current base {tip}"
-                    ))
-                ),
+                CheckFailureClass::Inconclusive,
+                "its log names no diagnostic, only the failed step".to_string(),
             )
+        } else {
+            match inherited(
+                host,
+                workspace,
+                job,
+                &signature.text,
+                base,
+                moved_tip,
+                &mut base_jobs,
+                &mut tip_jobs,
+            ) {
+                Err(gap) => (CheckFailureClass::Inconclusive, gap),
+                Ok(Some(why)) => (CheckFailureClass::Inherited, why),
+                Ok(None) => (
+                    CheckFailureClass::Candidate,
+                    format!(
+                        "base {base} does not fail it that way{}",
+                        moved_tip.map_or_else(String::new, |tip| format!(
+                            " and it does not pass on the current base {tip}"
+                        ))
+                    ),
+                ),
+            }
         };
         jobs.push(FailedJob {
             run_id,
             job_id,
             label,
             class,
-            signature,
+            signature: signature.text,
             why,
             excerpt: excerpt(&log),
         });
@@ -307,11 +322,21 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
             "the candidate is handed to one automatic repair",
         ))),
+        CheckFailureClass::Inconclusive => Ok(CheckRecoveryStep::Stop(evidence(
+            "its evidence could not be read in full, so nothing is rerun, updated or repaired \
+             and the candidate stays in review",
+        ))),
     }
 }
 
-/// Whether the failure of `job` is the base's: the same signature fails on
-/// the base commit, or the base branch moved and the same job passes there.
+/// The jobs on one commit, or why they could not be read; read once per
+/// landing attempt.
+type CommitJobs = Option<Result<Vec<Value>, String>>;
+
+/// Whether the failure of `job`, with genuine `signature`, is the base's:
+/// the same signature fails on the base commit, or the base branch moved and
+/// the same job passes there. `Ok(None)` is an answer read in full; `Err`
+/// names the evidence that could not be read.
 #[allow(clippy::too_many_arguments)]
 fn inherited<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -320,42 +345,62 @@ fn inherited<H: RuntimeHost + ?Sized>(
     signature: &str,
     base: &str,
     moved_tip: Option<&str>,
-    base_jobs: &mut Option<Vec<Value>>,
-    tip_jobs: &mut Option<Vec<Value>>,
-) -> Option<String> {
-    let base_jobs =
-        base_jobs.get_or_insert_with(|| commit_jobs(host, workspace, base).unwrap_or_default());
-    let on_base = base_jobs
+    base_jobs: &mut CommitJobs,
+    tip_jobs: &mut CommitJobs,
+) -> Result<Option<String>, String> {
+    let base_jobs = base_jobs
+        .get_or_insert_with(|| commit_jobs(host, workspace, base).map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|error| format!("the jobs on base {base} could not be read: {error}"))?;
+    for candidate in base_jobs
         .iter()
         .filter(|candidate| same_job(candidate, job) && unsuccessful(candidate))
-        .find_map(|candidate| {
-            let log = job_log(
-                host,
-                workspace,
-                candidate["run_id"].as_u64()?,
-                candidate["job_id"].as_u64()?,
-            )
-            .ok()?;
-            let step = candidate["failed_step"]
-                .as_str()
-                .or_else(|| candidate["name"].as_str())
-                .unwrap_or_default();
-            (error_signature(&log, step).text == signature).then_some(())
-        });
-    if on_base.is_some() {
-        return Some(format!("the same signature fails on base {base}"));
+    {
+        let (Some(run_id), Some(job_id)) =
+            (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
+        else {
+            return Err(format!("a failed job on base {base} reported no identity"));
+        };
+        let log = job_log(host, workspace, run_id, job_id).map_err(|error| {
+            format!("the log of the failed job on base {base} could not be read: {error}")
+        })?;
+        let found = error_signature(&log, failed_step(candidate));
+        if found.step_fallback {
+            return Err(format!(
+                "the failed job on base {base} logs no diagnostic, only the failed step"
+            ));
+        }
+        if found.text == signature {
+            return Ok(Some(format!("the same signature fails on base {base}")));
+        }
     }
-    let tip = moved_tip?;
-    let tip_jobs =
-        tip_jobs.get_or_insert_with(|| commit_jobs(host, workspace, tip).unwrap_or_default());
-    tip_jobs
+    let Some(tip) = moved_tip else {
+        return Ok(None);
+    };
+    let tip_jobs = tip_jobs
+        .get_or_insert_with(|| commit_jobs(host, workspace, tip).map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|error| {
+            format!("the jobs on the current base {tip} could not be read: {error}")
+        })?;
+    Ok(tip_jobs
         .iter()
         .any(|candidate| {
             same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
         })
-        .then(|| format!("the base branch moved from {base} to {tip}, where it passes"))
+        .then(|| format!("the base branch moved from {base} to {tip}, where it passes")))
 }
 
+/// The step a failed job's signature falls back to naming.
+fn failed_step(job: &Value) -> &str {
+    job["failed_step"]
+        .as_str()
+        .or_else(|| job["name"].as_str())
+        .unwrap_or_default()
+}
+
+/// Every job on `commit`. An answer without a job list is a failed read,
+/// never an empty one.
 fn commit_jobs<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -365,9 +410,13 @@ fn commit_jobs<H: RuntimeHost + ?Sized>(
         operations::CI_COMMIT_JOBS,
         json!({"commit": commit, "workspace_path": workspace.to_string_lossy()}),
     )?;
-    Ok(response["jobs"].as_array().cloned().unwrap_or_default())
+    response["jobs"].as_array().cloned().ok_or_else(|| {
+        OrbitError::Execution(format!("the jobs answer for {commit} carried no job list"))
+    })
 }
 
+/// One failed job's log. A read that recovered no text, which the log
+/// reader reports beside an empty log, is a failed read.
 fn job_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -382,7 +431,15 @@ fn job_log<H: RuntimeHost + ?Sized>(
             "workspace_path": workspace.to_string_lossy(),
         }),
     )?;
-    Ok(response["log"].as_str().unwrap_or_default().to_string())
+    if let Some(reason) = response["fallback_error"].as_str() {
+        return Err(OrbitError::Execution(format!(
+            "the log read recovered no text: {reason}"
+        )));
+    }
+    response["log"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| OrbitError::Execution("the log answer carried no log".to_string()))
 }
 
 /// A job that finished without passing.
