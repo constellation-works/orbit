@@ -4456,184 +4456,182 @@ fn known_red_coverage_rows(test: &str, selected: &[&str]) {
 /// base does not requires candidate repair, and the owner's check refuses
 /// the same report if a leaf made it anyway.
 fn claimed_known_red_rows(test: &str, selected: &[&str]) {
-    isolated(
-        test,
-        |sandbox| {
-            let named = |tests: &[&str]| {
-                tests
-                    .iter()
-                    .map(|test| format!("test orbit-core::runtime {test}"))
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>()
+    isolated(test, |sandbox| {
+        let named = |tests: &[&str]| {
+            tests
+                .iter()
+                .map(|test| format!("test orbit-core::runtime {test}"))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        for &(case, base, candidate_tests, known_red) in KNOWN_RED_CASES
+            .iter()
+            .filter(|row| selected.contains(&row.0))
+        {
+            let fx = Fixture::with_red_tests(sandbox, base, candidate_tests);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_TESTS]);
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let outcome = action(&host, "claim_validate", &input);
+            // The owner's own base run, not the one the leaf cached.
+            let cache = PathBuf::from(git(&fx.repo, &["rev-parse", "--git-common-dir"]))
+                .join("orbit-baseline");
+            let owner_check = |base_sha: &str, failures: &BTreeSet<String>| {
+                if cache.exists() {
+                    fs::remove_dir_all(&cache).unwrap();
+                }
+                verify_claimed_known_red(
+                    &host,
+                    &fx.repo,
+                    &ClaimedKnownRed {
+                        base_branch: BASE,
+                        base_sync: orbit_engine::BaseSyncMode::Local,
+                        base_sha,
+                        command: RED_TESTS,
+                        selection: None,
+                        // make's status for the recipe's failure
+                        exit_code: 2,
+                        failures,
+                    },
+                    std::time::Instant::now() + Duration::from_secs(120),
+                )
             };
-            for &(case, base, candidate_tests, known_red) in
-                KNOWN_RED_CASES.iter().filter(|row| selected.contains(&row.0))
-            {
-                let fx = Fixture::with_red_tests(sandbox, base, candidate_tests);
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                host.require_commands(&[RED_TESTS]);
-                let mut input = json!({
-                    "workspace_path": fx.repo,
-                    "base_sync": "local",
-                    "base_sha": fx.base_sha,
-                });
-                let outcome = action(&host, "claim_validate", &input);
-                // The owner's own base run, not the one the leaf cached.
-                let cache = PathBuf::from(git(&fx.repo, &["rev-parse", "--git-common-dir"]))
-                    .join("orbit-baseline");
-                let owner_check = |base_sha: &str, failures: &BTreeSet<String>| {
-                    if cache.exists() {
-                        fs::remove_dir_all(&cache).unwrap();
-                    }
-                    verify_claimed_known_red(
-                        &host,
-                        &fx.repo,
-                        &ClaimedKnownRed {
-                            base_branch: BASE,
-                            base_sync: orbit_engine::BaseSyncMode::Local,
-                            base_sha,
-                            command: RED_TESTS,
-                            selection: None,
-                            // make's status for the recipe's failure
-                            exit_code: 2,
-                            failures,
-                        },
-                        std::time::Instant::now() + Duration::from_secs(120),
-                    )
-                };
 
-                let Some(known_red) = known_red else {
-                    let message = outcome
-                        .expect_err(&format!("{case}: candidate failures need repair"))
-                        .to_string();
-                    assert!(
-                        !is_baseline_red_failure(None, Some(&message))
-                            && !message.contains("failed identically"),
-                        "different or unknown failures cannot hold for a red base: {case}: {message}"
-                    );
-                    assert!(host.handoffs.lock().unwrap().is_empty(), "{case}");
-                    let logs = host.claim_log_contents.lock().unwrap();
-                    let log: Value =
-                        serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"])
-                            .unwrap();
-                    let baseline: Value =
-                        serde_json::from_slice(&logs["validation/claim-landing/0.baseline.json"])
-                            .unwrap();
-                    assert_eq!(log["failure_kind"], "candidate", "{case}");
-                    assert_eq!(log["baseline_reproduces"], false, "{case}");
-                    assert_eq!(
-                        log["failures"],
-                        json!(named(candidate_tests.unwrap_or(base))),
-                        "{case}"
-                    );
-                    assert_eq!(
-                        baseline["failures"],
-                        json!(
-                            named(base)
-                                .into_iter()
-                                .chain(base.first().map(|test| format!("test {test}")))
-                                .collect::<Vec<_>>()
-                        ),
-                        "{case}"
-                    );
-                    assert_eq!(
-                        log["baseline"]["log"], "validation/claim-landing/0.baseline.json",
-                        "{case}"
-                    );
-                    drop(logs);
-                    if base.is_empty() || candidate_tests.is_some_and(|tests| tests.is_empty()) {
-                        continue;
-                    }
-                    let claimed = named(candidate_tests.unwrap()).into_iter().collect();
-                    let refusal = owner_check(&fx.base_sha, &claimed)
-                        .expect_err(&format!("{case}: the owner refuses the report"));
-                    assert!(
-                        matches!(&refusal, KnownRedUnconfirmed::Contradicted(reason)
-                            if reason.contains("does not fail `test orbit-core::runtime")),
-                        "{case}: the owner's base run contradicts it: {refusal:?}"
-                    );
-                    continue;
-                };
-
-                let output = outcome.unwrap_or_else(|error| panic!("{case}: {error}"));
-                assert_eq!(output["decision"], "passed_with_known_red", "{case}");
-                assert_eq!(output["commands"], json!([]), "{case}");
-                let records: Vec<KnownRedValidation> =
-                    serde_json::from_value(output["known_red"].clone()).unwrap();
-                assert_eq!(records.len(), 1, "{case}: {records:?}");
-                assert_eq!(records[0].command, RED_TESTS, "{case}");
-                assert_eq!(records[0].base_sha, fx.base_sha, "{case}");
-                assert_eq!(records[0].tested_head, fx.candidate, "{case}");
-                assert_eq!(records[0].failures.identities, named(known_red), "{case}");
-                let path = "validation/claim-landing/0.json";
-                let log: HandoffValidationLog =
-                    serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
-                assert_eq!(log.exit_code, 2, "{case}: the log keeps the exit status");
-                let report = log.known_red.expect("the log reports known red");
-                assert_eq!(report.base_sha, fx.base_sha, "{case}");
+            let Some(known_red) = known_red else {
+                let message = outcome
+                    .expect_err(&format!("{case}: candidate failures need repair"))
+                    .to_string();
                 assert!(
-                    named(known_red)
-                        .iter()
-                        .all(|test| report.failures.contains(test)),
-                    "{case}: {report:?}"
+                    !is_baseline_red_failure(None, Some(&message))
+                        && !message.contains("failed identically"),
+                    "different or unknown failures cannot hold for a red base: {case}: {message}"
+                );
+                assert!(host.handoffs.lock().unwrap().is_empty(), "{case}");
+                let logs = host.claim_log_contents.lock().unwrap();
+                let log: Value =
+                    serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"])
+                        .unwrap();
+                let baseline: Value =
+                    serde_json::from_slice(&logs["validation/claim-landing/0.baseline.json"])
+                        .unwrap();
+                assert_eq!(log["failure_kind"], "candidate", "{case}");
+                assert_eq!(log["baseline_reproduces"], false, "{case}");
+                assert_eq!(
+                    log["failures"],
+                    json!(named(candidate_tests.unwrap_or(base))),
+                    "{case}"
                 );
                 assert_eq!(
-                    owner_check(&fx.base_sha, &report.failures),
-                    Ok(report.failures.clone()),
-                    "{case}: the owner's base run fails every reported test"
+                    baseline["failures"],
+                    json!(
+                        named(base)
+                            .into_iter()
+                            .chain(base.first().map(|test| format!("test {test}")))
+                            .collect::<Vec<_>>()
+                    ),
+                    "{case}"
                 );
-                // A base off the owner's own base branch is no base: here the
-                // candidate itself, which fails the same tests. Nothing runs.
-                let off_base = owner_check(&fx.candidate, &report.failures)
-                    .expect_err(&format!("{case}: a base off the owner's branch is refused"));
-                assert!(
-                    matches!(&off_base, KnownRedUnconfirmed::Inconclusive(reason)
-                    if reason.contains(&format!(
-                        "base {} is not in the history of this owner's {BASE}",
-                        fx.candidate
-                    ))),
-                    "{case}: nothing ran, so nothing is contradicted: {off_base:?}"
+                assert_eq!(
+                    log["baseline"]["log"], "validation/claim-landing/0.baseline.json",
+                    "{case}"
                 );
-                assert!(!cache.exists(), "{case}: the owner ran nothing");
-
-                // Before publication the results carry the report, and the
-                // pin attaches the same log for the published candidate.
-                *host.ship_mode.lock().unwrap() = "pr".to_string();
-                host.claim_log_contents.lock().unwrap().clear();
-                let pending = action(&host, "claim_validate", &input)
-                    .unwrap_or_else(|error| panic!("{case}: validate before push: {error}"));
-                assert_eq!(pending["publication"], "pending", "{case}");
-                assert_eq!(pending["decision"], "passed_with_known_red", "{case}");
-                assert_eq!(pending["known_red"], output["known_red"], "{case}");
-                action(&host, "pr_open", &{
-                    let mut open = fx.open_input(&fx.candidate, &fx.base_sha);
-                    open["claim_validation"] = pending.clone();
-                    open
-                })
-                .unwrap_or_else(|error| panic!("{case}: open the PR: {error}"));
-                let body = fx
-                    .forge_state("pr-body")
-                    .expect("the forge received a body");
-                assert!(body.contains("## Known-red validation"), "{case}: {body}");
-                for test in known_red {
-                    assert!(
-                        body.contains(&format!("`orbit-core::runtime {test}`")),
-                        "{case}: the PR names {test}: {body}"
-                    );
+                drop(logs);
+                if base.is_empty() || candidate_tests.is_some_and(|tests| tests.is_empty()) {
+                    continue;
                 }
-                input["pull_request"] = json!(PR_NUMBER);
-                input["prevalidated"] = pending;
-                let pinned = action(&host, "claim_validate", &input)
-                    .unwrap_or_else(|error| panic!("{case}: pin: {error}"));
-                assert_eq!(pinned["decision"], "passed_with_known_red", "{case}");
-                let pinned_log: HandoffValidationLog =
-                    serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
-                assert_eq!(pinned_log.exit_code, 2, "{case}");
-                assert_eq!(pinned_log.known_red, Some(report), "{case}");
+                let claimed = named(candidate_tests.unwrap()).into_iter().collect();
+                let refusal = owner_check(&fx.base_sha, &claimed)
+                    .expect_err(&format!("{case}: the owner refuses the report"));
+                assert!(
+                    matches!(&refusal, KnownRedUnconfirmed::Contradicted(reason)
+                            if reason.contains("does not fail `test orbit-core::runtime")),
+                    "{case}: the owner's base run contradicts it: {refusal:?}"
+                );
+                continue;
+            };
+
+            let output = outcome.unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert_eq!(output["decision"], "passed_with_known_red", "{case}");
+            assert_eq!(output["commands"], json!([]), "{case}");
+            let records: Vec<KnownRedValidation> =
+                serde_json::from_value(output["known_red"].clone()).unwrap();
+            assert_eq!(records.len(), 1, "{case}: {records:?}");
+            assert_eq!(records[0].command, RED_TESTS, "{case}");
+            assert_eq!(records[0].base_sha, fx.base_sha, "{case}");
+            assert_eq!(records[0].tested_head, fx.candidate, "{case}");
+            assert_eq!(records[0].failures.identities, named(known_red), "{case}");
+            let path = "validation/claim-landing/0.json";
+            let log: HandoffValidationLog =
+                serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
+            assert_eq!(log.exit_code, 2, "{case}: the log keeps the exit status");
+            let report = log.known_red.expect("the log reports known red");
+            assert_eq!(report.base_sha, fx.base_sha, "{case}");
+            assert!(
+                named(known_red)
+                    .iter()
+                    .all(|test| report.failures.contains(test)),
+                "{case}: {report:?}"
+            );
+            assert_eq!(
+                owner_check(&fx.base_sha, &report.failures),
+                Ok(report.failures.clone()),
+                "{case}: the owner's base run fails every reported test"
+            );
+            // A base off the owner's own base branch is no base: here the
+            // candidate itself, which fails the same tests. Nothing runs.
+            let off_base = owner_check(&fx.candidate, &report.failures)
+                .expect_err(&format!("{case}: a base off the owner's branch is refused"));
+            assert!(
+                matches!(&off_base, KnownRedUnconfirmed::Inconclusive(reason)
+                if reason.contains(&format!(
+                    "base {} is not in the history of this owner's {BASE}",
+                    fx.candidate
+                ))),
+                "{case}: nothing ran, so nothing is contradicted: {off_base:?}"
+            );
+            assert!(!cache.exists(), "{case}: the owner ran nothing");
+
+            // Before publication the results carry the report, and the
+            // pin attaches the same log for the published candidate.
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            host.claim_log_contents.lock().unwrap().clear();
+            let pending = action(&host, "claim_validate", &input)
+                .unwrap_or_else(|error| panic!("{case}: validate before push: {error}"));
+            assert_eq!(pending["publication"], "pending", "{case}");
+            assert_eq!(pending["decision"], "passed_with_known_red", "{case}");
+            assert_eq!(pending["known_red"], output["known_red"], "{case}");
+            action(&host, "pr_open", &{
+                let mut open = fx.open_input(&fx.candidate, &fx.base_sha);
+                open["claim_validation"] = pending.clone();
+                open
+            })
+            .unwrap_or_else(|error| panic!("{case}: open the PR: {error}"));
+            let body = fx
+                .forge_state("pr-body")
+                .expect("the forge received a body");
+            assert!(body.contains("## Known-red validation"), "{case}: {body}");
+            for test in known_red {
+                assert!(
+                    body.contains(&format!("`orbit-core::runtime {test}`")),
+                    "{case}: the PR names {test}: {body}"
+                );
             }
-        },
-    );
+            input["pull_request"] = json!(PR_NUMBER);
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input)
+                .unwrap_or_else(|error| panic!("{case}: pin: {error}"));
+            assert_eq!(pinned["decision"], "passed_with_known_red", "{case}");
+            let pinned_log: HandoffValidationLog =
+                serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
+            assert_eq!(pinned_log.exit_code, 2, "{case}");
+            assert_eq!(pinned_log.known_red, Some(report), "{case}");
+        }
+    });
 }
 
 /// [ORB-15375] Captured output keeps only a head and a tail, so a failure in
@@ -7751,7 +7749,13 @@ fn claimed_known_red_equal_and_subset() {
 fn claimed_known_red_superset_and_disjoint() {
     claimed_known_red_rows(
         "claimed_known_red_superset_and_disjoint",
-        &["shared-plus-new", "disjoint-six-vs-one", "candidate-unknown", "base-unknown", "both-unknown"],
+        &[
+            "shared-plus-new",
+            "disjoint-six-vs-one",
+            "candidate-unknown",
+            "base-unknown",
+            "both-unknown",
+        ],
     );
 }
 

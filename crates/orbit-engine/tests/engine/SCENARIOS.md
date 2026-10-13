@@ -653,3 +653,38 @@ The red-test constructor seeds `failing.txt` and its Makefile together; the flak
   the marker check and retain the same stopped-state/refusal assertions. Untouched
   provider output beside companion edits, modify/delete and half-repaired stops
   remain independently exercised.
+
+
+## Reconciliation on landed 8e1e137e
+
+All prior mappings above remain retained. The preserved 148c candidate and its
+132.549 s Linux full-engine result remain separate evidence; this composition
+has not yet been measured.
+
+- The retired `default-driver` untouched-output row maps to the stronger
+  `custom-output` stopped-tree equality refusal in `adoption_contracts_1`.
+  `default-repair` retains real default-driver success and checkpoint reuse;
+  `missing-default` retains the separate `merge.default` fallback refusal.
+  Index, stopped rebase, preserved files, absent checkpoint and absent widening
+  assertions remain in the covering rows.
+- ORB-16010's full candidate known-red matrix remains in
+  `known_red_validation_and_subset`; its claimed assertions use the existing
+  `claimed_known_red_rows` dispatcher. `equal` and `subset` remain in the
+  positive family. The former `superset` and `disjoint` rows map to upstream's
+  stronger `shared-plus-new` and `disjoint-six-vs-one`; `candidate-unknown`,
+  `base-unknown` and `both-unknown` also execute in the existing negative family.
+  Complete failure identities, candidate-repair classification, baseline log
+  linkage, absent publication and independent owner recheck assertions are
+  preserved. The historical truncated-middle helper name
+  `a_failure_only_the_truncated_middle_names_still_holds_the_candidate` maps to
+  upstream's renamed `a_failure_only_the_truncated_middle_names_still_requires_candidate_repair`
+  within `supervisor_and_truncated_failures`, retaining the entire upstream body.
+- ORB-16013/16019's
+  `conflict_recovery_hands_over_only_managed_sync_validation` runs as a third
+  scenario in existing `recovery_evidence_contracts_1`. Its static, dynamic,
+  renamed, claim carry and literal revalidation assertions are unchanged;
+  no test identity was added for the consolidated invocation.
+- ORB-16025's negative held-slot timeout body is identical to upstream
+  (SHA256 `60fb59121c801fba040b824e27d5e22368cbc8d910237ac111261aee0361d246`)
+  and occurs exactly once. The carried adjacent positive wait-credit fixture
+  optimization remains distinct.
