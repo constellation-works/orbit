@@ -72,6 +72,45 @@ fn systemd_install_accepts_healthy_in_flight_and_finite_timers() {
 }
 
 #[test]
+fn systemd_install_accepts_finite_timers_with_failed_or_unreadable_sweeps() {
+    let cases = [
+        (
+            "failed service",
+            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
+        ),
+        ("unreadable service", None),
+    ];
+
+    for (case, service) in cases {
+        let root = tempdir().unwrap();
+        let home = tempdir().unwrap();
+        let program = root.path().join("orbit");
+        let runner = MockRunner::with_outputs(
+            systemd_activation_outputs("1000000", service),
+            vec![Ok(true), Ok(true), Ok(true)],
+        );
+
+        let report = install_clock_with(
+            root.path(),
+            program.to_str().unwrap(),
+            ClockSettings::default(),
+            ClockPlatform::Systemd,
+            &runner,
+            home.path(),
+        )
+        .unwrap_or_else(|error| panic!("{case}: {error}"));
+
+        assert!(report.activated, "{case}");
+        assert!(report.manual_steps.is_empty(), "{case}");
+        assert_eq!(
+            runner.commands().len(),
+            5,
+            "{case}: no retry or extra probe"
+        );
+    }
+}
+
+#[test]
 fn systemd_install_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger() {
     let cases = [
         ("missing service", None),
