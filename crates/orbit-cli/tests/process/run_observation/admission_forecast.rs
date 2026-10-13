@@ -14,6 +14,20 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         return;
     }
     let fixture = Fixture::init();
+    // Every readiness read here is compared with a baseline, so the CLI must
+    // never sample the live host: a loaded test host would add a throttle
+    // hold between the reads.
+    fixture
+        .orbit()
+        .args([
+            "config",
+            "set",
+            "workflow.resource_throttle.enabled",
+            "false",
+            "--global",
+        ])
+        .assert()
+        .success();
     fs::OpenOptions::new()
         .append(true)
         .open(fixture.home.join(".orbit/config.toml"))
