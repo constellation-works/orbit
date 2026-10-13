@@ -148,6 +148,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     tool_description: "Create an Orbit task and return the created task JSON",
     cli_about: "Create a new task",
     cli_help: CliHelp {
+        constraints: &[],
         long_about: None,
         after_help: None,
         flag_order: &[
@@ -358,6 +359,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     tool_description: "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
     cli_about: "Update task fields, or take the next approval step with `--approve` (proposed -> backlog, review -> done)",
     cli_help: CliHelp {
+        constraints: &[],
         long_about: None,
         after_help: None,
         flag_order: &[

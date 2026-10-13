@@ -17,8 +17,6 @@ mod workspace;
 
 pub use self::register::register;
 
-pub(super) use orbit_common::protocol::tool_input::{optional_string_alias, required_string};
-
 use self::dispatch::{
     execute_host_action, orbit_id_params, reject_agent_field, reject_unknown_tool_arguments,
     report_unknown_fields,

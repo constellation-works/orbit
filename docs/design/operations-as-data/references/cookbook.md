@@ -31,8 +31,10 @@ to migrate part of a noun. Phase 3b (task writes, [ORB-15938]) built `Array`,
 CLI-required flags (`cli_required`), `UnknownFields::Refuse` for a verb that
 already refused extras, retired-field wordings, the `GuardedModes::preempt`
 and `schema_extension` tables, and a hidden option object for operator-only
-CLI flags. A nested `cli_path` is still planned; a noun that needs it, or another kind the kernel lacks, extends
-the kernel first. Two recipes: migrating a noun that is still hand-wired, and
+CLI flags. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`
+nesting, `cli_groups` help and inherited group arguments, and CLI argument
+relationships. A noun needing another kind the kernel lacks extends the kernel
+first. Two recipes: migrating a noun that is still hand-wired, and
 adding a verb to a noun that is already migrated.
 
 ---
@@ -46,8 +48,9 @@ help output for the parent command and every subcommand, including nested ones:
 
 ```sh
 cargo build -p orbit-cli --bin orbit
+mkdir -p .orbit/tmp
 for sub in "" add list show …; do
-  ./target/debug/orbit <noun> $sub --help > /tmp/<noun>-help-${sub:-root}.txt 2>&1
+  ./target/debug/orbit <noun> $sub --help > .orbit/tmp/<noun>-help-${sub:-root}.txt 2>&1
 done
 ```
 
@@ -275,7 +278,7 @@ Run the gates in [CLAUDE.md](../../../../CLAUDE.md#gates) (`make ci-fast`,
 
 ```sh
 git diff --stat crates/orbit-cli/tests/snapshots/mcp_tools_list.json   # empty, or explained
-diff -ru /tmp/<noun>-help-before /tmp/<noun>-help-after                # must be empty
+diff -ru .orbit/tmp/<noun>-help-before .orbit/tmp/<noun>-help-after                # must be empty
 ```
 
 An empty MCP snapshot diff plus an empty help diff is what "wire compatible"

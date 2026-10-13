@@ -106,13 +106,7 @@ pub enum OrbitBuiltinAction {
     /// The migrated task verbs. Task verbs not yet migrated keep their own
     /// variants below until their slice of the migration lands.
     Task(TaskVerb),
-    TaskArtifactGet,
-    /// `orbit.task.artifact.put`: attaches a prepared artifact payload.
-    TaskArtifactPut,
     TaskDelete,
-    TaskLocks,
-    TaskLocksRelease,
-    TaskLocksReserve,
     TaskReject,
     TaskReconcileReview,
     TaskReviewReset,

@@ -318,34 +318,18 @@ impl Commands {
                 )
             }
             Commands::Task(command) => {
-                use super::super::locks::LocksSubcommand;
+                use super::super::task::TaskInvocation;
                 use super::super::task::TaskPublicationSubcommand;
                 use super::super::task::TaskSubcommand;
-                use super::super::task::artifact::TaskArtifactSubcommand;
                 let (subcommand, target_type, target_id) = match &command.command {
                     // The registry-derived task verbs take their runtime need,
                     // audit metadata and id routing from the spec.
-                    TaskSubcommand::Operation(invocation) => {
+                    TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
                         return task_operation(invocation, boxed_runtime_dispatch!(Task));
                     }
-                    TaskSubcommand::Artifact(command) => match &command.command {
-                        TaskArtifactSubcommand::Put(args) => {
-                            ("artifact-put", Some("task"), Some(args.id.as_str()))
-                        }
-                        TaskArtifactSubcommand::Get(args) => {
-                            ("artifact-get", Some("task"), Some(args.id.as_str()))
-                        }
-                    },
-                    TaskSubcommand::Locks(command) => match &command.command {
-                        LocksSubcommand::List(_) => ("locks-list", None, None),
-                        LocksSubcommand::Contention(_) => ("locks-contention", None, None),
-                        LocksSubcommand::Reserve(_) => ("locks-reserve", None, None),
-                        LocksSubcommand::Release(args) => (
-                            "locks-release",
-                            Some("reservation"),
-                            Some(args.reservation_id.as_str()),
-                        ),
-                    },
+                    TaskSubcommand::Operation(TaskInvocation::Contention(_)) => {
+                        ("locks-contention", None, None)
+                    }
                     TaskSubcommand::Flow(_) => ("flow", None, None),
                     TaskSubcommand::Archive(args) => {
                         ("archive", Some("task"), Some(args.id.as_str()))
@@ -382,17 +366,6 @@ impl Commands {
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };
                 let runtime_need = match &command.command {
-                    // `orbit.task.artifact.get` shares `orbit.task.show`'s
-                    // resolved-globally-by-default schema wording, so `orbit
-                    // task artifact get` must resolve the same way rather than
-                    // reporting a routing refusal as `task_not_found`
-                    // [ORB-12263].
-                    TaskSubcommand::Artifact(command) => match &command.command {
-                        TaskArtifactSubcommand::Get(args) => RuntimeNeed::TaskOwner {
-                            task_id: args.id.clone(),
-                        },
-                        TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
-                    },
                     TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
                     TaskSubcommand::RecheckBlocked(args) if !args.confirm => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its

@@ -17,11 +17,14 @@
 use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
 use orbit_types::tool::McpToolScope;
 
+use super::nested_operations::{
+    ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
+};
 use super::write_operations::{ADD, UPDATE};
 use crate::governance::operation::{
-    CliArgKind, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, defaulted, mcp_only,
-    operation_registry,
+    CliArgKind, CliGroup, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec,
+    ParamSpec, ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, defaulted,
+    mcp_only, operation_registry,
 };
 
 operation_registry! {
@@ -49,6 +52,16 @@ operation_registry! {
         Show => SHOW,
         /// Lint one task, or sweep active tasks for context needing repair.
         Lint => LINT,
+        /// Store an artifact.
+        ArtifactPut => ARTIFACT_PUT,
+        /// Read an artifact.
+        ArtifactGet => ARTIFACT_GET,
+        /// List active locks.
+        LocksList => LOCKS_LIST,
+        /// Reserve a lock surface.
+        LocksReserve => LOCKS_RESERVE,
+        /// Release a reservation.
+        LocksRelease => LOCKS_RELEASE,
     }
 }
 
@@ -60,7 +73,30 @@ pub const TASK: NounSpec<TaskVerb> = NounSpec {
     audit_target_type: "task",
     audit_target_param: "id",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_groups: &[],
+    cli_groups: &[
+        CliGroup {
+            name: "artifact",
+            cli_about: "Manage task artifact files",
+            params: &[cli_only(
+                "host",
+                ParamType::String,
+                CliArgKind::Flag {
+                    long: "host",
+                    delimiter: None,
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: Some("HOST"),
+                    multiple: false,
+                },
+                TASK_HOST_HELP,
+            )],
+        },
+        CliGroup {
+            name: "locks",
+            cli_about: "Inspect, reserve, and release task file locks",
+            params: &[],
+        },
+    ],
     operations: TASK_OPERATIONS,
 };
 
@@ -140,7 +176,7 @@ const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
 pub const TASK_HOST_HELP: &str = "Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names";
 
 /// The attribution fields every task tool accepts.
-const IDENTITY_PARAMS: &[ParamSpec] = &[
+pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
     mcp_only(
         "agent",
         ParamType::String,
@@ -167,6 +203,7 @@ const LIST: TaskOperation = TaskOperation {
     tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
+        constraints: &[],
         long_about: None,
         after_help: Some(
             "Examples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
@@ -347,6 +384,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
     tool_description: "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
     cli_about: "List backlog/proposed tasks you can pick up without colliding with work in flight",
     cli_help: CliHelp {
+        constraints: &[],
         long_about: Some(
             "List backlog/proposed tasks you can pick up without colliding with work in flight\n\nA task is eligible when its context-file lock surface overlaps no in-progress or review task's surface — the same lock test automatic dispatch applies. Nothing else is checked: not dependencies, complexity, groups or crew, and candidates are not checked against each other. Read-only: nothing is reserved, reconciled or changed.",
         ),
@@ -503,6 +541,7 @@ const LINT: TaskOperation = TaskOperation {
     tool_description: "Lint an Orbit task for stale paths, vague acceptance criteria, and stale repository names. Without `id`, sweep the active tasks (or those in `status`) for `context_files` that need repair. `restore_pruned` re-declares the selectors an earlier prune recorded in task history; without it nothing is written.",
     cli_about: "Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors",
     cli_help: CliHelp {
+        constraints: &[],
         long_about: None,
         after_help: Some(
             "Examples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",

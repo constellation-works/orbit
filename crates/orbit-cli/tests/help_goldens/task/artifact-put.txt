@@ -1,0 +1,42 @@
+Store a UTF-8 source file under a task's artifacts directory
+
+Usage: orbit task artifact put [OPTIONS] <ID> <SOURCE_PATH>
+
+Arguments:
+  <ID>
+          Task ID
+
+  <SOURCE_PATH>
+          UTF-8 source file to store as a task artifact
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+
+      --path <ARTIFACT_PATH>
+          Artifact path relative to the task artifacts directory. Defaults to the source file name
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --model <MODEL>
+          Explicit agent model to persist on the task artifact update
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -77,7 +77,7 @@ pub struct NounSpec<V: 'static> {
 
 pub struct OperationSpec<V: 'static> {
     pub verb: V,                       // typed verb, joins spec ↔ every surface table
-    pub cli_path: &'static [&'static str], // ["add"]; ["artifact", "get"] later
+    pub cli_path: &'static [&'static str], // ["add"]; ["artifact", "get"]
     pub tool_name: &'static str,       // "orbit.friction.add"
     pub tool_description: &'static str,
     pub cli_about: &'static str,
@@ -553,8 +553,14 @@ parameter) and write screening move to the tool path. The measured differences
 for auto-task and the task reads are in
 [Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 
-**Planned:** `cli_path` → intermediate subcommands built from
-`NounSpec::cli_groups`, when the first nested noun (task, phase 3) needs them.
+**Implemented:** two-segment `cli_path` nesting builds intermediate commands
+from `NounSpec::cli_groups`, including group help and inherited CLI-only
+arguments (`task artifact --host`). The generic parser resolves the full path
+and projects the leaf's parameters. `CliHelp::constraints` declares CLI
+argument conflicts and required-unless relationships, preserving the lock
+reservation's mutually exclusive `--task` and `--file` forms.
+`ParamType::Path` keeps CLI output paths verbatim while retaining the string
+wire type, so `--out` can name a file with leading or trailing whitespace.
 
 ## 8. Dashboard adapter
 
@@ -597,7 +603,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 0b (warn mode done) | Kernel v2 input validation on friction: `parse_input`, aliases, retired fields, `at_least_one_of`, unknown-field warnings | Moves the friction handlers onto canonical names and the warn-then-refuse rollout onto the one migrated noun |
 | 1 (done) | auto-task: 5 tools (`show` inactive), 10 CLI verbs | Second pilot. First noun whose CLI calls core directly; exercises `Enum`, `default`, parameter groups, CLI-only verbs (`toggle`, `delete`, `restore`, `recover`, `reset` with `mcp_scope: None`) and the tool-path rule |
 | 2 (done) | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
-| 3 (reads, writes done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
+| 3 (reads, writes, nested commands done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
 | 4 | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
 
@@ -605,7 +611,7 @@ Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
 [ORB-15933] (input validation, warn mode, done) and [ORB-15934] (refuse unknown
 fields after the window); phase 1
 [ORB-15935] (done); phase 2 [ORB-15936] (done); phase 3 [ORB-15937] (reads, done), [ORB-15938]
-(add/update, done), [ORB-15939] (artifact and locks), [ORB-15940] (review and
+(add/update, done), [ORB-15939] (artifact and locks, done), [ORB-15940] (review and
 lifecycle); phase 4 [ORB-15941]; phase 5 [ORB-15942]. [ORB-15943] verifies the
 authorization golden that phases 1 and 4 rely on.
 
@@ -625,7 +631,8 @@ are 23 and 19: the four task read tool impls and action variants are replaced
 by the generic tool and `Task(TaskVerb)`. After phase 3b on the same date,
 they are 21 and 18: the `add` and `update` tool impls and action variants are
 gone, and `orbit.task.artifact.put`, which dispatched `TaskUpdate`, has its own
-`TaskArtifactPut` variant until its slice lands. The weekly code-health sweep reports
+`TaskArtifactPut` variant until its slice lands. After phase 3c, the counts
+are 16 and 13: five artifact/lock tool impls and five action variants are gone. The weekly code-health sweep reports
 both numbers. Neither is a merge gate.
 
 ### Phase 2: tool-only nouns (Implemented)
@@ -709,6 +716,47 @@ shipped are spec entries (§2.1, §4), and over MCP and `orbit tool run` the
 registry's schema check still answers first with the same plain `unknown
 field` message. The Step 0 baseline and its differences are in
 [Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
+
+### Phase 3c: task artifacts and locks (Implemented)
+
+The artifact get/put and lock list/reserve/release specs live in
+[nested_operations.rs](../../../crates/orbit-common/src/governance/task/nested_operations.rs).
+Both intermediate commands and the five migrated verbs are registry-derived
+and execute through `run_tool`. Contention has no tool in the baseline and
+stays a hand-wired read-only diagnostic inside the spec-built locks group.
+Adding a tool for it would expand the all-tools authorization golden, which
+this slice must preserve. Its report, help and truncation remain unchanged.
+The list tool retains
+its shipped name `orbit.task.locks`, rather than introducing a `.list` rename.
+There is no top-level `orbit locks` command: `command/locks.rs` was mounted
+only under `task locks` in the migration's baseline.
+
+Artifact tools remain MCP-scoped; lock tools remain inactive, and the governed
+reserve/release rows are unchanged. Artifact put's authenticated preloaded
+ssh-mcp/worker payload still preempts ordinary parsing. Source-file confinement,
+bounded reads and review-report validation remain in its tool surface helper;
+the core handler consumes the resulting path-free payload. Artifact get keeps
+ID-global workspace routing and local binary export through `--out`.
+
+The derived audit labels are unchanged: `artifact-put`, `artifact-get`,
+`locks-list`, `locks-reserve`, `locks-release`. Contention retains its
+hand-wired `locks-contention` label. The CLI surface table retains the old targets: artifacts name the task, list/contention/
+reserve have no target, and release names its reservation. Lock listing keeps
+write effect because it expires reservations and records expiry. The eight
+group/leaf help goldens were captured before the migration.
+MCP descriptions, parameters and placement and the authorization golden remain
+unchanged. Nested public inputs start in warn mode; authenticated private
+artifact payloads retain their strict allowlist. Incomplete attachments retain
+source-file remedies and field suggestions. The existing `tool run`/MCP schema
+admission still refuses fields absent from the advertised schema before the
+generic tool entry; warn mode does not weaken that earlier check.
+
+Artifact put now follows the tool's workspace containment, byte limit and
+attachment validation even from the local CLI, and its JSON write response
+follows the migrated task-write renderer. Artifact get inherits the tool's
+inline byte limit. These are tool-path behavior changes, with baseline and
+candidate evidence attached to the task; help stability alone does not prove
+behavior neutrality.
 
 ## 10. Concerns & Honest Limitations
 

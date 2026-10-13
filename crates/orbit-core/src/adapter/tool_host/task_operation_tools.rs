@@ -32,6 +32,12 @@ pub(super) fn dispatch(
     verb: TaskVerb,
     input: Value,
 ) -> Result<(Value, Option<String>), OrbitError> {
+    // The attachment surface has already authenticated/prepared its path-free
+    // payload. Its public source_path parameter is no longer present here.
+    if verb == TaskVerb::ArtifactPut {
+        let output = super::task_write_tools::artifact_put(runtime, caller, &input)?;
+        return Ok((output.response, Some(output.persisted_id)));
+    }
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
     let input = verb.spec().parse_input(input)?;
     let read = |value: Result<Value, OrbitError>| value.map(|value| (value, None));
@@ -49,6 +55,24 @@ pub(super) fn dispatch(
             caller,
             input.as_value(),
             operator,
+        )),
+        TaskVerb::ArtifactPut => Err(OrbitError::Execution(
+            "artifact preparation dispatch invariant violated".into(),
+        )),
+        TaskVerb::ArtifactGet => read(super::task_tools::artifact_get(runtime, &input)),
+        TaskVerb::LocksList => read(crate::runtime::task::locks::list(runtime)),
+        TaskVerb::LocksReserve => read(crate::runtime::task::locks::reserve(
+            runtime,
+            input.into_value(),
+            caller.agent,
+            caller.model,
+            caller.reservation_owner,
+        )),
+        TaskVerb::LocksRelease => read(crate::runtime::task::locks::release(
+            runtime,
+            input.into_value(),
+            caller.agent,
+            caller.model,
         )),
         TaskVerb::List => read(list(runtime, &input)),
         TaskVerb::Eligible => read(eligible(runtime, &input)),

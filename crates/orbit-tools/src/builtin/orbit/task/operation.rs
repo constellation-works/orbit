@@ -9,7 +9,7 @@
 //! activity's `blocked` status before any field check.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::operation::OperationInput;
+use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::protocol::tool_input::{reject_unknown_tool_fields, required_string};
 use serde_json::Value;
@@ -23,6 +23,21 @@ use crate::{OrbitBuiltinAction, ToolContext};
 impl GuardedModes for TaskVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
+            TaskVerb::ArtifactPut => super::artifact_put::preempt(ctx, input),
+            TaskVerb::ArtifactGet => {
+                // Preserve the list-before-read remedy before required-field
+                // validation; the alias keys still come from the declaration.
+                let path = self
+                    .spec()
+                    .wire_params()
+                    .find(|param| param.name == "path")?;
+                let keys = std::iter::once(path.name)
+                    .chain(path.aliases.iter().copied())
+                    .collect::<Vec<_>>();
+                required_string(input, &["id"], "id").and_then(|_| {
+                    required_string(input, &keys, "path").map_err(|error| OrbitError::InvalidInput(format!("{error}; list available artifacts with orbit.task.show and field: \"artifacts\"")))
+                }).err().map(Err)
+            }
             TaskVerb::Add => {
                 guarded::is_guarded(input).then(|| guarded::write(ctx, input.clone(), true))
             }
@@ -49,7 +64,13 @@ impl GuardedModes for TaskVerb {
                     ))
                 })
             }
-            TaskVerb::Show | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => None,
+            TaskVerb::Show
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Lint
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => None,
         }
     }
 
@@ -57,7 +78,15 @@ impl GuardedModes for TaskVerb {
         let boolean_fields: &[&str] = match self {
             TaskVerb::Add => &["allow_missing_context"],
             TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags"],
-            TaskVerb::Show | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => return,
+            TaskVerb::Show
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::ArtifactPut
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => return,
         };
         let Some(object) = input.as_object_mut() else {
             return;
@@ -126,12 +155,24 @@ impl GuardedModes for TaskVerb {
                 )),
                 Err(error) => Some(Err(error)),
             },
-            TaskVerb::Add | TaskVerb::Update | TaskVerb::Eligible | TaskVerb::Lint => None,
+            TaskVerb::Add
+            | TaskVerb::Update
+            | TaskVerb::Eligible
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::ArtifactPut
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => None,
         }
     }
 
     fn shape_input(self, ctx: &ToolContext, input: &mut Value) -> Result<(), OrbitError> {
         match self {
+            TaskVerb::ArtifactPut => {
+                *input = super::artifact_put::prepare_remote_payload(input.take(), ctx)?;
+                Ok(())
+            }
             TaskVerb::Add => {
                 // The operator command leaves its text to the domain's own
                 // checks, and its description defaults to empty; MCP callers
@@ -149,7 +190,11 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::Show
             | TaskVerb::List
             | TaskVerb::Eligible
-            | TaskVerb::Lint => Ok(()),
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => Ok(()),
         }
     }
 
@@ -157,7 +202,15 @@ impl GuardedModes for TaskVerb {
         match self {
             TaskVerb::Add => Some(guarded::extend_create_schema),
             TaskVerb::Update => Some(guarded::extend_update_schema),
-            TaskVerb::Show | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => None,
+            TaskVerb::Show
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::ArtifactPut
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => None,
         }
     }
 }

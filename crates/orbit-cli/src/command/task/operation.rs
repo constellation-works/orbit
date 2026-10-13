@@ -1,6 +1,6 @@
 //! The task verbs derived from the task operation registry.
 //!
-//! `add`, `update`, `list`, `eligible`, `show` and `lint` are declared once in
+//! Task reads, writes, artifacts and locks are declared once in
 //! `orbit_common::governance::task`; the clap tree is the noun-agnostic
 //! adapter in [`super::super::operation_args`], and every verb runs through
 //! the tool. The other task verbs stay hand-wired in [`super::command`].
@@ -16,13 +16,15 @@ use serde_json::{Map, Value, json};
 use super::super::operation_args::Invocation;
 use crate::command::{CommandOut, Payload};
 
-/// How `list` renders its rows; consumed from CLI-only flags.
-#[derive(Clone, Copy, Default)]
+/// CLI-only response options: list presentation and the artifact destination.
+#[derive(Clone, Default)]
 pub(super) struct ListView {
     /// Signal-tier records (`--ops`).
     pub(super) ops: bool,
     /// Every table column (`--full`).
     pub(super) full: bool,
+    /// Destination consumed from `artifact get --out`.
+    pub(super) artifact_out: Option<String>,
 }
 
 pub(super) fn execute(invocation: Invocation<TaskVerb>, runtime: &OrbitRuntime) -> CommandOut {
@@ -111,6 +113,7 @@ fn prepare(
             Ok(ListView {
                 ops: take_switch(input, "ops"),
                 full: take_switch(input, "full"),
+                ..Default::default()
             })
         }
         // `--host` was resolved by the host preflight before dispatch.
@@ -118,7 +121,37 @@ fn prepare(
             input.shift_remove("host");
             Ok(ListView::default())
         }
-        TaskVerb::Eligible | TaskVerb::Lint => Ok(ListView::default()),
+        TaskVerb::ArtifactPut => {
+            input.shift_remove("host");
+            insert_env_model(input);
+            Ok(ListView::default())
+        }
+        TaskVerb::ArtifactGet => {
+            input.shift_remove("host");
+            Ok(ListView {
+                artifact_out: input
+                    .shift_remove("out")
+                    .and_then(|value| value.as_str().map(ToOwned::to_owned)),
+                ..Default::default()
+            })
+        }
+        TaskVerb::LocksReserve => {
+            let raw = input
+                .shift_remove("ttl")
+                .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                .unwrap_or_else(|| "30m".into());
+            let seconds = crate::command::locks::reservation_ttl_seconds(&raw)?;
+            input.insert("ttl_seconds".into(), json!(seconds));
+            Ok(ListView::default())
+        }
+        TaskVerb::LocksRelease => {
+            crate::command::require_confirmation(
+                take_switch(input, "confirm"),
+                "task lock release",
+            )?;
+            Ok(ListView::default())
+        }
+        TaskVerb::LocksList | TaskVerb::Eligible | TaskVerb::Lint => Ok(ListView::default()),
     }
 }
 
@@ -303,6 +336,29 @@ fn render(
                 format!("Updated task '{}'", task.id)
             };
             Ok(Payload::detail(document, text).into())
+        }
+        TaskVerb::ArtifactPut => {
+            let (document, task) = super::output::task_write_json(runtime, &value)?;
+            let path = input
+                .get("path")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    input
+                        .get("source_path")
+                        .and_then(Value::as_str)
+                        .and_then(|path| std::path::Path::new(path).file_name())
+                        .and_then(|name| name.to_str())
+                })
+                .unwrap_or_default();
+            Ok(Payload::detail(
+                document,
+                format!("Stored artifact '{path}' on task '{}'", task.id),
+            )
+            .into())
+        }
+        TaskVerb::ArtifactGet => super::artifact::render_get(value, view.artifact_out.as_deref()),
+        TaskVerb::LocksList | TaskVerb::LocksReserve | TaskVerb::LocksRelease => {
+            crate::command::locks::render(verb, value)
         }
         TaskVerb::List => super::list::render(input, value, view),
         TaskVerb::Eligible => super::eligible::render(input, value),

@@ -4,6 +4,7 @@
 //! verb. CLI, MCP and runtime handler wiring derive from it; the task verbs
 //! not yet migrated stay hand-wired beside them.
 
+mod nested_operations;
 pub mod operations;
 mod write_operations;
 

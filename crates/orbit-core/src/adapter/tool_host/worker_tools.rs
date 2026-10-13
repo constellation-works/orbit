@@ -42,19 +42,19 @@ pub(crate) fn execute(
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Show
-            | TaskVerb::Lint => true,
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactPut
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => true,
         },
         action => matches!(
             action,
-            OrbitBuiltinAction::TaskArtifactPut
-                | OrbitBuiltinAction::TaskArtifactGet
-                | OrbitBuiltinAction::TaskLocks
-                | OrbitBuiltinAction::TaskDelete
+            OrbitBuiltinAction::TaskDelete
                 | OrbitBuiltinAction::TaskReject
                 | OrbitBuiltinAction::TaskReconcileReview
                 | OrbitBuiltinAction::TaskReviewReset
-                | OrbitBuiltinAction::TaskLocksRelease
-                | OrbitBuiltinAction::TaskLocksReserve
                 | OrbitBuiltinAction::AutoTask(
                     AutoTaskVerb::Add
                         | AutoTaskVerb::Update
@@ -161,14 +161,11 @@ pub(crate) fn execute(
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         return Ok(Some(value));
     }
-    if action == OrbitBuiltinAction::TaskArtifactGet {
+    if action == OrbitBuiltinAction::Task(TaskVerb::ArtifactGet) {
         require_active_claim(runtime, session)?;
         return Ok(None);
     }
     let (mutation, friction_tag_substitutions) = match action {
-        OrbitBuiltinAction::TaskArtifactPut => {
-            return worker_update(runtime, session, binding, input).map(Some);
-        }
         OrbitBuiltinAction::Friction(verb) => match verb {
             FrictionVerb::Add => {
                 binding.validate_arguments(input)?;
@@ -226,12 +223,23 @@ pub(crate) fn execute(
                 require_active_claim(runtime, session)?;
                 return Ok(None);
             }
-            TaskVerb::Update => return worker_update(runtime, session, binding, input).map(Some),
-            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => {
+            TaskVerb::Update | TaskVerb::ArtifactPut => {
+                return worker_update(runtime, session, binding, input).map(Some);
+            }
+            TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList => {
                 return Ok(None);
             }
+            TaskVerb::LocksReserve | TaskVerb::LocksRelease => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
         },
-        OrbitBuiltinAction::TaskLocks => return Ok(None),
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
         OrbitBuiltinAction::AutoTask(verb) => match verb {
@@ -252,9 +260,7 @@ pub(crate) fn execute(
         OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskReject
         | OrbitBuiltinAction::TaskReconcileReview
-        | OrbitBuiltinAction::TaskReviewReset
-        | OrbitBuiltinAction::TaskLocksRelease
-        | OrbitBuiltinAction::TaskLocksReserve => {
+        | OrbitBuiltinAction::TaskReviewReset => {
             return Err(OrbitError::PolicyDenied(
                 "claimed worker operation requires its lifecycle boundary".into(),
             ));

@@ -1,0 +1,59 @@
+Claim a file surface for a bounded window before starting work on it
+
+Usage: orbit task locks reserve [OPTIONS]
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --task <TASK_ID>
+          Task whose declared context surface to reserve. Repeat or comma-separate to claim a bundle's combined surface
+
+      --file <SELECTOR>
+          Selector to reserve directly (`file:...`, `dir:...`). Repeat or comma-separate for several
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --ttl <DURATION>
+          How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 2h
+          
+          [default: 30m]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit task locks reserve --task <TASK_ID>
+  orbit task locks reserve --file dir:crates/orbit-cli --ttl 2h
+  orbit task locks reserve --file file:README.md --json
+
+Reserving is how work outside the task pipeline takes the same locks the
+pipeline takes: an editor session, a manual migration, a long refactor. The
+claim is atomic and either grants the whole surface or grants nothing and
+reports who holds the overlap.
+
+`--task` reserves that task's declared context surface, pruned and expanded
+exactly as conflict admission expands it. `--file` reserves selectors
+directly. Exactly one of the two — they are mutually exclusive forms.
+
+Reservations expire on their own, so the TTL is the safety net for a session
+that dies holding one. Release early with `orbit task locks release <id>
+--confirm`; a denied reservation exits 3.
+
+Reserving requires the `operator` or `runner` capability, same as releasing:
+a caller that can lock a surface out from under everyone else must be the same
+caller trusted to clear it. From a plain shell, set `ORBIT_OPERATOR=1`.

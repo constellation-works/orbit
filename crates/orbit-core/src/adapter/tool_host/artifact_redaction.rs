@@ -114,6 +114,7 @@ pub(super) fn sanitize_tool_input(
                     sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
                 }
                 ParamType::String
+                | ParamType::Path
                 | ParamType::Integer
                 | ParamType::UnsignedInteger
                 | ParamType::Boolean
@@ -255,9 +256,6 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[
 /// for read-only actions and mutations that only persist structural values.
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
-        // An artifact payload is stored as given; only its path is
-        // structural, and the store screens it.
-        OrbitBuiltinAction::TaskArtifactPut => NO_REDACTION,
         OrbitBuiltinAction::TaskReconcileReview => ActionPolicy {
             // `command` selects an already-authorized stored command. Preserve
             // it byte-for-byte for exact evidence matching, then redact only
@@ -306,6 +304,8 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             ..NO_REDACTION
         },
         OrbitBuiltinAction::Task(verb) => match verb {
+            // Artifact bytes are stored as given; the store screens their path.
+            TaskVerb::ArtifactPut => NO_REDACTION,
             // The plan `orbit task add` carries among its CLI options is free
             // text too.
             TaskVerb::Add => ActionPolicy {
@@ -319,7 +319,11 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Show
-            | TaskVerb::Lint => ActionPolicy {
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -351,11 +355,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search
-        | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskDelete
-        | OrbitBuiltinAction::TaskLocks
-        | OrbitBuiltinAction::TaskLocksRelease
-        | OrbitBuiltinAction::TaskLocksReserve
         | OrbitBuiltinAction::WorkflowRunList
         | OrbitBuiltinAction::WorkflowRunResume
         | OrbitBuiltinAction::WorkflowRunShow
@@ -397,13 +397,19 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | WorkspaceClaimVerb::Show => false,
         },
         OrbitBuiltinAction::Task(verb) => match verb {
-            TaskVerb::Add | TaskVerb::Update => true,
-            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => false,
+            TaskVerb::Add | TaskVerb::Update | TaskVerb::ArtifactPut => true,
+            TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease => false,
         },
         action => matches!(
             action,
-            OrbitBuiltinAction::TaskArtifactPut
-                | OrbitBuiltinAction::TaskReject
+            OrbitBuiltinAction::TaskReject
                 | OrbitBuiltinAction::TaskReconcileReview
                 | OrbitBuiltinAction::TaskReviewReset
         ),
@@ -700,8 +706,7 @@ fn artifact_target<'a>(
     persisted_task_id: Option<&'a str>,
 ) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
-        OrbitBuiltinAction::Task(TaskVerb::Add | TaskVerb::Update)
-        | OrbitBuiltinAction::TaskArtifactPut
+        OrbitBuiltinAction::Task(TaskVerb::Add | TaskVerb::Update | TaskVerb::ArtifactPut)
         | OrbitBuiltinAction::TaskReject
         | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset => {
@@ -778,7 +783,6 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::TaskArtifactPut => "orbit.task.artifact.put",
         OrbitBuiltinAction::TaskReject => "orbit.task.reject",
         OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
         OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
