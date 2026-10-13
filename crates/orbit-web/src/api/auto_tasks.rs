@@ -89,7 +89,11 @@ pub(super) async fn list_auto_tasks(
     }
 }
 
-/// `POST /api/auto-tasks/toggle` — flip one definition's versioned `enabled` field.
+/// `POST /api/auto-tasks/toggle` — set one definition's versioned `enabled` flag.
+///
+/// Compare-and-set uses the raw flag the client observed. "Already in that
+/// state" follows the effective switch, so Disable on a legacy-enabled
+/// consumer (raw flag still false) reaches the write and stamps the operator.
 pub(super) async fn toggle_auto_task(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
@@ -150,7 +154,10 @@ pub(super) async fn toggle_auto_task(
         )
             .into_response();
     }
-    if current.enabled == body.enabled {
+    // A legacy after-landing consumer is on while its raw flag is still
+    // false. Comparing the request to that raw flag would report Disable as
+    // a no-op and leave the consumer running.
+    if runtime.auto_task_enabled(&current) == body.enabled {
         return Json(json!({
             "name": body.name,
             "enabled": body.enabled,

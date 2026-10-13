@@ -993,15 +993,23 @@ function lastOutcomeText(definition) {
   return lastEvaluationText(definition);
 }
 
+// Grouping, counts, row state and the switch follow the effective switch.
+// The raw `enabled` flag stays the compare-and-set token the toggle posts:
+// a legacy after-landing consumer can be on while that flag is still false.
+function autoTaskOn(definition) {
+  return definition.effective_enabled ?? Boolean(definition.enabled);
+}
+
 function autoTaskToggleButton(payload, definition) {
   const selection = selectionSnapshot();
-  const nextEnabled = !definition.enabled;
+  const on = autoTaskOn(definition);
+  const nextEnabled = !on;
   const key = `auto-task-toggle:${selection.workspace}:${definition.name}`;
   const reason = actionReason(payload, "auto_task_toggle");
   const verb = nextEnabled ? "Enable" : "Disable";
   const pending = pendingOperations.has(key);
   const button = operationSwitch({
-    on: Boolean(definition.enabled),
+    on,
     text: pending ? "Pending…" : verb,
     pending,
     reason: reason || "",
@@ -1085,7 +1093,8 @@ function taskLink(taskId, workspaceId) {
 }
 
 function autoTaskRow(payload, definition, workspaceId) {
-  const state = definition.enabled ? "enabled" : "disabled";
+  const on = autoTaskOn(definition);
+  const state = on ? "enabled" : "disabled";
   const detailsKey = `auto-task:${definition.name}`;
   const template = definition.template || {};
   const duplicate = definition.open_duplicate ? "Yes — mint will create another" : "No";
@@ -1108,7 +1117,7 @@ function autoTaskRow(payload, definition, workspaceId) {
   const next = definition.next_evaluation;
   const nextCell = next?.state === "scheduled" && next.at
     ? whenCell("Next mint", next.at)
-    : operationCell("Next mint", [el("span", { class: `operation-cell-main${definition.enabled ? "" : " muted"}`, text: nextEvaluationText(next) })]);
+    : operationCell("Next mint", [el("span", { class: `operation-cell-main${on ? "" : " muted"}`, text: nextEvaluationText(next) })]);
   const card = el("article", { class: `operation-card operation-row auto-task-card ${state}` });
   card.append(
     el("div", { class: "operation-row-head" }, [
@@ -1200,7 +1209,7 @@ function renderAutoTasks(payload) {
       text: workspace && !workspaceReason ? "No auto-task definitions are defined by this workspace." : "Select a workspace to list its auto-task definitions.",
     }));
   } else if (definitions.length) {
-    const enabled = definitions.filter((definition) => definition.enabled);
+    const enabled = definitions.filter(autoTaskOn);
     const duplicates = definitions.filter((definition) => definition.open_duplicate).length;
     const nextMint = enabled
       .map((definition) => definition.next_evaluation?.state === "scheduled" ? new Date(definition.next_evaluation.at || NaN).getTime() : NaN)
@@ -1218,7 +1227,7 @@ function renderAutoTasks(payload) {
     const groups = [
       ["active", "On a schedule", "minted by the scheduler when due and no open instance exists", enabled.filter((definition) => autoTaskTrigger(definition) === "schedule")],
       ["accent", "On delivery", "minted after landed deliveries, not on a clock", enabled.filter((definition) => autoTaskTrigger(definition) === "delivery")],
-      ["paused", "Disabled", "kept in the repo, never evaluated", definitions.filter((definition) => !definition.enabled)],
+      ["paused", "Disabled", "kept in the repo, never evaluated", definitions.filter((definition) => !autoTaskOn(definition))],
     ];
     const columns = ["", "Definition", "Trigger", "Next mint", "Last minted", ""];
     for (const [tone, title, hint, members] of groups) {
@@ -1238,7 +1247,7 @@ function renderAutoTasks(payload) {
   }
   syncAutoTaskSchedulerNote();
   const count = $("auto-tasks-count");
-  const enabledCount = definitions.filter((definition) => definition.enabled).length;
+  const enabledCount = definitions.filter(autoTaskOn).length;
   if (count) count.textContent = workspace && !workspaceReason ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
   setRailSubtabCount("rail-count-ops-auto-tasks", workspace && !workspaceReason && definitions.length ? `${enabledCount}/${definitions.length}` : "");
 }

@@ -221,7 +221,8 @@ definition of the same name.
   deliveries. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
   enables a copy no operator has configured, which `list` and `show` report
-  as `effective_enabled`. The former `delivery-qa` default is retired and is not seeded;
+  as `effective_enabled`. The dashboard groups and toggles by that effective
+  value and keeps the raw flag as the compare-and-set token. The former `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
 

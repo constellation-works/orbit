@@ -23,6 +23,8 @@ const denied = { authorized: false, reason: 'Test session cannot perform this ac
 let operationsSubtab = 'routines';
 const capabilities = { routine_toggle: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 const enabled = { one: true, two: true };
+// A legacy after-landing consumer: raw flag off, effective switch on, until Disable.
+let legacyConsumerOn = true;
 let clock = { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' };
 let responseError = null;
 let readbackError = false;
@@ -90,7 +92,10 @@ globalThis.fetch = async (path, options = {}) => {
   if (options.method === 'POST') {
     if (delayPost) await new Promise(resolve => { releasePost = resolve; });
     if (responseError) return response({ error: responseError }, 500);
-    if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
+    if (url.pathname.endsWith('/toggle')) {
+      if (body?.name === 'delivery-code-review') legacyConsumerOn = body.enabled;
+      else enabled[workspace] = body.enabled;
+    }
     if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
@@ -103,7 +108,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
-    const payload = { workspace, cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'in_progress', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
+    const payload = { workspace, cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'in_progress', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }, { name: 'delivery-code-review', enabled: false, effective_enabled: legacyConsumerOn, template: { title: 'Review landed deliveries' }, template_summary: 'Review landed deliveries', schedule: { deliveries_landed: { branch: 'agent-main' } }, schedule_summary: 'after landed deliveries', description: 'Legacy policy keeps this consumer enabled until an operator toggles it.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, next_evaluation: { state: 'waiting' } }] };
     // A plugin-off definition is hidden unless asked for; listed, it is
     // enabled with an earlier slot, so leaking into a summary would show.
     payload.inactive_plugin_count = 1;
@@ -727,6 +732,8 @@ let action = button('auto-tasks-body', 'Disable');
 action.click(); action.click();
 await tick();
 assert(requests.filter(r => r.path === '/api/auto-tasks/toggle').length === 1, 'toggle double click submits once');
+const ordinaryToggle = requests.find(r => r.path === '/api/auto-tasks/toggle');
+assert(ordinaryToggle.body.name === 'Chore one' && ordinaryToggle.body.expected_enabled === true && ordinaryToggle.body.enabled === false, `ordinary toggle keeps the raw compare-and-set token: ${JSON.stringify(ordinaryToggle.body)}`);
 assert(button('auto-tasks-body', 'Pending…').disabled, 'toggle pending is disabled');
 releasePost(); await tick(); await tick();
 assert(button('auto-tasks-body', 'Enable'), 'toggle readback changes rendered state');
@@ -856,8 +863,26 @@ assert(restored?.open, 'details stay open across rerender');
 // Definitions are grouped by trigger with a stats strip; the toggle is a switch.
 const autoGroups = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('operation-group-title')).map(node => node.textContent);
 assert(autoGroups.some(text => text.startsWith('On a schedule2')), `auto-tasks grouped by trigger: ${autoGroups}`);
+assert(autoGroups.some(text => text.startsWith('On delivery1')), `legacy-enabled consumer is an enabled delivery definition: ${autoGroups}`);
+assert(!autoGroups.some(text => text.startsWith('Disabled')), `legacy-enabled consumer is not grouped as disabled: ${autoGroups}`);
 const autoStats = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('operation-stat ')).map(node => node.textContent);
-assert(autoStats.some(text => text.startsWith('Definitions2')) && autoStats.some(text => text.startsWith('Enabled2')) && autoStats.some(text => text.startsWith('Open duplicates1')), `auto-task stats: ${autoStats}`);
+assert(autoStats.some(text => text.startsWith('Definitions3')) && autoStats.some(text => text.startsWith('Enabled3')) && autoStats.some(text => text.startsWith('Open duplicates1')), `auto-task stats: ${autoStats}`);
+assert(get('auto-tasks-count').textContent.startsWith('3 enabled of 3'), `enabled count includes the legacy consumer: ${get('auto-tasks-count').textContent}`);
+const legacyCard = descendants(get('auto-tasks-body')).find(node => String(node.className || '').includes('auto-task-card') && node.textContent.includes('delivery-code-review'));
+assert(legacyCard, 'legacy-enabled consumer row is present');
+const legacyClasses = String(legacyCard.className).split(/\s+/);
+assert(legacyClasses.includes('enabled') && !legacyClasses.includes('disabled'), `legacy-enabled row is styled enabled: ${legacyCard.className}`);
+const legacySwitch = descendants(legacyCard).find(node => node.type === 'button' && (node.textContent === 'Disable' || node.textContent === 'Enable'));
+assert(legacySwitch?.textContent === 'Disable' && legacySwitch.getAttribute('aria-checked') === 'true', 'legacy-enabled consumer offers Disable');
+const beforeLegacy = requests.length;
+legacySwitch.click(); await tick(); await tick();
+const legacyToggle = requests.slice(beforeLegacy).find(r => r.path === '/api/auto-tasks/toggle');
+assert(legacyToggle && legacyToggle.body.name === 'delivery-code-review' && legacyToggle.body.expected_enabled === false && legacyToggle.body.enabled === false, `legacy Disable posts the raw token and the off state: ${JSON.stringify(legacyToggle?.body)}`);
+const legacyAfter = descendants(get('auto-tasks-body')).find(node => String(node.className || '').includes('auto-task-card') && node.textContent.includes('delivery-code-review'));
+const legacyAfterClasses = String(legacyAfter?.className || '').split(/\s+/);
+assert(legacyAfterClasses.includes('disabled') && !legacyAfterClasses.includes('enabled'), `readback styles the consumer disabled: ${legacyAfter?.className}`);
+assert(descendants(legacyAfter).some(node => node.type === 'button' && node.textContent === 'Enable'), 'readback offers Enable after Disable');
+assert(get('auto-tasks-count').textContent.startsWith('2 enabled of 3'), `readback drops the consumer from the enabled count: ${get('auto-tasks-count').textContent}`);
 // The browser runs in America/Los_Angeles: the 22:00Z mint is a local 15:00
 // and says so, beside cron triggers that are stated in the host zone.
 assert(autoStats.some(text => text.startsWith('Next mint') && text.endsWith('15:00 PDT')), `next mint names its local zone: ${autoStats}`);
