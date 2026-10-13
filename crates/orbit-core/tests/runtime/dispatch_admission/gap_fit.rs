@@ -262,19 +262,21 @@ fn write_proc(proc_root: &Path) {
 }
 
 fn classify(runtime: &OrbitRuntime, drain: &str, slots: u32) -> Value {
-    runtime
-        .run_deterministic(
-            "classify_workspace_auto_tasks",
-            &json!({}),
-            &json!({
-                "run_id": drain,
-                "max_active_leaf_runs": slots,
-                "poll_sleep_seconds": 7,
-                "idle_sleep_seconds": 70,
-            }),
-            ToolContext::default(),
-        )
-        .expect("classify")
+    crate::scenarios::with_immutable_host_load(|| {
+        runtime
+            .run_deterministic(
+                "classify_workspace_auto_tasks",
+                &json!({}),
+                &json!({
+                    "run_id": drain,
+                    "max_active_leaf_runs": slots,
+                    "poll_sleep_seconds": 7,
+                    "idle_sleep_seconds": 70,
+                }),
+                ToolContext::default(),
+            )
+            .expect("classify")
+    })
 }
 
 fn admitted(output: &Value) -> Vec<String> {

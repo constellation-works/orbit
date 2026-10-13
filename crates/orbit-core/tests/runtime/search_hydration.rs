@@ -16,9 +16,9 @@ use tempfile::TempDir;
 use tracing_subscriber::{Layer, layer::Context};
 
 /// Tasks in the workspace; only [`MATCHING`] of them carry the query term.
-const TASKS: usize = 40;
-/// Matching tasks, each carrying one [`ARTIFACT_BYTES`] artifact: 20 MB.
-const MATCHING: usize = 20;
+const TASKS: usize = 12;
+/// More matching tasks than the ten-hit limit, each carrying a corrupt payload.
+const MATCHING: usize = 11;
 const ARTIFACT_BYTES: usize = 1_000_000;
 const TERM: &str = "quasarbeacon";
 

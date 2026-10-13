@@ -154,3 +154,11 @@ pub(super) fn with_prompt_pipeline_polls<T>(operation: impl FnOnce() -> T) -> T 
         operation,
     )
 }
+
+/// Skip only the sampling delay for fixtures whose proc readings never change.
+/// The public forecast/admission path still reads those files, derives CPU
+/// unknown from zero tick deltas, and executes real reservation transitions.
+/// Cadence, changing proc data and native proc fixtures must keep the system wait.
+pub(super) fn with_immutable_host_load<T>(operation: impl FnOnce() -> T) -> T {
+    orbit_core::test_support::with_host_load_sampling_wait(|_| {}, operation)
+}

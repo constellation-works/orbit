@@ -362,41 +362,43 @@ fn an_enforcing_follower_admits_work_too_big_to_fit_only_on_an_idle_host() {
     ) {
         return;
     }
-    let (pair, proc_root) = forecasting_using("enforce", 1, 25 * GIB);
-    let (neighbour_jobs, neighbour) = neighbour_delivery(&pair.follower);
-    host_using(&proc_root, 4 * GIB);
-    let drain = pair.run_drain();
+    crate::scenarios::with_immutable_host_load(|| {
+        let (pair, proc_root) = forecasting_using("enforce", 1, 25 * GIB);
+        let (neighbour_jobs, neighbour) = neighbour_delivery(&pair.follower);
+        host_using(&proc_root, 4 * GIB);
+        let drain = pair.run_drain();
 
-    let pass = pair.pass(&drain);
+        let pass = pair.pass(&drain);
 
-    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
-    let fit = admission_fit(&pair, &drain).expect("the fit is recorded");
-    assert!(fit.admissible.is_empty(), "{fit:?}");
-    let unfit = fit
-        .unfit
-        .iter()
-        .find(|unfit| unfit.work == "change/low")
-        .expect("change/low is unfit");
-    assert_eq!(unfit.reason, "memory 91% at +0m", "{fit:?}");
+        assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+        let fit = admission_fit(&pair, &drain).expect("the fit is recorded");
+        assert!(fit.admissible.is_empty(), "{fit:?}");
+        let unfit = fit
+            .unfit
+            .iter()
+            .find(|unfit| unfit.work == "change/low")
+            .expect("change/low is unfit");
+        assert_eq!(unfit.reason, "memory 91% at +0m", "{fit:?}");
 
-    neighbour_jobs
-        .finalize_job_run(&neighbour, JobRunState::Success, Utc::now(), Some(0))
-        .unwrap();
-    let pass = pair.pass(&drain);
+        neighbour_jobs
+            .finalize_job_run(&neighbour, JobRunState::Success, Utc::now(), Some(0))
+            .unwrap();
+        let pass = pair.pass(&drain);
 
-    let pulls = pair.wire.calls("orbit.task.pull");
-    assert_eq!(pulls.len(), 1, "{pass}");
-    assert!(
-        pulls[0]["admissible"]["keys"]
-            .as_array()
-            .unwrap()
-            .contains(&json!({"work_class": "change", "complexity": "low"})),
-        "{}",
-        pulls[0]
-    );
-    let fit = admission_fit(&pair, &drain).unwrap();
-    assert!(fit.admissible.iter().any(|work| work == "change/low"));
-    assert!(fit.unfit.is_empty(), "{fit:?}");
+        let pulls = pair.wire.calls("orbit.task.pull");
+        assert_eq!(pulls.len(), 1, "{pass}");
+        assert!(
+            pulls[0]["admissible"]["keys"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"work_class": "change", "complexity": "low"})),
+            "{}",
+            pulls[0]
+        );
+        let fit = admission_fit(&pair, &drain).unwrap();
+        assert!(fit.admissible.iter().any(|work| work == "change/low"));
+        assert!(fit.unfit.is_empty(), "{fit:?}");
+    });
 }
 
 /// A second workspace shares the first follower's host database and wire.
@@ -464,152 +466,165 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
     ) {
         return;
     }
-    for (bytes, cores, lost) in [
-        (12 * GIB, 1.0, false),
-        (GIB, 6.0, false),
-        (12 * GIB, 1.0, true),
-    ] {
-        let (pair, proc_root) = forecasting_using("enforce", 2, bytes);
-        // Replace the fixture's history with this case's CPU curve.
-        finished_delivery_using(&pair.follower, bytes, cores);
-        neighbour_delivery(&pair.follower);
-        host_using(&proc_root, 4 * GIB);
-        let second = another_workspace(&pair, &proc_root);
-        assert_ne!(
-            second.follower.workspace_id().unwrap(),
-            pair.follower.workspace_id().unwrap()
-        );
-        let second_drain = second.run_drain();
-        let follower = pair.follower.clone();
-        let wire = pair.wire.clone();
-        let barrier = move || {
-            let held = reservations(&follower);
-            assert!(
-                !held.is_empty() && held.iter().all(|r| r.task_id.starts_with("pending:")),
-                "{held:?}"
+    // Static proc files never advance ticks. Skip their sampling wait only;
+    // real timestamps, raw reads and all pending-capacity transitions remain.
+    crate::scenarios::with_immutable_host_load(|| {
+        for (bytes, cores, lost) in [
+            (12 * GIB, 1.0, false),
+            (GIB, 6.0, false),
+            (12 * GIB, 1.0, true),
+        ] {
+            let (pair, proc_root) = forecasting_using("enforce", 2, bytes);
+            // Replace the fixture's history with this case's CPU curve.
+            finished_delivery_using(&pair.follower, bytes, cores);
+            neighbour_delivery(&pair.follower);
+            host_using(&proc_root, 4 * GIB);
+            let second = another_workspace(&pair, &proc_root);
+            assert_ne!(
+                second.follower.workspace_id().unwrap(),
+                pair.follower.workspace_id().unwrap()
             );
-            let (cpu, memory) = follower
-                .admit_against_forecast(|forecast| {
-                    Ok(ForecastDecision {
-                        outcome: (forecast.cpu.peak.value, forecast.memory.peak.value),
-                        admitted: vec![],
+            let second_drain = second.run_drain();
+            let follower = pair.follower.clone();
+            let wire = pair.wire.clone();
+            let barrier = move || {
+                let held = reservations(&follower);
+                assert!(
+                    !held.is_empty() && held.iter().all(|r| r.task_id.starts_with("pending:")),
+                    "{held:?}"
+                );
+                let (cpu, memory) = follower
+                    .admit_against_forecast(|forecast| {
+                        assert!(
+                            forecast.cpu.baseline.is_none(),
+                            "static proc ticks leave CPU unknown"
+                        );
+                        Ok(ForecastDecision {
+                            outcome: (forecast.cpu.peak.value, forecast.memory.peak.value),
+                            admitted: vec![],
+                        })
                     })
-                })
+                    .unwrap();
+                assert!(cpu <= 15.0 * 0.75 && memory <= (24 * GIB) as f64);
+                assert!(
+                    !local_admission(&follower, "local-in-flight"),
+                    "local work cannot fill the pending pull's gap"
+                );
+                let before = wire.calls("orbit.task.pull").len();
+                let pass = second.pass(&second_drain);
+                assert_eq!(wire.calls("orbit.task.pull").len(), before, "{pass}");
+                assert!(
+                    second.leaf_runs().is_empty(),
+                    "the second workspace must not execute"
+                );
+                Ok(())
+            };
+            *pair.wire.before_pull.lock().unwrap() = Some(Box::new(barrier));
+            if lost {
+                pair.wire.lose_next_reply("orbit.task.pull");
+            }
+            // Keep the leaf queued at bind so this fixture never starts a real
+            // provider; it still exercises durable leaf creation and pricing.
+            pair.wire.lose_next_reply("orbit.drain.claim.bind");
+            let drain = pair.run_drain();
+            let pass = pair.pass(&drain);
+            if lost {
+                assert!(error_of(&pass).contains("dropped"), "{pass}");
+                assert!(pair.leaf_runs().is_empty());
+                let pending = reservations(&pair.follower);
+                assert!(
+                    !pending.is_empty()
+                        && pending.iter().all(|r| r.task_id.starts_with("pending:"))
+                );
+                assert!(!local_admission(&pair.follower, "local-before-expiry"));
+                // Advance only the admission clock: the normal TTL path deletes
+                // the lost request's reservation, without waiting five minutes.
+                pair.follower
+                    .admit_against_forecast_at(Utc::now() + ChronoDuration::minutes(6), |_| {
+                        Ok(ForecastDecision {
+                            outcome: (),
+                            admitted: vec![],
+                        })
+                    })
+                    .unwrap();
+                assert!(reservations(&pair.follower).is_empty());
+                assert!(local_admission(&pair.follower, "local-after-expiry"));
+                let sends = pair.wire.calls("orbit.task.pull").len();
+                pair.pass(&drain);
+                assert_eq!(
+                    pair.wire.calls("orbit.task.pull").len(),
+                    sends,
+                    "an expired request must reacquire capacity before re-send"
+                );
+                assert!(pair.leaf_runs().is_empty());
+                let now = Utc::now();
+                pair.follower
+                    .sqlite_store()
+                    .unwrap()
+                    .admit_under_host_lock_replacing(
+                        &AdmissionLoadQuery {
+                            now,
+                            delivery_jobs: &[],
+                            reservations_expire_before: now - ChronoDuration::minutes(5),
+                        },
+                        &[("ws-local", "local-after-expiry")],
+                        &mut |_| Ok(vec![]),
+                    )
+                    .unwrap();
+                let follower = pair.follower.clone();
+                *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
+                    assert!(
+                        reservations(&follower)
+                            .iter()
+                            .all(|r| r.task_id.starts_with("pending:"))
+                    );
+                    assert!(!local_admission(&follower, "local-on-retry"));
+                    Ok(())
+                }));
+                pair.pass(&drain);
+                let calls = pair.wire.calls("orbit.task.pull");
+                assert_eq!(
+                    calls[0]["request_id"], calls[1]["request_id"],
+                    "retry the same owner claim"
+                );
+            }
+            assert_eq!(pair.leaf_runs().len(), 1, "{pass}");
+            let held = reservations(&pair.follower);
+            assert_eq!(
+                held.len(),
+                1,
+                "placeholder alternatives are replaced, not accumulated: {held:?}"
+            );
+            assert_eq!(held[0].task_id, pair.tasks[0]);
+            let leaf = pair
+                .follower_jobs
+                .get_job_run(&pair.leaf_runs()[0])
+                .unwrap()
                 .unwrap();
-            assert!(cpu <= 15.0 * 0.75 && memory <= (24 * GIB) as f64);
-            assert!(
-                !local_admission(&follower, "local-in-flight"),
-                "local work cannot fill the pending pull's gap"
+            assert_eq!(
+                leaf.input.as_ref().unwrap()["resource_class"]["complexity"],
+                "low"
             );
-            let before = wire.calls("orbit.task.pull").len();
-            let pass = second.pass(&second_drain);
-            assert_eq!(wire.calls("orbit.task.pull").len(), before, "{pass}");
-            assert!(
-                second.leaf_runs().is_empty(),
-                "the second workspace must not execute"
-            );
-            Ok(())
-        };
-        *pair.wire.before_pull.lock().unwrap() = Some(Box::new(barrier));
-        if lost {
-            pair.wire.lose_next_reply("orbit.task.pull");
-        }
-        // Keep the leaf queued at bind so this fixture never starts a real
-        // provider; it still exercises durable leaf creation and pricing.
-        pair.wire.lose_next_reply("orbit.drain.claim.bind");
-        let drain = pair.run_drain();
-        let pass = pair.pass(&drain);
-        if lost {
-            assert!(error_of(&pass).contains("dropped"), "{pass}");
-            assert!(pair.leaf_runs().is_empty());
-            let pending = reservations(&pair.follower);
-            assert!(
-                !pending.is_empty() && pending.iter().all(|r| r.task_id.starts_with("pending:"))
-            );
-            assert!(!local_admission(&pair.follower, "local-before-expiry"));
-            // Advance only the admission clock: the normal TTL path deletes
-            // the lost request's reservation, without waiting five minutes.
             pair.follower
-                .admit_against_forecast_at(Utc::now() + ChronoDuration::minutes(6), |_| {
+                .admit_against_forecast(|forecast| {
+                    assert!(
+                        forecast.reservations.is_empty(),
+                        "leaf replaces precise reservation"
+                    );
+                    assert!(
+                        forecast.cpu.baseline.is_none(),
+                        "static proc ticks leave CPU unknown"
+                    );
+                    assert!(forecast.cpu.peak.value <= 15.0 * 0.75);
+                    assert!(forecast.memory.peak.value <= (24 * GIB) as f64);
                     Ok(ForecastDecision {
                         outcome: (),
                         admitted: vec![],
                     })
                 })
                 .unwrap();
-            assert!(reservations(&pair.follower).is_empty());
-            assert!(local_admission(&pair.follower, "local-after-expiry"));
-            let sends = pair.wire.calls("orbit.task.pull").len();
-            pair.pass(&drain);
-            assert_eq!(
-                pair.wire.calls("orbit.task.pull").len(),
-                sends,
-                "an expired request must reacquire capacity before re-send"
-            );
-            assert!(pair.leaf_runs().is_empty());
-            let now = Utc::now();
-            pair.follower
-                .sqlite_store()
-                .unwrap()
-                .admit_under_host_lock_replacing(
-                    &AdmissionLoadQuery {
-                        now,
-                        delivery_jobs: &[],
-                        reservations_expire_before: now - ChronoDuration::minutes(5),
-                    },
-                    &[("ws-local", "local-after-expiry")],
-                    &mut |_| Ok(vec![]),
-                )
-                .unwrap();
-            let follower = pair.follower.clone();
-            *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
-                assert!(
-                    reservations(&follower)
-                        .iter()
-                        .all(|r| r.task_id.starts_with("pending:"))
-                );
-                assert!(!local_admission(&follower, "local-on-retry"));
-                Ok(())
-            }));
-            pair.pass(&drain);
-            let calls = pair.wire.calls("orbit.task.pull");
-            assert_eq!(
-                calls[0]["request_id"], calls[1]["request_id"],
-                "retry the same owner claim"
-            );
         }
-        assert_eq!(pair.leaf_runs().len(), 1, "{pass}");
-        let held = reservations(&pair.follower);
-        assert_eq!(
-            held.len(),
-            1,
-            "placeholder alternatives are replaced, not accumulated: {held:?}"
-        );
-        assert_eq!(held[0].task_id, pair.tasks[0]);
-        let leaf = pair
-            .follower_jobs
-            .get_job_run(&pair.leaf_runs()[0])
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            leaf.input.as_ref().unwrap()["resource_class"]["complexity"],
-            "low"
-        );
-        pair.follower
-            .admit_against_forecast(|forecast| {
-                assert!(
-                    forecast.reservations.is_empty(),
-                    "leaf replaces precise reservation"
-                );
-                assert!(forecast.cpu.peak.value <= 15.0 * 0.75);
-                assert!(forecast.memory.peak.value <= (24 * GIB) as f64);
-                Ok(ForecastDecision {
-                    outcome: (),
-                    admitted: vec![],
-                })
-            })
-            .unwrap();
-    }
+    });
 }
 
 /// Definite idle/refusal and cancelled unknown requests release capacity.
@@ -621,48 +636,50 @@ fn pending_pull_capacity_is_released_when_no_claim_will_execute() {
     ) {
         return;
     }
-    for outcome in ["idle", "refusal", "cancel"] {
-        let (pair, proc_root) = forecasting("enforce", 0);
-        neighbour_delivery(&pair.follower);
-        host_using(&proc_root, 4 * GIB);
-        let drain = pair.run_drain();
-        let follower = pair.follower.clone();
-        let wire = pair.wire.clone();
-        *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
-            assert!(!reservations(&follower).is_empty());
-            if outcome == "refusal" {
-                return Err(OrbitError::PolicyDenied(
-                    "fixture owner refuses this request".into(),
-                ));
-            }
-            if outcome == "cancel" {
-                *wire.unreachable.lock().unwrap() = true;
-            }
-            Ok(())
-        }));
-        let result = pair.follower.run_deterministic("pull_refill", &json!({}), &json!({
+    crate::scenarios::with_immutable_host_load(|| {
+        for outcome in ["idle", "refusal", "cancel"] {
+            let (pair, proc_root) = forecasting("enforce", 0);
+            neighbour_delivery(&pair.follower);
+            host_using(&proc_root, 4 * GIB);
+            let drain = pair.run_drain();
+            let follower = pair.follower.clone();
+            let wire = pair.wire.clone();
+            *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {
+                assert!(!reservations(&follower).is_empty());
+                if outcome == "refusal" {
+                    return Err(OrbitError::PolicyDenied(
+                        "fixture owner refuses this request".into(),
+                    ));
+                }
+                if outcome == "cancel" {
+                    *wire.unreachable.lock().unwrap() = true;
+                }
+                Ok(())
+            }));
+            let result = pair.follower.run_deterministic("pull_refill", &json!({}), &json!({
             "run_id": drain, "destination": pair.destination, "window_expired": false, "max_active_leaf_runs": 1,
         }), ToolContext::default());
-        if outcome == "refusal" {
-            assert!(error_of(&result.unwrap()).contains("fixture owner refuses"));
-        } else {
-            result.unwrap();
+            if outcome == "refusal" {
+                assert!(error_of(&result.unwrap()).contains("fixture owner refuses"));
+            } else {
+                result.unwrap();
+            }
+            if outcome == "cancel" {
+                assert!(
+                    !reservations(&pair.follower).is_empty(),
+                    "unknown owner outcome retains capacity until recovery or TTL"
+                );
+                *pair.wire.unreachable.lock().unwrap() = false;
+                // Exercise the drain's own graceful cancellation path.
+                pair.follower
+                    .cancel_job_run_with_options(&drain, "fixture", "fixture", None, false)
+                    .unwrap();
+                pair.pass(&drain);
+            }
+            assert!(reservations(&pair.follower).is_empty(), "{outcome}");
+            assert!(pair.leaf_runs().is_empty());
         }
-        if outcome == "cancel" {
-            assert!(
-                !reservations(&pair.follower).is_empty(),
-                "unknown owner outcome retains capacity until recovery or TTL"
-            );
-            *pair.wire.unreachable.lock().unwrap() = false;
-            // Exercise the drain's own graceful cancellation path.
-            pair.follower
-                .cancel_job_run_with_options(&drain, "fixture", "fixture", None, false)
-                .unwrap();
-            pair.pass(&drain);
-        }
-        assert!(reservations(&pair.follower).is_empty(), "{outcome}");
-        assert!(pair.leaf_runs().is_empty());
-    }
+    });
 }
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
