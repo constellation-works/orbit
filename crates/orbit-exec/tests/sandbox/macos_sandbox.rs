@@ -28,7 +28,7 @@ use wait_timeout::ChildExt;
 
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
-fn fixture_root_outside_profile_write_grants() -> tempfile::TempDir {
+pub(super) fn fixture_root_outside_profile_write_grants() -> tempfile::TempDir {
     let home = std::env::var_os("HOME").map(PathBuf::from).expect(
         "macOS sandbox test precondition: HOME must be set for a fixture outside granted trees",
     );

@@ -92,25 +92,25 @@ pub fn compile_macos_sandbox_profile(
 }
 
 /// Env inputs that influence per-provider state-directory allowances in the
-/// compiled SBPL profile. Threaded through a struct so tests can pin every
-/// override without juggling a long parameter list.
+/// compiled SBPL profile. Captured once by the public compiler and passed
+/// together to the internal profile renderer.
 #[derive(Default, Clone, Copy)]
-pub(super) struct SandboxCompileEnv<'a> {
-    pub(super) home: Option<&'a OsStr>,
-    pub(super) codex_home: Option<&'a OsStr>,
-    pub(super) claude_config_dir: Option<&'a OsStr>,
-    pub(super) grok_home: Option<&'a OsStr>,
-    pub(super) copilot_home: Option<&'a OsStr>,
-    pub(super) xdg_cache_home: Option<&'a OsStr>,
-    pub(super) pi_coding_agent_dir: Option<&'a OsStr>,
-    pub(super) xdg_data_home: Option<&'a OsStr>,
-    pub(super) xdg_config_home: Option<&'a OsStr>,
-    pub(super) xdg_state_home: Option<&'a OsStr>,
-    pub(super) opencode_config_dir: Option<&'a OsStr>,
-    pub(super) cargo_home: Option<&'a OsStr>,
+struct SandboxCompileEnv<'a> {
+    home: Option<&'a OsStr>,
+    codex_home: Option<&'a OsStr>,
+    claude_config_dir: Option<&'a OsStr>,
+    grok_home: Option<&'a OsStr>,
+    copilot_home: Option<&'a OsStr>,
+    xdg_cache_home: Option<&'a OsStr>,
+    pi_coding_agent_dir: Option<&'a OsStr>,
+    xdg_data_home: Option<&'a OsStr>,
+    xdg_config_home: Option<&'a OsStr>,
+    xdg_state_home: Option<&'a OsStr>,
+    opencode_config_dir: Option<&'a OsStr>,
+    cargo_home: Option<&'a OsStr>,
 }
 
-pub(super) fn compile_macos_sandbox_profile_with_env(
+fn compile_macos_sandbox_profile_with_env(
     rules: &ResolvedFsProfile,
     provider: &str,
     env: SandboxCompileEnv<'_>,

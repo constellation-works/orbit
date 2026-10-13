@@ -42,43 +42,12 @@ fn process_is_gone(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) != 0 }
 }
 
-/// The log keeps the first and last half of its cap whatever the chunking,
-/// so a runaway build cannot grow it and the failure at the end survives.
-#[test]
-fn the_build_log_keeps_its_head_and_tail_under_any_chunking() {
-    let output: Vec<u8> = (0..1000u32)
-        .flat_map(|n| format!("{n:04}\n").into_bytes())
-        .collect();
-    for chunk in [1, 3, 7, 64, 5000] {
-        let mut log = BuildLog::with_cap(100);
-        for piece in output.chunks(chunk) {
-            log.push(piece);
-        }
-        let rendered = String::from_utf8(log.render()).expect("utf8");
-        assert!(
-            rendered.starts_with("0000\n0001\n"),
-            "chunk {chunk}: {rendered}"
-        );
-        assert!(
-            rendered.ends_with("0998\n0999\n"),
-            "chunk {chunk}: {rendered}"
-        );
-        assert!(
-            rendered.contains(&format!(
-                "{} bytes of build output elided",
-                output.len() - 100
-            )),
-            "chunk {chunk}: {rendered}"
-        );
-    }
-    let mut small = BuildLog::with_cap(100);
-    small.push(b"short");
-    assert_eq!(small.render(), b"short");
-}
-
 /// A phase that outlives its timeout is killed with everything in its
 /// process group, including a background child it started.
 #[cfg(unix)]
+/// Unit admission: security invariant at the pre-namespace seam. The public
+/// Linux build wrapper puts the child in a pid namespace, so its recorded
+/// PID cannot certify host process-group reaping.
 #[test]
 fn a_timed_out_phase_takes_its_process_group_with_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -153,7 +122,14 @@ fn a_fast_phase_cannot_exit_with_an_oversized_build_directory() {
 #[cfg(unix)]
 #[test]
 fn unreadable_build_content_fails_closed_during_and_after_a_phase() {
+    use crate::build_sandbox::supervise::tree_exceeds;
     use std::os::unix::fs::PermissionsExt;
+
+    let missing = tempfile::tempdir().expect("build dir");
+    assert!(
+        !tree_exceeds(&missing.path().join("deleted"), 0),
+        "a path that no longer exists must not refuse a phase"
+    );
 
     for tail in ["", "; sleep 30"] {
         let dir = tempfile::tempdir().expect("build dir");
@@ -185,95 +161,6 @@ fn unreadable_build_content_fails_closed_during_and_after_a_phase() {
             "unreadable build content must refuse the phase (tail: {tail:?})"
         );
     }
-}
-
-/// The size walk only counts entries beneath its root; a symlink cannot make
-/// Orbit inspect files outside the build directory.
-#[cfg(unix)]
-#[test]
-fn build_directory_size_does_not_follow_symlinks() {
-    use crate::build_sandbox::supervise::tree_exceeds;
-
-    let dir = tempfile::tempdir().expect("build dir");
-    let outside = tempfile::tempdir().expect("outside dir");
-    std::fs::write(outside.path().join("large"), [0u8; 16]).expect("outside file");
-    std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).expect("symlink");
-
-    assert!(
-        !tree_exceeds(dir.path(), 0),
-        "an outside file reachable only through a symlink is not part of the build directory"
-    );
-}
-
-/// A path that vanishes while the size walk runs (a live build deleting its
-/// temporary files) holds nothing; only unreadable content fails closed.
-#[test]
-fn a_vanished_path_is_not_counted_as_unmeasurable() {
-    use crate::build_sandbox::supervise::tree_exceeds;
-
-    let dir = tempfile::tempdir().expect("build dir");
-    assert!(
-        !tree_exceeds(&dir.path().join("deleted"), 0),
-        "a path that no longer exists must not refuse a phase"
-    );
-}
-
-/// The phase runs from its requested working directory, which is the source
-/// checkout for plugin builds and may differ from the build directory root.
-#[cfg(unix)]
-#[test]
-fn a_phase_uses_its_requested_working_directory() {
-    let build_dir = tempfile::tempdir().expect("build dir");
-    let cwd = tempfile::tempdir().expect("working directory");
-    let cwd = cwd
-        .path()
-        .canonicalize()
-        .expect("physical working directory");
-    let env = path_env();
-    let mut log = BuildLog::default();
-    let request = BuildPhaseRequest {
-        sandbox: BuildSandboxSpec {
-            build_dir: build_dir.path(),
-            readable: &[],
-            home: None,
-            network: BuildPhaseNetwork::None,
-        },
-        argv: &[],
-        env: &env,
-        cwd: &cwd,
-        timeout: Duration::from_secs(20),
-        build_dir_cap_bytes: u64::MAX,
-    };
-
-    let end = run(shell("pwd"), (), &request, &mut log).expect("run");
-
-    assert_eq!(end, BuildPhaseEnd::Exited(0));
-    assert_eq!(
-        String::from_utf8_lossy(&log.render()).trim(),
-        cwd.display().to_string(),
-        "a phase must honor its requested cwd"
-    );
-}
-
-/// The phase sees only the environment it was given, and cannot dump core.
-#[cfg(unix)]
-#[test]
-fn a_phase_gets_only_its_environment_and_no_core_dumps() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let _ambient = orbit_common::test_env::scoped([("ORBIT_BUILD_AMBIENT_PROBE", Some("leaked"))]);
-    let env = path_env();
-    let mut log = BuildLog::default();
-    let end = run(
-        shell("env; echo core=$(ulimit -c)"),
-        (),
-        &request(dir.path(), Duration::from_secs(20), u64::MAX, &env),
-        &mut log,
-    )
-    .expect("run");
-    assert_eq!(end, BuildPhaseEnd::Exited(0));
-    let output = String::from_utf8_lossy(&log.render()).into_owned();
-    assert!(!output.contains("ORBIT_BUILD_AMBIENT_PROBE"), "{output}");
-    assert!(output.contains("core=0"), "{output}");
 }
 
 /// Supervision preserves the child's exit status, including a signal with
@@ -339,6 +226,9 @@ fn phase_output_shares_one_capped_log_across_streams_and_phases() {
 /// The `fetch` ruleset refuses a TCP connect to any port but 443, which is
 /// what keeps loopback and LAN services out of reach on Linux.
 #[cfg(target_os = "linux")]
+/// Unit admission: security invariant at the private TCP-only ruleset seam.
+/// The public fetch path also confines files and namespaces; the exported
+/// plugin network boundary only exposes deny-all TCP.
 #[test]
 fn the_fetch_ruleset_refuses_tcp_to_any_port_but_443() {
     // Nothing to check on a kernel without network Landlock, or without the

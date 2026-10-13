@@ -53,7 +53,7 @@ fn run_in_isolated_environment(test_name: &str, ambient: &[(&str, &str)]) -> boo
     true
 }
 
-fn profile(modify: Vec<String>) -> ResolvedFsProfile {
+pub(super) fn profile(modify: Vec<String>) -> ResolvedFsProfile {
     ResolvedFsProfile {
         name: "test".to_string(),
         read: vec!["/**".to_string()],

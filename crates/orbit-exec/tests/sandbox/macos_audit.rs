@@ -1,9 +1,8 @@
-use super::super::compile::{MacosLoginKeychainAccess, macos_login_keychain_access};
 #[cfg(target_os = "macos")]
-use super::super::compile_macos_sandbox_profile;
+use super::macos_audit_support::*;
 #[cfg(target_os = "macos")]
-use super::super::test_support::*;
-
+use orbit_exec::compile_macos_sandbox_profile;
+use orbit_exec::{MacosLoginKeychainAccess, macos_login_keychain_access};
 use orbit_types::policy::ResolvedFsProfile;
 
 #[test]
@@ -35,8 +34,13 @@ fn keychain_access_diagnostic_grants_antigravity_and_keeps_unknown_providers_den
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers() {
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_audit::compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers",
     ) {
         return;
     }
@@ -93,8 +97,13 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "compiled_profile_keeps_unknown_provider_keychain_access_denied",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_audit::compiled_profile_keeps_unknown_provider_keychain_access_denied",
     ) {
         return;
     }
@@ -124,8 +133,13 @@ fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials() {
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "compiled_codex_profile_reads_public_ca_material_but_not_private_credentials",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_audit::compiled_codex_profile_reads_public_ca_material_but_not_private_credentials",
     ) {
         return;
     }
@@ -197,17 +211,17 @@ struct SyntheticKeychainHome {
     // Declaration order is drop order: the tempdir must go before the guard
     // that removes its parent.
     home: tempfile::TempDir,
-    _cleanup: ScopeGuard,
+    _cleanup: tempfile::TempDir,
     credential: std::path::PathBuf,
 }
 
 #[cfg(target_os = "macos")]
 impl SyntheticKeychainHome {
     fn create(label: &str) -> Self {
-        let parent = sandbox_test_parent(label);
-        let cleanup = ScopeGuard(parent.clone());
+        let _cleanup = super::macos_sandbox::fixture_root_outside_profile_write_grants();
+        let parent = _cleanup.path().to_path_buf();
         let home = tempfile::Builder::new()
-            .prefix("synthetic-home-")
+            .prefix(&format!("synthetic-home-{label}-"))
             .tempdir_in(&parent)
             .expect("synthetic home tempdir");
         let keychains = home.path().join("Library/Keychains");
@@ -216,7 +230,7 @@ impl SyntheticKeychainHome {
         std::fs::write(&credential, b"synthetic-credential").expect("write synthetic credential");
         Self {
             home,
-            _cleanup: cleanup,
+            _cleanup,
             credential,
         }
     }
@@ -251,8 +265,13 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
     // EX_DATAERR), killing every macOS CLI run before the agent started.
     use std::process::Command;
 
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_audit::compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec",
     ) {
         return;
     }
@@ -314,16 +333,21 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
 fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token() {
     use std::process::Command;
 
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_audit::compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token",
     ) {
         return;
     }
 
     // The broad `/tmp` and `~/Library/Caches` write allows would mask the
     // grant under test, so the synthetic cargo home has to live outside them.
-    let parent = sandbox_test_parent("cargo-cache");
-    let _cleanup = ScopeGuard(parent.clone());
+    let _cleanup = super::macos_sandbox::fixture_root_outside_profile_write_grants();
+    let parent = _cleanup.path().to_path_buf();
     let dir = tempfile::Builder::new()
         .prefix("compile-cargo-")
         .tempdir_in(&parent)
@@ -429,13 +453,18 @@ fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_
 #[cfg(target_os = "macos")]
 #[test]
 fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec() {
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec",
     ) {
         return;
     }
-    let parent = sandbox_test_parent("plugin-state");
-    let _cleanup = ScopeGuard(parent.clone());
+    if super::audit_support::run_isolated(
+        "macos_audit::read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec",
+    ) {
+        return;
+    }
+    let _cleanup = super::macos_sandbox::fixture_root_outside_profile_write_grants();
+    let parent = _cleanup.path().to_path_buf();
     let root = parent.canonicalize().expect("canonical test parent");
     let plugins = root.join("state/plugins");
     for name in ["demo", "other"] {
@@ -444,7 +473,7 @@ fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec()
     }
     let resolved = profile("plugin", &[], &[]);
     let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
-    super::super::append_macos_read_boundary(
+    orbit_exec::append_macos_read_boundary(
         &mut text,
         std::slice::from_ref(&plugins),
         &[plugins.join("demo")],
@@ -486,12 +515,17 @@ fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec()
 #[cfg(target_os = "macos")]
 #[test]
 fn subpath_mask_hides_the_tree_from_a_sandboxed_child() {
-    if !crate::macos_sandbox_test_guard("subpath_mask_hides_the_tree_from_a_sandboxed_child") {
+    if !orbit_exec::macos_sandbox_test_guard("subpath_mask_hides_the_tree_from_a_sandboxed_child") {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_audit::subpath_mask_hides_the_tree_from_a_sandboxed_child",
+    ) {
         return;
     }
 
-    let parent = sandbox_test_parent("plugin-mask");
-    let _cleanup = ScopeGuard(parent.clone());
+    let _cleanup = super::macos_sandbox::fixture_root_outside_profile_write_grants();
+    let parent = _cleanup.path().to_path_buf();
     let global = parent.join("global");
     let masked = global.join("state/plugins");
     let visible = global.join("state/other");
@@ -506,7 +540,7 @@ fn subpath_mask_hides_the_tree_from_a_sandboxed_child() {
         modify: vec![format!("{global_text}/**")],
     };
     let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
-    super::super::append_macos_subpath_mask(&mut text, std::slice::from_ref(&masked));
+    orbit_exec::append_macos_subpath_mask(&mut text, std::slice::from_ref(&masked));
 
     assert!(can_read_under_profile(&text, &visible.join("note")));
     assert!(!can_read_under_profile(&text, &masked.join("secret")));

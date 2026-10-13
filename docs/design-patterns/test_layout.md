@@ -64,6 +64,13 @@ The principle: keep production directory listings free of `#[cfg(test)]` artefac
 - Persistence and index lifecycle behavior that can use exported store and query helpers belongs in that area binary too; `crates/orbit-search/tests/lexical/main.rs` covers its SQLite migration and synchronous FTS updates through `LexicalIndex`.
 - **The module has zero non-trivial logic worth a unit test.** Don't scaffold an empty `tests/` for the sake of uniformity.
 
+After relocating a suite to a crate-root integration binary, remove its empty
+source test module and unused private test support. In `orbit-exec`, sandbox
+compiler/spawn fixtures are modules of `tests/sandbox/main.rs`; only admitted
+private injection and security seams retain sibling source tests. The
+[applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
+records the per-identity coverage and the qualifying seams.
+
 ## Edge case: standalone top-level files
 
 For source files directly under `src/` with no enclosing module directory, tests go in a top-level `src/tests/` directory mirroring them:

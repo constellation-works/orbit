@@ -1,3 +1,5 @@
+//! Security invariant: inject an arbitrary alias bind before credential masking.
+//! The public compiler cannot specify this constructed bind destination.
 use super::*;
 use crate::credential_paths::credential_read_denies;
 use credentials::append_credential_masks;
@@ -7,8 +9,7 @@ struct HomeFixture {
     home: PathBuf,
 }
 
-/// A fake HOME holding `.ssh`, `.aws`, `.config/gh` directories and a cargo
-/// `credentials.toml` file, but no `.cargo/credentials` and no macOS trees.
+/// A fake HOME for the constructed credential-alias refusal.
 fn home_fixture() -> HomeFixture {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().canonicalize().expect("canonical root");
@@ -39,30 +40,6 @@ fn no_mounts() -> Result<Vec<MountEntry>, OrbitError> {
     Ok(Vec::new())
 }
 
-fn has_pair(args: &[String], option: &str, path: &Path) -> bool {
-    args.windows(2)
-        .any(|pair| pair[0] == option && pair[1] == path.display().to_string())
-}
-
-#[test]
-fn a_symlinked_credential_dir_masks_its_real_location() {
-    let fixture = home_fixture();
-    let dotfiles = fixture.home.join("dotfiles-ssh");
-    fs::create_dir_all(&dotfiles).expect("dotfiles");
-    fs::remove_dir_all(fixture.home.join(".ssh")).expect("remove .ssh");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&dotfiles, fixture.home.join(".ssh")).expect("symlink");
-    let mut out = Vec::new();
-
-    append_credential_masks(&mut out, &denies(&fixture), no_mounts).expect("masks");
-
-    #[cfg(unix)]
-    assert!(
-        has_pair(&out, "--tmpfs", &dotfiles),
-        "the mount must land on the symlink target, where the bytes live: {out:?}"
-    );
-}
-
 #[test]
 fn a_second_path_to_a_credential_dir_refuses_the_plan() {
     let fixture = home_fixture();
@@ -79,25 +56,5 @@ fn a_second_path_to_a_credential_dir_refuses_the_plan() {
     assert!(
         matches!(&error, OrbitError::PolicyDenied(message) if message.contains("/mnt/elsewhere")),
         "the refusal names the alias: {error}"
-    );
-}
-
-#[test]
-fn a_grant_inside_a_credential_dir_refuses_the_plan_instead_of_hiding_it() {
-    let fixture = home_fixture();
-    let granted = fixture.home.join(".config/gh/workdir");
-    fs::create_dir_all(&granted).expect("granted dir");
-    let mut out = vec![
-        "--bind".to_string(),
-        granted.display().to_string(),
-        granted.display().to_string(),
-    ];
-
-    let error = append_credential_masks(&mut out, &denies(&fixture), no_mounts)
-        .expect_err("masking would hide a path the plan grants");
-
-    assert!(
-        matches!(&error, OrbitError::PolicyDenied(message) if message.contains("workdir")),
-        "the refusal names the granted path: {error}"
     );
 }
