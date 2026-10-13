@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci check-ci-macos ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
 
 # ------------------------------------------------------------
 # Config
@@ -55,6 +55,7 @@ help:
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
 	@echo "  make ci-fast      Format, repository guardrails, and the MSRV check; runs no Rust tests"
 	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents; also checks ci-macos.yml when tests or the workflow change (CI_TEST_BASE=<commit> pins the base)"
+	@echo "  make check-ci-macos  Verify native macOS CI filters still select compiled tests"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
@@ -158,6 +159,10 @@ tree:
 # Full CI pass
 ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
+
+# Verify that every native macOS CI filter still selects a real test.
+check-ci-macos:
+	$(BUILD_BUDGET) -- ./scripts/check-ci-macos.sh --workspace-build
 
 # Format and shared guardrails plus the MSRV compile check: no Rust tests.
 # The MSRV check's wall time is its own line, separate from each guardrail.

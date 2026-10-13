@@ -1,7 +1,6 @@
 //! Positive production-stdio proofs with disposable records and deterministic jobs.
 use super::*;
 
-#[test]
 fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -36,7 +35,6 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     );
 }
 
-#[test]
 fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -526,7 +524,6 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
 /// empty list means no required check, and the drain runs. A drain or ship
 /// start also names each `execution.env.pass` variable the server's
 /// environment does not hold, in its `warning`.
-#[test]
 fn stdio_drain_and_ship_starts_report_their_notices() {
     // Not `ORBIT_`-prefixed: those names are never reported unset.
     const UNSET: &str = "FIXTURE_MCP_NOTICE_TOKEN";
@@ -785,4 +782,25 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
                 || message.contains("did not finish within")),
         "{message}"
     );
+}
+
+#[test]
+fn artifact_and_auto_task_stdio_contracts() {
+    for (name, check) in [
+        (
+            "stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape",
+            stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape as fn(),
+        ),
+        (
+            "stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state",
+            stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state as fn(),
+        ),
+        (
+            "stdio_drain_and_ship_starts_report_their_notices",
+            stdio_drain_and_ship_starts_report_their_notices as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
 }

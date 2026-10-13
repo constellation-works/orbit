@@ -319,7 +319,6 @@ fn linked_worktree_caller_can_declare_a_file_that_exists_only_there() {
     );
 }
 
-#[test]
 fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
     let workspace = Workspace::init();
     let task_id = workspace.author_task("Worktree context selector typo");
@@ -364,7 +363,6 @@ fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
 /// Managed job-run worktrees live under `<repo>/.orbit/state/worktrees/**`, so
 /// they sit inside the registered checkout's directory tree while being
 /// separate checkouts: a path-prefix test cannot tell them apart.
-#[test]
 fn worktree_nested_under_the_registered_checkout_can_declare_its_own_file() {
     let workspace = Workspace::init();
     let task_id = workspace.author_task("Nested worktree context selector");
@@ -397,7 +395,6 @@ fn worktree_nested_under_the_registered_checkout_can_declare_its_own_file() {
 /// file it is about to create for the task that run admitted. The response
 /// says which selectors were stored unverified; a selector that resolves is
 /// not listed.
-#[test]
 fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -466,7 +463,6 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
 /// `orbit task update` gets it as `orbit.task.update` does: the same response
 /// key, the same stored scope, and the strict check for a task its run does
 /// not own or a shell outside a managed run.
-#[test]
 fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -534,7 +530,6 @@ fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
 /// The relaxation is per task, not per worktree: the same worker, from the
 /// same worktree, still gets the strict rejection — with the escape hatch
 /// named — for a task its run did not admit.
-#[test]
 fn owning_worker_cannot_relax_a_task_its_run_does_not_own() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -596,7 +591,6 @@ fn owning_worker_cannot_relax_a_task_its_run_does_not_own() {
 /// The relaxation only forgives a missing anchor. A selector that escapes the
 /// workspace, uses an unsupported kind, or contradicts the kind of an existing
 /// target is refused for the owning worker too.
-#[test]
 fn owning_worker_relaxation_still_rejects_invalid_selectors() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -638,7 +632,6 @@ fn owning_worker_relaxation_still_rejects_invalid_selectors() {
 
 /// The worker's run binding alone is not enough: from the registered checkout
 /// rather than a linked worktree, the strict guard applies.
-#[test]
 fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -657,4 +650,50 @@ fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
         rejected.contains("file:src/not_yet.rs") && rejected.contains("allow_missing_context"),
         "the registered checkout keeps the strict guard: {rejected}"
     );
+}
+
+#[test]
+fn worktree_scope_and_owned_creation() {
+    for (name, check) in [
+        (
+            "selector_missing_from_both_checkouts_is_rejected_from_a_worktree",
+            selector_missing_from_both_checkouts_is_rejected_from_a_worktree as fn(),
+        ),
+        (
+            "worktree_nested_under_the_registered_checkout_can_declare_its_own_file",
+            worktree_nested_under_the_registered_checkout_can_declare_its_own_file as fn(),
+        ),
+        (
+            "owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet",
+            owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet as fn(),
+        ),
+        (
+            "owning_worker_cli_update_gets_the_same_relaxation_as_the_tool",
+            owning_worker_cli_update_gets_the_same_relaxation_as_the_tool as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn foreign_and_invalid_creation_refusals() {
+    for (name, check) in [
+        (
+            "owning_worker_cannot_relax_a_task_its_run_does_not_own",
+            owning_worker_cannot_relax_a_task_its_run_does_not_own as fn(),
+        ),
+        (
+            "owning_worker_relaxation_still_rejects_invalid_selectors",
+            owning_worker_relaxation_still_rejects_invalid_selectors as fn(),
+        ),
+        (
+            "owning_worker_outside_a_worktree_gets_the_strict_guard",
+            owning_worker_outside_a_worktree_gets_the_strict_guard as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

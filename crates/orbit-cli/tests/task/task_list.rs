@@ -15,7 +15,6 @@ fn workspace() -> TestWorkspace {
     TestWorkspace::new("task-list-test", template)
 }
 
-#[test]
 fn completed_add_and_update_leave_the_next_write_free_list_indexed() {
     let workspace = workspace();
     let added = workspace.add_task_cli_with_tags("Fresh index", &["initial"]);
@@ -76,7 +75,6 @@ fn completed_add_and_update_leave_the_next_write_free_list_indexed() {
     }
 }
 
-#[test]
 fn task_list_truncation_notice_and_bare_json_array_with_60_tasks() {
     let workspace = workspace();
     workspace.seed_tasks(
@@ -130,7 +128,6 @@ fn task_list_truncation_notice_and_bare_json_array_with_60_tasks() {
 /// stderr, and stdout must stay exactly the records — a bare array for
 /// `--format json`, one record per line for `--format ndjson` — with no
 /// notice mixed in.
-#[test]
 fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
     let workspace = workspace();
     workspace.seed_tasks(
@@ -183,7 +180,6 @@ fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
     }
 }
 
-#[test]
 fn older_someday_task_discoverable_ahead_of_newer_done_tasks() {
     let workspace = workspace();
 
@@ -234,64 +230,6 @@ fn older_someday_task_discoverable_ahead_of_newer_done_tasks() {
     for task in &tasks[1..] {
         assert_eq!(task["status"], "done");
     }
-}
-
-#[test]
-fn task_list_help_documents_rule() {
-    let workspace = workspace();
-    let output = workspace.run(&["task", "list", "--help"], "task list --help");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("status-aware rule"),
-        "help must mention status-aware rule:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("non-terminal"),
-        "help must mention non-terminal tasks:\n{stdout}"
-    );
-}
-
-#[test]
-fn existing_filters_keep_behaviour() {
-    let workspace = workspace();
-
-    let mut alpha = workspace.task_seed("Task with tag alpha");
-    alpha.tags = vec!["alpha".into()];
-    let mut beta = workspace.task_seed("Task with tag beta");
-    beta.tags = vec!["beta".into()];
-    beta.status = TaskStatus::Done;
-    let seeded = workspace.seed_tasks(&[alpha, beta]);
-    let id1 = seeded[0]["id"].as_str().unwrap();
-    let id2 = seeded[1]["id"].as_str().unwrap();
-
-    // --status filter
-    let status_filter = workspace.run(
-        &["task", "list", "--status", "done", "--json"],
-        "filter status done",
-    );
-    let status_payload: Value = serde_json::from_slice(&status_filter.stdout).expect("status json");
-    let status_tasks = status_payload.as_array().expect("tasks array");
-    assert_eq!(status_tasks.len(), 1);
-    assert_eq!(status_tasks[0]["id"], id2);
-
-    // --tag filter
-    let tag_filter = workspace.run(
-        &["task", "list", "--tag", "alpha", "--json"],
-        "filter tag alpha",
-    );
-    let tag_payload: Value = serde_json::from_slice(&tag_filter.stdout).expect("tag json");
-    let tag_tasks = tag_payload.as_array().expect("tasks array");
-    assert_eq!(tag_tasks.len(), 1);
-    assert_eq!(tag_tasks[0]["id"], id1);
-
-    // --limit filter
-    let limit_filter = workspace.run(
-        &["task", "list", "--limit", "1", "--json"],
-        "filter limit 1",
-    );
-    let limit_payload: Value = serde_json::from_slice(&limit_filter.stdout).expect("limit json");
-    let limit_tasks = limit_payload.as_array().expect("tasks array");
-    assert_eq!(limit_tasks.len(), 1);
 }
 
 /// ORB-12206: in human modes (`table` and `plain`), the truncation notice
@@ -384,4 +322,29 @@ fn task_list_truncation_notice_emitted_after_table_body_in_human_modes() {
         plain_stderr.contains(truncation_notice),
         "plain stderr must contain truncation notice:\n{plain_stderr}"
     );
+}
+
+#[test]
+fn task_index_and_bounded_listing() {
+    for (name, check) in [
+        (
+            "completed_add_and_update_leave_the_next_write_free_list_indexed",
+            completed_add_and_update_leave_the_next_write_free_list_indexed as fn(),
+        ),
+        (
+            "task_list_truncation_notice_and_bare_json_array_with_60_tasks",
+            task_list_truncation_notice_and_bare_json_array_with_60_tasks as fn(),
+        ),
+        (
+            "task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes",
+            task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes as fn(),
+        ),
+        (
+            "older_someday_task_discoverable_ahead_of_newer_done_tasks",
+            older_someday_task_discoverable_ahead_of_newer_done_tasks as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

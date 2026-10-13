@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
-#[test]
 fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let fixture = Fixture::new();
     let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
@@ -100,7 +99,6 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), task_before);
 }
 
-#[test]
 fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes() {
     use orbit_core::application::automation::consumer_key;
 
@@ -211,7 +209,6 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
 }
 
-#[test]
 fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
     use orbit_common::security::release::sha256_hex;
     use orbit_core::application::auto_tasks::{
@@ -315,7 +312,6 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
 }
 
-#[test]
 fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
     use chrono::Utc;
     use orbit_core::application::automation::consumer_key;
@@ -492,7 +488,6 @@ fn fixture_git_commits_and_refs_stay_in_the_fixture() {
     );
 }
 
-#[test]
 fn auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage() {
     let fixture = Fixture::new();
     let retired = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0}"#;
@@ -740,7 +735,6 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
 /// A review task that closed without accepted coverage once left its consumer
 /// `admitted` forever: reset and recover refused it as executing and nothing
 /// reported it. Its task being terminal is what makes it not executing.
-#[test]
 fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     use chrono::Utc;
     use orbit_core::application::automation::consumer_key;
@@ -1148,4 +1142,46 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
         delivery(9)["unattributed"],
         orbit_types::workflow::automation::UNATTRIBUTED_NO_LANDING_TASK
     );
+}
+
+#[test]
+fn auto_task_lifecycle_and_recovery() {
+    for (name, check) in [
+        (
+            "auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist",
+            auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist as fn(),
+        ),
+        (
+            "auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes",
+            auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes as fn(),
+        ),
+        (
+            "auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor",
+            auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor as fn(),
+        ),
+        (
+            "auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning",
+            auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn retired_coverage_and_closed_actions() {
+    for (name, check) in [
+        (
+            "auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage",
+            auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage as fn(),
+        ),
+        (
+            "auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled",
+            auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

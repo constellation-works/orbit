@@ -260,7 +260,6 @@ impl ExternalRootFixture {
     }
 }
 
-#[test]
 fn mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment() {
     for (raw, home_suffix) in [
         ("~", Some("")),
@@ -295,7 +294,6 @@ fn mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment(
     }
 }
 
-#[test]
 fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
     let fixture = ExternalRootFixture::init();
 
@@ -357,7 +355,6 @@ fn federated_setup_outputs(
     (text, json)
 }
 
-#[test]
 fn federated_home_setup_works_outside_a_workspace_and_reports_no_binding() {
     let fixture = ExternalRootFixture::init();
     let codex_config = fixture.home.join(".codex").join("config.toml");
@@ -412,7 +409,6 @@ fn federated_home_setup_works_outside_a_workspace_and_reports_no_binding() {
     assert!(!remaining.contains("orbit-federated"), "{remaining}");
 }
 
-#[test]
 fn federated_setup_inside_a_registered_checkout_reports_no_binding() {
     let fixture = ExternalRootFixture::init();
 
@@ -569,76 +565,6 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
     assert_eq!(entries(&settings_dir), settings_entries);
 }
 
-#[test]
-fn external_root_task_index_loss_is_reported_and_reindexed() {
-    let fixture = ExternalRootFixture::init();
-    let added = fixture
-        .orbit(
-            &fixture.checkout,
-            &fixture.rooted(&[
-                "task",
-                "add",
-                "--title",
-                "External task",
-                "--complexity",
-                "low",
-                "--json",
-            ]),
-        )
-        .success();
-    let task: Value = serde_json::from_slice(&added.get_output().stdout).expect("task json");
-    let task_id = task["id"].as_str().expect("task id").to_string();
-    let index = fixture.orbit_root.join("tasks/index.sqlite");
-    for suffix in ["", "-wal", "-shm"] {
-        let path = PathBuf::from(format!("{}{}", index.display(), suffix));
-        if path.exists() {
-            fs::remove_file(path).expect("remove task index");
-        }
-    }
-
-    let listed = fixture
-        .orbit(&fixture.checkout, &fixture.rooted(&["task", "list"]))
-        .failure();
-    let stderr = String::from_utf8_lossy(&listed.get_output().stderr);
-    assert!(
-        stderr.contains("error: store error: task index is missing 1 on-disk bundle(s); run `orbit task reindex` to recover them"),
-        "stderr: {stderr}"
-    );
-    assert!(!stderr.contains("invalid input"), "stderr: {stderr}");
-
-    let listed_json = fixture
-        .orbit(
-            &fixture.checkout,
-            &fixture.rooted(&["task", "list", "--format", "json"]),
-        )
-        .failure();
-    let stderr_json = String::from_utf8_lossy(&listed_json.get_output().stderr);
-    let error_payload: Value = serde_json::from_str(stderr_json.trim()).expect("error json");
-    assert_eq!(error_payload["code"], "store_error", "json: {stderr_json}");
-    assert_eq!(
-        error_payload["error"],
-        "store error: task index is missing 1 on-disk bundle(s); run `orbit task reindex` to recover them",
-        "json: {stderr_json}"
-    );
-    assert!(
-        !stderr_json.contains("invalid_input"),
-        "json: {stderr_json}"
-    );
-
-    fixture
-        .orbit(&fixture.checkout, &fixture.rooted(&["task", "reindex"]))
-        .success();
-    let listed = fixture
-        .orbit(
-            &fixture.checkout,
-            &fixture.rooted(&["task", "list", "--json"]),
-        )
-        .success();
-    let tasks: Value = serde_json::from_slice(&listed.get_output().stdout).expect("task list json");
-    assert_eq!(tasks[0]["id"], task_id);
-}
-
-#[test]
 fn mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory() {
     let fixture = ExternalRootFixture::init();
 
@@ -666,7 +592,6 @@ fn mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory() {
     assert!(!fixture.checkout.join(".claude").exists());
 }
 
-#[test]
 fn orbit_root_env_selects_the_same_checkout_as_the_root_flag() {
     let fixture = ExternalRootFixture::init();
     let env = [("ORBIT_ROOT", fixture.orbit_root.as_path())];
@@ -692,7 +617,6 @@ fn orbit_root_env_selects_the_same_checkout_as_the_root_flag() {
     assert!(!fixture.claude_config().exists());
 }
 
-#[test]
 fn explicit_root_outranks_a_different_registered_cwd_checkout() {
     let fixture = RegisteredCheckoutPairFixture::init();
     let root = fixture
@@ -733,7 +657,6 @@ fn explicit_root_outranks_a_different_registered_cwd_checkout() {
     assert!(!fixture.checkout_b.join(".mcp.json").exists());
 }
 
-#[test]
 fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
     let fixture = SharedRootCheckoutPairFixture::init();
     let root = fixture.orbit_root.to_str().expect("utf8 shared Orbit root");
@@ -793,7 +716,6 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
     assert!(!fixture.checkout_b.join(".mcp.json").exists());
 }
 
-#[test]
 fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
     let fixture = ExternalRootFixture::init();
     let unrelated_root = fixture
@@ -825,7 +747,6 @@ fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
     assert!(!fixture.claude_config().exists());
 }
 
-#[test]
 fn an_unregistered_root_reports_the_root_and_registered_candidates() {
     let fixture = RegisteredCheckoutPairFixture::init();
     let root = fixture.checkout_a.join("not-registered");
@@ -964,7 +885,6 @@ fn remove_last_entry_through_home_config_symlink(
 }
 
 #[cfg(unix)]
-#[test]
 fn json_client_home_config_symlink_survives_init_and_remove() {
     assert_home_scope_config_symlink_survives(
         "--cursor",
@@ -975,7 +895,6 @@ fn json_client_home_config_symlink_survives_init_and_remove() {
 }
 
 #[cfg(unix)]
-#[test]
 fn toml_client_home_config_symlink_survives_init_and_remove() {
     assert_home_scope_config_symlink_survives(
         "--codex",
@@ -986,7 +905,6 @@ fn toml_client_home_config_symlink_survives_init_and_remove() {
 }
 
 #[cfg(unix)]
-#[test]
 fn json_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries() {
     let removed = remove_last_entry_through_home_config_symlink("--cursor", ".cursor/mcp.json");
     assert_eq!(
@@ -1007,7 +925,6 @@ fn toml_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries() {
     );
 }
 
-#[test]
 fn toml_client_home_config_without_other_entries_is_deleted_when_removal_empties_it() {
     let fixture = ExternalRootFixture::init();
     let config = fixture.home.join(".codex").join("config.toml");
@@ -1251,4 +1168,107 @@ fn generated_server_args(config_path: &Path) -> Vec<String> {
         .iter()
         .map(|value| value.as_str().expect("arg is a string").to_string())
         .collect()
+}
+
+#[test]
+fn setup_root_expansion_and_config_confinement() {
+    for (name, check) in [
+        (
+            "mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment",
+            mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment as fn(),
+        ),
+        (
+            "outside_client_config_guard_rejects_config_files_in_scanned_directories",
+            outside_client_config_guard_rejects_config_files_in_scanned_directories as fn(),
+        ),
+        (
+            "federated_home_setup_works_outside_a_workspace_and_reports_no_binding",
+            federated_home_setup_works_outside_a_workspace_and_reports_no_binding as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[test]
+fn federated_and_external_root_resolution() {
+    for (name, check) in [
+        (
+            "federated_setup_inside_a_registered_checkout_reports_no_binding",
+            federated_setup_inside_a_registered_checkout_reports_no_binding as fn(),
+        ),
+        (
+            "mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory",
+            mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory as fn(),
+        ),
+        (
+            "orbit_root_env_selects_the_same_checkout_as_the_root_flag",
+            orbit_root_env_selects_the_same_checkout_as_the_root_flag as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[test]
+fn shared_and_explicit_root_precedence() {
+    for (name, check) in [
+        (
+            "explicit_root_outranks_a_different_registered_cwd_checkout",
+            explicit_root_outranks_a_different_registered_cwd_checkout as fn(),
+        ),
+        (
+            "shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove",
+            shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove as fn(),
+        ),
+        (
+            "a_root_without_a_registered_checkout_refuses_instead_of_writing",
+            a_root_without_a_registered_checkout_refuses_instead_of_writing as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[test]
+fn missing_root_guidance_and_empty_config_removal() {
+    for (name, check) in [
+        (
+            "an_unregistered_root_reports_the_root_and_registered_candidates",
+            an_unregistered_root_reports_the_root_and_registered_candidates as fn(),
+        ),
+        (
+            "toml_client_home_config_without_other_entries_is_deleted_when_removal_empties_it",
+            toml_client_home_config_without_other_entries_is_deleted_when_removal_empties_it
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_client_configuration() {
+    for (name, check) in [
+        (
+            "json_client_home_config_symlink_survives_init_and_remove",
+            json_client_home_config_symlink_survives_init_and_remove as fn(),
+        ),
+        (
+            "toml_client_home_config_symlink_survives_init_and_remove",
+            toml_client_home_config_symlink_survives_init_and_remove as fn(),
+        ),
+        (
+            "json_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries",
+            json_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
 }

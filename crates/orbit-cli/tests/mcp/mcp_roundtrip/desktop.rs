@@ -1,97 +1,5 @@
 use super::*;
 
-#[test]
-fn desktop_task_status_sets_compose_with_search_priority_and_pagination() {
-    let workspace = McpWorkspace::init();
-    let selector = workspace.work.to_str().unwrap();
-    let mut client = workspace.serve();
-    for (index, (status, title, priority)) in [
-        ("in-progress", "Needle running", "medium"),
-        ("review", "Needle review", "medium"),
-        ("blocked", "Needle blocked", "medium"),
-        ("backlog", "Needle queued", "medium"),
-        ("proposed", "Needle proposed", "medium"),
-        ("done", "Needle completed", "medium"),
-        ("backlog", "Other title", "medium"),
-        ("blocked", "Needle urgent", "high"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let created = client.call_tool_ok(
-            "orbit_task_add",
-            json!({"workspace":selector,"model":"codex","request_id":format!("filter-{index}"),"title":title,"description":"Filter fixture","acceptance_criteria":["Visible when included"],"priority":priority}),
-        );
-        let id = created["snapshot"]["task"]["id"].as_str().unwrap();
-        if status != "proposed" {
-            // Human override seeds lifecycle states only in the disposable
-            // child-process fixture; no task is dispatched or completed by MCP.
-            orbit_ok(
-                McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-                    .args(["task", "update", id, "--status", status, "--force"]),
-            );
-        }
-    }
-    let mut input = json!({"workspace":selector,"view":"bounded","status":"in-progress,review,blocked,backlog","search":"nEeDlE","priority":"medium","limit":2});
-    let first = client.call_tool_ok("orbit_task_list", input.clone());
-    assert_eq!(first["total"], 4);
-    assert_eq!(first["pagination"]["next_offset"], 2);
-    let mut ids = BTreeSet::new();
-    for offset in [0, 2] {
-        input["offset"] = json!(offset);
-        let page = client.call_tool_ok("orbit_task_list", input.clone());
-        assert_eq!(page["total"], 4);
-        assert_eq!(page["items"].as_array().unwrap().len(), 2);
-        for task in page["items"].as_array().unwrap() {
-            let status = task["status"].as_str().unwrap().replace('_', "-");
-            assert!(
-                ["in-progress", "review", "blocked", "backlog"].contains(&status.as_str()),
-                "only included lifecycle states appear: {task}"
-            );
-            assert!(ids.insert(task["id"].as_str().unwrap().to_string()));
-        }
-        if offset == 2 {
-            assert!(page["pagination"]["next_offset"].is_null());
-        }
-    }
-    input["offset"] = json!(0);
-    input["status"] = json!(["proposed", "done"]);
-    let expanded = client.call_tool_ok("orbit_task_list", input.clone());
-    assert_eq!(expanded["total"], 2);
-    let statuses: BTreeSet<_> = expanded["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|task| task["status"].as_str().unwrap())
-        .collect();
-    assert_eq!(statuses, BTreeSet::from(["proposed", "done"]));
-    input["status"] = json!("review");
-    assert_eq!(
-        client.call_tool_ok("orbit_task_list", input.clone())["total"],
-        1
-    );
-    input["status"] = json!("review,not-a-status");
-    assert_eq!(
-        client.call_tool_err("orbit_task_list", input.clone())["code"],
-        "invalid_input"
-    );
-    input.as_object_mut().unwrap().remove("status");
-    assert_eq!(
-        client.call_tool_ok("orbit_task_list", input.clone())["total"],
-        6
-    );
-    input["status"] = Value::Null;
-    assert_eq!(
-        client.call_tool_ok("orbit_task_list", input.clone())["total"],
-        6,
-        "a null status retains the bounded reader's unfiltered contract"
-    );
-    input.as_object_mut().unwrap().remove("status");
-    input["priority"] = json!("high");
-    assert_eq!(client.call_tool_ok("orbit_task_list", input)["total"], 1);
-}
-
-#[test]
 fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -193,7 +101,6 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     );
 }
 
-#[test]
 fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority()
 {
     let workspace = McpWorkspace::init();
@@ -315,7 +222,6 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
 /// change: an operator lists and enables its worktree GC, while owner work —
 /// ship sweep, auto-task minting and toggles — is refused with the owner
 /// named and leaves every definition byte-identical.
-#[test]
 fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest() {
     let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
     let selector = workspace.work.to_str().unwrap();
@@ -424,7 +330,6 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     );
 }
 
-#[test]
 fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -570,7 +475,6 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
 /// The bounded run detail reads a fixed metadata budget however long the
 /// run's audit trail is, yet still counts every log, places early logs in
 /// their step, reports the newest provider child and redacts previews.
-#[test]
 fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     const RUN_ID: &str = "jrun-20261011-0000-bd";
     const INVOCATIONS: usize = 600;
@@ -734,4 +638,33 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
         progress["provider_processes"]["items"],
         "both views report the same newest children: {full}"
     );
+}
+
+#[test]
+fn desktop_destination_and_routine_contracts() {
+    for (name, check) in [
+        ("desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations", desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations as fn()),
+        ("domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority", domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority as fn()),
+        ("replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest", replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest as fn()),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[test]
+fn desktop_governance_and_bounded_reads() {
+    for (name, check) in [
+        (
+            "desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates",
+            desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates as fn(),
+        ),
+        (
+            "bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history",
+            bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
 }

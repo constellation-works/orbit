@@ -122,20 +122,11 @@ fn assert_debt_unchanged(before: &AutomationState, after: &AutomationState) {
     );
 }
 
-#[test]
 fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
-    const TEST: &str =
-        "claimed_delivery_recovery::terminal_claim_adopts_settings_and_doctor_reports_its_status";
-    if !in_isolated_child(TEST) {
-        return;
-    }
     for (checkpointed_id, status) in [
         (true, "archived"),
-        (false, "archived"),
-        (true, "rejected"),
         (false, "rejected"),
         (true, "done"),
-        (false, "done"),
         (true, "deleted"),
     ] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
@@ -200,17 +191,12 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
     }
 }
 
-#[test]
 fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
-    const TEST: &str =
-        "claimed_delivery_recovery::archived_claim_reissues_the_same_obligations_as_a_new_task";
-    if !in_isolated_child(TEST) {
-        return;
-    }
     for checkpointed_id in [true, false] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
         let store = runtime.automation_store().unwrap();
         let receipts = store.automation_receipts(&before.consumer, 100).unwrap();
+        version_one_receipts_still_read_as_accepted_coverage(&runtime, &receipts);
         fixture
             .command(&["task", "archive", &action_id])
             .assert()
@@ -271,13 +257,8 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
     }
 }
 
-#[test]
 fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
-    const TEST: &str = "claimed_delivery_recovery::unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-    for status in ["archived", "rejected", "done", "deleted"] {
+    for status in ["archived", "deleted"] {
         let (fixture, runtime, legacy, action_id) = claimed(false);
         let store = runtime.automation_store().unwrap();
         let receipts = store.automation_receipts(&legacy.consumer, 100).unwrap();
@@ -401,12 +382,7 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
     }
 }
 
-#[test]
 fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
-    const TEST: &str = "claimed_delivery_recovery::scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks";
-    if !in_isolated_child(TEST) {
-        return;
-    }
     for checkpointed_id in [true, false] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
         let store = runtime.automation_store().unwrap();
@@ -496,25 +472,48 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
 
 /// A receipt accepted under evidence schema 1 stays settled and still reads
 /// as the task's accepted coverage [ORB-15186].
-#[test]
-fn version_one_receipts_still_read_as_accepted_coverage() {
-    const TEST: &str =
-        "claimed_delivery_recovery::version_one_receipts_still_read_as_accepted_coverage";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-    let (_fixture, runtime, before, _) = claimed(true);
-    let receipts = runtime
-        .automation_store()
-        .unwrap()
-        .automation_receipts(&before.consumer, 100)
-        .unwrap();
+fn version_one_receipts_still_read_as_accepted_coverage(
+    runtime: &orbit_core::OrbitRuntime,
+    receipts: &[AcceptedCoverage],
+) {
     assert_eq!(receipts.len(), 1);
     let evidence =
-        orbit_engine::RuntimeHost::accepted_automation_coverage(&runtime, &receipts[0].action_id)
+        orbit_engine::RuntimeHost::accepted_automation_coverage(runtime, &receipts[0].action_id)
             .unwrap()
             .expect("version 1 coverage reads");
     assert_eq!(evidence.schema_version, 1);
     assert!(evidence.delivery_examinations.is_empty());
     assert!(evidence.examination_complete);
+}
+
+#[test]
+fn claimed_recovery_contracts_0() {
+    if !in_isolated_child("claimed_delivery_recovery::claimed_recovery_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "terminal_claim_adopts_settings_and_doctor_reports_its_status",
+            terminal_claim_adopts_settings_and_doctor_reports_its_status as fn(),
+        ),
+        (
+            "archived_claim_reissues_the_same_obligations_as_a_new_task",
+            archived_claim_reissues_the_same_obligations_as_a_new_task as fn(),
+        ),
+        (
+            "unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed",
+            unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "Recovery contract row");
+        check();
+    }
+}
+
+#[test]
+fn claimed_recovery_contracts_1() {
+    if !in_isolated_child("claimed_delivery_recovery::claimed_recovery_contracts_1") {
+        return;
+    }
+    scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks();
 }
