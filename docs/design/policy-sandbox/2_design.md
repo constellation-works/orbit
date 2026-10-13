@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -132,7 +132,7 @@ Legacy pipeline contexts are different. `crates/orbit-core/src/runtime/tool_exec
 - `Sandbox::spawn(req) -> Result<Child>`; the default creates an unconfined child. A strategy that confines the process overrides this seam.
 - `run_process(req, sandbox) -> ExecutionResult`.
 
-`run_process` calls `sandbox.validate`, then `sandbox.spawn`, then `supervision::wait_with_optional_timeout`. Spawn applies the requested environment, pipes stdout/stderr, and on Unix calls `command.process_group(0)` so cleanup can kill orphan subprocesses.
+`run_process` validates the request, then creates the child through `SupervisedChild::spawn_guarded(|| sandbox.spawn(req))`. It applies `ExecSupervision` through `supervision::supervise`, which delegates process waiting and pipe handling to `SupervisedChild::supervise`. The shared spawn builder applies the requested environment, pipes stdout/stderr, and on Unix calls `command.process_group(0)` so cleanup can kill orphan subprocesses.
 
 Activity-scoped `proc.spawn` uses `NoSandbox` at this seam. The runtime still supplies the child environment resolved from `[execution.env]`, workspace root, and the activity's program policy through `ToolContext`; the program check runs before launch. The workspace root, which is also the child's cwd, is the caller's checkout when that checkout is a linked worktree sharing the registered repository's Git common directory or a source-inspection slot materialized from it. Any other checkout falls back to the registered root, so a task-pilot's `git`/`rg` children inspect its pinned revision while task tools keep the owning workspace. [ORB-13800] A managed CLI worker already runs inside the Linux Bubblewrap or macOS `sandbox-exec` boundary described in §7.1, and its `proc.spawn` children inherit that operating-system boundary. Direct and indirect file reads have the same access as their parent worker. Calls outside a managed worker retain their existing ambient host access. [ORB-13689]
 
@@ -157,7 +157,7 @@ Granted write roots are created before the child spawns, because a rule binds to
 
 **Evidence.** `crates/orbit-exec/tests/sandbox/linux_landlock.rs` exercises the retained Landlock read primitive against the real kernel, although `proc.spawn` no longer calls it. The same file tests the active plugin boundary: an outside-root write does not reach disk, a granted one does, a write root above a read deny or caller read exclusion does not make the excluded file readable, and a `deny_tcp` child cannot connect to a live loopback listener. These kernel tests report a skip where the required ABI is unavailable; `crates/orbit-exec/src/linux_landlock/tests/` covers grant compilation deterministically on any platform.
 
-`ExecutionResult { success, stdout, stderr, exit_code, duration_ms, output }` is defined in `orbit-common`. Captured bytes use `String::from_utf8_lossy`, so non-UTF-8 output becomes replacement characters instead of failing the call.
+`ExecutionResult { success, timed_out, stdout, stderr, exit_code, duration_ms, output }` is defined in `orbit-types/src/tool/definition.rs` and re-exported from `orbit_types::tool`. Captured bytes use `String::from_utf8_lossy`, so non-UTF-8 output becomes replacement characters instead of failing the call.
 
 The `Sandbox` trait remains the seam for generic `run_process` callers, but CLI-backed `agent_loop` invocations use a separate executor wrapper when the executor declares `sandbox: macos-sandbox-exec` ([T20260427-51]). The v2 host resolves the activity `fsProfile`; the engine converts workspace-relative rules to absolute roots and compiles SBPL before spawning the provider CLI.
 
@@ -480,7 +480,7 @@ Exec's runners supervise through `crates/orbit-exec/src/supervision/mod.rs::supe
 
 `SignalHandlerGuard` is RAII and refcounted: the first live waiter installs SIGINT/SIGTERM handlers and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal so a long-running server's original handler (tokio `ctrl_c` / SIGTERM, or SIG_DFL) still runs. `SIG_IGN` is not re-raised. When the previous disposition is SIG_DFL, the process stderr is annotated with `process interrupted by signal SIG…` before `raise`, because the wait result is discarded as the process terminates. A process-wide mutex covers only that install/drop critical section — never `raise` — so concurrent `run_process` waits overlap. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: it stores the signal, increments the generation, records a pending forward, and `killpg`s every registered group. Waiters that miss a slot still observe the generation counter on the next poll and run the ordinary termination path.
 
-Non-Unix builds use a fallback `terminate_process_group` that just calls `child.kill().ok(); child.wait().ok();` — process-group semantics do not apply on Windows, so orphan reaping is best-effort.
+Non-Unix builds can only kill and reap the direct child; process-group semantics do not apply on Windows, so orphan reaping is best-effort.
 
 ---
 

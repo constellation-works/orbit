@@ -1,8 +1,8 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-10-09
-last_validated: 2026-10-08
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Accepted
 feature: review-gate
 doc_role: overview
@@ -34,9 +34,16 @@ opens the PR first and reviews it while hosted CI runs, landing only the head
 that review settled; and the `delivery-code-review` auto-task's own `enabled`
 flag reviews landed deliveries in batches. Both config switches share
 `review.minutes`, the limit for one candidate's review, and there is one
-review layer before landing: config load fails while both are on. The reviewer crew stays `operation.review_crew`; the
+review layer before landing: config load fails while both are on. The reviewer
+is drawn from the single crew or weighted pool in `operation.review_crew`; the
 `[operation]` table once also carried operation-mode presets and grants,
 removed on 2026-09-21 (see [orbit-core decisions](../orbit-core/4_decisions.md)).
+
+With its own `review.before_landing` off, an owner can use
+`review.before_landing_hosts` to enable before-landing review for claimed
+deliveries from listed machines while leaving its own deliveries and unlisted
+hosts unaffected. The host selector cannot be combined with `review.before_pr`;
+there is one review layer before landing.
 
 ## 1. Motivation
 

@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-12
+last_validated: 2026-10-12
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -26,7 +26,7 @@ This document describes what `orbit-cli` renders today. It is deliberately a rec
 
 ## 2. Table Construction
 
-`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` is the only row constructor and caps every row at `Row::max_height(1)`, so the unbounded path that made a row span three or four lines is unreachable from a command module [ORB-10567]. The 27 command modules construct either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
+`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` is the only row constructor and caps every row at `Row::max_height(1)`, so the unbounded path that made a row span three or four lines is unreachable from a command module [ORB-10567]. The 31 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
 
 Rendering applies the `NOTHING` preset with `ContentArrangement::Disabled`, two-space right padding on every column but the last, and a dim header row. Widths are computed from the result set: natural widths first, then flexible columns shrink widest-first to a floor of 8, then flexible columns drop from the right with a notice on stderr. Fixed columns never move. Overflow truncates with `…` — tail truncation is `comfy_table`'s, middle truncation (`Column::path`) is applied before the grid sees the cell.
 
@@ -36,7 +36,7 @@ Two selection rules run before layout: a column whose value is identical in ever
 
 The last hand-padded list is gone. `orbit audit list` used to print each event through `print_audit_event_line` in `command/audit/support.rs`, a single `println!` with the format string `"[{}] {:<8} {:<6} {}:{:<20} {}ms"` — literal widths that held only while every value fit, no header, and a left-aligned duration carrying its unit per row. It now builds a `Table` with computed widths, a header, a `filtered` flag per filterable column, and a right-aligned `DURATION (ms)` [ORB-10570]. Satisfies [./specs/table-rendering.md](./specs/table-rendering.md) §2 and §3.
 
-30 modules under `command/` still call `println!` directly for some part of their output — detail views, field labels, confirmations — so line output remains a pattern rather than an isolated case. Record output is nevertheless centralized: command payloads go through `output::render`, while the remaining prose paths use `output::color`, whose `colored` backend is overridden from the sink at startup.
+15 modules under `command/` still call `println!` directly for some part of their output — detail views, field labels, confirmations — so line output remains a pattern rather than an isolated case. Record output is nevertheless centralized: command payloads go through `output::render`, while the remaining prose paths use `output::color`, whose `colored` backend is overridden from the sink at startup.
 
 The audit view still demonstrates the difference between the two renderings. [ORB-10228] added trusted session-context fields (`workspace_id`, `caller_machine_id`, `transport`, `mcp_call_id`) to `audit_event_to_json`; the human table does not expose those fields, while the shared payload keeps them available to JSON consumers.
 
