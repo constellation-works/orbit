@@ -37,9 +37,10 @@
 //! a canonical source-path key isolate those artifacts without deleting them;
 //! dependencies still come back through the compiler cache.
 //!
-//! Captured output keeps a head and a tail of each stream. A long stdout
-//! cannot drop the stderr failure before that classification, and the end of
-//! the recorded text still holds it. The failures a failed run names are read
+//! Captured output keeps a head, a tail and bounded nextest failure blocks
+//! from each stream. A long stdout cannot drop short stderr; middle failure
+//! blocks retain their scenario and nested assertion in durable evidence.
+//! Omission markers disclose every cut. The failures a failed run names are read
 //! from the complete streams first ([`RequiredCommandRun::failures`]), so a
 //! failure in the dropped middle still counts [ORB-15375].
 //! Host coverage refusals are also read from the complete streams, even on
@@ -69,7 +70,7 @@ use std::sync::OnceLock;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+use orbit_common::text::floor_char_boundary;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, ValidationEnvironment, program_on_path,
     run_process_supervised,
@@ -85,6 +86,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::base_claim::{failure_identities, normalize_output};
+pub(super) use super::required_capture::capture;
 
 /// The file a required command may write its [`ValidationSummary`] to.
 pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
@@ -144,10 +146,6 @@ pub(super) fn host_validation_target(checkout: &Path) -> Result<PathBuf, OrbitEr
 /// repository check suite, short enough that a wedged command settles the
 /// step instead of holding it open indefinitely.
 pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
-/// Captured output kept per command, split across stdout and stderr. The log
-/// is reader evidence, not a build log archive, so a runaway command cannot
-/// balloon the task bundle. See [`capture`].
-const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
 /// Diagnostic messages carry summaries and artifact references, never logs.
 pub(super) const MAX_VALIDATION_MESSAGE_BYTES: usize = 16 * 1024;
 
@@ -725,108 +723,4 @@ fn first_failure_cause(output: &str) -> Option<String> {
         }
     };
     Some(bounded_validation_text(&cause, 1024))
-}
-
-/// Join what the command wrote, bounded per stream.
-///
-/// Each non-empty stream gets a share of [`MAX_CAPTURED_OUTPUT_BYTES`]. A
-/// stream that fits in its share is kept whole, so a short stderr survives a
-/// stdout that would otherwise fill the cap. A stream over its share keeps a
-/// head and a tail, and the text says what was omitted. Stderr stays after
-/// stdout: `missing_tool` reads this string, and the repair excerpt reads its
-/// end, so the failure has to be in the kept tail [ORB-14086].
-pub(super) fn capture(stdout: &str, stderr: &str) -> String {
-    let stdout = trimmed_stream(stdout);
-    let stderr = trimmed_stream(stderr);
-    let separator = usize::from(!stdout.is_empty() && !stderr.is_empty());
-    if stdout.len() + stderr.len() + separator <= MAX_CAPTURED_OUTPUT_BYTES {
-        return join_streams(stdout, stderr);
-    }
-    let (stdout_budget, stderr_budget) = stream_budgets(stdout.len(), stderr.len());
-    join_streams(
-        &bound_stream(stdout, stdout_budget, "stdout"),
-        &bound_stream(stderr, stderr_budget, "stderr"),
-    )
-}
-
-/// `text` with trailing whitespace removed, or empty when it is only whitespace.
-fn trimmed_stream(text: &str) -> &str {
-    if text.trim().is_empty() {
-        ""
-    } else {
-        text.trim_end()
-    }
-}
-
-/// Byte budgets for the two streams. Their kept content, plus one separator
-/// when both are non-empty, stays within [`MAX_CAPTURED_OUTPUT_BYTES`].
-/// Truncation notices sit outside that count.
-fn stream_budgets(stdout_len: usize, stderr_len: usize) -> (usize, usize) {
-    let separator = usize::from(stdout_len > 0 && stderr_len > 0);
-    let max = MAX_CAPTURED_OUTPUT_BYTES.saturating_sub(separator);
-    if stderr_len == 0 {
-        return (max.min(stdout_len), 0);
-    }
-    if stdout_len == 0 {
-        return (0, max.min(stderr_len));
-    }
-    let half = max / 2;
-    if stderr_len <= half {
-        (max - stderr_len, stderr_len)
-    } else if stdout_len <= half {
-        (stdout_len, max - stdout_len)
-    } else {
-        let stderr_budget = half;
-        (max - stderr_budget, stderr_budget)
-    }
-}
-
-/// Keep `text` when it fits in `budget`. Otherwise keep a head and a tail
-/// whose content bytes fit, and say how much was omitted.
-fn bound_stream(text: &str, budget: usize, stream: &str) -> String {
-    if text.len() <= budget {
-        return text.to_string();
-    }
-    let tail_budget = budget / 2;
-    let head_budget = budget - tail_budget;
-    let head_end = floor_char_boundary(text, head_budget);
-    let tail_start = ceil_char_boundary(text, text.len().saturating_sub(tail_budget));
-    if tail_start <= head_end {
-        let end = floor_char_boundary(text, budget.min(text.len()));
-        return text[..end].to_string();
-    }
-    let head = &text[..head_end];
-    let tail = &text[tail_start..];
-    let omitted = tail_start - head_end;
-    let head_len = head.len();
-    let tail_len = tail.len();
-    let total = text.len();
-    let mut bounded = String::with_capacity(head_len + tail_len + 64);
-    if !head.is_empty() {
-        bounded.push_str(head);
-        bounded.push('\n');
-    }
-    bounded.push_str(&format!(
-        "[{stream} truncated: kept {head_len}+{tail_len} of {total} bytes, {omitted} omitted]"
-    ));
-    if !tail.is_empty() {
-        bounded.push('\n');
-        bounded.push_str(tail);
-    }
-    bounded
-}
-
-fn join_streams(stdout: &str, stderr: &str) -> String {
-    match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => stdout.to_string(),
-        (true, false) => stderr.to_string(),
-        (false, false) => {
-            let mut combined = String::with_capacity(stdout.len() + stderr.len() + 1);
-            combined.push_str(stdout);
-            combined.push('\n');
-            combined.push_str(stderr);
-            combined
-        }
-    }
 }

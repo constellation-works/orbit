@@ -4657,12 +4657,21 @@ fn a_failure_only_the_truncated_middle_names_still_requires_candidate_repair() {
             // About 590 KB: past the 256 KiB recorded budget, under the 1 MiB
             // supervisor capture limit that stops a run as an environment failure.
             let padding = "padding line that names no failure\n".repeat(8 * 1024);
+            let middle_failure = format!(
+                "{}--- STDOUT: orbit-core::runtime suite::added ---\n\
+                 scenario completion1335: cancellation during nested execution\n\
+                 --- STDERR: orbit-core::runtime suite::added ---\n\
+                 thread 'suite::added' panicked at fixture.rs:1335:9:\n\
+                 nested assertion failed: child completion must retain its cause\n\
+                 left: cancelled\nright: completed\n\
+                 PASS [   0.001s] orbit-core::runtime unrelated\n",
+                nextest_failures(&["suite::added"])
+            );
             let candidate = fx.commit(
                 "failing.txt",
                 &format!(
-                    "{}{padding}{}{padding}{}",
+                    "{}{padding}{middle_failure}{padding}{}",
                     nextest_failures(&base[..1]),
-                    nextest_failures(&["suite::added"]),
                     nextest_failures(&base[1..]),
                 ),
             );
@@ -4678,8 +4687,40 @@ fn a_failure_only_the_truncated_middle_names_still_requires_candidate_repair() {
             assert_eq!(log["tested_head"], candidate.as_str());
             let captured = log["output"].as_str().unwrap_or_default();
             assert!(
-                captured.contains("truncated") && !captured.contains("suite::added"),
-                "the extra failure is only in the dropped middle"
+                captured.contains("truncated") && captured.len() <= 256 * 1024 + 1024,
+                "bounded evidence must disclose omitted output"
+            );
+            for detail in [
+                "suite::added",
+                "scenario completion1335",
+                "nested assertion failed: child completion must retain its cause",
+                "left: cancelled",
+                "right: completed",
+            ] {
+                assert!(captured.contains(detail), "middle failure lost {detail}");
+            }
+            assert_eq!(log["base_sha"], fx.base_sha);
+            let claim_input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let message = action(&host, "claim_validate", &claim_input)
+                .expect_err("the claimed middle failure also requires repair")
+                .to_string();
+            assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
+            let logs = host.claim_log_contents.lock().unwrap();
+            let claim: Value =
+                serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"]).unwrap();
+            assert_eq!(claim["tested_head"], candidate.as_str());
+            assert_eq!(claim["base_sha"], fx.base_sha);
+            assert_eq!(claim["failure_kind"], log["failure_kind"]);
+            assert_eq!(claim["failures"], log["failures"]);
+            assert_eq!(claim["output"], log["output"]);
+            drop(logs);
+            assert!(
+                log["baseline"]["log"].as_str().is_some(),
+                "the candidate comparison retains its base evidence"
             );
             assert_eq!(log["failure_kind"], "candidate");
             assert!(
