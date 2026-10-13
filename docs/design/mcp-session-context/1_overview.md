@@ -4,7 +4,7 @@ type: design
 title: "MCP Session Context — Overview"
 owner: codex
 last_updated: 2026-09-30
-last_validated: 2026-10-09
+last_validated: 2026-10-13
 status: Accepted
 feature: mcp-session-context
 doc_role: overview
@@ -20,8 +20,12 @@ ToolSessionContext is Orbit's transport-to-Core invocation envelope. It keeps ca
 
 ## Live v1 flow
 
-1. A client selects a workspace in tool input or MCP initialize metadata.
-2. The accepting server resolves that address to a registered workspace and local runtime.
+1. A workspace-scoped call may select a workspace in tool input or MCP initialize
+   metadata; without one, the server may use its launch workspace. An id-routed
+   task call can identify its owner by task ID.
+2. The accepting server resolves the workspace address or task ID to a registered
+   workspace and local runtime under the applicable local or federated routing
+   rules.
 3. The server supplies caller, process, and transport audit metadata.
 4. The MCP adapter mints a fresh trace_id for each tools/call request.
 5. Core dispatch executes the tool and writes the authoritative audit event from the trusted context.
@@ -38,6 +42,6 @@ The external workspace value is addressing input, not a trusted workspace identi
 
 ## Current boundary
 
-MCP v1 still has one authoritative server host and stdio framing, either local or carried byte-for-byte through SSH. The current surface also has an explicit TCP listener transport and an opt-in federated stdio mux that routes to configured SSH destinations. Tool definitions carry global-versus-workspace-required scope; the accepting server and Core resolve capabilities and authorization. Caller machine and network labels remain audit evidence rather than authenticated principals; a destination serves the authority the session's argv asks for, because an SSH login to it is ownership of it [ORB-12564].
+MCP v1 still has one authoritative server host and stdio framing, either local or carried byte-for-byte through SSH. The current surface also has an explicit TCP listener transport and an opt-in federated stdio mux that routes to configured SSH destinations. Workspace selectors apply to workspace-scoped calls; federated id-routed task calls use the task ID and configured task-prefix table. Tool definitions carry global-versus-workspace-required scope; the accepting server and Core resolve capabilities and authorization. Caller machine and network labels remain audit evidence rather than authenticated principals; a destination serves the authority the session's argv asks for, because an SSH login to it is ownership of it [ORB-12564].
 
 See [2_design.md](./2_design.md) for the concrete path, [3_vision.md](./3_vision.md) for evolution gates, and [4_decisions.md](./4_decisions.md) for current design choices.
