@@ -235,6 +235,12 @@ fn lost_registry_refuses_allocation_until_the_high_water_mark_is_reestablished()
 /// them.
 #[test]
 fn losing_the_task_registry_leaves_populated_partitions_for_reindex() {
+    if crate::isolated_test::run_in_child(
+        "task_registry_recovery::losing_the_task_registry_leaves_populated_partitions_for_reindex",
+    ) {
+        return;
+    }
+
     let fixture = Fixture::new();
     fixture.add(&fixture.alpha, "Alpha one");
     let beta_task = fixture.add(&fixture.beta, "Beta one");
@@ -285,6 +291,12 @@ fn losing_the_task_registry_leaves_populated_partitions_for_reindex() {
 /// which is a failure to answer rather than a missing checkout.
 #[test]
 fn a_stat_failure_other_than_absence_keeps_a_populated_partition() {
+    if crate::isolated_test::run_in_child(
+        "task_registry_recovery::a_stat_failure_other_than_absence_keeps_a_populated_partition",
+    ) {
+        return;
+    }
+
     let fixture = Fixture::new();
     let beta_task = fixture.add(&fixture.beta, "Beta one");
 
