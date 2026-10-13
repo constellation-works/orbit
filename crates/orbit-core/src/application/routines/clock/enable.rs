@@ -17,9 +17,9 @@ use super::settings::{SYSTEMD_UNIT, load_clock_settings};
 use super::status::{
     ClockStatus, LaunchdHealthProbe, clock_manager_probe_error, clock_manager_unavailable_error,
     clock_status_from, launchd_health_issue, launchd_manager_probe_command,
-    launchd_reports_not_loaded, manager_command_error, manager_status_command,
+    launchd_reports_not_loaded, manager_command_error, manager_status_command, monotonic_usec,
     query_systemd_clock_details, systemd_reports_disabled_or_missing, systemd_reports_missing,
-    systemd_unschedulable_error,
+    systemd_schedulability_with_health, systemd_unschedulable_error,
 };
 
 fn manager_set_enabled_command(
@@ -141,7 +141,9 @@ fn apply_clock_enabled(
             return Err(manager_command_error(&restart));
         }
         let details = query_systemd_clock_details(runner)?;
-        if !details.is_schedulable() {
+        let (schedulable, _) =
+            systemd_schedulability_with_health(runner, Some(&details), monotonic_usec());
+        if !schedulable {
             return Err(systemd_unschedulable_error("enable completed"));
         }
         return Ok(clock_status_from(

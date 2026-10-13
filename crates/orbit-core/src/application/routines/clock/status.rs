@@ -191,36 +191,18 @@ pub(super) fn clock_status_with(
         (false, None)
     };
     if platform == ClockPlatform::Systemd && (enabled || schedulable) {
-        match query_systemd_service_health(runner, now_usec) {
-            Ok(service) => {
-                if enabled
-                    && service.running
-                    && service.issue.is_none()
-                    && manager_details.as_ref().is_some_and(|details| {
-                        details.loaded == Some(true)
-                            && details.is_running()
-                            && !details.next_elapse_known
-                    })
-                {
-                    // With OnUnitActiveSec, systemd waits for the oneshot to
-                    // finish before assigning the timer's next elapse.
-                    schedulable = true;
-                    health_issue = None;
-                }
-                if let Some(issue) = service.issue {
-                    schedulable = false;
-                    health_issue = Some(match health_issue {
-                        Some(previous) => format!("{previous}; {issue}"),
-                        None => issue,
-                    });
-                }
-            }
-            Err(error) => {
-                schedulable = false;
-                health_issue = Some(format!(
-                    "systemd tick health could not be verified: {error}"
-                ));
-            }
+        let (service_schedulable, service_issue) =
+            systemd_schedulability_with_health(runner, manager_details.as_ref(), now_usec);
+        if service_schedulable {
+            schedulable = true;
+            health_issue = None;
+        }
+        if let Some(issue) = service_issue {
+            schedulable = false;
+            health_issue = Some(match health_issue {
+                Some(previous) => format!("{previous}; {issue}"),
+                None => issue,
+            });
         }
     }
     Ok(clock_status_from(
@@ -254,6 +236,43 @@ fn query_systemd_service_health(
         .stdout(&command)?
         .ok_or_else(|| manager_command_error(&command))?;
     Ok(systemd_service_health(&output, now_usec))
+}
+
+/// Apply the service health rules shared by status and activation verification.
+/// An active timer with no next elapse is schedulable only while its loaded
+/// oneshot is healthy and in flight.
+pub(super) fn systemd_schedulability_with_health(
+    runner: &dyn ClockCommandRunner,
+    details: Option<&SystemdClockDetails>,
+    now_usec: Option<u64>,
+) -> (bool, Option<String>) {
+    let mut schedulable = details.is_some_and(SystemdClockDetails::is_schedulable);
+    match query_systemd_service_health(runner, now_usec) {
+        Ok(service) => {
+            if service.running
+                && service.issue.is_none()
+                && details.is_some_and(|details| {
+                    details.loaded == Some(true)
+                        && details.is_running()
+                        && !details.next_elapse_known
+                })
+            {
+                // With OnUnitActiveSec, systemd waits for the oneshot to
+                // finish before assigning the timer's next elapse.
+                schedulable = true;
+            }
+            if service.issue.is_some() {
+                schedulable = false;
+            }
+            (schedulable, service.issue)
+        }
+        Err(error) => (
+            false,
+            Some(format!(
+                "systemd tick health could not be verified: {error}"
+            )),
+        ),
+    }
 }
 
 struct SystemdServiceHealth {
@@ -302,7 +321,7 @@ fn systemd_service_health(output: &str, now_usec: Option<u64>) -> SystemdService
 }
 
 #[cfg(unix)]
-fn monotonic_usec() -> Option<u64> {
+pub(super) fn monotonic_usec() -> Option<u64> {
     let mut value = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -319,7 +338,7 @@ fn monotonic_usec() -> Option<u64> {
 }
 
 #[cfg(not(unix))]
-fn monotonic_usec() -> Option<u64> {
+pub(super) fn monotonic_usec() -> Option<u64> {
     None
 }
 

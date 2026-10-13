@@ -11,7 +11,10 @@ use super::converge::clear_clock_reload_pending;
 use super::manager::{ClockCommandRunner, ClockPlatform, ManagerCommand, NativeClockCommandRunner};
 use super::program::split_systemd_exec_start;
 use super::settings::{ClockSettings, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings};
-use super::status::{query_systemd_clock_details, systemd_unschedulable_error};
+use super::status::{
+    monotonic_usec, query_systemd_clock_details, systemd_schedulability_with_health,
+    systemd_unschedulable_error,
+};
 
 const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../../assets/clock/com.orbit.sweep.plist");
 const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../../../../assets/clock/orbit-sweep.service");
@@ -105,8 +108,8 @@ pub(super) fn validated_sweep_log_path(global_root: &Path) -> Result<PathBuf, Or
 pub struct ClockInstallReport {
     /// Unit files written.
     pub files_written: Vec<PathBuf>,
-    /// True when the unit was activated successfully. On systemd this also
-    /// means the manager reported it active with a finite future trigger.
+    /// True when the unit was activated successfully. On systemd this means
+    /// the timer is schedulable, including a healthy in-flight oneshot sweep.
     pub activated: bool,
     /// Follow-up commands to run manually when activation failed or was
     /// unavailable (e.g. no user systemd session).
@@ -288,7 +291,9 @@ fn install_systemd(
     let restarted = enabled && runner.run(&restart).unwrap_or(false);
     let activated = if restarted {
         let details = query_systemd_clock_details(runner)?;
-        if !details.is_schedulable() {
+        let (schedulable, _) =
+            systemd_schedulability_with_health(runner, Some(&details), monotonic_usec());
+        if !schedulable {
             return Err(systemd_unschedulable_error("restart completed"));
         }
         true
