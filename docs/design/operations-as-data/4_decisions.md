@@ -1,15 +1,15 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-08
+last_updated: 2026-10-12
 last_validated: 2026-10-12
-status: Accepted
+status: Draft
 feature: operations-as-data
 doc_role: decisions
 type: design
-summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
+summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the proposed kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 ---
@@ -21,15 +21,25 @@ related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 > earlier entries are retained as historical context only.
 
 The parent bearing is **[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)** (north-star: operations as data behind an
-operation registry), whose stored body now carries the friction pilot outcome and
-the ratchet.
+operation registry), whose stored body carries the friction pilot outcome and
+the touch-it-move-it ratchet. [Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)
+proposes replacing that ratchet.
 
-- **[Split spec/handler table joined by a typed verb enum](#split-spechandler-table-joined-by-a-typed-verb-enum) — Split spec/handler table joined by a typed verb enum** — Accepted.
-- **[Renderers and HTTP routes stay hand-written](#renderers-and-http-routes-stay-hand-written) — Renderers and HTTP routes stay hand-written** — Accepted.
-- **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating) — Freeze the pre-migration surface as fixtures before migrating** — Accepted.
-- **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) — Capability chokepoint for destructive operations outside MCP** — Accepted.
-- **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) — MCP advertisement is placement; the capability chokepoint is permission** — Accepted.
-- **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default) — Dashboard `web connect` grants operator by default** — Accepted.
+The last four entries are proposals from the 2026-10-12 design review. They
+describe kernel v2 and the migration plan in [2_design.md](./2_design.md) and
+stay proposed while this folder is `Draft`.
+
+- **[Split spec/handler table joined by a typed verb enum](#split-spechandler-table-joined-by-a-typed-verb-enum)** — Accepted.
+- **[Renderers and HTTP routes stay hand-written](#renderers-and-http-routes-stay-hand-written)** — Accepted; renderer selection amended by a proposed entry.
+- **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating)** — Accepted.
+- **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp)** — Accepted.
+- **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission)** — Accepted.
+- **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default)** — Accepted.
+- **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
+- **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Proposed.
+- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Proposed.
+- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Proposed.
+- **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Proposed.
 
 ## Split spec/handler table joined by a typed verb enum
 
@@ -39,7 +49,7 @@ the ratchet.
 ### Context
  [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 describes one operation table holding both the
 serializable definition and its handler. Orbit's layering makes that
-unreachable: every surface (`orbit-tools`, `orbit-cli`, `orbit-dashboard`) must
+unreachable: every surface (`orbit-tools`, `orbit-cli`, `orbit-web`) must
 read the definition, so it has to live at or below `orbit-common`; handlers need
 `&OrbitRuntime`, which lives in `orbit-core`, well above it. Co-locating them
 would either drag the runtime into the leaf crate or lift the specs above the
@@ -72,6 +82,8 @@ verb that is declared but not implemented fails to compile.
 
 ## Renderers and HTTP routes stay hand-written
 
+**Amended by (proposed):** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. Routes and renderers stay hand-written.
+
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
 **Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
@@ -86,7 +98,7 @@ friction pilot.
  The spec declares *which* rendering a verb wants (`CliRender`) but
 not how to render; the friction record and table printers stay in `orbit-cli` and
 know friction field names. Dashboard route shapes, serde request bodies, and
-HTTP-specific defaults stay hand-written in `orbit-dashboard`, which takes only
+HTTP-specific defaults stay hand-written in `orbit-web`, which takes only
 tool names and parameter names from the registry.
 
 
@@ -223,6 +235,8 @@ The gap the earlier entry named has therefore closed by deletion, not by a fix: 
 - **Reconsidering the owner-path `admitted()` denial** (option 3's own follow-through). Not rejected but already satisfied: that denial was removed with the owner route, so MCP placement no longer acts as an authorization statement anywhere and there is nothing left to reconsider.
 - **Leaving the pairing to a reader.** Rejected: it is exactly what the filing complained about — the relationship was true but only discoverable by holding two crates open, which is how it drifted in the first place.
 
+**Note (2026-10-12):** `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, named in decision 2, was retired with the orbit-tools unit tests in [ORB-13832]. The authorization matrix golden in `crates/orbit-cli/tests/output/output_goldens.rs` now records every tool's verdicts per caller; whether it still fails on a placement change was not re-verified in the 2026-10-12 review.
+
 ### Consequences
 
 - The question "may this caller perform this?" has one answer and one place to look, on every surface. "Will this caller be shown it?" is a different question with a different owner, and neither now implies the other by accident.
@@ -292,6 +306,195 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 - A capability-less MCP session is still refused, and now with a denial that names the operation, the required capability, and the remedy for its surface, rather than a bare `capability_refused`.
 - Cost: a CLI caller with no session grant, no agent envelope, and no TTY — a bare shell script or a cron entry — is refused both tools and must identify itself, the same trade the original chokepoint entry recorded for governed operations generally.
 - Cost: the guardrail table now has an exception list, asserted in both directions, so adding a name requires the same deliberate line as adding a governed tool does. [ORB-13625] added the distributed drain's executor lifecycle — `orbit.task.pull`, `orbit.drain.claim.bind`, `orbit.drain.claim.settle` — on the same floor: a follower's drain holds `agent` and nothing more, and attempt ownership is fenced by the claim journal against the session's own machine, not by a stronger capability.
+
+## The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface
+
+**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+
+### Context
+
+The friction pilot put every fact it could express as data into the spec,
+including the CLI's choice of renderer (`CliRender`, whose `TagList` variant
+exists only for friction). Facts it could not express stayed on the surfaces,
+several of them more than once and behind wildcard arms: the read/write class of
+a friction verb is decided in `FrictionOperationTool::execution_kind`
+(`_ => Mutating`), in the `Commands::Friction` arm of the CLI registry
+(`== List`, else the full runtime), in the redaction policy, and in claimed-worker
+routing. Two of those already disagree about `show`, `stats` and `tags`. The
+remaining nouns bring more single-surface facts: MCP schema conditionals for
+guarded task creation, CLI renderers, ID-addressed routing.
+
+### Decision
+
+Every per-verb fact has exactly one home, chosen by who needs it:
+
+1. A fact needed by two or more surfaces, or by the single tool entry every
+   surface traverses, is a field of the spec in `orbit-common`.
+2. A fact needed by one surface only is an exhaustive `match` on the verb enum
+   in that surface's crate.
+3. A surface table for a migrated noun has no wildcard arm. Adding a verb must
+   fail to compile wherever a decision about it is owed.
+
+This applies to every noun that migrates and to every new per-verb fact,
+including ones nobody has met yet: ask which surfaces need it, then place it.
+
+### Rejected alternatives
+
+- **Everything in the spec.** Kernel enums would grow a variant per noun quirk
+  (`CliRender::TagList` is the first), and MCP-only JSON Schema fragments or
+  CLI-only request shaping would sit in the leaf crate every surface compiles
+  against.
+- **Per-surface override tables with a default.** Shorter, but a default is a
+  wildcard: a new verb silently inherits whatever the default says, which is how
+  `execution_kind` and the CLI runtime choice drifted apart.
+
+### Consequences
+
+- A new verb produces a compile-error checklist across every surface that has a
+  decision to make about it, not just the spec and the handler.
+- `CliRender` leaves the spec for a CLI renderer table; MCP schema extensions get
+  an `orbit-tools` table.
+- Cost: one noun's behaviour lives in the spec plus up to one table per surface,
+  so reading a verb end to end means opening several files, and adding a verb
+  means editing each of them.
+
+## Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry
+
+**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/friction/mod.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
+
+### Context
+
+The friction spec declares parameter names, but nothing checks input against
+it. Each handler re-reads input by string name and silently accepts spellings
+the spec does not list (`required_string(&input, &["body", "description"],
+"body")`). Unknown fields are refused only by tools that call
+`reject_unknown_tool_fields` themselves, and friction does not. The redaction
+policy names `title`, `body` and the `description` alias in a separate file.
+The dashboard added its own field-name check (`FrictionCall::set`) to catch
+drift the tool entry does not.
+
+### Decision
+
+1. The spec declares each verb's `effect` (`Read` or `Write`) and each
+   parameter's `aliases` and `redact` class. Tool execution kind, the CLI's
+   default runtime need, the read route for claimed workers and the redaction
+   field lists are derived from them.
+2. `OperationSpec::parse_input` validates every call once, in the generic
+   operation tool's `execute`, which every surface reaches: it resolves aliases,
+   refuses retired and unknown fields, checks types, required presence and
+   `at_least_one_of`. Handlers read canonical names only.
+3. Validation checks presence and shape. Content rules stay in handlers.
+4. Unknown-field refusal is introduced per noun as warn-and-audit first, then
+   refusal after the 30-day compatibility window.
+
+### Rejected alternatives
+
+- **Typed per-verb request structs (`#[derive(Deserialize)]` with serde
+  aliases).** Gives handlers compile-time field access, but declares every
+  parameter twice, once in the spec and once in the struct, unless one is
+  generated from the other. Kept open as [3_vision.md](./3_vision.md) question 2.
+- **Validate in each adapter.** Three validators (CLI, MCP, dashboard) that
+  agree only by care, and the deterministic dispatcher would have none.
+- **Status quo.** Handlers stay the fifth copy of every parameter name, and the
+  aliases they accept stay invisible to every surface and to the compatibility
+  window.
+
+### Consequences
+
+- MCP, the CLI, the dashboard and the dispatcher get the same refusal, with the
+  same did-you-mean hint, for the same bad input.
+- Retiring an alias under the compatibility window is deleting one array entry.
+- `rejects_agent_field` and `reject_retired_task_add_input_fields` become
+  `retired_fields` entries.
+- Cost: refusing unknown fields is a wire change for callers that send extra
+  fields today, and each noun spends a 30-day window in which a mistyped field is
+  logged but still ignored.
+- Cost: `parse_input` has to reproduce the existing leniency exactly — a
+  `StringList` that accepts a string, an array or a comma-separated string — or
+  a migration changes what callers may send.
+
+## Migrated CLI verbs execute through the tool path
+
+**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/task/add.rs`, `crates/orbit-core/src/adapter/tool_host/task_tools.rs`
+
+### Context
+
+The friction CLI executes every verb with `runtime.run_tool`, so the CLI and MCP
+reach the same handler through the same capability chokepoint. The task,
+auto-task, routine and workflow-run CLIs call core services directly and build
+their own parameters: `TaskAddParams` is assembled from input in the CLI's
+`add.rs` and again in the tool handler, with different attribution
+(`mutation_identity` versus the `model` parameter) and different write
+screening.
+
+### Decision
+
+Every migrated CLI verb executes through `run_tool`. A verb the CLI has and MCP
+does not becomes a spec with `mcp_scope: None`: registered, unadvertised, and
+dispatched the same way. A noun migration that would keep a direct core call is
+not a migration.
+
+### Rejected alternatives
+
+- **Derive the CLI from the spec but keep calling the core service.** Keeps
+  today's CLI behaviour exactly, but leaves two input-to-parameter mappings and
+  two authorization paths per verb, which is the duplication the feature
+  exists to remove.
+
+### Consequences
+
+- One handler, one input mapping and one authorization decision per verb, on
+  every surface.
+- Cost: for task, auto-task, routine and workflow run, migration changes
+  behaviour. Capability resolution, audit rows, attribution and write screening
+  move to the tool path, so each migration PR documents a behaviour diff on top
+  of its help goldens and MCP snapshot.
+- Cost: CLI-only verbs become tools, and an unadvertised tool is still reachable
+  through `orbit tool run`. A destructive CLI-only verb such as `auto-task
+  delete` needs a `GOVERNED_OPERATIONS` row, and a re-blessed authorization
+  matrix golden, in the same PR.
+
+## Migrate the remaining nouns on a plan, not on contact
+
+**Recorded:** 2026-10-12 · proposed in the 2026-10-12 operations-as-data design review; no task yet
+
+### Context
+
+The friction pilot ([ORB-10358], 2026-07-26) set the touch-it-move-it ratchet:
+the next feature that touches a hand-wired noun migrates it. In the eleven weeks
+since, task, auto-task and workflow run all changed often, and no noun migrated.
+The ratchet depended on a reviewer noticing, at review time, that a change
+counted as touching a noun, and on the author accepting a migration as the price
+of an unrelated feature. Neither happened.
+
+### Decision
+
+Migrate the remaining nouns in a planned order, one Orbit task per phase (tagged
+`operations-as-data`), as in [2_design.md §9](./2_design.md#9-migration-plan).
+Progress is two counts the weekly code-health sweep reports: hand-written
+`impl Tool for` under `crates/orbit-tools/src/builtin/orbit/`, and
+`OrbitBuiltinAction` variants that are not the `Desktop*` actions or a noun's
+single variant. This amends the adoption model of bearing 1 of
+[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)
+only; the migration is still incremental, one noun at a time.
+
+### Rejected alternatives
+
+- **Keep the ratchet.** Its eleven-week record is the evidence against it.
+- **A CI check that fails on a new hand-written tool.** Turns the ratchet into a
+  merge gate, which Orbit does not use on `agent-main`; a reported count gives
+  the same visibility without blocking unrelated work.
+- **Big-bang migration.** Rejected by the north-star decision for the same
+  reasons it gave: churn across every surface with no incremental payoff.
+
+### Consequences
+
+- The transition has an end: two idioms coexist until the last phase, not
+  indefinitely.
+- Cost: migration tasks compete with feature work for drain capacity, and a
+  phase runs even when no feature currently needs that noun.
 
 ## Task References
 

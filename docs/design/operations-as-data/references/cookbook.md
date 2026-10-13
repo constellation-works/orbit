@@ -1,13 +1,13 @@
 ---
 title: Operations as Data — Migration Cookbook
 owner: claude
-last_updated: 2026-07-26
-last_validated: 2026-10-09
-status: Accepted
+last_updated: 2026-10-12
+last_validated: 2026-10-12
+status: Draft
 feature: operations-as-data
 doc_role: reference
 type: design
-summary: Step-by-step procedure for migrating a noun to the operation registry, and for adding a verb to an already-migrated noun.
+summary: Step-by-step procedure for migrating a noun to the operation registry under kernel v2, and for adding a verb to an already-migrated noun.
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data]
@@ -16,18 +16,20 @@ related_artifacts: [ORB-10358]
 
 # Operations as Data — Migration Cookbook
 
-Written from the friction migration ([ORB-10358]), which is the worked example
-for every step below. Two recipes: migrating a noun that is still hand-copied,
-and adding a verb to a noun that is already migrated.
+Written from the friction migration ([ORB-10358]) and updated for the proposed
+kernel v2 in [2_design.md](../2_design.md). Steps that need kernel v2 say so;
+until phase 0 of [2_design.md §9](../2_design.md#9-migration-plan) lands, only
+the friction-era kernel exists. Two recipes: migrating a noun that is still
+hand-wired, and adding a verb to a noun that is already migrated.
 
 ---
 
 ## Recipe A — migrate a noun
 
-### Step 0. Freeze the surface you must not move
+### Step 0. Freeze the surface and the behaviour you must not move
 
 **Do this before touching any code.** Build the current binary and capture the
-help output for the parent command and every subcommand:
+help output for the parent command and every subcommand, including nested ones:
 
 ```sh
 cargo build -p orbit-cli --bin orbit
@@ -36,11 +38,21 @@ for sub in "" add list show …; do
 done
 ```
 
-Then check `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` into your
-memory as the MCP baseline — it is already in-tree, so `git diff` on it at the
-end is the proof.
+`crates/orbit-cli/tests/snapshots/mcp_tools_list.json` is already in-tree, so
+`git diff` on it at the end is the MCP proof.
 
-These captures are the *only* reliable evidence that a derived surface did not
+If the noun's CLI calls core services directly today (task, auto-task, routine,
+workflow run), the help goldens are not enough: moving the CLI onto the tool
+path changes behaviour ([Migrated CLI verbs execute through the tool path](../4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path)).
+Also record, per verb, from the pre-migration binary:
+
+- the `--json` output for a representative call;
+- the audit rows one call writes (`command`, `subcommand`, target);
+- the outcome for a non-interactive caller with no `ORBIT_OPERATOR` and no agent
+  envelope, which the capability chokepoint may now refuse;
+- the attribution the stored record carries.
+
+These captures are the only reliable evidence that a derived surface did not
 move. Reconstructing them after the migration proves nothing.
 
 ### Step 1. Inventory the existing declaration sites
@@ -49,174 +61,196 @@ For a noun with verbs `v₁…vₙ`, find:
 
 | What | Where (friction example) |
 |------|--------------------------|
-| MCP `Tool` impls | `crates/orbit-tools/src/builtin/orbit/<noun>/*.rs` |
+| MCP `Tool` impls and `input_schema()` overrides | `crates/orbit-tools/src/builtin/orbit/<noun>/*.rs` |
 | MCP registration + workspace scope | `crates/orbit-tools/src/builtin/orbit/register.rs` |
 | Action enum variants | `crates/orbit-tools/src/host.rs` (`OrbitBuiltinAction`) |
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
-| Handlers | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
-| CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>.rs` |
-| CLI audit metadata | `crates/orbit-cli/src/command/operation/registry.rs` |
+| Handlers, and the input names and aliases they read | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
+| Redaction policy | `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs` |
+| Claimed-worker routing | `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` |
+| CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>/` |
+| CLI audit metadata and runtime need | `crates/orbit-cli/src/command/operation/registry.rs` |
+| Governed operations | `crates/orbit-common/src/governance/authorization/catalog.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
 
 Note where the *same* field is described differently in two places. Do **not**
-harmonize the wording during the migration — model the difference in the spec
-(`mcp_description` vs `cli.help`) and change it, if at all, in a later PR that
-is honestly a wire change.
+harmonize the wording during the migration. Model the difference in the spec
+(`mcp_description` versus `cli.help`) and change it, if at all, in a later PR
+that is honestly a wire change.
 
-### Step 2. Write the verb enum and the registry
+Note every spelling a handler accepts beyond the declared name (`description`
+for `body`, `task_id` for `during_task`). Each one becomes a declared alias.
 
-In `orbit-common`, next to the noun's existing shared types:
+### Step 2. Write the noun spec, the verb enum and the registry
 
-```rust
-pub enum <Noun>Verb { Add, List, /* … */ }
-pub type <Noun>Operation = OperationSpec<<Noun>Verb>;
+In `orbit-common`, next to the noun's existing shared types. Under kernel v2,
+the per-noun declarative macro emits the verb enum, its `spec()` match and the
+ordered operations list from one list, so they cannot disagree. Write a
+`NounSpec` holding the CLI name, tool prefix, `--help` summary, audit target
+type, any intermediate CLI groups, and the operations.
 
-impl <Noun>Verb {
-    pub fn spec(self) -> &'static <Noun>Operation {
-        match self { <Noun>Verb::Add => &ADD, /* … */ }   // exhaustive on purpose
-    }
-}
-
-pub const <NOUN>_OPERATIONS: &[<Noun>Operation] = &[ADD, LIST, /* … */];
-```
+For each verb, fill `cli_path`, `effect`, parameter groups,
+`at_least_one_of` and `retired_fields`. For each parameter, fill `aliases`,
+`default` and `redact` in addition to the friction-era fields. Choose `effect`
+from what the verb does, not from what the old CLI arm happened to open; where
+they differ, say so in the PR.
 
 Declaration order is contract twice over: it is `--help` subcommand order, and
-within a spec, `params` order is both `--help` arg order and MCP schema order.
-Copy both orders from the code you are replacing — the enum variant order for
-subcommands, the struct field order for parameters.
+within a spec, parameter order is both `--help` arg order and MCP schema order.
+Copy both orders from the code you are replacing.
 
 Factor repeated shapes with `const fn` helpers (friction has `text_param` and
-`count_param`), but write out anything that differs. A helper that needs three
-override arguments is not a helper.
+`count_param`) and shared flags with a parameter group, but write out anything
+that differs. A helper that needs three override arguments is not a helper.
 
-### Step 3. Write the registry invariant tests
+### Step 3. Test the registry at the boundary
 
-Before wiring any surface. These are cheap and they catch authoring mistakes the
-compiler cannot:
+Before wiring any surface, check what the compiler cannot:
 
-- every verb has exactly one spec, and `spec()` agrees with the table;
-- verb names and tool names are unique and follow `orbit.<noun>.<verb>`;
-- parameter names are unique within each operation;
-- subcommand order matches the shipped `--help` order (assert the literal list);
+- tool names follow `<tool_prefix>.<verb>` and are unique;
+- parameter names and aliases are unique within each operation, and no alias
+  equals another parameter's name;
+- subcommand order matches the shipped `--help` order (the Step 0 goldens);
 - MCP exposure matches `docs/design/mcp-bridge/references/conformance-v1.yaml`.
 
-Use the registry in `crates/orbit-common/src/governance/friction/operations.rs`
-as the worked example. Exercise the derived public surface at the boundary;
-the original friction registry unit tests have been retired.
+Exercise the derived public surface at the boundary, per the test strategy;
+the friction registry's original unit tests were retired.
 
 ### Step 4. Collapse the action enum
 
 Replace the noun's `n` `OrbitBuiltinAction` variants with one
-`<Noun>(<Noun>Verb)`. Fix the fallout mechanically:
+`<Noun>(<Noun>Verb)` and add `From<<Noun>Verb> for OrbitBuiltinAction`. Fix the
+fallout mechanically:
 
 - `OrbitBuiltinAction::<Noun>Add` → `OrbitBuiltinAction::<Noun>(<Noun>Verb::Add)`;
 - collapse or-patterns: `<Noun>(<Noun>Verb::Add | <Noun>Verb::Update)`;
-- turn any `_ => unreachable!()` inside a noun-scoped helper into an exhaustive
-  `match` on the verb, so a future verb has to state its behavior. The friction
-  hub executor did this and now returns a real error for `Stats`/`Resolve`
-  instead of panicking on a case it never received.
+- turn every wildcard arm that covers the noun into an exhaustive `match` on
+  the verb, so a future verb has to state its behaviour. Under
+  [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](../4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)
+  this includes `worker_tools.rs` and `artifact_redaction.rs`. Under kernel v2
+  the redaction field lists come from the parameters' `redact` class; delete the
+  noun's hand-written lists.
 
 ### Step 5. Derive MCP
 
-Delete the per-verb `Tool` files. Add one `<Noun>OperationTool(&'static
-<Noun>Operation)` whose `schema()` is `operation_tool_schema(self.0)` and whose
-`execute()` dispatches `OrbitBuiltinAction::<Noun>(self.0.verb)`. Register with a
-loop over the registry through `register_operation`, and delete the noun's block
-from `register_builtins`.
+Delete the per-verb `Tool` files. Under kernel v2, register the noun's
+operations with the generic `OperationTool<V>`; it validates input with
+`parse_input`, takes `execution_kind` from `effect`, and dispatches the action.
+Delete the noun's block from `register_builtins`.
+
+If a verb overrode `input_schema()`, move the override into the noun's exhaustive
+`schema_extension(verb)` table in `orbit-tools`. If a parameter has allowed values
+or a default, decide whether its schema keeps them in the description
+(wire-identical) or emits `enum`/`default` (additive wire change), and say which
+in the PR.
+
+Unknown-field refusal starts in warn-and-audit mode for the noun; the refusal
+flip is a separate change after the 30-day compatibility window.
 
 Then assert the derived schemas equal the shipped ones — name, description,
-parameter order, types, requiredness, and the exact description strings. Use
-`crates/orbit-tools/tests/tools/mcp_definitions.rs` for the public definition
-boundary and `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` for the
-shipped schema baseline; the original derived-schema unit tests have been retired.
+parameter order, types, requiredness and exact description strings — through
+`crates/orbit-tools/tests/tools/mcp_definitions.rs` and the
+`mcp_tools_list.json` snapshot.
 
 ### Step 6. Derive the CLI
 
-Delete the per-verb `Args` structs and `Execute` impls. Keep the parent
-`#[derive(Args)]` struct, and give its subcommand field the type
-`Invocation<<Noun>Verb>` with hand-written `Subcommand` and `FromArgMatches`
-impls that are three lines each, delegating to `operation_args`. Keep the
-response renderers — those are presentation and stay per-noun.
+Delete the per-verb `Args` structs and `Execute` impls. Under kernel v2 the
+generic `Invocation<V>` supplies the clap impls; the parent command's subcommand
+field has type `Invocation<<Noun>Verb>`. Keep only the noun's exhaustive CLI
+surface tables: `render(verb, &Value)` and, if the noun shapes requests for the
+CLI only, `prepare(verb, &mut Map)`.
 
-Update `command/operation/registry.rs`'s arm for the noun to read
-`invocation.spec.name`, `invocation.target_id()`, and `invocation.json` instead
-of matching verb by verb.
+Every verb executes through `run_tool`, including CLI-only verbs registered with
+`mcp_scope: None`. A destructive CLI-only verb becomes reachable through
+`orbit tool run`, so give it a `GOVERNED_OPERATIONS` row in this PR and re-bless
+the authorization matrix golden in `crates/orbit-cli/tests/output/output_goldens.rs`
+(`make goldens UPDATE=1`), reviewing its diff.
+
+Replace the noun's arm in `command/operation/registry.rs` with the generic
+helper (runtime need from `effect`, audit metadata from the noun spec and
+`cli_path`). Keep any input-dependent override, such as `governed_when` or a
+flag that needs the full runtime, around the helper, and check the derived audit
+labels against the old arm.
 
 Now cash in Step 0: commit the captured help files as
 `crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`
-in `crates/orbit-cli/tests/output/help_goldens.rs`, which compares the binary's live
-`--help` against them.
+in `crates/orbit-cli/tests/output/help_goldens.rs`.
 
 ### Step 7. Derive the handler table
 
 Add `dispatch(runtime, verb, input, model)` to `<noun>_tools.rs` with one
 exhaustive `match` on the verb, make the per-verb handlers private to it, and
-reduce `dispatch.rs` to a single arm.
+reduce `dispatch.rs` to a single arm. Under kernel v2, handlers take
+`OperationInput` and read canonical names only; delete their alias lists and
+any presence check `parse_input` now performs. Keep content checks.
 
 ### Step 8. Point the dashboard at the registry
 
-Take tool names from `<Noun>Verb::tool_name()` and validate field names against
-the spec. Leave route shapes, serde bodies, and HTTP-specific defaults alone —
-they are not verb data. Add a test asserting every parameter the dashboard sets
-is one the registry declares.
+Take tool names from `<Noun>Verb::tool_name()`. Leave route shapes, serde bodies
+and HTTP-specific defaults alone — they are not verb data. The tool entry
+refuses undeclared fields, so the dashboard needs no field-name check of its
+own.
 
 ### Step 9. Verify contract stability
 
+Run the gates in [CLAUDE.md](../../../../CLAUDE.md#gates) (`make ci-fast`,
+`make ci-test-affected`, `make ci-lint`, `make goldens`), sequentially, then:
+
 ```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets
-make ci-fast
-git diff --stat crates/orbit-cli/tests/snapshots/mcp_tools_list.json   # must be empty
+git diff --stat crates/orbit-cli/tests/snapshots/mcp_tools_list.json   # empty, or explained
 diff -ru /tmp/<noun>-help-before /tmp/<noun>-help-after                # must be empty
 ```
 
 An empty MCP snapshot diff plus an empty help diff is what "wire compatible"
-means. Anything else is a consumer-visible change that belongs in the PR
-description.
+means. Compare the Step 0 behaviour captures as well. Every difference is a
+consumer-visible change that the PR description lists.
 
 ### Step 10. Record the outcome
 
-Append a pilot/migration note directly to [North-star architecture bearing: operations as data behind an operation registry](../../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry), citing the task that supplied the evidence.
-(never hand-edit `.orbit/`), and add the noun to this feature's docs. If the
-migration surfaced a cost the ADR does not already name, name it.
+Update this feature's docs: move the noun's rows in [2_design.md](../2_design.md)
+from Proposed to Implemented, update the §9 progress counts, and add the noun to
+[1_overview.md](../1_overview.md)'s At a Glance table. If the migration
+surfaced a cost the decisions do not already name, name it in
+[4_decisions.md](../4_decisions.md).
 
 ---
 
 ## Recipe B — add a verb to a migrated noun
 
-1. Add the `<Noun>Verb` variant. Compilation now fails in exactly two places.
-2. Add the spec `const` and list it in `<NOUN>_OPERATIONS`, in the position you
-   want it to appear in `--help`.
-3. Add the `spec()` arm.
-4. Add the handler and its `dispatch` arm.
+1. Add the verb to the noun's macro list with its spec. Compilation now fails in
+   every surface table for the noun.
+2. Place it in the operations list where it should appear in `--help`.
+3. Fill each failing table: the handler, the CLI renderer, and any schema
+   extension, worker route or redaction decision the compiler asks for.
+4. If it destroys something outside its run's purpose, add its
+   `GOVERNED_OPERATIONS` row and re-bless the authorization matrix golden.
 5. Add a route only if the verb should be reachable over HTTP.
 
-Steps 1–4 are the whole cost for CLI and MCP. No surface file is edited: the
-subcommand, its flags, its `--help`, its tool schema, its MCP exposure, its audit
-metadata, and its JSON input projection all fall out of the spec.
+No adapter file is edited: the subcommand, its flags, its `--help`, its tool
+schema, its MCP placement, its validation, its audit metadata and its runtime
+need all come from the spec.
 
 ---
 
 ## Gotchas the friction migration hit
 
-- **`clap::Arg::value_name` takes `&'static str` only.** Building a clap surface
-  from runtime data needs interning; the adapter `Box::leak`s the SCREAMING_SNAKE
-  form. Bounded, but know it is there.
 - **clap's help ordering is insertion order for flags and a separate sequence for
   positionals.** Reproducing derive's output means adding args in field order and
   letting positionals fall where they fall. Freezing the help fixtures first is
-  what makes this checkable instead of hopeful.
-- **Required vs optional inputs were trimmed differently** by the old hand-written
-  code, and that difference is observable in error messages. Preserve it; do not
-  "clean it up" mid-migration.
-- **`register_inactive` tools are still executable** through `run_tool` — they are
-  hidden from MCP, not disabled. `ToolRegistry::schemas()` filters to active
+  what makes this checkable.
+- **Required and optional inputs were trimmed differently** by the old
+  hand-written code, and that difference is observable in error messages.
+  Preserve it; do not clean it up mid-migration.
+- **`register_inactive` tools are still executable** through `run_tool`; they
+  are hidden from MCP, not disabled. `ToolRegistry::schemas()` filters to active
   tools, so use `has()` when asserting that every verb is registered.
 - **Functional record update (`..OTHER`) is not usable in a `const`.** Write
-  near-duplicate specs out, or factor a `const fn` that takes the differing
-  fields.
+  near-duplicate specs out, factor a `const fn`, or use a parameter group.
+- **`value_name` does not need interning.** The workspace enables clap's
+  `string` feature, so pass the owned SCREAMING_SNAKE `String`; the friction
+  adapter's `Box::leak` predates noticing that.
 - **Test layout.** Sibling `tests/` mirroring source filenames, per
-  [test_layout.md](../../../design-patterns/test_layout.md) — not a nested
+  [test_layout.md](../../../design-patterns/test_layout.md), not a nested
   `<module>/tests.rs` child.
 
 ## Task References
