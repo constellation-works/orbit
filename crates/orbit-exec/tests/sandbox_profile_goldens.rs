@@ -159,6 +159,7 @@ fn run_child(root: &Path, output: &Path) {
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("HOME", root.join("home"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
         .env(OUTPUT_ENV, output)
         .env(ROOT_ENV, &root)
         .args([
@@ -318,6 +319,7 @@ impl Fixture {
         ];
         for dir in [
             home.join(".ssh"),
+            root.join("runtime"),
             home.join(".aws"),
             home.join(".cargo/registry"),
             home.join(".cargo/git"),
@@ -622,7 +624,23 @@ impl Fixture {
         .expect("compile Bubblewrap plan");
         let mut lines: Vec<String> = vec![format!("wrapper: {}", plan.wrapper)];
         let mut after_separator = false;
-        for arg in &plan.args {
+        // The real /run/user/<uid> exists only on hosts with a login session.
+        // The pinned XDG runtime above exercises the same mandatory mask;
+        // omit the host-dependent duplicate from these portable goldens.
+        // SAFETY: getuid has no arguments or memory-safety preconditions.
+        let host_runtime = PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }))
+            .canonicalize()
+            .ok();
+        let mut argv = plan.args.iter().peekable();
+        while let Some(arg) = argv.next() {
+            if arg == "--tmpfs"
+                && argv
+                    .peek()
+                    .is_some_and(|path| host_runtime.as_deref() == Some(Path::new(path.as_str())))
+            {
+                argv.next();
+                continue;
+            }
             let starts_option = !after_separator && arg.starts_with("--");
             if arg == "--" {
                 after_separator = true;
