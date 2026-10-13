@@ -110,7 +110,9 @@ Admitted unit tests:
   observation immediately after activation: a loaded active timer has no next
   trigger while a healthy oneshot is still running, or its service is missing,
   inactive, failed, unhealthy, or lacks safe recovery settings. Finite-trigger
-  rows provide controls. The public enable/install APIs use the native manager
+  rows include healthy, failed, and unreadable-service controls: service health
+  may grant the in-flight exception but cannot revoke a finite trigger. The
+  public enable/install APIs use the native manager
   and cannot force this transient or these failures economically without
   changing the host's user service. These matrices guard the premature
   activation refusal observed on 2026-10-13 and exercise the activation entry

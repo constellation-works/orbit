@@ -250,45 +250,22 @@ fn systemd_enable_accepts_healthy_in_flight_and_finite_timers() {
     let home = tempfile::tempdir().unwrap();
     let service = "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n";
 
-    for next_elapse in ["infinity", "1000000"] {
-        let runner = MockRunner::with_outputs(
-            systemd_activation_outputs(next_elapse, Some(service)),
-            vec![Ok(true), Ok(true), Ok(true), Ok(true)],
-        );
-        let status = set_clock_enabled_with(
-            root.path(),
-            true,
-            ClockPlatform::Systemd,
-            &runner,
-            home.path(),
-        )
-        .unwrap();
-
-        assert!(status.enabled);
-        assert!(status.schedulable, "next elapse {next_elapse}");
-        assert!(status.health_issue.is_none(), "next elapse {next_elapse}");
-        assert_eq!(runner.commands().len(), 6, "no retry or extra probe");
-    }
-}
-
-#[test]
-fn systemd_enable_accepts_finite_timers_with_failed_or_unreadable_sweeps() {
     let cases = [
+        ("healthy in-flight service", "infinity", Some(service)),
+        ("healthy finite timer", "1000000", Some(service)),
         (
-            "failed service",
+            "finite timer with failed service",
+            "1000000",
             Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
         ),
-        ("unreadable service", None),
+        ("finite timer with unreadable service", "1000000", None),
     ];
 
-    for (case, service) in cases {
-        let root = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
+    for (case, next_elapse, observed_service) in cases {
         let runner = MockRunner::with_outputs(
-            systemd_activation_outputs("1000000", service),
+            systemd_activation_outputs(next_elapse, observed_service),
             vec![Ok(true), Ok(true), Ok(true), Ok(true)],
         );
-
         let status = set_clock_enabled_with(
             root.path(),
             true,
@@ -300,6 +277,9 @@ fn systemd_enable_accepts_finite_timers_with_failed_or_unreadable_sweeps() {
 
         assert!(status.enabled, "{case}");
         assert!(status.schedulable, "{case}");
+        if observed_service == Some(service) {
+            assert!(status.health_issue.is_none(), "{case}");
+        }
         assert_eq!(
             runner.commands().len(),
             6,

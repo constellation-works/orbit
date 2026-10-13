@@ -45,48 +45,24 @@ fn installed_systemd_unit_has_recovery_settings_that_pass_inspection() {
 fn systemd_install_accepts_healthy_in_flight_and_finite_timers() {
     let service = "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n";
 
-    for next_elapse in ["infinity", "1000000"] {
+    let cases = [
+        ("healthy in-flight service", "infinity", Some(service)),
+        ("healthy finite timer", "1000000", Some(service)),
+        (
+            "finite timer with failed service",
+            "1000000",
+            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
+        ),
+        ("finite timer with unreadable service", "1000000", None),
+    ];
+
+    for (case, next_elapse, observed_service) in cases {
         let root = tempdir().unwrap();
         let home = tempdir().unwrap();
         let program = root.path().join("orbit");
         fs::write(&program, "fixture").unwrap();
         let runner = MockRunner::with_outputs(
-            systemd_activation_outputs(next_elapse, Some(service)),
-            vec![Ok(true), Ok(true), Ok(true)],
-        );
-
-        let report = install_clock_with(
-            root.path(),
-            program.to_str().unwrap(),
-            ClockSettings::default(),
-            ClockPlatform::Systemd,
-            &runner,
-            home.path(),
-        )
-        .unwrap();
-
-        assert!(report.activated, "next elapse {next_elapse}");
-        assert!(report.manual_steps.is_empty());
-        assert_eq!(runner.commands().len(), 5, "no retry or extra probe");
-    }
-}
-
-#[test]
-fn systemd_install_accepts_finite_timers_with_failed_or_unreadable_sweeps() {
-    let cases = [
-        (
-            "failed service",
-            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
-        ),
-        ("unreadable service", None),
-    ];
-
-    for (case, service) in cases {
-        let root = tempdir().unwrap();
-        let home = tempdir().unwrap();
-        let program = root.path().join("orbit");
-        let runner = MockRunner::with_outputs(
-            systemd_activation_outputs("1000000", service),
+            systemd_activation_outputs(next_elapse, observed_service),
             vec![Ok(true), Ok(true), Ok(true)],
         );
 
