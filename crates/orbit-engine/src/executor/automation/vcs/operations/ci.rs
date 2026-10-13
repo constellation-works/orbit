@@ -80,7 +80,9 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "commit": commit, "jobs": jobs }))
 }
 
-/// One failed job's bounded, redacted failed-step log.
+/// One failed job's bounded, redacted failed-step log. `fallback_error` is
+/// the redacted reason the read recovered no text, so the caller can tell an
+/// unreadable log from a readable one.
 pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
     let run_id = required_string(input, "run_id")?;
     let job_id = required_string(input, "job_id")?;
@@ -94,7 +96,11 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         github_cli::LogReadBounds::new(MAX_JOB_LOG_BYTES),
         None,
     )?;
-    Ok(json!({ "log": read.log.text, "truncated": read.log.truncated }))
+    Ok(json!({
+        "log": read.log.text,
+        "truncated": read.log.truncated,
+        "fallback_error": read.fallback_error,
+    }))
 }
 
 /// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a
