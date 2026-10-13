@@ -156,6 +156,11 @@ processes, so a saturated host favors the store, lock holders, and CLI over comp
 
 - CPU: niceness is raised to at least 10. This is a floor, not a setting: a caller already
   nicer than 10 keeps its level, and the wrapper never lowers it.
+  The macOS worker profile grants `system-sched` only for `(target self)` so
+  a child can raise its own niceness. It does not grant scheduling changes to
+  another process; macOS still refuses priority elevation by an unprivileged
+  process. A worker already running under an older profile keeps that profile
+  until its next launch, and may still refuse the niceness change.
 - IO (Linux only): the command runs in the best-effort class at level 7, the lowest
   best-effort level, through `ionice -c 2 -n 7`. The idle class is not used, because it can
   starve compilation while Orbit's store keeps issuing IO. Where `ionice` is not on `PATH`,
@@ -184,6 +189,17 @@ runtime, and
 `make watch` admitting each check/test iteration without retaining a slot while idle. It
 also asserts child niceness and IO class for admitted and bypassed runs, and that the
 opt-out and a caller already nicer than the floor keep their priority.
+On a native macOS host, the `orbit-exec` sandbox integration tests run this
+script under the compiled worker profile and check the scheduling boundary:
+
+```bash
+ORBIT_REQUIRE_SANDBOX_EXEC=1 cargo test -p orbit-exec --test sandbox sandbox_exec_build_budget_self_test_passes_under_worker_profile
+ORBIT_REQUIRE_SANDBOX_EXEC=1 cargo test -p orbit-exec --test sandbox sandbox_exec_scheduling_changes_are_self_only_and_unprivileged
+```
+
+An apply refusal inside an existing worker defers these integration tests;
+it does not prove that the new profile's scheduling grant works. The native
+host commands above require sandbox application and fail on that refusal.
 Commands expected to run have a 30-second bound to allow delayed admission or
 interpreter startup. The wait-reporting case polls for an elapsed-time progress
 line and limits the number of lines relative to the observation time, so a slow

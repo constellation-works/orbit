@@ -171,6 +171,13 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
+      # The worker-profile integration test runs the build-budget self-test,
+      # whose bounded subprocess probes use GNU timeout.
+      - name: Install build-budget test prerequisite
+        run: |
+          brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
       # Exercises the real sandbox-exec profiles, compiled SBPL goldens and
       # tests/sandbox/macos_sandbox.rs enforcement tests. The shared apply guard
       # reports a nested sandbox_apply refusal elsewhere, but must fail here:

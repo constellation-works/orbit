@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
 
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
