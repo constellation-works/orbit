@@ -1,6 +1,7 @@
 //! Probe lifetimes at the signed-release update boundary. Reuse the integrity
 //! fixture without adding another responsibility to its large parent module.
 
+#[cfg(target_os = "linux")]
 use super::*;
 
 #[cfg(target_os = "linux")]
