@@ -168,6 +168,25 @@ fn supervisor_stops_never_classify_partial_failures_as_known_red() {
                     }
                 );
                 assert_eq!(check.base_replay, Some(BaseReplay::FailingTests));
+                let mut baseline = cached_base_check(
+                    &repo,
+                    base.trim(),
+                    command,
+                    check.base_log["summary"].get("selection"),
+                )
+                .unwrap();
+                let mut run = run;
+                assert!(baseline.reproduces(&run));
+                for (candidate_timeout, base_timeout) in
+                    [(true, false), (false, true), (true, true)]
+                {
+                    run.timed_out = candidate_timeout;
+                    baseline.result.as_mut().unwrap().timed_out = base_timeout;
+                    assert!(
+                        !baseline.reproduces(&run),
+                        "timeouts cannot confirm matching failures"
+                    );
+                }
             }
         }
     }
@@ -439,78 +458,143 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
     assert_eq!(check_cached.base_log["cached"], true);
 }
 
-// Fault injection: candidate-only failures yield BasePasses, and completed base
-// results remain reusable from the cache. [ORB-15350]
+// Fault injection: reviewer comparisons preserve candidate-only identities,
+// including against failed and unidentified bases and cached full results.
 #[test]
 #[cfg(unix)]
 fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() {
-    let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
-    let repo = root.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    git_ok(&repo, &["init", "-q", "-b", "main"]);
-    // Passes on base (candidate.txt absent); fails on candidate.
-    fs::write(
-        repo.join("check.sh"),
-        "#!/bin/sh\n\
-         selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
-         [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
-         printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" \
-         > \"$ORBIT_VALIDATION_SUMMARY\"\n\
-         if [ -f candidate.txt ]; then\n\
-             echo 'test suite::broken ... FAILED'\n\
-             exit 1\n\
-         fi\n\
-         exit 0\n",
-    )
-    .unwrap();
-    fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
-    git_ok(&repo, &["add", "check.sh"]);
-    git_ok(&repo, &["commit", "-q", "-m", "base"]);
-    let base = String::from_utf8(
-        Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&repo)
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    fs::write(repo.join("candidate.txt"), "after\n").unwrap();
-    git_ok(&repo, &["add", "candidate.txt"]);
-    git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
-
-    let budget = ReplayBudget::new(Duration::from_secs(4));
-    let check = verify_base_failure(
-        &Host,
-        &repo,
-        base.trim(),
-        "./check.sh",
-        &["suite::broken".to_string()],
-        "jrun-fixture-1",
-        budget,
-    )
-    .unwrap();
-    assert!(
-        matches!(check.verdict, BaseFailureVerdict::BasePasses(_)),
-        "candidate-only failure yields BasePasses: {:?}",
-        check.verdict
-    );
-    assert_eq!(check.base_log["cached"], false);
-
-    // Second call reuses the completed base result from cache
-    let check_cached = verify_base_failure(
-        &Host,
-        &repo,
-        base.trim(),
-        "./check.sh",
-        &["suite::broken".to_string()],
-        "jrun-fixture-2",
-        budget,
-    )
-    .unwrap();
-    assert!(
-        matches!(check_cached.verdict, BaseFailureVerdict::BasePasses(_)),
-        "cached result still yields BasePasses"
-    );
-    assert_eq!(check_cached.base_log["cached"], true);
+    for (case, candidate_output, base_output, verdict) in [
+        (
+            "base-passes",
+            "test suite::broken ... FAILED",
+            None,
+            "base_passes",
+        ),
+        (
+            "shared-plus-new",
+            "test suite::broken ... FAILED\ntest suite::added ... FAILED",
+            Some("test suite::broken ... FAILED"),
+            "candidate_adds",
+        ),
+        (
+            "disjoint",
+            "test suite::added ... FAILED",
+            Some("test suite::broken ... FAILED"),
+            "candidate_adds",
+        ),
+        (
+            "noncomparable",
+            "test suite::broken ... FAILED",
+            Some("test suite::broken ... FAILED"),
+            "not_comparable",
+        ),
+        (
+            "base-unknown",
+            "test suite::added ... FAILED",
+            Some("unknown failure"),
+            "inconclusive",
+        ),
+        (
+            "both-unknown",
+            "unknown failure",
+            Some("unknown failure"),
+            "inconclusive",
+        ),
+    ] {
+        let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+        let repo = root.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        git_ok(&repo, &["init", "-q", "-b", "main"]);
+        // Preserve the original narrowed passing-base case. A mismatched
+        // reported selection refuses even identical identities; the other
+        // rows exercise full-selection comparisons and their cache.
+        let summary = if case == "base-passes" {
+            "selection=\"$ORBIT_VALIDATION_SELECTION\"; [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'; printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n"
+        } else if case == "noncomparable" {
+            "if [ -f candidate.txt ]; then selection='{\"packages\":[\"suite\"]}'; else selection='{\"packages\":[\"other\"]}'; fi; printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n"
+        } else {
+            ""
+        };
+        let base_script = base_output.map_or_else(
+            || "exit 0".to_string(),
+            |output| format!("printf '%s\\n' '{output}'; exit 1"),
+        );
+        fs::write(repo.join("check.sh"), format!(
+            "#!/bin/sh\n{summary}if [ -f candidate.txt ]; then printf '%s\\n' '{candidate_output}'; exit 1; fi\n{base_script}\n"
+        )).unwrap();
+        fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        git_ok(&repo, &["add", "check.sh"]);
+        git_ok(&repo, &["commit", "-q", "-m", "base"]);
+        let base = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        fs::write(repo.join("candidate.txt"), "after\n").unwrap();
+        git_ok(&repo, &["add", "candidate.txt"]);
+        git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
+        for cached in [false, true] {
+            let check = verify_base_failure(
+                &Host,
+                &repo,
+                base.trim(),
+                "./check.sh",
+                &[],
+                "jrun-fixture",
+                ReplayBudget::new(Duration::from_secs(4)),
+            )
+            .unwrap();
+            match verdict {
+                "base_passes" => assert!(
+                    matches!(check.verdict, BaseFailureVerdict::BasePasses(_)),
+                    "{case}: {:?}",
+                    check.verdict
+                ),
+                "candidate_adds" => assert_eq!(
+                    check.verdict,
+                    BaseFailureVerdict::CandidateAdds {
+                        failures: vec!["test suite::added".to_string()]
+                    },
+                    "{case}"
+                ),
+                "inconclusive" => assert!(
+                    matches!(&check.verdict, BaseFailureVerdict::Inconclusive(reason)
+                    if reason.contains("failure identities are missing")),
+                    "{case}: {:?}",
+                    check.verdict
+                ),
+                "not_comparable" => assert!(
+                    matches!(&check.verdict, BaseFailureVerdict::NotComparable(_)),
+                    "{case}: {:?}",
+                    check.verdict
+                ),
+                _ => unreachable!(),
+            }
+            assert_eq!(check.base_log["cached"], cached, "{case}");
+            assert_eq!(
+                check.base_replay,
+                Some(if !summary.is_empty() {
+                    BaseReplay::FailingTests
+                } else if cached {
+                    BaseReplay::CachedFailureSet
+                } else {
+                    BaseReplay::FullSelection
+                }),
+                "{case}"
+            );
+            if verdict == "candidate_adds" {
+                assert!(
+                    check.candidate_log["failures"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("test suite::added"))
+                );
+                assert_eq!(check.base_log["failures"], json!(["test suite::broken"]));
+            }
+        }
+    }
 }

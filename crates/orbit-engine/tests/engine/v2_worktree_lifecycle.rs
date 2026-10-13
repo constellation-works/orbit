@@ -1250,34 +1250,66 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
     isolated(
         "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
         || {
-            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
-            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            // The base has no feature.txt, so the base passes and the
-            // failure is the candidate's.
-            let command = "test ! -f feature.txt || { echo 'feature.txt is wrong' >&2; exit 3; }";
-            preserved.host.set_required_commands(&[command]);
-            let setup = preserved.next_setup();
-
-            let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
-            assert_eq!(resumed["implement"], true);
-            assert_eq!(resumed["repair"]["trigger"], "validation");
-            assert_eq!(resumed["repair"]["command"], command);
-            assert_eq!(resumed["repair"]["exit_code"], 3);
-            assert!(
-                resumed["repair"]["output"]
-                    .as_str()
-                    .unwrap()
-                    .contains("feature.txt is wrong"),
-                "{resumed}"
-            );
-            let checkout = Checkout::from_setup(&setup);
-            assert_eq!(
-                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
-                "feature\n",
-                "the implementer starts from the candidate"
-            );
-            assert_resume_recorded(&preserved, "resumed_repaired");
+            for (case, command) in [
+                (
+                    "base-passes",
+                    "test ! -f feature.txt || { echo 'feature.txt is wrong' >&2; exit 3; }",
+                ),
+                (
+                    "disjoint",
+                    "if test -f feature.txt; then echo 'test suite::added ... FAILED'; else echo 'test suite::broken ... FAILED'; fi; exit 3",
+                ),
+                (
+                    "shared-plus-new",
+                    "echo 'test suite::broken ... FAILED'; test ! -f feature.txt || echo 'test suite::added ... FAILED'; exit 3",
+                ),
+                ("unknown", "echo 'lint is red' >&2; exit 3"),
+            ] {
+                let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+                preserved.host.set_required_commands(&[command]);
+                let setup = preserved.next_setup();
+                let resumed = preserved.resume(&setup).expect("candidate_resume");
+                assert_eq!(resumed["outcome"], "resumed_repaired", "{case}: {resumed}");
+                assert_eq!(resumed["implement"], true);
+                assert_eq!(resumed["repair"]["trigger"], "validation");
+                assert_eq!(resumed["repair"]["command"], command);
+                assert_eq!(resumed["repair"]["exit_code"], 3);
+                assert_eq!(resumed["repair"]["baseline_reproduces"], false);
+                let expected = if case == "base-passes" {
+                    "feature.txt is wrong"
+                } else if case == "unknown" {
+                    "lint is red"
+                } else {
+                    "suite::added"
+                };
+                assert!(
+                    resumed["repair"]["output"]
+                        .as_str()
+                        .unwrap()
+                        .contains(expected),
+                    "{resumed}"
+                );
+                if case == "disjoint" || case == "shared-plus-new" {
+                    assert_eq!(
+                        resumed["repair"]["baseline"]["failures"],
+                        json!(["test suite::broken"])
+                    );
+                    assert!(
+                        resumed["repair"]["failures"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&json!("test suite::added"))
+                    );
+                }
+                let checkout = Checkout::from_setup(&setup);
+                assert_eq!(
+                    fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
+                    "feature\n",
+                    "the implementer starts from the candidate"
+                );
+                assert_resume_recorded(&preserved, "resumed_repaired");
+            }
         },
     );
 }
@@ -1292,9 +1324,9 @@ fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implement
         || {
             let preserved = PreservedCandidate::new("feature.txt", "feature\n");
             commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            preserved
-                .host
-                .set_required_commands(&["echo 'lint is red' >&2; exit 3"]);
+            preserved.host.set_required_commands(&[
+                "printf 'error: lint is red\\n  --> src/lib.rs:1:1\\n' >&2; exit 3",
+            ]);
             let setup = preserved.next_setup();
 
             let resumed = preserved.resume(&setup).expect("candidate_resume");

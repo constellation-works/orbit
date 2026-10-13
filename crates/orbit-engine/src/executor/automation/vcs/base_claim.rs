@@ -43,9 +43,9 @@ const BASE_REPLAY_RESERVE_DIVISOR: u32 = 4;
 /// claim that the pinned base fails it the same way [ORB-14434].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BaseFailureVerdict {
-    /// The base fails exactly as the candidate: same exit status, same
-    /// timeout outcome, and no failure the base does not also name. Carries
-    /// the failures both name.
+    /// Comparable completed runs fail with the same exit status and a
+    /// nonempty candidate failure set covered by the base identities.
+    /// Carries the failures both name.
     Reproduced { failures: Vec<String> },
     /// The base fails as the candidate does, and the candidate's failures
     /// are known red [ORB-15546]: at least one, every one a test the base
@@ -195,9 +195,10 @@ impl BaseFailureCheck {
 /// `compare_with_base`. A base run that is not comparable with what it was
 /// handed settles nothing.
 ///
-/// A full replay must reproduce the exit status and timeout outcome
+/// A full replay must confirm the identities and exit status
 /// `BaselineCheck::reproduces` compares; a replay of the failing tests ran
-/// part of the selection, so only its own timeout disqualifies it. Either
+/// part of the selection, so its exit status need not match. Timeouts leave
+/// the claim inconclusive, except for explicitly attributed reserve cuts. Either
 /// way the failures each output names (`failure_identities`) must not grow
 /// on the candidate, and every failure the reviewer named must appear in the
 /// base's output. A reproduced claim is `KnownRed` when the candidate's
@@ -258,6 +259,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         "passed": run.passed,
         "network_retries": run.network_retries,
         "output": run.output,
+        "failures": run.failures,
         "host_output_refusal": host_output_refusal,
         "validation_env": run.environment_record(),
         "summary": run.summary,
@@ -328,7 +330,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         .then(|| cached_base_check(workspace_path, base_sha, command, full.as_ref()))
         .flatten()
         .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
-    // A run the validation timeout stopped is compared whole, timeout and all.
+    // A timed-out run is compared whole for evidence, never confirmed.
     let narrowed = (!run.timed_out || cut.is_some())
         .then(|| failing_tests_selection(full.as_ref(), &on_candidate, claimed_failures))
         .flatten();
@@ -398,6 +400,25 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         }
         Ok(base) => base,
     };
+    if base.timed_out || (run.timed_out && cut.is_none()) {
+        return Ok(checked(BaseFailureVerdict::Inconclusive(
+            "a timed-out run cannot establish matching failure identities".to_string(),
+        )));
+    }
+    if on_candidate.is_empty() || base.failures.is_empty() {
+        return Ok(checked(BaseFailureVerdict::Inconclusive(
+            "failure identities are missing, so matching failures are unconfirmed".to_string(),
+        )));
+    }
+    let added = on_candidate
+        .difference(&base.failures)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !added.is_empty() {
+        return Ok(checked(BaseFailureVerdict::CandidateAdds {
+            failures: added,
+        }));
+    }
     let reproduces = match replay {
         BaseReplay::FailingTests => !base.timed_out,
         BaseReplay::CachedFailureSet | BaseReplay::FullSelection => check.reproduces(&run),
@@ -422,20 +443,15 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             "the claimed failure `{missing}` is not in base {base_sha}'s output"
         ))));
     }
-    let added = on_candidate
-        .difference(&base.failures)
-        .cloned()
-        .collect::<Vec<_>>();
-    Ok(checked(match (added.is_empty(), &cut) {
-        (false, _) => BaseFailureVerdict::CandidateAdds { failures: added },
-        (true, Some(reason)) => BaseFailureVerdict::Cut {
+    Ok(checked(match &cut {
+        Some(reason) => BaseFailureVerdict::Cut {
             reason: reason.clone(),
             failures: on_candidate.into_iter().collect(),
         },
-        (true, None) if known_red(&run, &base.failures) => BaseFailureVerdict::KnownRed {
+        None if known_red(&run, &base.failures) => BaseFailureVerdict::KnownRed {
             failures: on_candidate.into_iter().collect(),
         },
-        (true, None) => BaseFailureVerdict::Reproduced {
+        None => BaseFailureVerdict::Reproduced {
             failures: on_candidate.into_iter().collect(),
         },
     }))

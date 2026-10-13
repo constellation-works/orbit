@@ -523,6 +523,8 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         "exit_code": run.exit_code,
         "timed_out": run.timed_out,
         "output": run.output,
+        "failures": run.failures,
+        "baseline_reproduces": red,
         "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
             "reason": refusal.reason.as_str(),
             "detail": refusal.detail,

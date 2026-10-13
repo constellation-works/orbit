@@ -244,6 +244,8 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "exit_code": run.exit_code,
             "timed_out": run.timed_out,
             "output": run.output,
+            "failures": run.failures,
+            "baseline_reproduces": red,
             "validation_env": validation_env,
             "failure_kind": if recovered.is_some() {
                 json!("flaky")
