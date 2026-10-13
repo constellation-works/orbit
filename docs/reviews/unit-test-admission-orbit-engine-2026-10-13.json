@@ -1,0 +1,761 @@
+{
+  "schema_version": 1,
+  "audit": "docs/reviews/unit-test-audit-2026-10-12.json",
+  "audited_head": "dd268d0d5a1640b709bcac0d3759b04879f77a14",
+  "delivery_base": "e02530797379899c4635936dd04cac136b5deb49",
+  "counts": {
+    "corrected_admission": 38,
+    "moved": 39,
+    "retired": 8
+  },
+  "reconciliation_basis": "Rechecked existing crate-root exports and current private observer/fault boundaries; generic dispatch/RuntimeHost move rationale does not make private CiQueries, inspection leases, raw process observers or comparator diagnostics injectable. Current admission rules require the cheapest boundary that preserves the same guarantee. The twelve old gc.rs identities resolve to the split cleanup.rs and gc/tests files; nine collector cases relocate, three final-removal safety cases retain their specific private seams. No visibility widened or production logic changed.",
+  "entries": [
+    {
+      "identity": "activity_job/cli_runner/supervisor/tests/output.rs::a_running_childs_output_is_sampled_before_it_exits",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "activity_job/cli_runner/supervisor/tests/output.rs::a_running_childs_output_is_sampled_before_it_exits",
+      "criterion": 2,
+      "qualifying_seam": "SpawnWithTimeoutRequest.on_progress + ProgressReporter.report",
+      "evidence": "The callback receives observed byte counts and the recent raw bytes before exit; public run_cli_backend configures tracing progress internally and accepts no callback. The existing 15-byte sample assertion needs that observer, not merely a final audit blob.",
+      "current_source": "crates/orbit-engine/src/activity_job/cli_runner/supervisor/tests/output.rs",
+      "current_line": 56
+    },
+    {
+      "identity": "activity_job/cli_runner/supervisor/tests/output.rs::spawn_with_timeout_kills_grandchild_holding_output_pipes",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "activity_job/cli_runner/supervisor/tests/output.rs::spawn_with_timeout_kills_grandchild_holding_output_pipes",
+      "criterion": 4,
+      "qualifying_seam": "spawn_with_timeout + SpawnTraceContext + captured pipe EOF",
+      "evidence": "This native process-group/pipe harness applies a 150ms deadline and checks the raw prefix, absent exit code and grandchild death within the 2s return budget. The exported provider accepts whole-second activity timeouts and projects terminal envelopes; scenario_c_wall_clock_timeout proves activity timeout but does not observe this pipe-holding grandchild or raw capture.",
+      "current_source": "crates/orbit-engine/src/activity_job/cli_runner/supervisor/tests/output.rs",
+      "current_line": 13
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::a_commit_lookup_killed_by_a_signal_stays_retryable",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/inspection.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::inspection_git_ignores_parent_locale_and_config",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "activity_job/cli_runner/tests/inspection.rs::inspection_git_ignores_parent_locale_and_config",
+      "criterion": 3,
+      "qualifying_seam": "SourceInspection::from_input/verify + effective-config Git observer",
+      "evidence": "The isolated observer asserts the effective C locale, removed LANGUAGE/GIT_CONFIG_* authority and disabled fsmonitor for every constructor/verification Git command. This security case was explicitly admitted in the current strategy on the delivery base; provider dispatch performs other Git calls and consumes the lease/verification internally, so it cannot apply the observer exclusively to this private boundary.",
+      "current_source": "crates/orbit-engine/src/activity_job/cli_runner/tests/inspection.rs",
+      "current_line": 287
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::missing_commit_and_slot_ownership_are_permanent",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "activity_job/cli_runner/tests/inspection.rs::missing_commit_and_slot_ownership_are_permanent",
+      "criterion": 3,
+      "qualifying_seam": "SourceInspection::from_input + leased root/slot owner",
+      "evidence": "The fixture leases and drops an inspection handle, then corrupts precisely its slot owner or removes it while retaining the checkout; missing commits and blobs are controls. Public dispatch consumes the lease internally and does not export the slot handle/owner transition. Recreating a provider lifecycle merely to recover that slot adds a separate mechanism to this ownership refusal invariant.",
+      "current_source": "crates/orbit-engine/src/activity_job/cli_runner/tests/inspection.rs",
+      "current_line": 26
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::short_inspection_revision_fails_a_retried_task_pilot_once",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/inspection.rs",
+      "boundary": "execute_job_with_resume"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::slot_exhaustion_and_git_io_stay_retryable",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "activity_job/cli_runner/tests/inspection.rs::slot_exhaustion_and_git_io_stay_retryable",
+      "criterion": 2,
+      "qualifying_seam": "SourceInspection::from_input + simultaneously held leases",
+      "evidence": "The fixture retains up to 64 SourceInspection handles to force pool exhaustion, alongside blocked-pool and invalid-gitdir IO controls. Public provider dispatch owns and drops these handles internally; forcing exhaustion there needs concurrent live providers and coordinated leases, rather than the bounded deterministic handle harness.",
+      "current_source": "crates/orbit-engine/src/activity_job/cli_runner/tests/inspection.rs",
+      "current_line": 83
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::slow_full_ancestry_copy_outlasts_the_local_deadline",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/inspection.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::stalled_full_ancestry_copy_leaves_a_reusable_slot",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "activity_job/cli_runner/tests/inspection.rs::stalled_full_ancestry_copy_leaves_a_reusable_slot",
+      "criterion": 2,
+      "qualifying_seam": "SourceInspection::create(copy_timeout) + verify",
+      "evidence": "The private constructor accepts a 500ms copy budget while the Git shim stalls for 600 seconds; a subsequent lease verifies that the failed lease cleaned the slot. Public activity timeout is not the inspection copy deadline and cannot replace this seam without waiting out the bulk production bound.",
+      "current_source": "crates/orbit-engine/src/activity_job/cli_runner/tests/inspection.rs",
+      "current_line": 145
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/inspection.rs::validation_failures_are_permanent",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/inspection.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/launcher.rs::launcher_lookup_refuses_parent_directory_traversal",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/launcher.rs",
+      "boundary": "locate_provider_launcher + run_cli_backend typed refusal"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::inspection_mutation_keeps_provider_output_and_finish_event",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::inspection_mutation_still_classifies_primary_checkout_drift",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::representable_timeout_stamps_a_future_provider_deadline",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::run_cli_backend_does_not_forward_benignly_named_ambient_credentials",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::run_cli_backend_keeps_claimed_task_read_but_denies_owner_task_updates",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::run_cli_backend_redacts_live_env_values_in_stored_blobs",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/orchestrator_env.rs::unrepresentable_deadline_omits_the_provider_deadline_stamp",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "crates/orbit-engine/tests/engine/admission_audit/orchestrator_env.rs::representable_timeout_stamps_a_future_provider_deadline",
+      "evidence": "Existing overflow duration/unset assertion consolidated into the moved provider-deadline fixture, alongside the representable control; no coverage deleted."
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/trusted_host.rs::a_forged_admission_value_does_not_admit_the_mode",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/trusted_host.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/trusted_host.rs::an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/trusted_host.rs",
+      "boundary": "run_cli_backend + exported audit/blob APIs"
+    },
+    {
+      "identity": "activity_job/cli_runner/tests/trusted_host.rs::distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/trusted_host.rs",
+      "boundary": "execute_job_with_resume"
+    },
+    {
+      "identity": "activity_job/job_executor/tests/resume.rs::resume_reexecuted_pr_output_reaches_promotion_and_checkpoint",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/resume.rs",
+      "boundary": "execute_job_with_resume"
+    },
+    {
+      "identity": "activity_job/tests/dispatcher.rs::dispatch_error_retryability_classification_table",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/dispatcher.rs",
+      "boundary": "DispatchError::is_non_retryable"
+    },
+    {
+      "identity": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_crlf_and_boundary_rules",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
+      "evidence": "Existing input/assertion body consolidated into the admitted chunk-boundary invariant; the large-diff case observes the private parser’s start count and retains its existing regression bound. Public fingerprints hide chunk offsets/counts; no parser was exported or copied."
+    },
+    {
+      "identity": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_empty_and_short_inputs",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
+      "evidence": "Existing input/assertion body consolidated into the admitted chunk-boundary invariant; the large-diff case observes the private parser’s start count and retains its existing regression bound. Public fingerprints hide chunk offsets/counts; no parser was exported or copied."
+    },
+    {
+      "identity": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_ignores_non_header_diff_lines",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
+      "evidence": "Existing input/assertion body consolidated into the admitted chunk-boundary invariant; the large-diff case observes the private parser’s start count and retains its existing regression bound. Public fingerprints hide chunk offsets/counts; no parser was exported or copied."
+    },
+    {
+      "identity": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_scales_linearly_on_many_file_diff",
+      "audit_decision": "move",
+      "disposition": "retired",
+      "coverage": "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
+      "evidence": "Existing input/assertion body consolidated into the admitted chunk-boundary invariant; the large-diff case observes the private parser’s start count and retains its existing regression bound. Public fingerprints hide chunk offsets/counts; no parser was exported or copied."
+    },
+    {
+      "identity": "executor/automation/ci/tests/collect.rs::a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/collect.rs::a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note",
+      "criterion": 2,
+      "qualifying_seam": "collect_for_sweep + RetryableHistory",
+      "evidence": "Explicit scheduled-1/2/3 identities force repeat incomplete-log errors to degrade only on the third distinct sweep. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/collect.rs",
+      "current_line": 236
+    },
+    {
+      "identity": "executor/automation/ci/tests/collect.rs::concurrency_cancelled_newest_runs_with_incomplete_logs_are_inconclusive_not_retryable",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/collect.rs::concurrency_cancelled_newest_runs_with_incomplete_logs_are_inconclusive_not_retryable",
+      "criterion": 2,
+      "qualifying_seam": "collect + CiQueries::job_concurrency_cancellation/run_logs",
+      "evidence": "The same incident runs switch only cancellation annotations; source-incomplete logs must stop producing retryable errors without spending any log read. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/collect.rs",
+      "current_line": 187
+    },
+    {
+      "identity": "executor/automation/ci/tests/collect.rs::repeated_collection_for_one_sweep_does_not_advance_persistence",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/collect.rs::repeated_collection_for_one_sweep_does_not_advance_persistence",
+      "criterion": 1,
+      "qualifying_seam": "collect_for_sweep + RetryableHistory",
+      "evidence": "Three calls with one sweep identity and a second sweep pin retry-count versus distinct-sweep counting. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/collect.rs",
+      "current_line": 279
+    },
+    {
+      "identity": "executor/automation/ci/tests/collect.rs::run_bound_above_the_page_limit_reports_the_applied_limit_and_its_cap",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/collect.rs::run_bound_above_the_page_limit_reports_the_applied_limit_and_its_cap",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries::repository_runs(limit)",
+      "evidence": "A full scripted 100-run page under an input bound of 200 pins applied clamping and truncation evidence together. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/collect.rs",
+      "current_line": 33
+    },
+    {
+      "identity": "executor/automation/ci/tests/collect.rs::unavailable_collection_breaks_a_consecutive_error_streak",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/collect.rs::unavailable_collection_breaks_a_consecutive_error_streak",
+      "criterion": 2,
+      "qualifying_seam": "collect_for_sweep + RetryableHistory::observe",
+      "evidence": "Two injected error observations, an unauthenticated sweep, then the same error must reset the consecutive streak. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/collect.rs",
+      "current_line": 301
+    },
+    {
+      "identity": "executor/automation/ci/tests/collect.rs::zero_listing_bounds_are_raised_to_one_so_the_sweep_can_complete",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/collect.rs::zero_listing_bounds_are_raised_to_one_so_the_sweep_can_complete",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries listing limits",
+      "evidence": "Numeric and string zero bounds exercise both listing floors and the completed evidence outcome. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/collect.rs",
+      "current_line": 53
+    },
+    {
+      "identity": "executor/automation/ci/tests/history.rs::persisted_retryable_errors_degrade_only_after_three_distinct_sweeps",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/history.rs::persisted_retryable_errors_degrade_only_after_three_distinct_sweeps",
+      "criterion": 1,
+      "qualifying_seam": "RetryableHistory::observe + save/load(history_path)",
+      "evidence": "Each explicit sweep row is persisted/reloaded, including duplicate scheduled-1, before scheduled-3 can degrade the same error. This tests a persisted state machine, not a serde round-trip. RetryableHistory and its path/save/load helpers are private. Public collection constructs its own history and derives sweep identity from host run ancestry or wall-clock hours, so this deterministic persistence/transition matrix would require host run records plus gh/git process emulation instead of the direct persisted state machine.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/history.rs",
+      "current_line": 6
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::closed_pull_request_does_not_retire_a_branch_with_a_newer_open_pull_request",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::closed_pull_request_does_not_retire_a_branch_with_a_newer_open_pull_request",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries open/closed PR fallback",
+      "evidence": "A closed PR at this SHA with a newer open PR omitted from the global page must retain the branch failure. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 517
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::closed_pull_request_omitted_by_full_listing_is_found_by_head",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::closed_pull_request_omitted_by_full_listing_is_found_by_head",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries::closed_pull_requests_for_branch",
+      "evidence": "A full 100-entry global closed page omits the relevant branch; branch-specific lookup must retire it and supply the matching PR identity. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 371
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::collector_separates_task_pr_failures_from_landing_push_failures",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::collector_separates_task_pr_failures_from_landing_push_failures",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries branch/event snapshots",
+      "evidence": "Same-SHA push and task-PR events with an omitted open PR page must remain in separate actionable buckets. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 238
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::concurrency_cancelled_runs_are_superseded_without_spending_budget_or_failing_the_sweep",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::concurrency_cancelled_runs_are_superseded_without_spending_budget_or_failing_the_sweep",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries scripted run order",
+      "evidence": "Three cancelled runs and a passing sibling workflow under one investigation slot must yield stale/inconclusive evidence and zero spent slots. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 70
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::failed_branch_specific_closed_pr_lookup_defers_the_failure",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::failed_branch_specific_closed_pr_lookup_defers_the_failure",
+      "criterion": 2,
+      "qualifying_seam": "CiQueries::closed_pull_requests_for_branch injected error + collect",
+      "evidence": "A full closed page followed by a branch-specific API fault must produce retryable discovery evidence rather than silently retire or file the branch. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 426
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::failed_global_closed_pr_listing_falls_back_to_branch_lookup",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::failed_global_closed_pr_listing_falls_back_to_branch_lookup",
+      "criterion": 2,
+      "qualifying_seam": "CiQueries::closed_pull_requests injected error + collect",
+      "evidence": "A global-listing fault with a successful branch fallback must still identify the closed PR without leaving a retryable error. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 471
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::latest_selection_is_independent_per_workflow_and_breaks_ties_by_run_id",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::latest_selection_is_independent_per_workflow_and_breaks_ties_by_run_id",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries equal-time workflow snapshots",
+      "evidence": "Equal created_at timestamps and multiple workflows pin independent run-id tie breaking and supersession. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 8
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::newer_cancellations_never_erase_an_older_actionable_failure",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::newer_cancellations_never_erase_an_older_actionable_failure",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries cancelled/failed run matrix",
+      "evidence": "Two newer non-actionable cancellations must leave the older failed-step run the only actionable failure under a one-run budget. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 183
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::red_runs_on_closed_pull_request_or_deleted_branches_are_not_current",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::red_runs_on_closed_pull_request_or_deleted_branches_are_not_current",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries closed/missing/moved ref matrix",
+      "evidence": "A closed same-head PR, deleted branch and advanced branch are separate retirement rows; the moved branch remains live. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 317
+    },
+    {
+      "identity": "executor/automation/ci/tests/partition.rs::superseded_cancelled_run_with_a_failed_step_is_still_investigated",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/partition.rs::superseded_cancelled_run_with_a_failed_step_is_still_investigated",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries::run_view failed-step evidence",
+      "evidence": "An older cancelled run with a failed step remains actionable despite a newer cancellation, consuming the sole budget slot once. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/partition.rs",
+      "current_line": 133
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::held_red_run_is_released_once_it_has_waited_past_the_window",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::held_red_run_is_released_once_it_has_waited_past_the_window",
+      "criterion": 2,
+      "qualifying_seam": "collect_at(now) + CiQueries ancestry",
+      "evidence": "An explicit clock at 35 minutes must release a held red run for a 30-minute window and hold it with the existing 60-minute control. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof. The explicit collection clock is also private; the public action uses Utc::now().",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 216
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::newest_completed_descendant_failure_is_current_and_older_red_runs_stay_superseded",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::newest_completed_descendant_failure_is_current_and_older_red_runs_stay_superseded",
+      "criterion": 1,
+      "qualifying_seam": "collect + CiQueries ancestry/conclusion matrix",
+      "evidence": "Completed descendant failure and success are separate rows: only the newer red is actionable and a newer green suppresses the old red. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 155
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::red_run_is_held_while_a_descendant_push_run_of_its_workflow_is_in_flight",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::red_run_is_held_while_a_descendant_push_run_of_its_workflow_is_in_flight",
+      "criterion": 2,
+      "qualifying_seam": "collect_at(now) + CiQueries ancestry/status matrix",
+      "evidence": "Queued and in-progress descendants at an injected ten minutes must hold red evidence without log reads. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof. The explicit collection clock is also private; the public action uses Utc::now().",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 74
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::red_run_stays_current_when_the_in_flight_run_is_not_a_proven_descendant",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::red_run_stays_current_when_the_in_flight_run_is_not_a_proven_descendant",
+      "criterion": 2,
+      "qualifying_seam": "collect + CiQueries::is_ancestor/error",
+      "evidence": "Rewritten/unproven ancestry, injected unfetched-commit errors and a same-commit rerun are independent controls that cannot certify a repair. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof.",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 114
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::red_run_that_failed_a_different_step_stays_held_without_reading_logs",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::red_run_that_failed_a_different_step_stays_held_without_reading_logs",
+      "criterion": 2,
+      "qualifying_seam": "collect_at(now) + CiQueries failed-step/log observer",
+      "evidence": "An injected clock within the hold window and different failed-step names must keep the newer failure held without reading either log. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof. The explicit collection clock is also private; the public action uses Utc::now().",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 405
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::red_run_that_failed_the_same_step_for_another_cause_stays_held",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::red_run_that_failed_the_same_step_for_another_cause_stays_held",
+      "criterion": 2,
+      "qualifying_seam": "collect_at(now) + CiQueries log/signature matrix",
+      "evidence": "Different diagnostic signatures and diagnostic-free logs cannot turn same-step names into proof of reproduction at the injected clock. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof. The explicit collection clock is also private; the public action uses Utc::now().",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 368
+    },
+    {
+      "identity": "executor/automation/ci/tests/pending.rs::red_run_that_reproduced_on_the_previous_completed_run_is_not_held",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/ci/tests/pending.rs::red_run_that_reproduced_on_the_previous_completed_run_is_not_held",
+      "criterion": 2,
+      "qualifying_seam": "collect_at(now) + CiQueries normalized log cause/ancestry",
+      "evidence": "At one injected minute after completion, equivalent moved-line diagnostics must release the red run and read the earlier evidence once. The public collect_ci_evidence action constructs HostCiQueries directly (ci/mod.rs) and does not dispatch queries through RuntimeHost; scripted CiQueries cannot be supplied. Moving this guarantee would replace direct state-machine/fault inputs with a multi-command gh/git process emulator, auth/repository projection and durable host setup for each case, with no extra behavioral proof. The explicit collection clock is also private; the public action uses Utc::now().",
+      "current_source": "crates/orbit-engine/src/executor/automation/ci/tests/pending.rs",
+      "current_line": 325
+    },
+    {
+      "identity": "executor/automation/tests/shell.rs::cwd_outside_the_workspace_root_is_rejected",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/shell.rs",
+      "boundary": "execute_deterministic_action(\"local_shell\")"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/candidate_paths.rs::claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/candidate_paths.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/candidate_paths.rs::owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/candidate_paths.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/candidate_paths.rs::owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/candidate_paths.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/candidate_paths.rs::per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/candidate_paths.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/candidate_paths.rs::scratch_under_orbit_tmp_is_never_delivered",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/candidate_paths.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/git_ops.rs::commit_child_environment_excludes_parent_secrets",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/git_ops.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/git_ops.rs::glob_candidate_names_stage_and_commit_only_themselves",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/commit/git_ops.rs",
+      "boundary": "execute_deterministic_action(\"git_commit\") + public RuntimeHost"
+    },
+    {
+      "identity": "executor/automation/vcs/commit/tests/message.rs::delivery_markers_survive_a_title_truncated_inside_brackets",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/commit/tests/message.rs::delivery_markers_survive_a_title_truncated_inside_brackets",
+      "criterion": 1,
+      "qualifying_seam": "batch_commit_message + delivery_markers",
+      "evidence": "The private producer/parser pair tests Unicode title truncation with unmatched subject brackets, and parses both the subject and full message while rejecting the title body. Neither parser nor message builder is exported. A commit action can expose the message but not the parser result; reproducing parser behavior in an integration test would not test it.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/commit/tests/message.rs",
+      "current_line": 7
+    },
+    {
+      "identity": "executor/automation/vcs/operations/tests/pr.rs::pr_status_retries_the_landed_run_graphql_failure_and_stops_on_permanent_errors",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/operations/pr.rs",
+      "boundary": "run_private_vcs_operation"
+    },
+    {
+      "identity": "executor/automation/vcs/operations/tests/push_retry.rs::a_push_outlasts_a_forge_outage_that_fits_its_backoff_budget",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/operations/push_retry.rs",
+      "boundary": "run_private_vcs_operation"
+    },
+    {
+      "identity": "executor/automation/vcs/operations/tests/push_retry.rs::pushes_bound_retries_and_stop_when_remote_confirmation_fails",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/operations/push_retry.rs",
+      "boundary": "run_private_vcs_operation"
+    },
+    {
+      "identity": "executor/automation/vcs/operations/tests/push_retry.rs::pushes_confirm_lost_replies_without_reusing_a_consumed_lease",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/operations/push_retry.rs",
+      "boundary": "run_private_vcs_operation"
+    },
+    {
+      "identity": "executor/automation/vcs/operations/tests/push_retry.rs::pushes_do_not_retry_permanent_refusals_even_with_transport_diagnostics",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/operations/push_retry.rs",
+      "boundary": "run_private_vcs_operation"
+    },
+    {
+      "identity": "executor/automation/vcs/operations/tests/push_retry.rs::pushes_recover_from_transient_remote_failures",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/operations/push_retry.rs",
+      "boundary": "run_private_vcs_operation"
+    },
+    {
+      "identity": "executor/automation/vcs/tests/base_claim.rs::a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/tests/base_claim.rs::a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached",
+      "criterion": 2,
+      "qualifying_seam": "verify_base_failure + ReplayBudget + BaseFailureVerdict/base_log",
+      "evidence": "The script fails only where candidate.txt exists; the private comparator exposes BasePasses and the second call exposes its cached base_log bit. The exported verify_claimed_known_red runs only the base and returns a refusal set/type, not a candidate rerun, comparator verdict or cache diagnostic. Public review settlement would add the review/task lifecycle to observe this comparator-specific fault/cache guarantee.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/tests/base_claim.rs",
+      "current_line": 446
+    },
+    {
+      "identity": "executor/automation/vcs/tests/git.rs::host_git_classifies_failures_in_the_c_locale",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/tests/git.rs::host_git_classifies_failures_in_the_c_locale",
+      "criterion": 3,
+      "qualifying_seam": "git_run + git_run_bytes + update-ref contention",
+      "evidence": "The isolated child observes locale through a Git alias in both text and byte runners, then plants a ref lock to assert C-locale retry classification. No public engine API executes arbitrary Git argv through both runners. Current strategy explicitly admits this security observer on the delivery base.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/tests/git.rs",
+      "current_line": 179
+    },
+    {
+      "identity": "executor/automation/vcs/tests/git.rs::quiet_git_failures_keep_exit_status_and_signal_diagnostics",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/tests/git.rs::quiet_git_failures_keep_exit_status_and_signal_diagnostics",
+      "criterion": 2,
+      "qualifying_seam": "git_run/git_run_bytes/git_output_raw + git_failure_error",
+      "evidence": "Silent aliases deterministically exit 37 or kill their Git parent; the fixture observes the text and byte outcome fields and diagnostic conversion for each. Public VCS operations expose prescribed argv and JSON projections, not arbitrary aliases or both raw runner outcomes. Retain the existing missing-diagnostic fault harness without exporting those runners.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/tests/git.rs",
+      "current_line": 25
+    },
+    {
+      "identity": "executor/automation/vcs/tests/required_command.rs::a_guardrail_for_a_tool_on_path_is_not_a_missing_tool",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "executor/automation/vcs/tests/required_command.rs::shell_and_launcher_diagnostics_name_the_missing_tool",
+      "evidence": "Existing unnamed exit-127, ordinary-check failure and PATH-presence controls consolidated into the one admitted missing-tool classifier invariant."
+    },
+    {
+      "identity": "executor/automation/vcs/tests/required_command.rs::an_unnamed_exit_127_is_still_an_environment_failure",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "executor/automation/vcs/tests/required_command.rs::shell_and_launcher_diagnostics_name_the_missing_tool",
+      "evidence": "Existing unnamed exit-127, ordinary-check failure and PATH-presence controls consolidated into the one admitted missing-tool classifier invariant."
+    },
+    {
+      "identity": "executor/automation/vcs/tests/required_command.rs::ordinary_check_failures_are_candidate_failures",
+      "audit_decision": "retire",
+      "disposition": "retired",
+      "coverage": "executor/automation/vcs/tests/required_command.rs::shell_and_launcher_diagnostics_name_the_missing_tool",
+      "evidence": "Existing unnamed exit-127, ordinary-check failure and PATH-presence controls consolidated into the one admitted missing-tool classifier invariant."
+    },
+    {
+      "identity": "executor/automation/vcs/tests/required_command.rs::oversized_stdout_keeps_the_stderr_tail_and_names_the_missing_tool",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/tests/required_command.rs::oversized_stdout_keeps_the_stderr_tail_and_names_the_missing_tool",
+      "criterion": 3,
+      "qualifying_seam": "run_required_command + RequiredCommandRun raw output/classification",
+      "evidence": "The fixture verifies head/tail ordering for both capped streams, omitted UTF-8 middle, stderr diagnostic retention inside the repair reader’s 32KiB tail, and missing-tool classification. RequiredCommandRun and the runner are private. Public review/commit gates wrap the result in capped repair records and can redact/project it, hiding an earlier capture defect; they also require task/delivery validation setup for each stream shape.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/tests/required_command.rs",
+      "current_line": 104
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::forced_pipeline_cleanup_removes_a_worktree_holding_a_read_only_directory",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/worktree/tests/cleanup.rs::forced_pipeline_cleanup_removes_a_worktree_holding_a_read_only_directory",
+      "criterion": 3,
+      "qualifying_seam": "remove_worktree(force=true) + owner-access restoration",
+      "evidence": "The private removal entry verifies the owned checkout and branch are entirely removed even with read-only descendants. Public setup may force removal only as part of replacing a checkout and leaves a new checkout at that path; public GC refuses force except after candidate recovery. Those callers cannot expose the same terminal removal assertion without adding lifecycle behavior.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/worktree/tests/cleanup.rs",
+      "current_line": 31
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_keeps_a_leftover_whose_task_is_not_settled",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/classify.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_keeps_an_unregistered_directory_whose_git_link_still_resolves",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/classify.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/leftovers.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_leaves_malformed_trash_directory_as_unrecognized",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/leftovers.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_reclaims_the_leftover_of_a_removal_that_failed_partway",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/leftovers.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_reclaims_trash_directory_when_age_exceeds_timeout",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/leftovers.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_reclaims_trash_directory_when_deleter_pid_is_dead",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/leftovers.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::gc_removes_a_worktree_holding_a_read_only_directory",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/sweep.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::removal_without_force_fails_closed_on_a_dirty_worktree",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/worktree/tests/cleanup.rs::removal_without_force_fails_closed_on_a_dirty_worktree",
+      "criterion": 3,
+      "qualifying_seam": "remove_worktree(force=false) final Git refusal",
+      "evidence": "The fixture bypasses the collector’s preliminary dirty check and reaches Git’s final non-force gate on an already dirty tree. Public GC returns earlier and cannot prove that last removal gate; forcing a change after GC’s check would require a new interleaving seam. Its bytes-preserved assertion must stay at the private safety seam.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/worktree/tests/cleanup.rs",
+      "current_line": 11
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::repair_never_follows_a_symlink_out_of_the_worktree",
+      "audit_decision": "move",
+      "disposition": "corrected_admission",
+      "current_identity": "executor/automation/vcs/worktree/tests/cleanup.rs::repair_never_follows_a_symlink_out_of_the_worktree",
+      "criterion": 3,
+      "qualifying_seam": "remove_worktree(force=true) + restore_owner_access",
+      "evidence": "This forces permission repair on a worktree containing a symlink to a read-only outside directory and checks the outside mode remains 0555 after complete removal. Public GC’s dirty-path/candidate recovery checks precede this forced seam, and public setup recreates the checkout. The existing narrow private permission-restoration safety harness remains economical.",
+      "current_source": "crates/orbit-engine/src/executor/automation/vcs/worktree/tests/cleanup.rs",
+      "current_line": 48
+    },
+    {
+      "identity": "executor/automation/vcs/worktree/tests/gc.rs::symlink_at_a_known_worktree_path_is_never_followed",
+      "audit_decision": "move",
+      "disposition": "moved",
+      "destination": "crates/orbit-engine/tests/engine/admission_audit/gc/sweep.rs",
+      "boundary": "collect_worktrees + run_worktree_paths"
+    }
+  ]
+}

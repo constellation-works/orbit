@@ -59,42 +59,38 @@ fn shell_and_launcher_diagnostics_name_the_missing_tool() {
             "{output}"
         );
     }
-}
 
-#[test]
-fn an_unnamed_exit_127_is_still_an_environment_failure() {
-    assert_eq!(tool(127, "something went wrong"), Some(None));
-    assert_eq!(
-        tool(2, "make: *** [Makefile:3: ci] Error 127"),
-        Some(None),
-        "make reports a recipe whose command was not found"
-    );
-}
-
-#[test]
-fn ordinary_check_failures_are_candidate_failures() {
-    for (exit_code, output) in [
-        (
-            1,
-            "test tests::parses ... FAILED\nassertion failed: config.toml: not found",
-        ),
-        (1, "error: field `name` is required"),
-        (2, "src/feature.txt: not formatted"),
-        (
-            101,
-            "thread 'main' panicked at src/lib.rs:3:5:\nworkspace_path is required",
-        ),
-        (1, "cat: missing.txt: No such file or directory"),
-    ] {
-        assert_eq!(tool(exit_code, output), None, "{output}");
+    // Positive and negative controls share the one missing-tool invariant.
+    {
+        assert_eq!(tool(127, "something went wrong"), Some(None));
+        assert_eq!(
+            tool(2, "make: *** [Makefile:3: ci] Error 127"),
+            Some(None),
+            "make reports a recipe whose command was not found"
+        );
     }
-}
-
-#[test]
-fn a_guardrail_for_a_tool_on_path_is_not_a_missing_tool() {
-    let output = "check: sh (sh) is required; install it before running";
-    assert!(missing_tool(Some(1), output, "/bin:/usr/bin").is_none());
-    assert!(missing_tool(Some(1), output, EMPTY_PATH).is_some());
+    {
+        for (exit_code, output) in [
+            (
+                1,
+                "test tests::parses ... FAILED\nassertion failed: config.toml: not found",
+            ),
+            (1, "error: field `name` is required"),
+            (2, "src/feature.txt: not formatted"),
+            (
+                101,
+                "thread 'main' panicked at src/lib.rs:3:5:\nworkspace_path is required",
+            ),
+            (1, "cat: missing.txt: No such file or directory"),
+        ] {
+            assert_eq!(tool(exit_code, output), None, "{output}");
+        }
+    }
+    {
+        let output = "check: sh (sh) is required; install it before running";
+        assert!(missing_tool(Some(1), output, "/bin:/usr/bin").is_none());
+        assert!(missing_tool(Some(1), output, EMPTY_PATH).is_some());
+    }
 }
 
 struct CaptureHost;

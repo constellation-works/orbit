@@ -11,6 +11,3 @@ pub use reclaim::run_worktree_has_reclaim_output;
 #[allow(unused_imports)]
 pub use sweep::WorktreeGcReport;
 pub use sweep::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
-
-#[cfg(test)]
-mod tests;

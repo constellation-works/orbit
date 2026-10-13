@@ -5,7 +5,7 @@ fn dispatch_error_retryability_classification_table() {
     // ORB-10006: retryable-vs-permanent classification consumed by the step
     // retry wrapper. Permanent (non-retryable) errors fail fast; transient
     // ones burn retry attempts.
-    use super::super::dispatcher::DispatchError;
+    use orbit_engine::DispatchError;
 
     let permanent: Vec<DispatchError> = vec![
         DispatchError::ToolDenied {

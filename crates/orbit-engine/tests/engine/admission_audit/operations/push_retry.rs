@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::json;
 
-use super::super::super::run_private_operation;
 use super::test_support::{read_count, with_stub_path, write_executable};
+use orbit_engine::run_private_vcs_operation as run_private_operation;
 
 const PUSH_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PUSH_PREVIOUS_HEAD: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

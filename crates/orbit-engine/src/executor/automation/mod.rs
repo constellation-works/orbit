@@ -193,6 +193,3 @@ fn hours_input(field: &str, value: &Value) -> Result<u64, OrbitError> {
         .filter(|hours| i64::try_from(*hours).is_ok())
         .ok_or_else(|| OrbitError::InvalidInput(format!("{field} is too large")))
 }
-
-#[cfg(test)]
-mod tests;

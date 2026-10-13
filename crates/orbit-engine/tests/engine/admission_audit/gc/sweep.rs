@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
-use super::super::super::tests::support::*;
-use super::super::sweep::{WorktreeGcOptions, collect_worktrees};
+use super::support::*;
+use orbit_engine::{WorktreeGcOptions, collect_worktrees};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRunState;
 use std::fs;
@@ -11,6 +11,13 @@ use tempfile::tempdir;
 #[cfg(unix)]
 #[test]
 fn symlink_at_a_known_worktree_path_is_never_followed() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::symlink_at_a_known_worktree_path_is_never_followed"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -41,6 +48,13 @@ fn symlink_at_a_known_worktree_path_is_never_followed() {
 #[cfg(unix)]
 #[test]
 fn gc_removes_a_worktree_holding_a_read_only_directory() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_removes_a_worktree_holding_a_read_only_directory"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);

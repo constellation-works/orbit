@@ -4,9 +4,6 @@ mod pr;
 mod process;
 mod push_retry;
 
-#[cfg(all(test, unix))]
-mod tests;
-
 pub(crate) use dispatch::run;
 pub(super) use process::{
     GITHUB_TRANSIENT_ATTEMPTS, GITHUB_TRANSIENT_RETRY_DELAY, is_transient_github_failure,

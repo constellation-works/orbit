@@ -10,7 +10,10 @@ use std::sync::Mutex as StdMutex;
 
 use orbit_types::workflow::{JobRunState, PipelineState};
 
-use super::*;
+use super::job_support::*;
+use orbit_engine::{DispatchError, RuntimeHost, execute_job_with_resume};
+use orbit_types::workflow::activity_job::JobV2StepBody;
+use serde_json::{Value, json};
 
 /// One `checkpoint_step` call: step index, step id, output.
 type Checkpoint = (u32, String, Value);
@@ -48,7 +51,7 @@ impl CheckpointHost {
     }
 }
 
-impl crate::test_support::NullRuntimeHost for CheckpointHost {
+impl orbit_engine::test_support::NullRuntimeHost for CheckpointHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -97,6 +100,13 @@ fn resume_state_with_completed_steps(steps: &[(u32, &str, Value)]) -> PipelineSt
 
 #[test]
 fn resume_reexecuted_pr_output_reaches_promotion_and_checkpoint() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::resume_reexecuted_pr_output_reaches_promotion_and_checkpoint"
+    )) {
+        return;
+    }
+
     // ORB-10241 / ORB-10240 incident shape: push completed in the source
     // attempt, pr_open failed, then resume skips push, re-executes pr_open,
     // and renders its numeric-looking string output into pr_promote.
