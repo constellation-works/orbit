@@ -12,16 +12,22 @@
 //! run of the shipped reconciliation job: it runs the owner's required
 //! commands at the merged head, a read-only reviewer on the configured crew
 //! inspects it, and the desktop consumer reads the settled record.
+//!
+//! An authenticated terminal release also proves the exact foreign execution
+//! stopped, including a held red base; operator recovery alone does not.
 
 use super::*;
 
 use orbit_core::application::review::ExpectedCandidate;
+use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
     DesktopTaskRequest,
 };
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{ExecutorSandboxKind, REVIEW_RECONCILIATION_JOB, ReviewReconciliation};
+use orbit_types::workflow::{
+    BaselineRedHold, ExecutorSandboxKind, REVIEW_RECONCILIATION_JOB, ReviewReconciliation,
+};
 
 const PR_URL: &str = "https://github.com/owner/repository/pull/42";
 const RECONCILE: &str = "orbit.task.reconcile_review";
@@ -1856,6 +1862,229 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
     assert_eq!(pair.owner_status(&task), "review");
 }
 
+/// A held leaf gives its claim back through the authenticated follower route.
+/// Unlike operator recovery, that exact-bound terminal settlement proves the
+/// execution stopped, without inventing a handoff or substituting a local run.
+fn a_settled_follower_release_completes_on_current_review_evidence() {
+    let pair = Pair::new(1);
+    let owner = &pair.wire.owner;
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let operator = session(McpCapability::Operator);
+    let admission = pair.admission(&leaf);
+    let claim_id = admission.receipt.unwrap().claim.unwrap().claim_id;
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: "b".repeat(40),
+        command: "make ci-lint".into(),
+        run_id: leaf.clone(),
+        selection: None,
+        failures: Default::default(),
+    };
+    pair.advance(
+        &leaf,
+        LocalPullMutation::Settle(Box::new(ClaimMutation::Release(ClaimEvidence {
+            summary: Some("The base failed its required check.".into()),
+            baseline_red: Some(hold),
+            ..Default::default()
+        }))),
+    );
+    pair.follower_jobs
+        .finalize_job_run(&leaf, JobRunState::Held, Utc::now(), None)
+        .unwrap();
+    let pass = pair.pass_over(&drain, json!({"window_expired": true}));
+    assert!(pass["error"].is_null(), "{pass:#}");
+    let claim = pair.owner_claim(&claim_id);
+    assert_eq!(claim["claim"]["phase"], "revoked", "{claim:#}");
+    assert_eq!(claim["bound_run"]["machine_id"], FOLLOWER);
+    assert_eq!(claim["bound_run"]["run_id"], leaf);
+    let settlements = owner.leaf_settlements(None, false).unwrap();
+    let settlement = &settlements[0];
+    assert_eq!(settlement.kind, Some(ClaimSettlementKind::Release));
+    assert_eq!(settlement.evidence, "baseline_red");
+    assert_eq!(settlement.last_event, "baseline_red_hold");
+    assert_eq!(settlement.leaf_run_id.as_deref(), Some(leaf.as_str()));
+    assert_eq!(settlement.machine_id, FOLLOWER);
+    assert_eq!(pair.run_state(&leaf), JobRunState::Held);
+    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none());
+
+    back_to_review(
+        owner,
+        &task,
+        Some("Independent review accepted the native repair."),
+    );
+    // A settlement on one host/run cannot substitute for another binding.
+    // Build these hostile documents through the public store fixture surface;
+    // production callers cannot rewrite the trusted execution location.
+    use orbit_store::contracts::TaskDocumentUpdateParams;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let documents = orbit_store::compose::workspace_coordinated_backends(
+        TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap(),
+        owner.workspace_id().unwrap(),
+        owner.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .document;
+    let original = owner.get_task(&task).unwrap();
+    let bind = |run, location| {
+        // A location is immutable while its run remains linked. Each hostile
+        // fixture binding is established anew, rather than rewriting one.
+        documents
+            .update_task_document(
+                &task,
+                TaskDocumentUpdateParams {
+                    actor: "fixture".into(),
+                    job_run_id: Some(None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        documents
+            .update_task_document(
+                &task,
+                TaskDocumentUpdateParams {
+                    actor: "fixture".into(),
+                    job_run_id: Some(run),
+                    job_run_machine: Some(location),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    let mut wrong_host = original.job_run_machine.clone().unwrap();
+    wrong_host.machine_id = "hm_other_follower".into();
+    for (run, location, reason) in [
+        (
+            Some(leaf.clone()),
+            Some(wrong_host),
+            "holds no claim bound to that run",
+        ),
+        (
+            Some("unbound-run".into()),
+            original.job_run_machine.clone(),
+            "holds no claim bound to that run",
+        ),
+        (Some(leaf.clone()), None, "linked review run is unavailable"),
+    ] {
+        bind(run, location);
+        let refused = owner.desktop_task_snapshot(&task, &operator).unwrap();
+        assert!(!refused.actions.complete.enabled);
+        assert!(
+            refused
+                .actions
+                .complete
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains(reason),
+            "{:?}",
+            refused.actions.complete
+        );
+    }
+    bind(original.job_run_id, original.job_run_machine);
+    let shown = pair.owner_task(&task);
+    let snapshot = owner.desktop_task_snapshot(&task, &operator).unwrap();
+    assert!(
+        snapshot.actions.complete.enabled,
+        "{:?}",
+        snapshot.actions.complete
+    );
+    // Release evidence proves only stopped execution. It does not make a PR
+    // reconciliation eligible without an accepted PR handoff.
+    let reconciliation = owner
+        .run_tool_with_context_and_role(
+            RECONCILE,
+            json!({"id": task, "action": "inspect"}),
+            Role::Admin,
+            ToolContext {
+                session_context: operator.clone(),
+                ..ToolContext::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(reconciliation["eligible"], false, "{reconciliation:#}");
+
+    let mut current = verdict(&shown, "", &leaf);
+    current.expected_head = None;
+    current.evidence = vec!["execution_summary".into()];
+    for criterion in &mut current.criteria {
+        criterion.evidence = vec!["execution_summary".into()];
+    }
+    for (request, changed, reason) in [
+        (
+            "stale-run",
+            {
+                let mut v = current.clone();
+                v.expected_run_id = Some("other-run".into());
+                v
+            },
+            "reviewed run binding changed",
+        ),
+        (
+            "stale-head",
+            {
+                let mut v = current.clone();
+                v.expected_head = Some("a".repeat(40));
+                v
+            },
+            "linked PR head changed",
+        ),
+        (
+            "missing-evidence",
+            {
+                let mut v = current.clone();
+                v.evidence = vec!["missing-artifact".into()];
+                v
+            },
+            "review evidence must reference current",
+        ),
+    ] {
+        let refused = owner
+            .desktop_task_write(
+                review(&task, &snapshot.revision, changed, request),
+                None,
+                None,
+                &operator,
+            )
+            .unwrap_err();
+        assert!(refused.to_string().contains(reason), "{refused}");
+        assert_eq!(pair.owner_status(&task), "review");
+    }
+    assert!(
+        owner
+            .desktop_task_write(
+                review(&task, &snapshot.revision, current.clone(), "agent-release"),
+                None,
+                None,
+                &session(McpCapability::Agent)
+            )
+            .is_err()
+    );
+    let done = owner
+        .desktop_task_write(
+            review(&task, &snapshot.revision, current, "complete-release"),
+            None,
+            None,
+            &operator,
+        )
+        .expect("the exact terminal release permits evidence-bound completion");
+    assert_eq!(done.snapshot.task.status, TaskStatus::Done);
+    let completed = pair.owner_task(&task);
+    assert_eq!(completed["job_run_id"], leaf);
+    assert_eq!(completed["job_run_machine"]["machine_id"], FOLLOWER);
+    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none());
+    assert_eq!(
+        owner.leaf_settlements(None, false).unwrap()[0].kind,
+        Some(ClaimSettlementKind::Release)
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_recovered_follower_delivery_completes_through_a_reconciled_merged_head_scenarios,
@@ -1876,5 +2105,6 @@ crate::scenario_table!(
     a_reconciliation_runs_under_the_contract_frozen_at_submission,
     an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract,
     a_reconciliation_refuses_a_changed_head_and_forged_runs,
-    a_same_named_owner_run_never_stands_in_for_a_follower_run
+    a_same_named_owner_run_never_stands_in_for_a_follower_run,
+    a_settled_follower_release_completes_on_current_review_evidence
 );

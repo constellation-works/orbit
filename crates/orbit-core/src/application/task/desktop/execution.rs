@@ -3,12 +3,13 @@
 //! A linked run lives in the job store of the machine that executed it
 //! (`job_run_machine`). This machine observes its own runs directly. A run
 //! another machine executed is known here only through the owner-held claim
-//! journal: the claim bound to that exact host and run, and the handoff the
-//! owner accepted from it. A run with the same id in this machine's own store
-//! is a different run and proves nothing about it.
+//! journal: the claim bound to that exact host and run, and its authenticated
+//! terminal settlement or the handoff the owner accepted from it. A run with
+//! the same id in this machine's own store is a different run and proves
+//! nothing about it.
 use orbit_common::OrbitError;
 use orbit_engine::{PullRequestStatus, RuntimeHost};
-use orbit_store::contracts::{ClaimInspection, ClaimRun, ExecutionClaimPhase};
+use orbit_store::contracts::{ClaimInspection, ClaimRun, ClaimSettlementKind, ExecutionClaimPhase};
 use orbit_types::{
     task::Task,
     workflow::handoff::{AcceptedHandoff, HandoffDelivery},
@@ -43,8 +44,10 @@ impl ForeignExecution {
 
     /// Whether the owner-held evidence proves the execution stopped. Only a
     /// settled claim does: a handoff the owner accepted from the run, a failure
-    /// the run settled itself, or a verified landing. An open claim names the
-    /// supported way forward instead of a status change it would refuse anyway.
+    /// the run settled itself, an authenticated terminal release (including a
+    /// held red base), or a verified landing. Operator recovery alone does not
+    /// prove the run stopped. An open claim names the supported way forward
+    /// instead of a status change it would refuse anyway.
     pub(crate) fn ensure_stopped(&self) -> Result<(), OrbitError> {
         let (run, host) = (&self.run_id, &self.host);
         let Some(claim) = &self.claim else {
@@ -70,11 +73,18 @@ impl ForeignExecution {
                  automatic repair is pending; let the repair re-hand it off, or recover the claim \
                  from the owner's operator console, before completing from review"
             ))),
-            ExecutionClaimPhase::Revoked if self.handoff.is_none() => Err(invalid(&format!(
-                "the claim for run {run} on {host} was recovered before the run handed off; no \
+            ExecutionClaimPhase::Revoked
+                if self.handoff.is_none()
+                    && !claim.settlement.as_ref().is_some_and(|settlement| {
+                        settlement.kind == ClaimSettlementKind::Release
+                    }) =>
+            {
+                Err(invalid(&format!(
+                    "the claim for run {run} on {host} was recovered before the run handed off; no \
                  owner-held evidence shows that the execution stopped, so inspect the run on \
                  {host}"
-            ))),
+                )))
+            }
             ExecutionClaimPhase::Revoked
             | ExecutionClaimPhase::Failed
             | ExecutionClaimPhase::Landed => Ok(()),
