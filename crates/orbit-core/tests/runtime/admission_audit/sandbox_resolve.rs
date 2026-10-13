@@ -641,9 +641,6 @@ fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
     );
 }
 
-#[cfg(target_os = "macos")]
-use super::engine_support::runtime_with_workspace_config;
-
 // Related boundary scenarios share the isolated table fixture.
 #[cfg(target_os = "macos")]
 crate::scenario_table!(
