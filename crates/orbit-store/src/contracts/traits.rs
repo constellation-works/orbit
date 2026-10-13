@@ -103,6 +103,15 @@ pub trait TaskStoreBackend: Send + Sync {
     fn resolve_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
+    /// [ORB-15962] One claim and its lifecycle state, whatever its phase,
+    /// read like [`Self::resolve_execution_claims`]. A store without a claim
+    /// journal holds no claim.
+    fn execution_claim_state(
+        &self,
+        _claim_id: &str,
+    ) -> Result<Option<super::ClaimInspection>, OrbitError> {
+        Ok(None)
+    }
     /// Retain one task-branch CI receipt, or queue it for a current protecting
     /// claim. The claim check and decision share the commit boundary.
     fn record_deferred_branch_observation(

@@ -32,6 +32,21 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| self.claim_states_locked())
     }
 
+    /// [ORB-15962] One claim's state, read inside the boundary like
+    /// [`Self::resolve_execution_claims`]. Claim and lifecycle rows outlive
+    /// the mutation receipts that settlement prunes.
+    pub fn execution_claim_state(
+        &self,
+        claim_id: &str,
+    ) -> Result<Option<ClaimInspection>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.store
+                .task_coordination_row(&self.workspace_id, CLAIM, claim_id)?
+                .map(|row| self.claim_state(decode(&row.payload_json)?))
+                .transpose()
+        })
+    }
+
     /// Caller holds the boundary and has already settled or excluded a
     /// pending commit.
     pub(in super::super) fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {

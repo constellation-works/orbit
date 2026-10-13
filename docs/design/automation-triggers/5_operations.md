@@ -272,6 +272,21 @@ works through the checkoutless hub: the hub retains origin, while the batch owne
 verifies its source and run assignment during evaluation. An upload without valid
 executor context can be stored, but cannot certify coverage.
 
+A review task a follower claimed runs on a host whose run records the owner
+never holds. Its put reaches the owner as a claim mutation, and the owner writes
+the witness in the same commit as the bytes, also naming the claim it
+authenticated and the follower machine. Settlement verifies that witness
+against the owner's claim journal: the claim was admitted for this task to that
+machine and bound to exactly that run, and the task still links that run and
+machine. It does not need a live claim, so coverage stays verifiable after the
+claim lands, and it reads no mutation receipts, which are pruned a week after
+settlement. A witness without a claim never certifies a follower's run.
+Coverage a follower submitted before owners stamped claimed puts has no witness
+and stays `unauthorized_submitter`; the only supported recovery is an audited
+`orbit auto-task recover <name> --reissue-action --reason <why>` over the same
+frozen obligations. No witness is added to, and no artifact rewritten on, the
+earlier task.
+
 For a job-only routine, the assigned job returns a `coverage_evidence` object in
 an existing persisted step result. It must match the immutable `input.automation`
 batch and the admitted run ID. No additional tool is needed.
