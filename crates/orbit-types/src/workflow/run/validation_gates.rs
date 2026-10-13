@@ -101,6 +101,16 @@ pub struct HostValidationGates {
 }
 
 impl HostValidationGates {
+    /// Required commands a managed invocation may leave to final validation.
+    /// A replica fallback is not the owner's captured contract; an empty
+    /// list conveys no ownership.
+    #[must_use]
+    pub fn captured_required_commands(&self) -> Option<&[String]> {
+        (self.source != ValidationGateSource::ReplicaConfig
+            && !self.gates.required_validation_commands.is_empty())
+        .then_some(self.gates.required_validation_commands.as_slice())
+    }
+
     /// Gates read from this host's own configuration.
     #[must_use]
     pub fn local(gates: ValidationGates) -> Self {

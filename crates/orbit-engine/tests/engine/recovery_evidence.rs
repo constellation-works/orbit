@@ -253,3 +253,59 @@ fn both_recovery_dispatches_distinguish_missing_logs_from_unreadable_or_oversize
         }
     }
 }
+
+#[test]
+fn conflict_recovery_hands_over_only_managed_sync_validation() {
+    for (step_id, action, final_validation, expected) in [
+        ("sync_base", "git_rebase", Some(true), true),
+        ("sync_base", "git_rebase", None, false),
+        ("sync_base", "git_rebase", Some(false), false),
+        ("other", "git_rebase", Some(true), false),
+        ("complete_pr", "pr_complete", Some(true), false),
+        ("sync_base", "unknown", Some(true), false),
+    ] {
+        let host = Host {
+            activity: "pr_conflict_recovery",
+            log: Ok(None),
+            inputs: Mutex::default(),
+        };
+        let (mut job, schema) = job(host.activity);
+        job.steps[0].id = step_id.to_string();
+        let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) =
+            &mut job.steps[0].body
+        else {
+            panic!("target fixture")
+        };
+        // Name the failed activity, leaving its failing backend under the
+        // fixture's control; real Git continuation is exercised separately.
+        target.activity_name = Some(action.to_string());
+        if let Some(owned) = final_validation {
+            target.default_input.as_mut().unwrap()["final_validation"] = json!(owned);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let writer = V2AuditWriter::with_disk_sinks(
+            dir.path(),
+            Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            "fixture",
+            RUN,
+            "test-agent",
+            None,
+        )
+        .unwrap();
+        assert!(execute_job_with_resume(&job, json!({}), RUN, writer, &host, None).is_err());
+        let inputs = host.inputs.lock().unwrap();
+        let [input] = inputs.as_slice() else {
+            panic!("one recovery: {inputs:?}")
+        };
+        assert_eq!(
+            input["final_validation"] == true,
+            expected,
+            "{step_id}/{action}"
+        );
+        assert!(
+            jsonschema::JSONSchema::compile(&schema)
+                .unwrap()
+                .is_valid(input)
+        );
+    }
+}

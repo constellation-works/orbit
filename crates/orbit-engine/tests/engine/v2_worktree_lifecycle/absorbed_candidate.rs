@@ -131,42 +131,151 @@ fn a_rebase_retaining_candidate_commits_still_runs_validation() {
         module_path!(),
         "a_rebase_retaining_candidate_commits_still_runs_validation",
         || {
-            let prepared = PreparedRebase::with_commits(
-                "jrun-retained-rebase",
-                &[
-                    ("README.md", "target\n"),
-                    ("candidate-only.md", "new change\n"),
-                ],
-                &[
-                    ("base-only.md", "base advance\n"),
-                    ("README.md", "target\n"),
-                ],
-            );
-            let host = &prepared.host;
-            stub_pipeline_steps(host, &prepared);
-
-            let run = execute(host, &prepared, &pipeline(git_rebase_step()));
-
-            assert!(run.result.as_ref().unwrap().success);
-            assert_eq!(
-                git(
-                    &prepared.checkout.path,
-                    &["rev-list", "--count", &format!("{}..HEAD", prepared.target)]
-                ),
-                "1"
-            );
-            assert_eq!(
-                std::fs::read_to_string(prepared.checkout.path.join("candidate-only.md")).unwrap(),
-                "new change\n"
-            );
-            assert!(host.checkpoints().is_empty());
-            assert!(run.events.iter().any(|event| matches!(
-                event,
-                V2AuditEventKind::StepFinished { step_id, outcome, .. }
-                    if step_id == "candidate_validate" && outcome == "success"
-            )));
-            assert_eq!(host.stub_calls_of("deliver").len(), 1);
-            assert!(run.final_recovery().is_empty());
+            use orbit_types::workflow::ValidationGateSource::{
+                LocalConfig, OwnerContract, ReplicaConfig,
+            };
+            // Four distinct cheap commands stand in for the captured full
+            // gates. They record their exact head after the real conflict
+            // continuation, without generating load or measuring production.
+            for (case, retained, owned, source, claimed, empty) in [
+                ("retained-owner", true, true, LocalConfig, false, false),
+                ("retained-claim", true, true, OwnerContract, true, false),
+                ("absorbed-owner", false, true, LocalConfig, false, false),
+                ("absorbed-claim", false, true, OwnerContract, true, false),
+                ("failing-absorbed", false, true, LocalConfig, false, false),
+                ("no-diff-expected", false, true, LocalConfig, false, false),
+                ("standalone", false, false, LocalConfig, false, false),
+                ("uncaptured-claim", false, true, ReplicaConfig, true, false),
+                ("empty-capture", false, true, LocalConfig, false, true),
+            ] {
+                let mut commits = vec![("README.md", "draft\n"), ("README.md", "target\n")];
+                if retained {
+                    commits.push(("candidate-only.md", "new change\n"));
+                }
+                let prepared = PreparedRebase::with_commits(
+                    &format!("jrun-{case}"),
+                    &commits,
+                    &[("README.md", "target\n")],
+                );
+                let mut host = resolving_host(&prepared, "printf 'target\\n' > README.md");
+                host.gate_source = Some(source);
+                if claimed {
+                    host.worker = Some(orbit_types::tool::WorkerInvocation {
+                        owner_machine_id: "owner".into(),
+                        owner_workspace_id: "workspace".into(),
+                        owner_destination: "owner".into(),
+                        task_id: "T-REBASE".into(),
+                        claim_id: "claim-recovery".into(),
+                        execution: orbit_types::task::ExecutionLocation {
+                            machine_id: "follower".into(),
+                            machine_name: None,
+                        },
+                        bound_run_id: prepared.run_id.clone(),
+                    });
+                }
+                stub_pipeline_steps(&host, &prepared);
+                if case == "no-diff-expected" {
+                    host.tasks
+                        .lock()
+                        .unwrap()
+                        .get_mut("T-REBASE")
+                        .unwrap()
+                        .tags
+                        .push("no-diff-expected".into());
+                }
+                let runs = prepared.fixture.root.path().join("required-command-runs");
+                let mut commands = (0..4).map(|index| format!(
+                    "test ! -d \"$(git rev-parse --git-path rebase-merge)\" && printf 'check{index} %s\\n' \"$(git rev-parse HEAD)\" >> '{}'",
+                    runs.display(),
+                )).collect::<Vec<_>>();
+                if case == "failing-absorbed" {
+                    commands[3].push_str("; orbit_required_gate_fixture_missing_command");
+                }
+                if !empty {
+                    *host.required_commands.lock().unwrap() = commands.clone();
+                }
+                let mut sync = git_rebase_step();
+                if owned {
+                    sync["default_input"]["final_validation"] = json!(true);
+                }
+                let run = execute(&host, &prepared, &pipeline(sync));
+                let final_head = prepared.head();
+                let should_validate = retained
+                    || (owned && source != ReplicaConfig && !empty && case != "no-diff-expected");
+                if should_validate {
+                    assert!(
+                        runs.exists(),
+                        "{case}: commands were not reached: {:?}; events: {:?}",
+                        run.result,
+                        run.events
+                    );
+                    assert_eq!(
+                        fs::read_to_string(&runs).unwrap(),
+                        (0..4)
+                            .map(|index| format!("check{index} {final_head}\n"))
+                            .collect::<String>(),
+                        "{case}: every captured command runs once on the final head",
+                    );
+                    let logs = host.get_task_artifacts("T-REBASE").unwrap();
+                    assert_eq!(logs.len(), 4, "{case}: every command retains evidence");
+                    for (index, artifact) in logs.iter().enumerate() {
+                        let log: Value = serde_json::from_slice(&artifact.content).unwrap();
+                        assert_eq!(log["command"], commands[index], "{case}");
+                        assert_eq!(log["tested_head"], final_head, "{case}");
+                        if case == "failing-absorbed" && index == 3 {
+                            assert_ne!(
+                                log["exit_code"], 0,
+                                "a failed required command is retained"
+                            );
+                        } else {
+                            assert_eq!(log["exit_code"], 0, "{case}");
+                        }
+                    }
+                } else {
+                    assert!(
+                        !runs.exists(),
+                        "{case}: no captured host handoff; recovery keeps its checks"
+                    );
+                }
+                if retained {
+                    assert!(run.result.as_ref().unwrap().success, "{case}");
+                    assert_ne!(final_head, prepared.target);
+                    assert_eq!(host.stub_calls_of("deliver").len(), 1, "{case}");
+                    assert!(run.final_recovery().is_empty(), "{case}");
+                } else if case == "failing-absorbed" {
+                    assert!(run.result.is_err());
+                    assert_eq!(run.final_recovery(), vec![("skipped".into(), None)]);
+                    assert!(
+                        host.final_recovery_applications.lock().unwrap().iter().all(
+                            |application| {
+                                !matches!(
+                                    application.decision,
+                                    FinalRecoveryDecision::CompleteNoDiff { .. }
+                                )
+                            }
+                        ),
+                        "required-command failure cannot settle the absorbed candidate"
+                    );
+                } else {
+                    assert!(
+                        run.result.is_err(),
+                        "{case}: absorption settles the failed step"
+                    );
+                    assert_eq!(final_head, prepared.target, "{case}");
+                    assert_eq!(
+                        run.final_recovery(),
+                        vec![("settled".into(), Some("complete_no_diff".into()))],
+                        "{case}"
+                    );
+                    assert!(host.stub_calls_of("deliver").is_empty(), "{case}");
+                }
+                assert_eq!(run.recovery_attempts(), vec![true], "{case}");
+                assert_eq!(
+                    git(&prepared.checkout.path, &["status", "--porcelain"]),
+                    "",
+                    "{case}"
+                );
+            }
         },
     );
 }

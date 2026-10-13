@@ -90,13 +90,10 @@ impl OrbitRuntime {
     /// validates against this replica's copy, which the owner may refuse at
     /// acceptance, so it yields nothing and the implementer keeps every check.
     pub(crate) fn captured_final_validation_commands(&self) -> Vec<String> {
-        let gates = self.host_validation_gates();
-        match gates.source {
-            ValidationGateSource::LocalConfig | ValidationGateSource::OwnerContract => {
-                gates.gates.required_validation_commands
-            }
-            ValidationGateSource::ReplicaConfig => Vec::new(),
-        }
+        self.host_validation_gates()
+            .captured_required_commands()
+            .unwrap_or_default()
+            .to_vec()
     }
 
     /// [`Self::host_validation_gates`] for a claimed leaf, given what its

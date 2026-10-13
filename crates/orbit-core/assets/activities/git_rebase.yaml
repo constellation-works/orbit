@@ -38,6 +38,11 @@ spec:
         type: integer
       sync_required:
         type: boolean
+      # Managed pre-publication synchronization is followed by final
+      # validation. If the base absorbs the candidate, this host boundary
+      # runs the captured commands before returning that settlement instead.
+      final_validation:
+        type: boolean
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.

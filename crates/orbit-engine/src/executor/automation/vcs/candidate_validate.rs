@@ -9,6 +9,10 @@
 //! tool is the validation environment's failure rather than the candidate's
 //! [ORB-13987].
 //!
+//! Managed PR synchronization that ends absorbed uses this same runner on
+//! its final clean base before settlement, including a claimed leaf whose
+//! logs are routed through its trusted owner binding.
+//!
 //! A failure that survives the network reruns is compared with the
 //! synchronized base [ORB-14258] (see [`super::baseline`]). One the base shares
 //! fails as a typed `baseline_red`: no recovery repairs it, and the failure
@@ -446,10 +450,26 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
     run_id: &str,
     logs: &[(String, Vec<u8>)],
 ) -> Result<Vec<HandoffArtifactRef>, OrbitError> {
+    // Absorbed PR synchronization also uses this runner on a claimed leaf:
+    // there is no PR candidate to pin through claim_validate. Route its
+    // diagnostic evidence through the trusted claim, never the local store.
+    let claimed = host.worker_invocation().is_some();
+    if claimed {
+        let claim = host.claim_execution_context()?;
+        if task_ids != std::slice::from_ref(&claim.task_id) || run_id != claim.run_id {
+            return Err(OrbitError::PolicyDenied(
+                "validation evidence does not belong to the bound claim".to_string(),
+            ));
+        }
+    }
     let mut references = Vec::new();
     for (path, content) in logs {
-        for task_id in task_ids {
-            host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
+        if claimed {
+            host.attach_claim_validation_log(path, content.clone())?;
+        } else {
+            for task_id in task_ids {
+                host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
+            }
         }
         references.push(HandoffArtifactRef {
             path: path.clone(),

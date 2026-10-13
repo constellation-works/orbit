@@ -95,9 +95,43 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let context = load_handoff_context(host, input, "git_rebase")?;
-    match rebase_pr_branch_inner(host, input, &context) {
+    let result = {
+        let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
+        rebase_pr_branch_inner(host, input, &context)
+    };
+    // Absorption bypasses the later validate step. Run its captured commands
+    // on the final continued/chased head before no-diff settlement. The Git
+    // rewrite budget is over: long validation must not exhaust that budget.
+    let result = match result {
+        Err(OrbitError::CandidateAbsorbed(candidate))
+            if input.get("final_validation").and_then(Value::as_bool) == Some(true)
+                && host
+                    .validation_gates()
+                    .captured_required_commands()
+                    .is_some()
+                && !context
+                    .tasks
+                    .iter()
+                    .any(|task| task.tags.iter().any(|tag| tag == "no-diff-expected")) =>
+        {
+            match super::super::candidate_validate::candidate_validate(
+                host,
+                &json!({
+                    "job_run_id": recovery_run_id(input, &context),
+                    "completed_task_ids": context.tasks.iter().map(|task| &task.id).collect::<Vec<_>>(),
+                    "workspace_path": context.workspace_path,
+                    "base_sha": candidate.base_sha,
+                    "base_ref": candidate.base_ref,
+                }),
+            ) {
+                Ok(_) => Err(OrbitError::CandidateAbsorbed(candidate)),
+                Err(error) => Err(error),
+            }
+        }
+        result => result,
+    };
+    match result {
         Ok(output) => Ok(output),
         Err(error) => {
             record_failed_handoff(host, &context, input, FailedHandoffPhase::Rebase, &error)?;

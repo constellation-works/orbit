@@ -4006,6 +4006,8 @@ fn task(id: &str, status: TaskStatus) -> Task {
 /// read through, kept in memory.
 #[derive(Default)]
 struct LifecycleHost {
+    worker: Option<orbit_types::tool::WorkerInvocation>,
+    gate_source: Option<orbit_types::workflow::ValidationGateSource>,
     reclaim_patterns: Option<Vec<String>>,
     repo: PathBuf,
     provider: Option<PathBuf>,
@@ -4318,6 +4320,81 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
 
     fn required_validation_commands(&self) -> Vec<String> {
         self.required_commands.lock().unwrap().clone()
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        orbit_types::workflow::HostValidationGates {
+            gates: orbit_types::workflow::ValidationGates {
+                required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                baseline_commands: Vec::new(),
+            },
+            source: self
+                .gate_source
+                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
+        }
+    }
+
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        self.worker.clone()
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+        let worker = self.worker.as_ref().expect("claimed fixture");
+        Ok(orbit_engine::ClaimExecutionContext {
+            footprint: vec!["file:README.md".to_string()],
+            workspace_id: worker.owner_workspace_id.clone(),
+            task_id: worker.task_id.clone(),
+            claim_id: worker.claim_id.clone(),
+            machine_id: worker.execution.machine_id.clone(),
+            run_id: worker.bound_run_id.clone(),
+            ship_mode: "pr".to_string(),
+            base_branch: "agent-main".to_string(),
+            landing_branch: "agent-main".to_string(),
+            required_commands: self.required_commands.lock().unwrap().clone(),
+        })
+    }
+
+    fn attach_task_validation_log(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        assert_eq!(
+            RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref(),
+            Some(run_id)
+        );
+        let mut artifacts = self.artifacts.lock().unwrap();
+        let artifacts = artifacts.entry(task_id.to_string()).or_default();
+        artifacts.retain(|artifact| artifact.path != path);
+        artifacts.push(TaskArtifact::from_text(
+            path,
+            String::from_utf8(content).unwrap(),
+        ));
+        Ok(())
+    }
+
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
+        let worker = self
+            .worker
+            .as_ref()
+            .expect("claim routes evidence to its owner");
+        RuntimeHost::attach_task_validation_log(
+            self,
+            &worker.task_id,
+            &worker.bound_run_id,
+            path,
+            content,
+        )
     }
 
     fn local_machine_id(&self) -> Option<String> {
