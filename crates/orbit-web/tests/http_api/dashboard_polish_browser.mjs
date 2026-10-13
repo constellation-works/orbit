@@ -29,11 +29,12 @@ const initializer = `
   import { initConfig, getConfigSubtab, setConfigSubtab } from '/js/config.js';
   import * as audit from '/js/audit.js';
   import * as codebase from '/js/codebase.js';
-  let tab = 'tasks', diag = 'runs', operations = 'routines', knowledge = 'frictions';
+  let tab = 'tasks', diag = 'incidents', jobs = 'live', operations = 'routines', knowledge = 'frictions';
   let incidentsView = 'incidents', analytics = 'metrics', reliabilityView = 'pipeline';
   initConfig();
   initRouter({
     getTab: () => tab, setTab: value => { tab = value; },
+    getJobsSubtab: () => jobs, setJobsSubtab: value => { jobs = value; },
     getDiagSubtab: () => diag, setDiagSubtab: value => { diag = value; },
     getIncidentsView: () => incidentsView, setIncidentsView: value => { incidentsView = value; },
     getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: value => { analytics = value; },
@@ -94,7 +95,7 @@ try {
       .map(button => `diagnostics/incidents/${button.dataset.view}`),
     ...[...document.querySelectorAll('#analytics-subtabs .subtab')].map(button => `analytics/${button.dataset.subtab}`),
     'analytics/reliability/tools',
-    'diagnostics/runs',
+    'jobs/history',
   ]);
   const navigation = async (route, visit) => {
     const layout = await page.evaluate(() => {
@@ -128,7 +129,7 @@ try {
     await navigation(route, 'reload');
   }
   // Changing the hash on an existing page must also reveal the current view.
-  for (const route of ['config/hosts', 'analytics/cost', 'operations/jobs']) {
+  for (const route of ['config/hosts', 'analytics/cost', 'jobs/catalogue']) {
     await page.evaluate(route => { document.getElementById('tabs').scrollLeft = 0; location.hash = route; }, route);
     await page.waitForFunction(route => location.hash.slice(1).split('?')[0] === route && document.querySelector('.tab.active').dataset.tab === route.split('/')[0], route);
     await settle();

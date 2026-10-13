@@ -27,7 +27,7 @@ export async function assertRunTaskLabels(page, evidence) {
       return previousFetch(input, options);
     };
     setRunFilter('all');
-    setActiveTab('diagnostics/runs');
+    setActiveTab('jobs/history');
     document.getElementById('refresh-btn').click();
   });
   try {
@@ -91,7 +91,7 @@ export async function assertRunTaskLabels(page, evidence) {
     }
     // Back is one step to the Runs list: the link added a single history entry.
     await page.goBack();
-    await page.waitForFunction(() => document.querySelector('.tab-pane.active')?.dataset.tab === 'diagnostics');
+    await page.waitForFunction(() => document.querySelector('.tab-pane.active')?.dataset.tab === 'jobs');
     // With the task inside the operator's filter it opens in place in the list.
     await page.evaluate(async () => {
       const { setActiveTab } = await import('/js/router.js');
@@ -99,13 +99,15 @@ export async function assertRunTaskLabels(page, evidence) {
     });
     await page.locator('#tasks-body .row[data-key="task-RUN-TASK-1"]').waitFor({ state: 'visible' });
     const listFilter = await taskFilter();
-    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/runs'));
+    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('jobs/history'));
     await link.click();
     await page.locator('#tasks-body .row[data-key="task-RUN-TASK-1"].expanded').waitFor({ state: 'visible' });
     if (JSON.stringify(await taskFilter()) !== JSON.stringify(listFilter)) throw new Error('A task link must leave the operator\'s status filter as it was');
     // Collapsing the row removes it from the URL, so a copy no longer names it.
     await page.locator('#tasks-body .row[data-key="task-RUN-TASK-1"] .title').click();
     await page.waitForFunction(() => !window.location.hash.includes('open='));
+    await page.evaluate(async () => (await import('/js/runs.js')).setRunFilter('failed'));
+    const historyFilters = new URL(page.url()).search;
     await page.evaluate(async () => (await import('/js/router.js')).navigateToRun('jrun-task-label'));
     const header = page.locator('#run-detail-meta .run-meta-task .run-task-link');
     await header.waitFor({ state: 'visible' });
@@ -114,7 +116,12 @@ export async function assertRunTaskLabels(page, evidence) {
     await page.setViewportSize({ width: 390, height: 900 });
     if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('Task labels must fit the mobile run detail');
     await page.screenshot({ path: path.join(evidence, 'run-task-detail-mobile.png'), fullPage: true });
-    fs.writeFileSync(path.join(evidence, 'run-task-result.json'), JSON.stringify({ column: true, truncatedTitle: true, taskNavigation: true, header: true, childLabels: true, mobile: true }));
+    if (await page.locator('#topbar-crumb').textContent() !== 'Jobs › History') throw new Error('Run detail must belong to Jobs History');
+    await page.locator('#run-detail-meta .run-detail-actions .back-action').click();
+    await page.waitForFunction(() => location.hash.startsWith('#jobs/history'));
+    if (new URL(page.url()).search !== historyFilters) throw new Error('Back to Jobs History changed the run filters or scope');
+    await page.evaluate(async () => (await import('/js/runs.js')).setRunFilter('all'));
+    fs.writeFileSync(path.join(evidence, 'run-task-result.json'), JSON.stringify({ column: true, truncatedTitle: true, taskNavigation: true, header: true, childLabels: true, mobile: true, jobsHistoryBackLink: true, preservedFilters: true }));
   } finally {
     await page.evaluate(() => {
       if (globalThis.runTaskFixture) globalThis.fetch = globalThis.runTaskFixture.previousFetch;
@@ -183,7 +190,7 @@ export async function assertTaskLinkScopeHistory(browser, origin, evidence) {
       if (!(await pinned.textContent()).includes(taskId)) throw new Error(`The link must open ${taskId} expanded`);
     };
     const boot = async search => {
-      await page.goto(`${origin}/${search}#diagnostics/runs?window=24h`);
+      await page.goto(`${origin}/${search}#jobs/history?window=24h`);
       await page.evaluate(async () => {
         globalThis.setInterval = () => 0;
         globalThis.EventSource = class { close() {} };

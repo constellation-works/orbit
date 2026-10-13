@@ -17,8 +17,7 @@ const $ = (id) => document.getElementById(id);
 
 const CANCELLABLE_RUN_STATES = new Set(["pending", "running"]);
 const RESUMABLE_RUN_STATES = new Set(["failed", "interrupted", "timeout"]);
-const ACTIVE_RUN_STATES = new Set(["pending", "running"]);
-const RUN_FILTERS = new Set(["all", "active", "failed"]);
+const RUN_FILTERS = new Set(["all", "failed"]);
 // One delivered task runs these three pipelines back to back; the list folds
 // them into one group per task.
 const PIPELINE_GROUP_JOBS = new Set(["task_auto_pipeline", "task_gate_pipeline", "task_pr_pipeline"]);
@@ -801,7 +800,6 @@ function sortedRunsForDisplay(runs) {
 }
 
 function runMatchesFilter(run) {
-  if (runFilter === "active") return ACTIVE_RUN_STATES.has(run && run.state);
   if (runFilter === "failed") return RESUMABLE_RUN_STATES.has(run && run.state);
   return true;
 }
@@ -835,16 +833,6 @@ export function setRunFilter(value) {
   clearRunsFetchTimer();
   showRunsLoading();
   doFetchAndRenderRuns().catch((error) => console.error(error));
-}
-
-// The rail badge counts every failed run in the window, so it opens that whole
-// scope: a task or job search would otherwise narrow the list below the count.
-export function showAllFailedRuns() {
-  runTaskId = "";
-  runJobId = "";
-  const input = $("runs-body")?.querySelector(".runs-query");
-  if (input) input.value = "";
-  setRunFilter("failed");
 }
 
 function setRunWindow(value) {
@@ -924,16 +912,12 @@ function runsEmptyText() {
   if (runFilter === "failed") {
     return `No failed, timed-out, or interrupted job runs${extra} (${windowPhrase()}).`;
   }
-  if (runFilter === "active") {
-    return `No pending or running job runs${extra} (${windowPhrase()}).`;
-  }
   return `No job runs${extra} in this workspace (${windowPhrase()}).`;
 }
 
 function runsScopeText() {
   let lead = "Every job run";
   if (runFilter === "failed") lead = "Failed, timed-out, and interrupted job runs";
-  else if (runFilter === "active") lead = "Pending and running job runs";
   const qualifiers = ["newest first", windowPhrase()];
   if (runTaskId) qualifiers.push(`task ${runTaskId}`);
   if (runJobId) qualifiers.push(`job ${runJobId}`);
@@ -944,7 +928,7 @@ function runsScopeNote() {
   const note = el("div", {
     class: "runs-scope-note",
     text: runsScopeText(),
-    title: "The count beside Runs uses these same Failed, Timeout, and Interrupted outcomes for the selected window. Click that count to open this list on Failed for that window. Health › Incidents › Errors lists step and event failures in the selected window.",
+    title: "Failed includes failed, timed-out and interrupted job runs in the selected window. Health › Incidents › Errors lists step and event failures in that window.",
   });
   note.dataset.key = "runs-scope-note";
   note.dataset.hash = `scope-${runFilter}-${getWindow()}-${runTaskId}-${runJobId}`;
@@ -1005,7 +989,7 @@ function runFilterControls() {
   const controls = el("div", { class: "runs-filter", title: "Filter runs by state" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Filter runs by state");
-  for (const [value, label] of [["all", "All"], ["active", "Live"], ["failed", "Failed"]]) {
+  for (const [value, label] of [["all", "All"], ["failed", "Failed"]]) {
     const button = el("button", {
       class: `runs-filter-button${runFilter === value ? " active" : ""}`,
       text: label,
@@ -1357,8 +1341,8 @@ export function renderRuns(runs) {
   const filtered = (runs || []).filter(runMatchesFilter);
   const sorted = sortedRunsForDisplay(filtered);
   const top = sorted;
-  if ($("diag-count")) {
-    $("diag-count").textContent = loading ? "…" : formatRunCount(top.length, sorted.length, meta);
+  if ($("runs-count")) {
+    $("runs-count").textContent = loading ? "…" : formatRunCount(top.length, sorted.length, meta);
   }
   frag.appendChild(runsToolbar());
   frag.appendChild(runsScopeNote());

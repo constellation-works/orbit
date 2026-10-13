@@ -341,7 +341,7 @@ async function assertRowKeyboard(page) {
     globalThis.fetch = async (path, options) => new URL(path, window.location.href).pathname === '/api/job-runs'
       ? response({ items: runs, total: runs.length, limit: 50, truncated: false })
       : prior(path, options);
-    (await import('/js/router.js')).setActiveTab('diagnostics/runs');
+    (await import('/js/router.js')).setActiveTab('jobs/history');
     document.getElementById('refresh-btn').click();
   });
   const runButtons = page.locator('#runs-body .runs-row[data-key^="run-"] > .id');
@@ -871,7 +871,7 @@ async function assertNarrowTableLayouts(page) {
   };
   await page.setViewportSize({ width: 375, height: 900 });
 
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/runs'));
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('jobs/history'));
   await refresh();
   await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
   // Earlier keyboard coverage intentionally leaves the Failed filter active;
@@ -1034,8 +1034,8 @@ async function assertNarrowTableLayouts(page) {
   // can be scrolled into view. Once the card can hold the tracks the table is
   // plain. All-workspaces mode adds a column, so that threshold is wider.
   await page.evaluate(async () => {
-    document.getElementById('diagnostics-main').style.display = '';
-    (await import('/js/router.js')).setActiveTab('diagnostics/runs');
+    document.getElementById('jobs-history-main').style.display = '';
+    (await import('/js/router.js')).setActiveTab('jobs/history');
   });
   const renderRunsFixture = async (attributed) => {
     await page.evaluate(async (attributed) => {

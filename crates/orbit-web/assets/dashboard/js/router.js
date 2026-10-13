@@ -13,14 +13,14 @@
 //
 // The public exports (setActiveTab, navigateToRun, initTabs) are thin wrappers over
 // impls that close over the injected ctx (set once via initRouter).
-// No behavior change: every prior hash route, subtab click, back/forward, and the
-// dashboard polling is scheduled here so it can pause while a tab is hidden
+// Hash routes, subtab clicks, back/forward navigation and dashboard polling
+// are owned here, so polling can pause while a tab is hidden
 // and retry failed refreshes without competing with active dashboard use.
 //
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
-import { renderRuns, showAllFailedRuns } from './runs.js';
+import { renderRuns } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -47,15 +47,15 @@ function markWorkspaceSelectorScope(fleetWide) {
 // delivery is trending. Auto-drain is not a destination: its window card is
 // the Tasks dock's Drain mode (ORB-12898). The retired `#auto-drain` and older
 // `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
-const TABS = ["tasks", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
-// `runs` is the Runs rail entry's list, which lives under this route.
-const DIAG_SUBTABS = ["runs", "incidents", "doctor"];
+const TABS = ["tasks", "jobs", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
 const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "cost"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
+const JOBS_SUBTABS = ["live", "history", "catalogue"];
 // Health views that replace the list panel with their own full-width <main>.
 const HEALTH_MAINS = {
   events: "diagnostics-events-main",
@@ -74,33 +74,25 @@ const RUN_DETAIL_SUBTABS = ["steps", "events"];
 // underneath keep older names (`diagnostics` is Health).
 const RAIL_LABELS = {
   tasks: "Tasks",
-  runs: "Runs",
+  jobs: "Jobs",
   diagnostics: "Health",
   analytics: "Analytics",
   operations: "Automation",
   knowledge: "Knowledge",
   plugins: "Plugins",
   config: "Settings",
-  "run-detail": "Run detail",
 };
 
-/// The operator-facing name of a destination, as the rail and the top bar spell
-/// it. The run list lives under the `diagnostics` route but is the Runs entry,
-/// and a single run's page belongs to that entry too.
-export function destinationLabel(top, diagSubtab) {
-  const railKey = top === "run-detail" || (top === "diagnostics" && diagSubtab === "runs") ? "runs" : top;
-  return RAIL_LABELS[railKey] || RAIL_LABELS[top] || top;
+/// The operator-facing name of the destination on screen.
+export function destinationLabel(top) {
+  return top === "run-detail" ? "Jobs › History" : RAIL_LABELS[top] || top;
 }
 
-// The route a rail entry opens: its remembered view, with Events keeping its
-// filters. Runs is its own rail entry, so Health opens Incidents rather than
-// the run list.
+// Rail destinations reopen their remembered view.
 function railRoute(ctx, tab) {
-  if (tab === "diagnostics") {
-    const sub = ctx.getDiagSubtab();
-    return sub === "incidents" || sub === "doctor" ? healthHash(ctx).slice(1) : incidentsRoute(ctx);
-  }
+  if (tab === "diagnostics") return healthHash(ctx).slice(1);
   if (tab === "analytics") return analyticsSubtabRoute(ctx, ctx.getAnalyticsSubtab());
+  if (tab === "jobs") return `jobs/${ctx.getJobsSubtab()}`;
   return tab;
 }
 
@@ -209,13 +201,12 @@ function setRunDetailSubtabImpl(ctx, name) {
 }
 
 const DIAG_TITLES = {
-  runs: "Runs",
   errors: "Errors",
   incidents: "Incidents",
 };
 
 function setDiagSubtabImpl(ctx, name, view = ctx.getIncidentsView()) {
-  if (!DIAG_SUBTABS.includes(name)) name = "runs";
+  if (!DIAG_SUBTABS.includes(name)) name = "incidents";
   if (!INCIDENTS_VIEWS.includes(view)) view = "incidents";
   ctx.setDiagSubtab(name);
   ctx.setIncidentsView(view);
@@ -248,27 +239,14 @@ function setDiagSubtabImpl(ctx, name, view = ctx.getIncidentsView()) {
   if (diagMain) diagMain.style.display = fullWidthMain ? "none" : "";
   if (fullWidthMain) {
     $("diag-body").style.display = "none";
-    $("runs-body").style.display = "none";
     // Doctor runs on open, not on the poll: show the cached report or read one.
     if (shown === "doctor" && ctx.openDoctor) ctx.openDoctor();
     return;
   }
 
-  // Runs remains live in the aggregate view. Other per-workspace diagnostics
-  // must keep their placeholder and never repaint a prior workspace's rows.
-  if (shown === "runs") {
-    $("diag-body").style.display = "none";
-    $("runs-body").style.display = "block";
-    renderRuns(ctx.getLastRuns ? ctx.getLastRuns() : []);
-  } else {
-    $("diag-body").style.display = "block";
-    $("runs-body").style.display = "none";
-    if (isAggregateView()) {
-      renderPanelPlaceholder("diag-body");
-    } else {
-      ctx.renderDiagnostics();
-    }
-  }
+  $("diag-body").style.display = "block";
+  if (isAggregateView()) renderPanelPlaceholder("diag-body");
+  else ctx.renderDiagnostics();
 }
 
 function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
@@ -303,10 +281,23 @@ function setOperationsSubtabImpl(ctx, name) {
   }
   const routines = $("operations-routines-main");
   const autoTasks = $("operations-auto-tasks-main");
-  const jobs = $("operations-jobs-main");
   if (routines) routines.hidden = name !== "routines";
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
-  if (jobs) jobs.hidden = name !== "jobs";
+}
+
+function setJobsSubtabImpl(ctx, name) {
+  if (!JOBS_SUBTABS.includes(name)) name = "live";
+  ctx.setJobsSubtab(name);
+  for (const btn of document.querySelectorAll("#jobs-subtabs .subtab")) {
+    const active = btn.dataset.subtab === name;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-current", active ? "page" : "false");
+  }
+  for (const sub of JOBS_SUBTABS) {
+    const main = $(`jobs-${sub}-main`);
+    if (main) main.hidden = name !== sub;
+  }
+  if (name === "history") renderRuns(ctx.getLastRuns ? ctx.getLastRuns() : []);
 }
 
 function setKnowledgeSubtabImpl(ctx, name) {
@@ -350,12 +341,6 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
   }
-  // `#runs` with no run id is the Runs destination in the rail: the recent-runs
-  // list, which still lives at `#diagnostics/runs` so existing links resolve.
-  if (head === "runs" && !segments[1]) {
-    head = "diagnostics";
-    segments.splice(0, segments.length, "diagnostics", "runs");
-  }
   let top;
   if (head === "runs" && segments[1]) {
     let nextRunId;
@@ -364,7 +349,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     } catch {
       // Bookmarks and pasted hashes are untrusted input. A malformed escape
       // must not interrupt initialization or strand the navigation listener.
-      return setActiveTabImpl(ctx, "diagnostics/runs", { ...opts, repairRoute: true });
+      return setActiveTabImpl(ctx, "jobs/history", { ...opts, repairRoute: true });
     }
     top = "run-detail";
     if (ctx.getRunId() !== nextRunId) {
@@ -394,12 +379,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   ctx.setTab(top);
   // ORB-10972: the topbar breadcrumb names the active destination, since the
   // rail no longer sits above the content where the tab strip used to.
-  const diagSub = top === "diagnostics"
-    ? (DIAG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getDiagSubtab())
-    : null;
-  const railKey = top === "run-detail" || diagSub === "runs" ? "runs" : top;
+  const railKey = top === "run-detail" ? "jobs" : top;
   const crumb = $("topbar-crumb");
-  const destination = destinationLabel(top, diagSub);
+  const destination = destinationLabel(top);
   if (crumb) crumb.textContent = destination;
   // Browser tabs and history entries read as this page's title, so name the
   // destination there too instead of every entry saying "orbit".
@@ -445,7 +427,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     indicator.style.display = "none";
   }
 
-  // The shared window rides in the hash of every Health and Analytics view
+  // The shared window rides in the hash of Jobs History, Health and Analytics
   // except Events and Codebase, whose queries carry their own windows.
   const adoptHashedWindow = () => {
     const hashedWindow = parseDashboardWindow(query.get("window"));
@@ -456,7 +438,12 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     }
   };
   let hash;
-  if (top === "diagnostics") {
+  if (top === "jobs") {
+    const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
+    adoptHashedWindow();
+    setJobsSubtabImpl(ctx, sub);
+    hash = `#jobs/${sub}` + (sub === "history" ? `?${windowQuery()}` : "");
+  } else if (top === "diagnostics") {
     const sub = DIAG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getDiagSubtab();
     // `#diagnostics/incidents` is the Incidents view itself; the other views
     // name themselves. A bare `#diagnostics` keeps the remembered view.
@@ -614,17 +601,8 @@ function initTabsImpl(ctx) {
   });
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", (event) => {
-      const count = event.target && event.target.closest && event.target.closest("#rail-count-diag-runs");
-      // The badge is the windowed failure count. Open Failed for that window
-      // so the list total matches the number the operator clicked. The Runs
-      // label itself keeps the filter already on screen.
-      if (count && count.textContent.trim() && tab.dataset.tab === "runs") {
-        const counted = parseDashboardWindow(count.dataset.window);
-        const windowChanged = Boolean(counted) && setWindow(counted);
-        if (windowChanged) persistScopeToUrl();
-        showAllFailedRuns();
-        setActiveTabImpl(ctx, "diagnostics/runs", { refresh: false });
-        if (windowChanged) notifyScopeChange();
+      if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
+        setActiveTabImpl(ctx, "jobs/live", { refresh: false });
         return;
       }
       // The denial badge opens Health › Incidents › Events filtered to
@@ -672,6 +650,11 @@ function initTabsImpl(ctx) {
   for (const btn of document.querySelectorAll("#knowledge-subtabs .subtab")) {
     btn.addEventListener("click", () =>
       setActiveTabImpl(ctx, `knowledge/${btn.dataset.subtab}`, { refresh: false }),
+    );
+  }
+  for (const btn of document.querySelectorAll("#jobs-subtabs .subtab")) {
+    btn.addEventListener("click", () =>
+      setActiveTabImpl(ctx, `jobs/${btn.dataset.subtab}`, { refresh: false }),
     );
   }
   for (const btn of document.querySelectorAll("#operations-subtabs .subtab")) {
@@ -730,6 +713,7 @@ export function initTabs() {
 export function scopeRouteHash() {
   const ctx = getCtx();
   const { query } = parseHashRoute(window.location.hash);
+  if (ctx.getTab() === "jobs" && ctx.getJobsSubtab() === "history") return `#jobs/history?${windowQuery()}`;
   if (ctx.getTab() === "diagnostics") return healthHash(ctx);
   if (ctx.getTab() === "analytics") return analyticsHash(ctx, query);
   return null;

@@ -119,7 +119,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   const indicators = await page.evaluate(async () => {
     const router = await import('/static/js/router.js');
-    const state = { diagSubtab: 'runs' };
+    const state = { diagSubtab: 'incidents' };
     router.initRouter(new Proxy({}, {
       get: (_, name) => name === 'getDiagSubtab' ? () => state.diagSubtab
         : name === 'setDiagSubtab' ? value => { state.diagSubtab = value; }
@@ -134,7 +134,7 @@ try {
     });
     const counts = [];
     for (let round = 0; round < 3; round += 1) {
-      for (const route of ['tasks', 'plugins', 'diagnostics/runs', 'analytics/metrics', 'diagnostics/incidents/errors', 'tasks']) {
+      for (const route of ['tasks', 'plugins', 'jobs/history', 'analytics/metrics', 'diagnostics/incidents/errors', 'tasks']) {
         router.setActiveTab(route, { refresh: false, updateHash: false });
         counts.push({ route, ...count() });
       }

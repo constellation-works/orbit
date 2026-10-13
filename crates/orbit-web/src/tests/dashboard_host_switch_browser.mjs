@@ -287,7 +287,7 @@ try {
   await page.locator('.artifact-preview', { hasText: 'hello from hostb' }).waitFor({ state: 'visible' });
   await page.locator('.task-quick.approve').first().click();
   await until('the approve action on hostb', () => logged(/^POST \/api\/on\/hostb\/tasks\/hostb-NEW\/approve\?workspace=ws_orbit$/));
-  for (const route of ['diagnostics/runs', 'runs/jrun-remote-1', 'operations/routines', 'diagnostics/incidents', 'config/effective', 'config/hosts']) {
+  for (const route of ['jobs/history', 'runs/jrun-remote-1', 'operations/routines', 'diagnostics/incidents', 'config/effective', 'config/hosts']) {
     await page.evaluate((route) => { window.location.hash = route; }, route);
     await page.waitForTimeout(400);
   }
@@ -611,8 +611,9 @@ try {
   // Rail clicks write each route's settled hash, so traversing back to one
   // routes it without pushing an entry that would drop the Forward history.
   const openRuns = async () => {
-    await page.click('.tab[data-tab="runs"]');
-    await page.locator('.tab-pane.active[data-tab="diagnostics"]').waitFor({ state: 'visible' });
+    await page.click('.tab[data-tab="jobs"]');
+    await page.click('#jobs-subtabs [data-subtab="history"]');
+    await page.locator('#jobs-history-main').waitFor({ state: 'visible' });
   };
   const openTasks = () => page.click('.tab[data-tab="tasks"]');
   const ALPHA_WORKSPACES = 'All workspaces,orbit,alpha-only';

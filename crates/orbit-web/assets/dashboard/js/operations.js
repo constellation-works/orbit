@@ -554,7 +554,7 @@ function jobLink(target) {
   const jobId = jobIdFromTarget(target);
   if (!jobId) return el("span", { class: "mono", text: target || "—" });
   const link = el("a", { class: "mono operation-run-link operation-job-link operation-link", text: jobId, title: `Open ${jobId} under Jobs` });
-  link.href = `#operations/jobs?job=${encodeURIComponent(jobId)}`;
+  link.href = `#jobs/catalogue?job=${encodeURIComponent(jobId)}`;
   return link;
 }
 
@@ -1441,13 +1441,15 @@ function jobRow(job, workspace) {
 }
 
 function renderJobs(payload) {
-  lastJobs = payload;
+  if (payload.view !== "live") lastJobs = payload;
   if (payload.routines) {
     lastOperations = payload.routines;
     noteCronZone(lastOperations);
     updateRoutineFailureBadge(scopedRoutines(lastOperations));
   }
-  const body = $("jobs-body");
+  const isLive = payload.view === "live";
+  const body = $(isLive ? "jobs-live-body" : "jobs-body");
+  const count = $(isLive ? "jobs-live-count" : "jobs-count");
   if (!body) return;
   body.textContent = "";
   const workspace = selectedWorkspace();
@@ -1455,29 +1457,33 @@ function renderJobs(payload) {
   if (workspaceReason || !workspace) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: workspaceReason || "Select a workspace to list its jobs." }));
     body.appendChild(el("div", { class: "empty-state", text: "Select a workspace to list its jobs." }));
-    $("jobs-count").textContent = "read-only";
-    setRailSubtabCount("rail-count-ops-jobs", "");
+    count.textContent = "read-only";
     return;
   }
   const runs = Array.isArray(payload.runs?.items) ? payload.runs.items : Array.isArray(payload.runs) ? payload.runs : [];
-  const catalog = jobCatalog(lastOperations, runs, workspace.name);
   const running = runs.filter((run) => run.state === "running" || run.state === "pending");
-  const groups = runningGroups(running);
-  const taskCount = groups.tasks.length;
-  const strip = el("section", { class: "operation-running" });
-  strip.setAttribute("aria-label", "Running now");
-  strip.appendChild(el("div", { class: "operation-running-title" }, [
-    el("strong", { text: "Running now" }),
-    el("span", { class: "mono", text: `${taskCount} task${taskCount === 1 ? "" : "s"}` }),
-    el("span", { class: "muted", text: running.length ? `(${running.length} run${running.length === 1 ? "" : "s"} in flight)` : "nothing in flight" }),
-  ]));
-  if (running.length) {
-    strip.appendChild(el("div", { class: "operation-running-grid" }, [
-      ...groups.tasks.map((group) => runningTaskCard(group, workspace.id)),
-      ...groups.untasked.map((run) => jobRunningCard(run, workspace.id)),
+  if (isLive) {
+    const groups = runningGroups(running);
+    const taskCount = groups.tasks.length;
+    const strip = el("section", { class: "operation-running" });
+    strip.setAttribute("aria-label", "Running now");
+    strip.appendChild(el("div", { class: "operation-running-title" }, [
+      el("strong", { text: "Running now" }),
+      el("span", { class: "mono", text: `${taskCount} task${taskCount === 1 ? "" : "s"}` }),
+      el("span", { class: "muted", text: running.length ? `(${running.length} run${running.length === 1 ? "" : "s"} in flight)` : "nothing in flight" }),
     ]));
+    if (running.length) {
+      strip.appendChild(el("div", { class: "operation-running-grid" }, [
+        ...groups.tasks.map((group) => runningTaskCard(group, workspace.id)),
+        ...groups.untasked.map((run) => jobRunningCard(run, workspace.id)),
+      ]));
+    }
+    body.appendChild(strip);
+    if (payload.runs?.truncated) body.appendChild(el("p", { class: "operation-control-note", text: `${running.length} shown of ${payload.runs.total} runs in flight.` }));
+    count.textContent = `${running.length} run${running.length === 1 ? "" : "s"} in flight · ${workspace.name}`;
+    return;
   }
-  body.appendChild(strip);
+  const catalog = jobCatalog(lastOperations, runs, workspace.name);
   if (catalog.size === 0) {
     body.appendChild(el("div", { class: "empty-state", text: "No job has been referenced by a routine or run in this workspace recently." }));
   } else {
@@ -1498,17 +1504,21 @@ function renderJobs(payload) {
     body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
   }
   $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${running.length} running · ${workspace.name}`;
-  setRailSubtabCount("rail-count-ops-jobs", running.length ? `${running.length} running` : "");
 }
 
-function fetchAndRenderJobs(routinesRequest = null) {
+export function fetchAndRenderJobs() {
+  const live = context.getJobsSubtab?.() === "live";
+  const bodyId = live ? "jobs-live-body" : "jobs-body";
+  const countId = live ? "jobs-live-count" : "jobs-count";
   if (!selectedWorkspace()) {
-    return requestPanel("jobs-body", "unselected", () => Promise.resolve({ runs: [] }), renderJobs, "jobs-count");
+    return requestPanel(bodyId, "unselected", () => Promise.resolve({ runs: [], view: live ? "live" : "catalogue" }), renderJobs, countId);
   }
-  return requestPanel("jobs-body", "jobs",
-    () => Promise.all([routinesRequest || Promise.resolve(lastOperations), fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`)])
-      .then(([routines, runs]) => ({ routines, runs })),
-    renderJobs, "jobs-count");
+  return requestPanel(bodyId, "jobs",
+    () => Promise.all([
+      fetchJson(withInactivePlugins("/api/routines")),
+      fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
+    ]).then(([routines, runs]) => ({ routines, runs, view: live ? "live" : "catalogue" })),
+    renderJobs, countId);
 }
 
 function operationCountId(bodyId) {
@@ -2342,10 +2352,6 @@ export async function fetchAndRenderOperations(subtab = context.getOperationsSub
     return;
   }
   const routines = fetchJson(withInactivePlugins("/api/routines"));
-  if (subtab === "jobs") {
-    await fetchAndRenderJobs(routines);
-    return;
-  }
   throwFirstPanelError(await Promise.allSettled([
     requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
     requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),

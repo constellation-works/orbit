@@ -103,8 +103,8 @@ function matchesChain(path, chain) {
 }
 
 const runsBody = Object.assign(new Node('div'), { id: 'runs-body' });
-const diagCount = Object.assign(new Node('span'), { id: 'diag-count' });
-const byId = { 'runs-body': runsBody, 'diag-count': diagCount };
+const diagCount = Object.assign(new Node('span'), { id: 'runs-count' });
+const byId = { 'runs-body': runsBody, 'runs-count': diagCount };
 
 const document = {
   activeElement: null,
@@ -115,7 +115,7 @@ const document = {
   getElementById: id => byId[id] || null,
 };
 
-const location = { search: '', hash: '#diagnostics/runs', href: 'http://localhost/#diagnostics/runs' };
+const location = { search: '', hash: '#jobs/history', href: 'http://localhost/#jobs/history' };
 const history = {
   replaceState(_data, _title, url) {
     if (url == null) return;

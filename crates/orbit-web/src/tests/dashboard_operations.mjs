@@ -1,12 +1,12 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
 const { setHost, setWorkspace, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
-const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
+const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 const { drainReadinessFor } = await import('./js/drain-waits.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
 const fetchAndRenderOperations = async () => {
-  const results = await Promise.allSettled([...(["routines", "auto-tasks", "jobs"].map(subtab => fetchAndRenderOperationsPane(subtab))), fetchAndRenderAutoDrainPane()]);
+  const results = await Promise.allSettled([...(["routines", "auto-tasks"].map(subtab => fetchAndRenderOperationsPane(subtab))), (async () => { jobsSubtab = "live"; await fetchAndRenderJobs(); jobsSubtab = "catalogue"; await fetchAndRenderJobs(); })(), fetchAndRenderAutoDrainPane()]);
   const failed = results.find(result => result.status === 'rejected');
   if (failed) throw failed.reason;
 };
@@ -20,6 +20,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const longTaskJobId = 'task_' + 'a'.repeat(58);
 const allowed = { authorized: true, reason: null };
 const denied = { authorized: false, reason: 'Test session cannot perform this action. Ask the server operator.' };
+let jobsSubtab = 'catalogue';
 let operationsSubtab = 'routines';
 const capabilities = { routine_toggle: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 const enabled = { one: true, two: true };
@@ -181,7 +182,7 @@ globalThis.fetch = async (path, options = {}) => {
   return response({});
 };
 setWorkspace('one');
-initOperations({ getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
+initOperations({ getJobsSubtab: () => jobsSubtab, getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
 await fetchAndRenderOperations();
 const mintedStatus = get('auto-tasks-body').querySelector('.pill');
 const taskStatus = statusPill('in-progress');
@@ -507,7 +508,7 @@ setWindow('7d');
 await fetchAndRenderOperations();
 for (const [surface, runId] of [
   ['auto-drain-live', 'jrun-20260923-0400-a1'],
-  ['jobs-body', 'jrun-fixture-running'],
+  ['jobs-live-body', 'jrun-fixture-running'],
   ['routines-body', 'jrun-fixture-done'],
 ]) {
   const link = Array.from(get(surface).querySelectorAll('a')).find(link => new URL(link.href).hash === `#runs?run_id=${runId}`);
@@ -582,7 +583,7 @@ const routineGroups = descendants(get('routines-body')).filter(node => String(no
 assert(routineGroups.some(text => text.startsWith('Active1')) && routineGroups.some(text => text.startsWith('Paused1')), `routines grouped by state: ${routineGroups}`);
 const routineSwitch = descendants(get('routines-body')).find(node => String(node.className || '').includes('operation-switch'));
 assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable', 'routine toggle is a switch named by its action');
-assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#operations/jobs?job=fixture'), 'routine row links the job it runs');
+assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#jobs/catalogue?job=fixture'), 'routine row links the job it runs');
 assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
 assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
 assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');
@@ -591,7 +592,7 @@ assert(descendants(get('clock-body')).some(node => String(node.className || '').
 // Running now: four runs in flight, three of them for ORB-15001. The count names
 // tasks and runs separately, the task's runs share one card linked to the
 // task, and a run with no task keeps its own card.
-const runningStrip = get('jobs-body').querySelector('.operation-running');
+const runningStrip = get('jobs-live-body').querySelector('.operation-running');
 const runningTitle = runningStrip.querySelector('.operation-running-title').textContent;
 assert(runningTitle.includes('1 task') && runningTitle.includes('(4 runs in flight)'), `running strip counts tasks and runs apart: ${runningTitle}`);
 const taskCards = Array.from(runningStrip.querySelectorAll('.operation-running-task'));
@@ -634,7 +635,7 @@ workspaceTwoRunId = 'jrun-workspace-two';
 delayJobRunsWorkspace = 'two';
 failJobRunsWorkspace = 'two';
 setWorkspace('two');
-const workspaceTwoJobs = fetchAndRenderOperationsPane('jobs');
+const workspaceTwoJobs = fetchAndRenderJobs();
 await tick(); await tick();
 assert(releaseJobRuns, 'workspace B job-runs request is pending');
 await fetchAndRenderOperationsPane('routines');
@@ -648,7 +649,7 @@ assert(failedJobsText.startsWith('Unable to load:') && !failedJobsText.includes(
 assert(requests.some(request => request.path === '/api/job-runs' && request.workspace === 'two'), 'workspace B jobs request uses its selected workspace');
 delayJobRunsWorkspace = null;
 failJobRunsWorkspace = null;
-await fetchAndRenderOperationsPane('jobs');
+await fetchAndRenderJobs();
 assert(get('jobs-body').textContent.includes('jrun-workspace-two') && !get('jobs-body').textContent.includes('jrun-fixture-running'), 'workspace B run list appears after its jobs load');
 setWorkspace('one');
 await fetchAndRenderOperations();
@@ -1000,7 +1001,6 @@ delayPost=false;responseError=null;
 for (const [subtab, expected] of [
   ['auto-tasks', ['/api/auto-tasks']],
   ['routines', ['/api/routines']],
-  ['jobs', ['/api/job-runs', '/api/routines']],
 ]) {
   operationsSubtab = subtab;
   const before = requests.length;

@@ -15,7 +15,7 @@ import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -109,9 +109,10 @@ let lastRunSourcesUnavailable = [];
 let lastDiagnostics = { errors: null, incidents: null };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
-// Health: the rail subtab (`runs` is the Runs entry's list) and the view
+// Health: the rail subtab and the view
 // Incidents shows. Analytics: the rail subtab and the view Reliability shows.
-let activeDiagSubtab = "runs";
+let activeDiagSubtab = "incidents";
+let activeJobsSubtab = "live";
 let activeIncidentsView = "incidents";
 let activeAnalyticsSubtab = "metrics";
 let activeReliabilityView = "pipeline";
@@ -125,6 +126,7 @@ let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
 
 // Health strip state
 let lastSummary = null;
+let jobsInFlightSequence = 0;
 
 // ORB-00030: workspaces the dashboard is serving. Empty/one entry => single
 // mode (no selector). More than one => global mode (selector shown).
@@ -172,7 +174,7 @@ function auditContext() {
   };
 }
 
-// The Health list panel's view: the run list, or Incidents' signature list or
+// The Health list panel's view: Incidents' signature list or
 // error feed. Events and Doctor have their own panels.
 function diagListView() {
   return activeDiagSubtab === "incidents" ? activeIncidentsView : activeDiagSubtab;
@@ -210,6 +212,8 @@ function routerContext() {
     // getters/setters for router-owned state (kept in app.js per extraction contract)
     getTab: () => activeTab,
     setTab: (v) => { activeTab = v; },
+    getJobsSubtab: () => activeJobsSubtab,
+    setJobsSubtab: (v) => { activeJobsSubtab = v; },
     getDiagSubtab: () => activeDiagSubtab,
     setDiagSubtab: (v) => { activeDiagSubtab = v; },
     getIncidentsView: () => activeIncidentsView,
@@ -1097,7 +1101,7 @@ function renderAggregatePlaceholders() {
 }
 
 // Most Health panels are fed exclusively by per-workspace endpoints and
-// remain unavailable in aggregate mode. Runs is the exception: its body is
+// remain unavailable in aggregate mode. Jobs History is the exception: its body is
 // managed by the bounded /api/job-runs/all response and must not be overwritten
 // by these placeholders.
 function renderDiagnosticsPlaceholders() {
@@ -1118,15 +1122,9 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   if (count) count.textContent = "—";
 }
 
-// The Runs failure and Health denial counts are fed by the per-workspace
-// /api/audit/summary endpoint, so in aggregate mode and on a workspace switch
-// they are cleared rather than showing the last-selected workspace's numbers as
-// if they were machine-wide.
+// Health denials are scoped to the summary window.
 function resetSummaryCounts() {
-  setRailCount("rail-count-diag-runs", null);
   renderDenialCount(null);
-  const runsCount = $("rail-count-diag-runs");
-  if (runsCount) delete runsCount.dataset.window;
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1367,6 +1365,7 @@ function activeRefreshJobs() {
   } else {
     add("Health summary", fetchAndRenderSummary());
   }
+  add("Jobs in flight", fetchJobsInFlight());
   // Keep the chrome indicator current even when Tasks and its dock are hidden.
   add("Drain", fetchAndRenderAutoDrainPane());
 
@@ -1418,6 +1417,11 @@ function activeRefreshJobs() {
     return jobs;
   }
 
+  if (activeTab === "jobs") {
+    add(`Jobs › ${activeJobsSubtab}`, activeJobsSubtab === "history" ? fetchAndRenderRuns() : fetchAndRenderJobs());
+    return jobs;
+  }
+
   if (activeTab === "operations") {
     add(subpanel("operations-subtabs", activeOperationsSubtab), fetchAndRenderOperations());
     return jobs;
@@ -1464,32 +1468,23 @@ function activeRefreshJobs() {
       add("Health › Events", fetchAndRenderAudit(auditContext()));
       return jobs;
     }
-    if (aggregate && view === "runs") {
-      renderDiagnosticsPlaceholders();
-      add("Runs", fetchAndRenderRuns());
-      return jobs;
-    }
     if (aggregate) {
       renderDiagnosticsPlaceholders();
       return jobs;
     }
-    if (view === "runs") {
-      add("Runs", fetchAndRenderRuns());
-    } else {
-      // Incidents may narrow the shared window to its own 6h segment.
-      const windowFor = () => (view === "incidents" ? getIncidentWindow() : getWindow());
-      const selectedWindow = windowFor();
-      const incidentClass = getIncidentClass();
-      const limit = view === "errors" ? errorDiagLimit : DIAG_LIMIT;
-      const path = view === "incidents"
-        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&class=${encodeURIComponent(incidentClass)}&limit=${incidentDiagLimit}`
-        : `/api/diagnostics/${view}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
-      add(view === "errors" ? "Health › Errors" : "Health › Incidents", requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
-        lastDiagnostics[view] = payload;
-        if (diagListView() === view && windowFor() === selectedWindow
-          && (view !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
-      }, "diag-count"));
-    }
+    // Incidents may narrow the shared window to its own 6h segment.
+    const windowFor = () => (view === "incidents" ? getIncidentWindow() : getWindow());
+    const selectedWindow = windowFor();
+    const incidentClass = getIncidentClass();
+    const limit = view === "errors" ? errorDiagLimit : DIAG_LIMIT;
+    const path = view === "incidents"
+      ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&class=${encodeURIComponent(incidentClass)}&limit=${incidentDiagLimit}`
+      : `/api/diagnostics/${view}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
+    add(view === "errors" ? "Health › Errors" : "Health › Incidents", requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+      lastDiagnostics[view] = payload;
+      if (diagListView() === view && windowFor() === selectedWindow
+        && (view !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
+    }, "diag-count"));
   }
   return jobs;
 }
@@ -1517,7 +1512,18 @@ function fetchAndRenderRuns() {
     lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
-  }, "diag-count");
+  }, "runs-count");
+}
+
+function fetchJobsInFlight() {
+  const sequence = ++jobsInFlightSequence;
+  const revision = getWorkspaceRevision();
+  const aggregate = isAggregateView();
+  return fetchJson(`${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1`).then((payload) => {
+    if (revision !== getWorkspaceRevision() || sequence !== jobsInFlightSequence) return;
+    const count = Number.isFinite(payload.total) ? payload.total : listItems(payload).length;
+    setRailCount("rail-count-jobs", count, false, "Pending and running job runs, independent of the History window and filters.");
+  });
 }
 
 function fetchRunningRuns() {
@@ -1672,19 +1678,9 @@ function setRailCount(id, value, alert = false, title = "") {
   node.title = empty ? "" : title;
 }
 
-// The windowed counts of /api/audit/summary ride on the rail: failed runs on
-// Runs and denials on Health. Their titles keep each count's definition.
+// Health's denial badge follows the summary window.
 function renderSummaryCounts(data) {
-  if (!data) return;
-  const windowLabel = data.window || getWindow();
-  setRailCount("rail-count-diag-runs", data.failed_runs, true,
-    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Click this count to open Runs on Failed for the same window.`);
-  const runsCount = $("rail-count-diag-runs");
-  if (runsCount) {
-    if (data.failed_runs) runsCount.dataset.window = String(windowLabel);
-    else delete runsCount.dataset.window;
-  }
-  renderDenialCount(data);
+  if (data) renderDenialCount(data);
 }
 
 function formatBigInt(n) {
@@ -1694,9 +1690,9 @@ function formatBigInt(n) {
 }
 
 // The connection line names the destination the way the rail does, not by its
-// route: an operator on Runs should not read "diagnostics/runs".
+// route: the connection line uses the destination label.
 function refreshLabel() {
-  return destinationLabel(activeTab, activeDiagSubtab);
+  return destinationLabel(activeTab);
 }
 
 // Chrome retains values when a panel fails. Mark the whole snapshot until a
@@ -1830,9 +1826,10 @@ onWorkspaceChange(() => {
     if ($(id)) $(id).textContent = "—";
   }
   resetSummaryCounts();
+  setRailCount("rail-count-jobs", null);
 });
 resetPanel("tasks-body", "tasks-count");
-resetPanel("runs-body", "diag-count");
+resetPanel("runs-body", "runs-count");
 resetPanel("diag-body", "diag-count");
 
 const tasksContext = taskContext();
@@ -1871,7 +1868,7 @@ setScopeChangeListener(() => {
   }
   refreshDashboard();
 });
-initOperations({ getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
+initOperations({ getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 
 initRuns(runsContext());
