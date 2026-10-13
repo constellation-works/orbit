@@ -1,5 +1,5 @@
-use crate::workspace_registry::bind_publication;
 use chrono::{TimeZone, Utc};
+use orbit_registry::workspace_registry::bind_publication;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
