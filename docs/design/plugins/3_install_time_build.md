@@ -9,7 +9,7 @@ paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
-last_validated: 2026-10-09
+last_validated: 2026-10-13
 ---
 
 # Threat model: install-time spec.build for source-built plugins
