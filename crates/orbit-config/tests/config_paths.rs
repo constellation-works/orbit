@@ -238,3 +238,6 @@ fn symlinked_parent_directories_still_load_regular_config_files() {
         config.plugin_enablement
     );
 }
+
+#[path = "config_paths/plugin_enablement.rs"]
+mod plugin_enablement;
