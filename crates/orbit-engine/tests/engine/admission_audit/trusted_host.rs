@@ -46,7 +46,6 @@ fn echoing_provider(dir: &std::path::Path) -> String {
 }
 
 /// A malformed admission is not an admission.
-#[test]
 fn a_forged_admission_value_does_not_admit_the_mode() {
     if !super::run_isolated(concat!(
         module_path!(),
@@ -80,7 +79,6 @@ fn a_forged_admission_value_does_not_admit_the_mode() {
 
 /// The inverse: an admission riding on an activity that never declared the mode
 /// changes nothing. Ordinary managed activities keep their sandbox resolution.
-#[test]
 fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
     if !super::run_isolated(concat!(
         module_path!(),
@@ -135,7 +133,6 @@ fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
 
 /// The target activity controls authorization, while the audit event keeps
 /// the pipeline step id for operators reading the run trace.
-#[test]
 fn distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit() {
     if !super::run_isolated(concat!(
         module_path!(),
@@ -197,4 +194,26 @@ impl EnvelopeSink for CapturedEnvelopes {
         self.0.lock().expect("captured events").push(event.clone());
         Ok(())
     }
+}
+
+#[test]
+fn trusted_host_authority_contracts() {
+    super::run_family(
+        concat!(module_path!(), "::trusted_host_authority_contracts"),
+        module_path!(),
+        &[
+            (
+                "a_forged_admission_value_does_not_admit_the_mode",
+                a_forged_admission_value_does_not_admit_the_mode,
+            ),
+            (
+                "an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox",
+                an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox,
+            ),
+            (
+                "distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit",
+                distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit,
+            ),
+        ],
+    );
 }

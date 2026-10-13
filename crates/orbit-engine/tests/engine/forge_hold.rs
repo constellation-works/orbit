@@ -374,7 +374,6 @@ fn execute(job: &JobV2, host: &ForgeHost, resume: Option<&PipelineState>) -> Job
 
 /// A contaminated origin must be rejected before the wrapper simulates a
 /// forge response, increments push attempts, or delegates to real Git.
-#[test]
 fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
     super::git_fixture::isolated(
         module_path!(),
@@ -412,7 +411,6 @@ fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
     );
 }
 
-#[test]
 fn an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure() {
     super::git_fixture::isolated(
         module_path!(),
@@ -445,7 +443,6 @@ fn an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure() {
     );
 }
 
-#[test]
 fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
     super::git_fixture::isolated(
         module_path!(),
@@ -527,7 +524,6 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
 /// held run, so its push keeps retrying past its budget inside a window: the
 /// same run pushes the same head once the forge accepts it, and opens the
 /// pull request without implementing or reviewing again.
-#[test]
 fn a_push_window_retries_past_the_budget_and_lands_the_same_head() {
     super::git_fixture::isolated(
         module_path!(),
@@ -564,7 +560,6 @@ fn a_push_window_retries_past_the_budget_and_lands_the_same_head() {
 
 /// [ORB-14634] Past its window the push holds as before, and the hold dates
 /// from the forge's first refusal rather than from the last.
-#[test]
 fn a_push_window_that_closes_holds_since_the_first_refusal() {
     super::git_fixture::isolated(
         module_path!(),
@@ -591,4 +586,42 @@ fn a_push_window_that_closes_holds_since_the_first_refusal() {
             assert_eq!(host.actions(), ["implement", "review"]);
         },
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn forge_hold_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "forge_hold_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_forge_wrapper_refuses_a_non_local_origin_before_pushing",
+                a_forge_wrapper_refuses_a_non_local_origin_before_pushing,
+            ),
+            (
+                "an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure",
+                an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure,
+            ),
+            (
+                "an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head",
+                an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn forge_hold_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "forge_hold_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_push_window_retries_past_the_budget_and_lands_the_same_head",
+                a_push_window_retries_past_the_budget_and_lands_the_same_head,
+            ),
+            (
+                "a_push_window_that_closes_holds_since_the_first_refusal",
+                a_push_window_that_closes_holds_since_the_first_refusal,
+            ),
+        ]);
+    });
 }

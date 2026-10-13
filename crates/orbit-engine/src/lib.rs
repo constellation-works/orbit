@@ -34,7 +34,7 @@ pub mod activity_job;
 pub mod test_support {
     pub use crate::activity_job::cli_runner::with_cli_supervision_clock;
     pub use crate::context::NullRuntimeHost;
-    pub use crate::executor::automation::vcs::with_remote_probe_backoff;
+    pub use crate::executor::automation::vcs::{with_remote_probe_backoff, with_vcs_retry_wait};
 }
 mod condition;
 mod context;

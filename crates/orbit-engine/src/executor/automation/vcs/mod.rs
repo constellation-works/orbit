@@ -53,7 +53,7 @@ pub use pr::PullRequestStatus;
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
 #[cfg(feature = "test-support")]
-pub use remote_probe::with_remote_probe_backoff;
+pub use remote_probe::{with_remote_probe_backoff, with_vcs_retry_wait};
 pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
 pub use worktree::{

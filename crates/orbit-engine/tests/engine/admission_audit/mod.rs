@@ -34,7 +34,7 @@ fn run_isolated(qualified: &str) -> bool {
         child.env_remove(key);
     });
     child
-        .args(["--exact", test, "--nocapture"])
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env(MARKER, test)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
@@ -47,4 +47,40 @@ fn run_isolated(qualified: &str) -> bool {
         &output.stderr,
     );
     false
+}
+
+/// Share a bounded single-test child, never a row's authority or mutable state.
+fn run_family(qualified: &str, module: &str, rows: &[(&str, fn())]) {
+    if !run_isolated(qualified) {
+        return;
+    }
+    struct RestoreCwd(std::path::PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).expect("restore family cwd");
+        }
+    }
+    for (name, row) in rows {
+        let root =
+            tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("row root");
+        let home = root.path().join("home");
+        let tmp = root.path().join("tmp");
+        std::fs::create_dir(&home).expect("row home");
+        std::fs::create_dir(&tmp).expect("row temporary directory");
+        let marker = format!("{}::{name}", module.split_once("::").unwrap().1);
+        let home_text = home.to_str().expect("UTF-8 fixture path");
+        let tmp_text = tmp.to_str().expect("UTF-8 fixture path");
+        // These rows do not hold their own ScopedEnv. Keep tests that mutate
+        // ambient credentials outside the family to avoid nested env locks.
+        let _env = orbit_common::test_env::scoped([
+            ("ORBIT_ENGINE_ADMISSION_AUDIT_CHILD", Some(marker.as_str())),
+            ("HOME", Some(home_text)),
+            ("USERPROFILE", Some(home_text)),
+            ("TMPDIR", Some(tmp_text)),
+            ("XDG_CONFIG_HOME", Some(home_text)),
+        ]);
+        let _cwd = RestoreCwd(std::env::current_dir().expect("family cwd"));
+        std::env::set_current_dir(root.path()).expect("row cwd");
+        row();
+    }
 }

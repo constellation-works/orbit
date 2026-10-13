@@ -39,7 +39,7 @@ pub(super) fn execute_with_transient_retry(
                     attempt,
                     "retrying private automation VCS lookup after a transient GitHub failure"
                 );
-                std::thread::sleep(GITHUB_TRANSIENT_RETRY_DELAY);
+                super::super::remote_probe::fixed_wait(GITHUB_TRANSIENT_RETRY_DELAY);
                 attempt += 1;
             }
             Err(error) => return Err(error),

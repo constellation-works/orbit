@@ -3,7 +3,6 @@
 use super::*;
 use std::os::unix::fs::symlink;
 
-#[test]
 fn sweep_reclaims_declared_paths_in_kept_worktrees_and_preserves_candidates() {
     isolated_in(
         module_path!(),
@@ -104,7 +103,6 @@ fn sweep_reclaims_declared_paths_in_kept_worktrees_and_preserves_candidates() {
     );
 }
 
-#[test]
 fn reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_paths() {
     isolated_in(
         module_path!(),
@@ -207,7 +205,6 @@ fn reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_p
     );
 }
 
-#[test]
 fn a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes() {
     isolated_in(
         module_path!(),
@@ -269,4 +266,25 @@ fn a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes() {
             assert!(git(&checkout.path, &["status", "--porcelain"]).is_empty());
         },
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn reclaim_contracts_1() {
+    isolated_in(module_path!(), "reclaim_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "sweep_reclaims_declared_paths_in_kept_worktrees_and_preserves_candidates",
+                sweep_reclaims_declared_paths_in_kept_worktrees_and_preserves_candidates,
+            ),
+            (
+                "reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_paths",
+                reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_paths,
+            ),
+            (
+                "a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes",
+                a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes,
+            ),
+        ]);
+    });
 }

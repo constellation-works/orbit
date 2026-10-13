@@ -25,7 +25,6 @@ const CONFLICT_RECOVERY: &str = "test_stub_pr_conflict_recovery";
 /// head needs rebasing; the fake reviewer then fixes and certifies the new
 /// head, owner validation reruns on the reviewer commit [ORB-13989], and the
 /// pipeline republishes and completes it.
-#[test]
 fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     let host = CompletionReviewHost::new(1, &[]);
     let result = run(&host);
@@ -138,7 +137,6 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
 /// again under the first re-review, so a second round reviews, republishes
 /// and completes that head: delivery continues without an operator and the
 /// task is never left blocked.
-#[test]
 fn a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers() {
     let host = CompletionReviewHost::new(2, &[1, 2]);
     let result = run(&host);
@@ -225,7 +223,6 @@ fn a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers() {
 
 /// The base moving under the second re-review as well ends at the bound: the
 /// last completion round refuses as `review_gate_stale` and nothing merges.
-#[test]
 fn a_conflict_after_the_second_re_review_stops_delivery() {
     let host = CompletionReviewHost::new(3, &[]);
     let result = run(&host);
@@ -246,7 +243,6 @@ fn a_conflict_after_the_second_re_review_stops_delivery() {
 
 /// A rebase that keeps stopping on a new conflict gets a bounded number of
 /// recovery rounds, then the step fails instead of looping.
-#[test]
 fn conflict_recovery_rounds_are_bounded_per_failure() {
     let host = CompletionReviewHost::new(2, &[0, 50]);
     let result = run(&host);
@@ -652,4 +648,29 @@ impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
             .push(request.clone());
         Ok(None)
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn completion_review_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "completion_review_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "shipped_completion_rebases_re_reviews_and_completes_the_new_head",
+                shipped_completion_rebases_re_reviews_and_completes_the_new_head,
+            ),
+            (
+                "a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers",
+                a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers,
+            ),
+            (
+                "a_conflict_after_the_second_re_review_stops_delivery",
+                a_conflict_after_the_second_re_review_stops_delivery,
+            ),
+            (
+                "conflict_recovery_rounds_are_bounded_per_failure",
+                conflict_recovery_rounds_are_bounded_per_failure,
+            ),
+        ]);
+    });
 }

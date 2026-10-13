@@ -19,7 +19,7 @@ use serde_json::json;
 
 use super::provider_capacity::{
     CapacityHost, FakeProvider, SUCCESS_ENVELOPE, agent_spec, failure_message, implementation_job,
-    run_job, writer,
+    outcome_writer, run_job,
 };
 
 /// What Antigravity wrote for crew `gemini-flash` (runs
@@ -126,7 +126,7 @@ fn dispatch(
         spec: &ActivityV2Spec::AgentLoop(agent_spec(case.provider)),
         fs_profile: None,
         input: json!({ "prompt": "implement" }),
-        audit: writer(audit.path(), &run_id),
+        audit: outcome_writer(&run_id),
         run_id: &run_id,
         host: Some(&host),
     })
@@ -154,7 +154,6 @@ fn typed_limit(message: Option<&str>, provider: &str) -> ProviderLimitFailure {
 
 /// Every recorded provider limit text types the failure, and nothing the
 /// agent wrote does.
-#[test]
 fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
     let envelope_answer = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
@@ -313,7 +312,6 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
 /// [ORB-15102] Antigravity's quota arrives as an in-band `ERROR` result frame
 /// with exit 0. It fails the turn as the typed limit, not as a missing
 /// envelope, and records the reset; another terminal error does not.
-#[test]
 fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
     let before = Utc::now();
     let (success, message, limits, _) = dispatch(
@@ -369,7 +367,6 @@ fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
 /// Codex's same-day reset is the host's local time today; Claude's
 /// `rate_limit_info` names the window and its epoch reset, and fails the turn
 /// even on exit 0.
-#[test]
 fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
     let (_, message, _, _) = dispatch(
         0,
@@ -412,7 +409,6 @@ fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
 /// The incident runs spent a step recovery on a quota. Now the provider is
 /// invoked once, neither recovery runs, and the failure handoff gets the typed
 /// code with the candidate intact.
-#[test]
 fn a_usage_limit_skips_recovery_and_keeps_the_candidate() {
     let worktree = tempfile::tempdir().unwrap();
     let candidate = worktree.path().join("candidate.rs");
@@ -457,4 +453,29 @@ fn a_usage_limit_skips_recovery_and_keeps_the_candidate() {
         1,
         "the limit is recorded"
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_limit_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "provider_limit_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "usage_limits_are_typed_only_from_text_the_failed_provider_wrote",
+                usage_limits_are_typed_only_from_text_the_failed_provider_wrote,
+            ),
+            (
+                "an_antigravity_error_result_on_exit_zero_is_a_usage_limit",
+                an_antigravity_error_result_on_exit_zero_is_a_usage_limit,
+            ),
+            (
+                "reported_resets_and_windows_are_read_from_the_providers_own_words",
+                reported_resets_and_windows_are_read_from_the_providers_own_words,
+            ),
+            (
+                "a_usage_limit_skips_recovery_and_keeps_the_candidate",
+                a_usage_limit_skips_recovery_and_keeps_the_candidate,
+            ),
+        ]);
+    });
 }

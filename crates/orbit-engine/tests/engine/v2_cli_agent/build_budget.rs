@@ -66,7 +66,7 @@ fn held_slot_wait_extends_deadline_and_is_durable() {
     // The holder stays until the wrapper's own wait clock passes the activity
     // budget. Post-admission work then returns at once, so startup speed does
     // not eat a fixed gap between the hold and the wall-clock timeout.
-    let budget_ms = 4_000;
+    let budget_ms = 1_000;
     let script = format!(
         r#"#!/usr/bin/env python3
 import json,os,pathlib,subprocess,sys,time
@@ -101,6 +101,7 @@ print(json.dumps({{'schemaVersion':1,'status':'success','result':{{}},'error':No
         budget_ms = budget_ms,
     );
     let fake = fake_cli("claude", &script).unwrap();
+    let clock_queued = queued.clone();
     let release = std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(30);
         while !queued.exists() {
@@ -116,16 +117,28 @@ print(json.dumps({{'schemaVersion':1,'status':'success','result':{{}},'error':No
     let (writer, store) = build_writer(root.path(), "wait-credit").unwrap();
     let mut spec = cli_agent_loop_spec(None);
     spec.wall_clock_timeout_seconds = budget_ms / 1000;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "wait_credit",
-        spec: &ActivityV2Spec::AgentLoop(spec),
-        fs_profile: None,
-        input: serde_json::json!({"prompt":"test", "workspace_path":root.path()}),
-        audit: writer,
-        run_id: "wait-credit",
-        host: Some(&ScriptHost::new(fake.cli_path())),
-    })
-    .unwrap();
+    let origin = Instant::now();
+    let outcome = orbit_engine::test_support::with_cli_supervision_clock(
+        move || {
+            if clock_queued.exists() {
+                origin + Duration::from_millis(budget_ms + 1)
+            } else {
+                origin
+            }
+        },
+        || {
+            dispatch_v2_activity(V2DispatchInput {
+                activity_name: "wait_credit",
+                spec: &ActivityV2Spec::AgentLoop(spec),
+                fs_profile: None,
+                input: serde_json::json!({"prompt":"test", "workspace_path":root.path()}),
+                audit: writer,
+                run_id: "wait-credit",
+                host: Some(&ScriptHost::new(fake.cli_path())),
+            })
+            .unwrap()
+        },
+    );
     release.join().unwrap();
     assert!(
         outcome.success,
