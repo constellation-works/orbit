@@ -2216,8 +2216,6 @@ fn git_rebase_decision_follows_the_checkout_state() {
             ([Some(0), Some(1), Some(0)], true),
             ([None, Some(1), Some(1)], true),
             ([None, Some(1), Some(2)], false),
-            ([Some(0), None, Some(0)], false),
-            ([Some(0), Some(0), None], false),
         ] {
             use std::io::Write;
             // Clear the old stages so absent entries really are absent.

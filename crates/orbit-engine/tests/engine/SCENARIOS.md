@@ -632,3 +632,24 @@ PR leaf rows also receive their own disposable sandbox-root counters, generated 
 ## Batched red-fixture seeding
 
 The red-test constructor seeds `failing.txt` and its Makefile together; the flake constructor seeds its gate program and base mode together. These fixtures observe only the completed base tree before rebasing and pushing the candidate. One seed commit replaces two setup commits, while validation, baseline comparison, replay, publication pins, audit and all failure rows still run. Observed base advances retain separate `commit_on_base` calls. No template cache or clock seam is added.
+
+## Approved duplicate-row retirement (ORB-15959)
+
+- Metadata lag success previously crossed reviewed/unreviewed with one/two stale
+  reads. `(reviewed, 2)` and `(unreviewed, 1)` retain both review routes and both
+  reread counts, exact merge/delivery pins, completion and landing presence/absence.
+  The retired `(reviewed, 1)` maps its review assertions to `(reviewed, 2)` and
+  its reread accounting to `(unreviewed, 1)`; `(unreviewed, 2)` maps inversely.
+  Contradictory and review-only pins remain in the metadata refusal matrix.
+- The artificial missing-ours and missing-theirs equal-base index cases in
+  `git_rebase_decision_follows_the_checkout_state` map to both actual rename/delete
+  orientations in `git_rebase_rename_delete_conflicts_remain_for_recovery`. They
+  retain equal remaining mode/content, nondeterministic classification, unchanged
+  index/HEAD, the live stopped rebase and absence of a recovery checkpoint. The
+  other five index algebra cases remain.
+- `jrun-untouched` in
+  `earlier_repairs_still_refuse_markers_whitespace_and_unrepaired_conflicts` maps
+  to its stronger `jrun-kept-markers` prior-edit row: both reject adoption through
+  the marker check and retain the same stopped-state/refusal assertions. Untouched
+  provider output beside companion edits, modify/delete and half-repaired stops
+  remain independently exercised.
