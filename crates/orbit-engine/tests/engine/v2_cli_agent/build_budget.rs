@@ -179,35 +179,101 @@ fn slot_that_never_frees_times_out_at_twice_the_original_budget() {
         .join("../../scripts/build-budget.py")
         .canonicalize()
         .unwrap();
-    let fake = fake_cli("claude", &format!("#!/bin/sh\ncat > /dev/null\nunset ORBIT_BUILD_BUDGET_HELD\nexport ORBIT_BUILD_BUDGET_DIR='{}' ORBIT_BUILD_SLOTS=1\nexec python3 '{}' -- true\n", budget.display(), wrapper.display())).unwrap();
+    let ready = root.path().join("credit-capped");
+    let wrapper_pid = root.path().join("wrapper-pid");
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            r#"#!/usr/bin/env python3
+import json,os,pathlib,subprocess,sys,time
+sys.stdin.read()
+os.environ.pop('ORBIT_BUILD_BUDGET_HELD',None)
+os.environ['ORBIT_BUILD_BUDGET_DIR']={budget:?}
+os.environ['ORBIT_BUILD_SLOTS']='1'
+p=subprocess.Popen([sys.executable,{wrapper:?},'--','true'])
+pathlib.Path({pid:?}).write_text(str(p.pid))
+directory=pathlib.Path(os.environ['ORBIT_ACTIVITY_BUILD_BUDGET_DIR'])
+limit=time.monotonic()+30
+while True:
+    files=list(directory.glob('*.json'))
+    if files:
+        try:
+            snapshot=json.loads(files[0].read_text())
+        except (OSError,json.JSONDecodeError):
+            pass
+        else:
+            if snapshot.get('elapsed_ms',0)>=2000:
+                pathlib.Path({ready:?}).touch()
+                break
+    if time.monotonic()>limit:
+        raise RuntimeError('blocked-slot heartbeat did not reach credit cap')
+    time.sleep(0.01)
+# The real slot stays blocked; only the supervisor's decision clock advances.
+assert p.wait()==0
+"#,
+            budget = budget.to_str().unwrap(),
+            wrapper = wrapper.to_str().unwrap(),
+            pid = wrapper_pid.to_str().unwrap(),
+            ready = ready.to_str().unwrap()
+        ),
+    )
+    .unwrap();
     let (writer, store) = build_writer(root.path(), "wait-cap").unwrap();
     let mut spec = cli_agent_loop_spec(None);
     spec.wall_clock_timeout_seconds = 2;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "wait_cap",
-        spec: &ActivityV2Spec::AgentLoop(spec),
-        fs_profile: None,
-        input: serde_json::json!({"prompt":"test", "workspace_path":root.path()}),
-        audit: writer,
-        run_id: "wait-cap",
-        host: Some(&ScriptHost::new(fake.cli_path())),
-    })
-    .unwrap();
+    let origin = Instant::now();
+    let clock_ready = ready.clone();
+    let outcome = orbit_engine::test_support::with_cli_supervision_clock(
+        move || {
+            if clock_ready.exists() {
+                origin + Duration::from_millis(4_001)
+            } else {
+                origin
+            }
+        },
+        || {
+            dispatch_v2_activity(V2DispatchInput {
+                activity_name: "wait_cap",
+                spec: &ActivityV2Spec::AgentLoop(spec),
+                fs_profile: None,
+                input: serde_json::json!({"prompt":"test", "workspace_path":root.path()}),
+                audit: writer,
+                run_id: "wait-cap",
+                host: Some(&ScriptHost::new(fake.cli_path())),
+            })
+            .unwrap()
+        },
+    );
+    assert!(
+        ready.exists(),
+        "the real held slot earned the full credit cap"
+    );
     assert!(!outcome.success);
     assert_eq!(outcome.output["timed_out"], true);
-    let duration = outcome.output["duration_ms"].as_u64().unwrap();
+    assert_eq!(outcome.output["effective_deadline_ms"], 4000);
+    let waits = &outcome.output["build_budget_waits"];
+    assert_eq!(waits["count"], 1);
+    assert!(waits["queued_wall_ms"].as_u64().unwrap() >= 2000);
+    assert_eq!(waits["total_ms"], waits["longest_ms"]);
+    let pid = fs::read_to_string(wrapper_pid)
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
     assert!(
-        (3700..=5000).contains(&duration),
-        "bounded deadline plus process cleanup: {duration}ms"
+        !orbit_common::process::identity::process_is_alive(pid),
+        "the blocked wrapper must be ended before dispatch returns"
     );
     assert_eq!(
         outcome.output["build_budget_waits"]["deadline_extension_ms"],
         2000
     );
     let events = events_snapshot(&store, "wait-cap").unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|event| event.envelope.event_type == "cli.invocation.build_budget")
-    );
+    let persisted = events
+        .iter()
+        .find(|event| event.envelope.event_type == "cli.invocation.build_budget")
+        .expect("timeout retains build-budget audit evidence");
+    let persisted = serde_json::to_value(&persisted.kind).unwrap();
+    assert_eq!(persisted["deadline_extension_ms"], 2000);
+    assert_eq!(persisted["queued_wall_ms"], waits["queued_wall_ms"]);
+    assert_eq!(persisted["total_ms"], waits["total_ms"]);
 }
