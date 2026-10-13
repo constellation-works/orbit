@@ -9,18 +9,16 @@
 //! uncommitted changes — a squash merge, so the run's own commit step
 //! delivers it under the usual gates. Then:
 //!
-//! - it applies cleanly, the failed step is `commit` or later, and owner
-//!   validation passes: `resumed_validated`, and no implementation step runs;
+//! - it applies cleanly and the failed step is `commit` or later:
+//!   `resumed_carried`, and no implementation step runs. No validation runs
+//!   here; the delivery gate judges the committed, synchronized candidate;
 //! - the failed step is the implementation (`implement_bundle` /
 //!   `implement_one`) or any step before `commit`: `resumed_repaired`, and
 //!   the implementer finishes the applied partial candidate. Validation is
 //!   not consulted, so an empty command list cannot accept it;
-//! - it conflicts, validation fails, or the before-PR review refused it:
+//! - it conflicts or the before-PR review refused it:
 //!   `resumed_repaired`, and the implementer starts from the applied
 //!   candidate with that output;
-//! - validation could not run for lack of a tool, or fails exactly as it does
-//!   on the base [ORB-14258]: `resumed_unjudged`, and no implementation step
-//!   runs; the delivery's own validation decides;
 //! - there is no usable candidate (none preserved, an operator discarded it,
 //!   the spec changed, a bundle, the commit is gone): `fresh`, with the
 //!   reason and its `reason_code`.
@@ -123,7 +121,7 @@ const PRESERVING_DECISIONS: &[&str] = &[
 const REVIEW_VERDICT_STEP: &str = "review_gate_settle";
 /// Steps of the owner and claimed task pipelines that run only after
 /// `implement_bundle` has finished. A preserved candidate from one of these
-/// is a completed implementation and may resume as `resumed_validated`.
+/// is a completed implementation and may resume as `resumed_carried`.
 ///
 /// Any other id — `implement_bundle`, the nested `implement_one`, a step
 /// before `commit`, or a step this list does not name yet — is unfinished.
@@ -257,9 +255,9 @@ impl Fresh {
 
 enum Outcome {
     Fresh(Fresh),
-    Validated,
+    /// A completed owner-local candidate applied cleanly, without validation.
+    Carried,
     /// [ORB-14450] A held candidate applied cleanly; review decides.
     Held,
-    Unjudged(String),
     Repair(Value),
 }

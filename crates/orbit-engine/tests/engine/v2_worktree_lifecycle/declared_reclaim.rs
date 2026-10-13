@@ -225,7 +225,7 @@ fn a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes() {
             assert_eq!(git(old, &["rev-parse", "HEAD"]), preserved.candidate);
             let setup = preserved.next_setup();
             let resumed = preserved.resume(&setup).unwrap();
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
             let checkout = Checkout::from_setup(&setup);
             let provider = preserved.fixture.root.path().join("codex");
             write_executable(

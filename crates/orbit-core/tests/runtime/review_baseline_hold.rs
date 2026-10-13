@@ -167,7 +167,11 @@ fn readiness(fixture: &Fixture) -> Value {
 /// error names no test, so the failure is not known red [ORB-15546]: the
 /// candidate is held for the red base.
 fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
-    let mut fixture = fixture(RED_BUILD, "after\n");
+    let mut fixture = with_checks(
+        Fixture::new_with_config(&[CHECK], BASELINE_COMMANDS),
+        RED_BUILD,
+        "after\n",
+    );
     let candidate = git(&fixture.repo, &["rev-parse", "HEAD"]);
     let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
     let base_sha = fixture.input["admission"]["base_sha"]
@@ -349,13 +353,38 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
         None,
     )
     .unwrap();
-    assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+    assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
     assert_eq!(resumed["implement"], false, "no implementation step runs");
     assert_eq!(resumed["source_sha"], candidate.as_str());
     git(&fixture.repo, &["add", "-A"]);
     git(
         &fixture.repo,
         &["commit", "--quiet", "-m", "resumed candidate"],
+    );
+
+    // The carried outcome is not evidence; the final gate still judges the
+    // committed candidate on the green base before the fresh review.
+    git(
+        &fixture.repo,
+        &["checkout", "--quiet", "-b", "resumed-final"],
+    );
+    let validated = execute_deterministic_action(
+        &fixture.runtime,
+        "candidate_validate",
+        &json!({}),
+        &json!({
+            "job_run_id": next.run_id, "completed_task_ids": [fixture.task_id],
+            "workspace_path": fixture.input["workspace_path"],
+            "base_sha": green, "base_ref": "main",
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        validated["tested_head"],
+        git(&fixture.repo, &["rev-parse", "HEAD"])
     );
 
     // A fresh review judges it on the green base.

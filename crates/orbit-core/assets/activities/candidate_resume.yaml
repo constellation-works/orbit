@@ -26,14 +26,16 @@ spec:
     step is the implementation (`implement_bundle` or `implement_one`) or
     any step before `commit` is unfinished: the outcome is
     `resumed_repaired` with trigger `implementation`, and validation is not
-    consulted. A clean merge of a candidate that failed at `commit` or later
-    runs `workflow.required_validation_commands`: passing is
-    `resumed_validated` and `implement` is false. A conflict, a failing
-    command, or a candidate the before-PR review refused is
-    `resumed_repaired`: `implement` stays true and `repair` carries the
-    trigger and output the implementer repairs from. A command that lacks a
-    tool is `resumed_unjudged`: the run's own validation step decides. Every
-    outcome with a candidate is written to the task history as a
+    consulted. A clean merge of a completed owner-local candidate that failed
+    at `commit` or later is `resumed_carried` and `implement` is false:
+    no required validation command runs here. The pipeline commits it,
+    synchronizes its base where applicable, and runs the ordinary final
+    validation gate on that exact candidate. That gate owns validation
+    failure repair, infrastructure refusals and baseline-red holds; old
+    candidate evidence never waives it. A conflict or a candidate the
+    before-PR review refused is `resumed_repaired`: `implement` stays true
+    and `repair` carries the trigger and output the implementer repairs from.
+    Every outcome with a candidate is written to the task history as a
     `candidate_resume` event naming the source run and SHA.
     A claimed leaf, PR or owner-local, sets `claimed` and passes
     `candidate`, the reference the owner kept from the task's last claim;
@@ -138,7 +140,7 @@ spec:
         type: string
       outcome:
         type: string
-        enum: [fresh, resumed_validated, resumed_held, resumed_repaired, resumed_unjudged]
+        enum: [fresh, resumed_carried, resumed_held, resumed_repaired]
       implement:
         type: boolean
       reason:
@@ -154,9 +156,9 @@ spec:
         type: [object, "null"]
         description: >
           What the implementer repairs: `trigger` (`implementation`, `conflict`,
-          `validation`, `review`, `continuation` or `landing`) and its `output`, plus `failed_step_id`,
-          `conflicting_paths` or the failing `command`. A candidate stopped
-          inside a review adds `interrupted_review`: `step_id`,
+          `review`, `continuation` or `landing`) and its `output`, plus
+          `failed_step_id` or `conflicting_paths`. A candidate stopped inside
+          a review adds `interrupted_review`: `step_id`,
           `attempt_id`, `verdict`, `findings`, `repair_ref`,
           `repair_commit`, `repair_applied` and `repair_refused`.
       source_run_id:

@@ -409,7 +409,7 @@ elsewhere in the review still holds it as below.
 
 The certificate's `baseline_red` names the holds. When the base ref moves to a commit where the
 command passes, admission lifts the hold. The next delivery resumes the
-preserved candidate (`resumed_validated`) without the implementer and admits
+preserved candidate (`resumed_carried`) without the implementer and admits
 a fresh review. A claimed leaf's resume runs the implementer again.
 
 ### Host sandbox tests

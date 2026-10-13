@@ -445,6 +445,10 @@ pub(super) enum Settlement {
 pub(super) enum Revalidation {
     Passes,
     Fails,
+    /// The first final gate fails, then existing step recovery repairs it.
+    CandidateFailsOnce,
+    CandidateEnvironment,
+    CandidateBaselineRed,
 }
 
 /// Plays the shipped pipeline's activities, keeping the candidate head a
@@ -644,6 +648,40 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
                     && self.revalidation == Revalidation::Fails =>
             {
                 return Err(DeterministicFailure::validation(&head));
+            }
+            "candidate_validate"
+                if input.get("ownership_base_sha").is_none()
+                    && matches!(
+                        self.revalidation,
+                        Revalidation::CandidateFailsOnce
+                            | Revalidation::CandidateEnvironment
+                            | Revalidation::CandidateBaselineRed
+                    )
+                    && self.inputs("candidate_validate").len() == 1 =>
+            {
+                let message = match self.revalidation {
+                    Revalidation::CandidateEnvironment => {
+                        "[validation_environment] required tool unavailable".to_string()
+                    }
+                    Revalidation::CandidateBaselineRed => orbit_types::workflow::BaselineRedHold {
+                        base_ref: "origin/main".to_string(),
+                        base_sha: "base-sha".to_string(),
+                        command: "make test".to_string(),
+                        run_id: RUN_ID.to_string(),
+                        selection: None,
+                        failures: Default::default(),
+                    }
+                    .text("base shares failure"),
+                    _ => format!("required validation failed on candidate {head}"),
+                };
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: "candidate_validate".into(),
+                    message,
+                });
+            }
+            "step_failure_recovery" => {
+                *self.head.lock().expect("candidate") = "candidate-repaired".to_string();
+                json!({"summary": "repaired candidate"})
             }
             "candidate_validate" => json!({ "decision": "passed", "tested_head": head }),
             "review_gate_admit" if input["preflight"] == true => {

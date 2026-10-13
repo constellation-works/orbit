@@ -56,7 +56,7 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         {
             return claim_repair_resume(repair, &workspace_path, &base_sha);
         }
-        return claimed_resume(host, input, task_id, &workspace_path, &base_sha);
+        return claimed_resume(input, task_id, &workspace_path, &base_sha);
     }
     let task = host.get_task(task_id)?;
     let foreign = input.get("prior_foreign_run").and_then(|run| {
@@ -90,14 +90,7 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         Preserved::Refused(candidate, reason) => (candidate, Outcome::Fresh(reason)),
         Preserved::Usable(candidate) => {
             let from_claim = candidate.claim.is_some();
-            let outcome = resume(
-                host,
-                &task.id,
-                &candidate,
-                &workspace_path,
-                &base_sha,
-                from_claim,
-            )?;
+            let outcome = resume(&task.id, &candidate, &workspace_path, &base_sha, from_claim)?;
             (candidate, outcome)
         }
     };
@@ -115,8 +108,7 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
 
 /// [ORB-14257] Resume the candidate the owner kept from the task's last
 /// claim. Nothing is written to the task: its history lives on the owner.
-fn claimed_resume<H: RuntimeHost + ?Sized>(
-    host: &H,
+fn claimed_resume(
     input: &Value,
     task_id: &str,
     workspace_path: &Path,
@@ -135,7 +127,7 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
             base_sha,
         ));
     };
-    let outcome = resume(host, task_id, &candidate, workspace_path, base_sha, true)?;
+    let outcome = resume(task_id, &candidate, workspace_path, base_sha, true)?;
     tracing::info!(target: "orbit_engine::executor::automation::vcs::candidate_resume",
         task_id,
         outcome = outcome_name(&outcome),
