@@ -15,7 +15,6 @@ use tempfile::tempdir;
 const OLD_REMOTE: &str = "git@github.com:example/orbit.git";
 const NEW_REMOTE: &str = "ssh://github.com/example/orbit-renamed.git";
 
-#[test]
 fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -197,7 +196,6 @@ fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() 
     );
 }
 
-#[test]
 fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
     for origin in [
         "/local/source.git",
@@ -268,7 +266,6 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
     }
 }
 
-#[test]
 fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -304,7 +301,6 @@ fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
     }
 }
 
-#[test]
 fn force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -345,7 +341,6 @@ fn force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner() {
     }
 }
 
-#[test]
 fn owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -485,7 +480,6 @@ fn owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind() {
     assert_eq!(verified["remote"], NEW_REMOTE);
 }
 
-#[test]
 fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -517,7 +511,6 @@ fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
     );
 }
 
-#[test]
 fn source_remote_help_names_inspection_dry_run_and_rebind() {
     let home = tempdir().expect("home");
     let cwd = tempdir().expect("cwd");
@@ -643,4 +636,50 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
         .env("USERPROFILE", home)
         .env_remove("ORBIT_HOME");
     command
+}
+
+#[test]
+fn source_remote_contracts_0() {
+    for (name, check) in [
+        (
+            "force_init_binds_first_origin_and_preserves_task_partition_and_publication",
+            force_init_binds_first_origin_and_preserves_task_partition_and_publication as fn(),
+        ),
+        (
+            "force_init_recovers_identity_with_an_unchanged_non_portable_origin",
+            force_init_recovers_identity_with_an_unchanged_non_portable_origin as fn(),
+        ),
+        (
+            "force_init_rejects_invalid_origins_before_first_binding_and_on_retry",
+            force_init_rejects_invalid_origins_before_first_binding_and_on_retry as fn(),
+        ),
+        (
+            "force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner",
+            force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn source_remote_contracts_1() {
+    for (name, check) in [
+        (
+            "owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind",
+            owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind as fn(),
+        ),
+        (
+            "credential_bearing_rebind_is_redacted_and_does_not_mutate",
+            credential_bearing_rebind_is_redacted_and_does_not_mutate as fn(),
+        ),
+        (
+            "source_remote_help_names_inspection_dry_run_and_rebind",
+            source_remote_help_names_inspection_dry_run_and_rebind as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

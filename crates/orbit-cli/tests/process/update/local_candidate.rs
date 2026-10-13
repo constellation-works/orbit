@@ -283,7 +283,6 @@ fn assert_converged(report: &Value) {
 /// only `--version`, as an older release's argument parser would refuse the
 /// option). The newly built candidate bootstraps the capability by running
 /// the update itself, against the explicitly named installed target.
-#[test]
 fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_replays_idempotently() {
     let install = LocalInstall::new();
     let version = env!("CARGO_PKG_VERSION");
@@ -388,7 +387,6 @@ fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_repla
     );
 }
 
-#[test]
 fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
@@ -577,7 +575,6 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
 /// A discovered workspace can differ from the isolated host-global authority.
 /// Its live clients still have to block the executable replacement because
 /// the update runs convergence against that workspace after the swap.
-#[test]
 fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
@@ -611,7 +608,6 @@ fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
 /// A candidate that cannot coordinate with protected clients is refused
 /// before it is installed, however correct its manifest.
 #[cfg(target_os = "linux")]
-#[test]
 fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
@@ -637,7 +633,6 @@ fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
 /// manifest FIFO holds the updater mid-validation. Meanwhile clients still
 /// run, a second update is refused, and replacing the candidate's pathname
 /// changes nothing about what is installed.
-#[test]
 fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
@@ -734,7 +729,6 @@ fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_in
 
 /// A convergence failure after the swap reports `needs_recovery` with the
 /// exact command that retries this candidate; retrying it converges.
-#[test]
 fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
     let install = LocalInstall::with_bin_name("managed tools' dir");
     let candidate = install.candidate("orbit-b");
@@ -811,4 +805,39 @@ fn retarget(path: &Path) {
         bytes[4..8].copy_from_slice(&other.to_le_bytes());
     }
     fs::write(path, bytes).expect("write retargeted executable");
+}
+
+#[test]
+fn local_candidate_contracts_0() {
+    for (name, check) in [
+        ("an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_replays_idempotently", an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_replays_idempotently as fn()),
+        ("wrong_provenance_digest_target_or_ownership_refuses_before_replacement", wrong_provenance_digest_target_or_ownership_refuses_before_replacement as fn()),
+        ("a_live_discovered_workspace_client_blocks_a_local_candidate_update", a_live_discovered_workspace_client_blocks_a_local_candidate_update as fn()),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn local_candidate_contracts_1() {
+    for (name, check) in [
+        #[cfg(target_os = "linux")]
+        (
+            "a_candidate_without_the_admission_contract_is_refused_before_replacement",
+            a_candidate_without_the_admission_contract_is_refused_before_replacement as fn(),
+        ),
+        (
+            "clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed",
+            clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed
+                as fn(),
+        ),
+        (
+            "a_post_swap_failure_recovers_from_a_quoted_install_dir",
+            a_post_swap_failure_recovers_from_a_quoted_install_dir as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

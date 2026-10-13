@@ -16,7 +16,6 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
-#[test]
 fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
     let temp = tempdir().expect("fixture");
     let home = temp.path().join("home");
@@ -138,7 +137,6 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
     );
 }
 
-#[test]
 fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -208,13 +206,11 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
-#[test]
 fn submodule_bootstrap_and_runtime_keep_the_submodule_workspace() {
     check_submodule_roots(false);
 }
 
 #[cfg(unix)]
-#[test]
 fn submodule_roots_remain_independent_when_git_is_unavailable() {
     check_submodule_roots(true);
 }
@@ -259,7 +255,6 @@ fn check_submodule_roots(without_git: bool) {
     }
 }
 
-#[test]
 fn submodule_runtime_respects_its_registered_data_directory() {
     let temp = tempdir().expect("submodule fixture");
     let home = temp.path().join("home");
@@ -295,7 +290,6 @@ fn submodule_runtime_respects_its_registered_data_directory() {
 }
 
 #[cfg(unix)]
-#[test]
 fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
     let temp = tempdir().expect("worktree fixture");
     let home = temp.path().join("home");
@@ -437,7 +431,6 @@ fn restore_permissions_guard_restores_the_mode_when_the_test_panics() {
 }
 
 #[cfg(unix)]
-#[test]
 fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation() {
     let temp = tempdir().expect("fixture");
     let home = temp.path().join("home");
@@ -511,7 +504,6 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     );
 }
 
-#[test]
 fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -740,7 +732,6 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     }
 }
 
-#[test]
 fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -981,7 +972,6 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
 /// The real detached worker must bootstrap, claim, and finish its run while an
 /// unrelated WAL writer holds the already-current task registry. The parent
 /// keeps supervising the child; no fixture claims the run on its behalf.
-#[test]
 fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1085,7 +1075,6 @@ spec:
         .expect("release registry writer");
 }
 
-#[test]
 fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1379,7 +1368,6 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
 /// It keeps a live holder record, and a dead record in a file a live process
 /// holds through the OS lock.
 #[cfg(unix)]
-#[test]
 fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1442,7 +1430,6 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
 /// through it, and refuses to walk through a symlinked `knowledge` ancestor.
 /// Files outside the Orbit root survive both.
 #[cfg(unix)]
-#[test]
 fn doctor_graph_cleanup_never_deletes_through_symlinks() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1507,7 +1494,6 @@ fn doctor_graph_cleanup_never_deletes_through_symlinks() {
 /// discovery, which beats walking up from a subdirectory. `--workspace`
 /// selects a registered checkout from outside any repository. An explicit
 /// root that is not an initialized workspace is refused, not adopted.
-#[test]
 fn root_resolution_precedence() {
     struct Case<'a> {
         name: &'a str,
@@ -1977,7 +1963,6 @@ updated_at: 2026-09-14T00:00:00Z
 
 /// [ORB-10981] `orbit --root <data-dir> doctor providers` from a cwd that is not
 /// the intended git checkout must not mint a checkout for `parent(data-dir)`.
-#[test]
 fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2051,7 +2036,6 @@ fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
 
 /// [ORB-10981] Clean path: init + workspace init from the git checkout, no
 /// extra command from another cwd first.
-#[test]
 fn clean_root_workspace_init_then_auto_task_list_succeeds() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2101,7 +2085,6 @@ fn clean_root_workspace_init_then_auto_task_list_succeeds() {
 
 /// [ORB-10981] `--force` must rebind a leftover synthetic sqlite checkout so
 /// later commands are not split-brain against `workspaces.json`.
-#[test]
 fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2280,4 +2263,121 @@ fn seed_synthetic_data_dir_checkout(data_dir: &Path) {
 
 fn canonicalize_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[test]
+fn checkout_routing_contracts_0() {
+    for (name, check) in [
+        (
+            "tool_run_explicit_workspace_resolves_from_home_and_temp_directory",
+            tool_run_explicit_workspace_resolves_from_home_and_temp_directory as fn(),
+        ),
+        (
+            "config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides",
+            config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides as fn(),
+        ),
+        (
+            "submodule_bootstrap_and_runtime_keep_the_submodule_workspace",
+            submodule_bootstrap_and_runtime_keep_the_submodule_workspace as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "submodule_roots_remain_independent_when_git_is_unavailable",
+            submodule_roots_remain_independent_when_git_is_unavailable as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_1() {
+    for (name, check) in [
+        (
+            "submodule_runtime_respects_its_registered_data_directory",
+            submodule_runtime_respects_its_registered_data_directory as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "linked_worktree_gitfile_fallback_checks_the_common_directory",
+            linked_worktree_gitfile_fallback_checks_the_common_directory as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation",
+            workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation
+                as fn(),
+        ),
+        (
+            "auto_task_show_reports_and_honors_the_selected_definition_source",
+            auto_task_show_reports_and_honors_the_selected_definition_source as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_2() {
+    for (name, check) in [
+        (
+            "auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root",
+            auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root as fn(),
+        ),
+        (
+            "detached_worker_bootstraps_and_claims_while_registry_writer_is_held",
+            detached_worker_bootstraps_and_claims_while_registry_writer_is_held as fn(),
+        ),
+        (
+            "doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean",
+            doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "doctor_stale_lock_repair_keeps_locks_a_live_process_holds",
+            doctor_stale_lock_repair_keeps_locks_a_live_process_holds as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_3() {
+    for (name, check) in [
+        #[cfg(unix)]
+        (
+            "doctor_graph_cleanup_never_deletes_through_symlinks",
+            doctor_graph_cleanup_never_deletes_through_symlinks as fn(),
+        ),
+        (
+            "root_resolution_precedence",
+            root_resolution_precedence as fn(),
+        ),
+        (
+            "doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir",
+            doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir as fn(),
+        ),
+        (
+            "clean_root_workspace_init_then_auto_task_list_succeeds",
+            clean_root_workspace_init_then_auto_task_list_succeeds as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_4() {
+    for (name, check) in [(
+        "workspace_init_force_rebinds_synthetic_data_dir_checkout",
+        workspace_init_force_rebinds_synthetic_data_dir_checkout as fn(),
+    )] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

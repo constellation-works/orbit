@@ -157,7 +157,6 @@ fn checkout_build(checkout: &Path) -> PathBuf {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -260,7 +259,6 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn update_without_a_root_override_retains_default_workspace_routing() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -317,7 +315,6 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn update_and_preflight_admit_against_the_same_overridden_root() {
     use orbit_common::fs::generation::{GenerationGuard, executable_generation};
 
@@ -428,7 +425,6 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
 /// through both spellings of the override — and preflight has to name the same
 /// pair of authorities the update will lock.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling() {
     use orbit_common::fs::generation::{GenerationGuard, executable_generation};
 
@@ -537,7 +533,6 @@ fn assert_admission_refused(output: &std::process::Output, label: &str) {
     );
 }
 
-#[test]
 fn help_documents_both_latest_and_explicit_version_selection() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -553,7 +548,6 @@ fn help_documents_both_latest_and_explicit_version_selection() {
     assert!(help.contains("--allow-downgrade"), "{help}");
 }
 
-#[test]
 fn check_reports_the_available_release_and_exits_three() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -591,7 +585,6 @@ fn check_reports_the_available_release_and_exits_three() {
     );
 }
 
-#[test]
 fn check_renders_a_prefix_free_remediation_sentence() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -613,7 +606,6 @@ fn check_renders_a_prefix_free_remediation_sentence() {
     assert!(!text.contains("invalid input: "), "{text}");
 }
 
-#[test]
 fn check_is_quiet_and_succeeds_when_the_installed_release_is_current() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing(env!("CARGO_PKG_VERSION"));
@@ -627,7 +619,6 @@ fn check_is_quiet_and_succeeds_when_the_installed_release_is_current() {
     assert_eq!(report["outcome"], "already_current");
 }
 
-#[test]
 fn check_succeeds_without_recommending_an_update_when_the_published_release_is_older() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("0.0.0");
@@ -655,7 +646,6 @@ fn check_succeeds_without_recommending_an_update_when_the_published_release_is_o
     assert!(!text.contains("`orbit update`"), "{text}");
 }
 
-#[test]
 fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -678,7 +668,6 @@ fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works
 /// binary installed by an installer, or somewhere no installer owns, is
 /// never offered the local-build remediation, and an unknown location is
 /// refused in place.
-#[test]
 fn installed_and_unknown_location_binaries_are_not_checkout_builds() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -723,7 +712,6 @@ fn installed_and_unknown_location_binaries_are_not_checkout_builds() {
     assert_eq!(report["updatable"], true, "{report}");
 }
 
-#[test]
 fn an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work() {
     let home = tempdir().expect("home");
     // No mirror content at all: the version is rejected before it is consulted.
@@ -736,4 +724,85 @@ fn an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work(
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("MAJOR.MINOR.PATCH"), "{stderr}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn update_command_contracts_0() {
+    for (name, check) in [
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "update_preserves_explicit_and_environment_roots_from_another_checkout",
+            update_preserves_explicit_and_environment_roots_from_another_checkout as fn(),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "update_without_a_root_override_retains_default_workspace_routing",
+            update_without_a_root_override_retains_default_workspace_routing as fn(),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "update_and_preflight_admit_against_the_same_overridden_root",
+            update_and_preflight_admit_against_the_same_overridden_root as fn(),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling",
+            a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn update_command_contracts_1() {
+    for (name, check) in [
+        (
+            "help_documents_both_latest_and_explicit_version_selection",
+            help_documents_both_latest_and_explicit_version_selection as fn(),
+        ),
+        (
+            "check_reports_the_available_release_and_exits_three",
+            check_reports_the_available_release_and_exits_three as fn(),
+        ),
+        (
+            "check_renders_a_prefix_free_remediation_sentence",
+            check_renders_a_prefix_free_remediation_sentence as fn(),
+        ),
+        (
+            "check_is_quiet_and_succeeds_when_the_installed_release_is_current",
+            check_is_quiet_and_succeeds_when_the_installed_release_is_current as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn update_command_contracts_2() {
+    for (name, check) in [
+        (
+            "check_succeeds_without_recommending_an_update_when_the_published_release_is_older",
+            check_succeeds_without_recommending_an_update_when_the_published_release_is_older
+                as fn(),
+        ),
+        (
+            "applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works",
+            applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works as fn(),
+        ),
+        (
+            "installed_and_unknown_location_binaries_are_not_checkout_builds",
+            installed_and_unknown_location_binaries_are_not_checkout_builds as fn(),
+        ),
+        (
+            "an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work",
+            an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

@@ -14,14 +14,7 @@ use super::release_fixture::{FakeBinary, Fixture, TEST_TARGET, request};
 /// Larger than every release input limit; sparse, so it costs no disk.
 const OVERSIZED_INPUT_BYTES: u64 = 1 << 30;
 
-#[test]
 fn oversized_mirror_inputs_fail_before_executable_replacement() {
-    if crate::isolated_test::run_in_child(
-        "update::flow::oversized_mirror_inputs_fail_before_executable_replacement",
-    ) {
-        return;
-    }
-
     for asset_class in [
         MIRROR_LATEST_FILE,
         RELEASE_CHECKSUMS_FILENAME,
@@ -57,14 +50,7 @@ fn oversized_mirror_inputs_fail_before_executable_replacement() {
     }
 }
 
-#[test]
 fn successful_read_only_inspection_cannot_authorize_a_downgrade() {
-    if crate::isolated_test::run_in_child(
-        "update::flow::successful_read_only_inspection_cannot_authorize_a_downgrade",
-    ) {
-        return;
-    }
-
     let fixture = Fixture::new("0.19.0");
     fixture.publish("0.18.0", FakeBinary::ReadOnlyStore);
     let mut requested = request();
@@ -77,14 +63,7 @@ fn successful_read_only_inspection_cannot_authorize_a_downgrade() {
     );
 }
 
-#[test]
 fn a_replacement_without_admission_protocol_is_refused_before_installation() {
-    if crate::isolated_test::run_in_child(
-        "update::flow::a_replacement_without_admission_protocol_is_refused_before_installation",
-    ) {
-        return;
-    }
-
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::NoAdmissionContract);
     let before = std::fs::read(&fixture.executable).expect("installed executable");
@@ -101,14 +80,7 @@ fn a_replacement_without_admission_protocol_is_refused_before_installation() {
     assert!(fixture.invocations().is_empty());
 }
 
-#[test]
 fn an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release() {
-    if crate::isolated_test::run_in_child(
-        "update::flow::an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release",
-    ) {
-        return;
-    }
-
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
     let mut environment = fixture.environment();
@@ -161,14 +133,7 @@ fn parse_retry_request_from_recovery(report: &UpdateReport) -> UpdateRequest {
     request
 }
 
-#[test]
 fn recovery_hint_targets_requested_version_when_newer_release_is_published() {
-    if crate::isolated_test::run_in_child(
-        "update::flow::recovery_hint_targets_requested_version_when_newer_release_is_published",
-    ) {
-        return;
-    }
-
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::FailsMigrationConfirm);
     fixture.publish("0.20.0", FakeBinary::Healthy);
@@ -193,14 +158,7 @@ fn recovery_hint_targets_requested_version_when_newer_release_is_published() {
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
 }
 
-#[test]
 fn recovery_hint_preserves_allow_downgrade_when_retrying_older_release() {
-    if crate::isolated_test::run_in_child(
-        "update::flow::recovery_hint_preserves_allow_downgrade_when_retrying_older_release",
-    ) {
-        return;
-    }
-
     let fixture = Fixture::new("0.19.0");
     fixture.publish("0.18.0", FakeBinary::FailsMigrationConfirm);
     fixture.publish("0.20.0", FakeBinary::Healthy);
@@ -225,4 +183,122 @@ fn recovery_hint_preserves_allow_downgrade_when_retrying_older_release() {
     assert_eq!(retry_report.outcome, UpdateOutcome::AlreadyCurrent);
     assert_eq!(retry_report.target_version, "0.18.0");
     assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
+}
+
+#[test]
+fn update_flow_contracts_0() {
+    if crate::isolated_test::run_in_child("update::flow::update_flow_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "a_hanging_candidate_probe_times_out_without_holding_an_authority",
+            a_hanging_candidate_probe_times_out_without_holding_an_authority as fn(),
+        ),
+        (
+            "oversized_mirror_inputs_fail_before_executable_replacement",
+            oversized_mirror_inputs_fail_before_executable_replacement as fn(),
+        ),
+        (
+            "successful_read_only_inspection_cannot_authorize_a_downgrade",
+            successful_read_only_inspection_cannot_authorize_a_downgrade as fn(),
+        ),
+        (
+            "a_replacement_without_admission_protocol_is_refused_before_installation",
+            a_replacement_without_admission_protocol_is_refused_before_installation as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn update_flow_contracts_1() {
+    if crate::isolated_test::run_in_child("update::flow::update_flow_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release",
+            an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release as fn(),
+        ),
+        (
+            "recovery_hint_targets_requested_version_when_newer_release_is_published",
+            recovery_hint_targets_requested_version_when_newer_release_is_published as fn(),
+        ),
+        (
+            "recovery_hint_preserves_allow_downgrade_when_retrying_older_release",
+            recovery_hint_preserves_allow_downgrade_when_retrying_older_release as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+/// The version probe times out only after its real child starts. Exercise the
+/// public updater directly so the clock seam avoids a minute of wall-clock wait
+/// on macOS; generation admission must remain free during and after the probe.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
+    use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+    use orbit_common::test_env::with_supervision_clock;
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::new("0.18.0");
+    let environment = fixture.environment();
+    let authority = &environment.admission_roots[0];
+    let probing = authority.with_file_name("probe-started");
+    let candidate = format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then : > '{}'; exec sleep 600; fi\nexit 0\n",
+        probing.display()
+    );
+    fixture.publish_script("0.19.0", candidate.as_bytes());
+    let digest = executable_generation(&fixture.executable).expect("installed digest");
+    drop(GenerationGuard::acquire(authority, &digest).expect("initialize generation"));
+    let generation = authority.join(".generation.lock");
+    let before_generation = std::fs::read(&generation).expect("generation record");
+    let before = std::fs::read(&fixture.executable).expect("installed bytes");
+    let observed = std::rc::Rc::new(Cell::new(false));
+    let clock_observed = observed.clone();
+    let clock_roots = environment.admission_roots.clone();
+    let origin = Instant::now();
+    let error = with_supervision_clock(
+        move || {
+            if probing.exists() {
+                if !clock_observed.replace(true) {
+                    drop(
+                        orbit_cmd::update::acquire_admissions(&clock_roots)
+                            .expect("a live candidate probe must not hold generation admission"),
+                    );
+                }
+                origin + Duration::from_secs(3_601)
+            } else {
+                origin
+            }
+        },
+        || run_update(&environment, &request()).expect_err("candidate probe must time out"),
+    );
+    assert!(
+        observed.get(),
+        "the intended candidate actually started its probe"
+    );
+    let message = error.to_string();
+    assert!(message.contains("did not finish within"), "{message}");
+    assert!(message.contains("--version"), "{message}");
+    assert!(message.contains("nothing was replaced"), "{message}");
+    assert_eq!(std::fs::read(&fixture.executable).unwrap(), before);
+    assert_eq!(std::fs::read(&generation).unwrap(), before_generation);
+    assert!(
+        !fixture.staging_file_remains(),
+        "timed-out staging must be cleaned"
+    );
+    assert!(!super::integrity::backup_path(&fixture.executable).exists());
+    drop(
+        orbit_cmd::update::acquire_admissions(&environment.admission_roots)
+            .expect("the timed-out update must release every authority"),
+    );
 }

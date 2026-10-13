@@ -137,12 +137,7 @@ fn in_child(test: &str) -> bool {
     false
 }
 
-#[test]
 fn audit_retention_plans_then_prunes_rows_and_unreferenced_blobs() {
-    const TEST: &str = "store_gc::audit_retention_plans_then_prunes_rows_and_unreferenced_blobs";
-    if !in_child(TEST) {
-        return;
-    }
     let fixture = Fixture::new();
     // Hosted CI has no provider CLI, so init leaves its default crew disabled.
     // Retention is deterministic and must run without an enabled provider.
@@ -321,12 +316,7 @@ fn audit_retention_plans_then_prunes_rows_and_unreferenced_blobs() {
         .stderr(predicates::str::contains("crew 'missing' is not defined"));
 }
 
-#[test]
 fn run_retention_drops_terminal_state_and_keeps_run_history() {
-    const TEST: &str = "store_gc::run_retention_drops_terminal_state_and_keeps_run_history";
-    if !in_child(TEST) {
-        return;
-    }
     let fixture = Fixture::new();
     let workspace_id = fixture.workspace_id();
     {
@@ -432,12 +422,7 @@ fn run_retention_drops_terminal_state_and_keeps_run_history() {
 /// The per-minute run and host resource history, and the admission forecasts
 /// checked against it, are pruned by run retention after 30 days, host-wide,
 /// whatever window the run sweep uses.
-#[test]
 fn run_retention_prunes_resource_minutes_past_thirty_days() {
-    const TEST: &str = "store_gc::run_retention_prunes_resource_minutes_past_thirty_days";
-    if !in_child(TEST) {
-        return;
-    }
     let fixture = Fixture::new();
     let stamp = |days: i64| {
         (chrono::Utc::now() - chrono::Duration::days(days))
@@ -537,7 +522,6 @@ fn find_check<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
 /// Retention is deterministic, so it runs on a host whose default crew is
 /// disabled (a host with no provider CLI seeds every crew disabled) and
 /// records no crew for the run. A crew lookup still guards misconfiguration.
-#[test]
 fn retention_job_runs_when_the_default_crew_is_disabled() {
     let fixture = Fixture::new();
     fs::write(
@@ -568,4 +552,32 @@ fn retention_job_runs_when_the_default_crew_is_disabled() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("crew 'missing' is not defined"));
+}
+
+#[test]
+fn store_retention_contracts() {
+    if !in_child("store_gc::store_retention_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "audit_retention_plans_then_prunes_rows_and_unreferenced_blobs",
+            audit_retention_plans_then_prunes_rows_and_unreferenced_blobs as fn(),
+        ),
+        (
+            "run_retention_drops_terminal_state_and_keeps_run_history",
+            run_retention_drops_terminal_state_and_keeps_run_history as fn(),
+        ),
+        (
+            "run_retention_prunes_resource_minutes_past_thirty_days",
+            run_retention_prunes_resource_minutes_past_thirty_days as fn(),
+        ),
+        (
+            "retention_job_runs_when_the_default_crew_is_disabled",
+            retention_job_runs_when_the_default_crew_is_disabled as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

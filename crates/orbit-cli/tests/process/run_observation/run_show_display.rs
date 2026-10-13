@@ -69,13 +69,7 @@ fn shown(fixture: &Fixture, extra: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-#[test]
 fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
     // Piped output (`auto`) renders the plain form of the table.
@@ -107,13 +101,7 @@ fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
     assert!(!quiet.contains("Lock wait:"), "{quiet}");
 }
 
-#[test]
 fn run_show_hides_shipped_catalog_layers_unless_verbose() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::run_show_hides_shipped_catalog_layers_unless_verbose",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
     let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
@@ -133,13 +121,7 @@ fn run_show_hides_shipped_catalog_layers_unless_verbose() {
     );
 }
 
-#[test]
 fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
 
@@ -174,13 +156,7 @@ fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_recor
 /// reconcile an ended run's steps by one rule: the audit trail answers for a
 /// run-level-only record, and the step the run died in reads as the run's
 /// terminal state with an `interrupted` outcome rather than `running`.
-#[test]
 fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
     // The MCP run tools are an operator surface.
@@ -256,7 +232,6 @@ fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
     assert_eq!(step["step"]["outcome"], "interrupted", "{step}");
 }
 
-#[test]
 fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
@@ -285,4 +260,37 @@ fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     assert_eq!(attempts[0]["decision"]["verdict"], "resume");
     assert_eq!(attempts[0]["diagnostic"], rationale);
     assert!(shown(&fixture, &[]).contains(rationale));
+}
+
+#[test]
+fn run_show_contracts() {
+    if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
+            run_show_prints_human_durations_and_one_based_steps_in_every_human_mode as fn(),
+        ),
+        (
+            "run_show_hides_shipped_catalog_layers_unless_verbose",
+            run_show_hides_shipped_catalog_layers_unless_verbose as fn(),
+        ),
+        (
+            "run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record",
+            run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record
+                as fn(),
+        ),
+        (
+            "every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted",
+            every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted as fn(),
+        ),
+        (
+            "run_show_lists_a_final_recovery_resume_with_its_rationale",
+            run_show_lists_a_final_recovery_resume_with_its_rationale as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

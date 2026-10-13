@@ -114,7 +114,6 @@ fn entry<'a>(scratch: &'a Value, tmp: &Path, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no report for {name}: {scratch}"))
 }
 
-#[test]
 fn prunes_entries_older_than_the_window_and_never_follows_symlinks() {
     let fixture = Fixture::new();
     let tmp = fixture.tmp();
@@ -202,7 +201,6 @@ fn prunes_entries_older_than_the_window_and_never_follows_symlinks() {
     assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
 }
 
-#[test]
 fn a_negative_window_is_refused_before_anything_is_removed() {
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.tmp()).unwrap();
@@ -305,5 +303,22 @@ mod held {
         let after = fixture.gc(&[]);
         assert_eq!(after["scratch"]["entries_removed"], 2, "{after}");
         assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn scratch_gc_contracts() {
+    for (name, check) in [
+        (
+            "prunes_entries_older_than_the_window_and_never_follows_symlinks",
+            prunes_entries_older_than_the_window_and_never_follows_symlinks as fn(),
+        ),
+        (
+            "a_negative_window_is_refused_before_anything_is_removed",
+            a_negative_window_is_refused_before_anything_is_removed as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

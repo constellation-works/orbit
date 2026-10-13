@@ -195,7 +195,6 @@ fn comments_in(fleet: &Fleet, home: &Path, repo: &Path, id: &str) -> Vec<String>
         .collect()
 }
 
-#[test]
 fn task_show_projections_match_the_owning_host() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -280,7 +279,6 @@ fn task_show_projections_match_the_owning_host() {
     }
 }
 
-#[test]
 fn cli_task_ids_route_to_the_host_their_prefix_names() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -355,7 +353,6 @@ fn cli_task_ids_route_to_the_host_their_prefix_names() {
     );
 }
 
-#[test]
 fn federated_mcp_routes_an_id_only_call_by_prefix() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -408,7 +405,6 @@ fn federated_mcp_routes_an_id_only_call_by_prefix() {
     );
 }
 
-#[test]
 fn a_routed_call_carries_the_callers_authority_and_no_more() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -468,7 +464,6 @@ fn a_routed_call_carries_the_callers_authority_and_no_more() {
     );
 }
 
-#[test]
 fn a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule() {
     let routed = Routed::new();
     // B keeps a replica checkout of A's workspace: a mirror of A's tasks.
@@ -556,7 +551,6 @@ fn a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule()
     );
 }
 
-#[test]
 fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() {
     let routed = Routed::new();
     let selector = routed.bravo_selector();
@@ -645,7 +639,6 @@ fn hinted_commands(message: &str) -> Vec<String> {
         .collect()
 }
 
-#[test]
 fn routed_task_update_refusals_offer_a_command_that_works() {
     let routed = Routed::new();
     let id = routed.remote_task.as_str();
@@ -758,7 +751,6 @@ fn routed_task_update_refusals_offer_a_command_that_works() {
     );
 }
 
-#[test]
 fn host_flag_resolves_to_the_selector_that_host_lists() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -931,7 +923,6 @@ fn ssh_hint_remote_argv(message: &str) -> Vec<String> {
     posix_shell_split(&local_words[2..].join(" "))
 }
 
-#[test]
 fn host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv() {
     let routed = Routed::new();
     let marker = routed.fleet.temp.path().join("injected_marker");
@@ -1094,5 +1085,66 @@ impl Drop for StdioClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn host_routing_contracts_0() {
+    for (name, check) in [
+        (
+            "task_show_projections_match_the_owning_host",
+            task_show_projections_match_the_owning_host as fn(),
+        ),
+        (
+            "cli_task_ids_route_to_the_host_their_prefix_names",
+            cli_task_ids_route_to_the_host_their_prefix_names as fn(),
+        ),
+        (
+            "federated_mcp_routes_an_id_only_call_by_prefix",
+            federated_mcp_routes_an_id_only_call_by_prefix as fn(),
+        ),
+        (
+            "a_routed_call_carries_the_callers_authority_and_no_more",
+            a_routed_call_carries_the_callers_authority_and_no_more as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn host_routing_contracts_1() {
+    for (name, check) in [
+        (
+            "a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule",
+            a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule as fn(),
+        ),
+        (
+            "local_task_commands_refuse_remote_selection_without_delivering_or_mutating",
+            local_task_commands_refuse_remote_selection_without_delivering_or_mutating as fn(),
+        ),
+        (
+            "routed_task_update_refusals_offer_a_command_that_works",
+            routed_task_update_refusals_offer_a_command_that_works as fn(),
+        ),
+        (
+            "host_flag_resolves_to_the_selector_that_host_lists",
+            host_flag_resolves_to_the_selector_that_host_lists as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn host_routing_contracts_2() {
+    for (name, check) in [(
+        "host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv",
+        host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv as fn(),
+    )] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }
