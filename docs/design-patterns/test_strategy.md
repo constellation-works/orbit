@@ -420,3 +420,15 @@ merely for starting two threads. The public resource evaluator/cache cases have
 moved independently. Review gate cases use public policy views to prepare their
 fixture DTOs and public deterministic/ledger APIs to observe decisions; capture
 itself and the system-history writer remain at their private seams.
+
+## Orbit-policy admission audit reconciliation
+
+The 12 `orbit-policy` cases pinned by the 2026-10-12 audit now run in
+`crates/orbit-policy/tests/policy/admission.rs`. Their fixtures use the
+exported `PolicyEngine::from_def`, `check` and `check_resolved` methods and
+`PolicyDef::merged`; in-memory definitions and temporary directories reach the
+same validation, matching and symlink-resolution behavior without a private
+seam or an extra process. This applies to parent traversal, host exceptions,
+workspace exception validation, resolved symlinks, newline globs and rule
+precedence. No source-level unit-test identities remain admitted for
+`orbit-policy`, and no production visibility or behavior changed.
