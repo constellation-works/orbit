@@ -82,7 +82,9 @@ Admitted unit tests:
 
 - The [launchd enable tests](../../crates/orbit-core/src/application/routines/clock/tests/enable.rs) (criterion 2,
   fault injection) drives the enable entry point with launchd selected and failed
-  program/state probes. It checks rewrite and reload for unhealthy loaded agents,
+  program/state probes. Version outcomes use the inspection probe seam rather
+  than executing a fixture binary: healthy, timeout, empty output and unreachable
+  outcomes are deterministic under host contention. It checks rewrite and reload for unhealthy loaded agents,
   error propagation when loading fails, and preservation of healthy and paused
   agents. The public API selects the native host platform, so an integration test
   on Linux cannot force these launchd states.

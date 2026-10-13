@@ -14,16 +14,8 @@ use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout, seed_executor,
 };
 
-/// Last `file-write*` clause whose `subpath` or `literal` covers `path`. The
-/// compiled profile denies by default, so a path with no covering clause is
-/// denied.
-#[cfg(target_os = "macos")]
-fn last_compiled_file_write_allows(profile: &str, path: &std::path::Path) -> bool {
-    last_compiled_file_write_allows_under(profile, path, std::path::Path::new("/"))
-}
-
-/// [`last_compiled_file_write_allows`] over the clauses rooted inside
-/// `fixture`. Temp fixtures sit beneath the compiler's host scratch allows
+/// Whether the last `file-write*` clause rooted inside `fixture` allows
+/// `path`. Temp fixtures sit beneath the compiler's host scratch allows
 /// (`/tmp`, `/private/var/folders`), which never cover a real `~/.orbit`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn last_compiled_file_write_allows_under(
@@ -93,31 +85,6 @@ fn sbpl_regex(quoted: &str) -> regex::Regex {
         });
     }
     regex::Regex::new(&pattern).unwrap_or_else(|error| panic!("SBPL regex `{pattern}`: {error}"))
-}
-
-/// Create or append to `path` under `profile` with the native wrapper.
-#[cfg(target_os = "macos")]
-fn assert_native_write(profile: &str, path: &std::path::Path, allowed: bool) {
-    let output = orbit_common::process::run_bounded_capped(
-        std::process::Command::new("/usr/bin/sandbox-exec").args([
-            "-p",
-            profile,
-            "/bin/sh",
-            "-c",
-            "printf probe >> \"$1\"",
-            "write-probe",
-            path.to_str().expect("fixture path"),
-        ]),
-        std::time::Duration::from_secs(10),
-        64 * 1024,
-    )
-    .expect("run sandbox-exec write probe");
-    assert_eq!(
-        output.status.success(),
-        allowed,
-        "native write to {}: {output:?}",
-        path.display()
-    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
