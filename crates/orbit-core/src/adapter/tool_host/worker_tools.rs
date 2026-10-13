@@ -4,6 +4,7 @@ use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
@@ -35,6 +36,13 @@ pub(crate) fn execute(
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => false,
         },
         OrbitBuiltinAction::Task(verb) => match verb {
             TaskVerb::Add
@@ -277,6 +285,13 @@ pub(crate) fn execute(
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => return Ok(None),
         },
         _ => return Ok(None),
     };

@@ -6,6 +6,7 @@ use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
@@ -345,8 +346,19 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | AutoTaskVerb::Recover
             | AutoTaskVerb::Reset => NO_REDACTION,
         },
+        // Run selectors, crews and drain settings are structural; a resize
+        // reason is an operator audit note kept verbatim.
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
         OrbitBuiltinAction::DesktopRead
-        | OrbitBuiltinAction::DesktopDrain
         | OrbitBuiltinAction::DesktopAutomation
         | OrbitBuiltinAction::DesktopTaskSnapshot
         // Desktop writes redact at their transactional persistence boundary.
@@ -356,10 +368,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search
         | OrbitBuiltinAction::TaskDelete
-        | OrbitBuiltinAction::WorkflowRunList
-        | OrbitBuiltinAction::WorkflowRunResume
-        | OrbitBuiltinAction::WorkflowRunShow
-        | OrbitBuiltinAction::WorkflowShip
         // [ORB-11354] The invocation prompt is free text and *is* persisted on
         // the run record, but redacting it would change the instruction the
         // agent receives — an operator debugging an auth failure needs to name
@@ -395,6 +403,13 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => false,
         },
         OrbitBuiltinAction::Task(verb) => match verb {
             TaskVerb::Add | TaskVerb::Update | TaskVerb::ArtifactPut => true,

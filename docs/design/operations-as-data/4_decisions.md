@@ -9,9 +9,9 @@ doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938, ORB-15941]
 ---
 
 # Operations as Data — Decisions
@@ -422,7 +422,7 @@ drift the tool entry does not.
 
 ## Migrated CLI verbs execute through the tool path
 
-**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935], the task reads in [ORB-15937] and the task writes in [ORB-15938]
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935], the task reads in [ORB-15937] and the task writes in [ORB-15938]; no workflow-run CLI verb migrates ([ORB-15941])
 **Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs`, `crates/orbit-cli/src/command/task/operation.rs`, `crates/orbit-core/src/adapter/tool_host/task_write_tools.rs`
 
 ### Context
@@ -597,6 +597,54 @@ reviewed:
 - **Not migrated.** The dashboard's task create and update routes still
   call the runtime directly.
 
+**Workflow-run outcome ([ORB-15941]).** The five workflow tools are served by
+the generic tool from a tool-only noun ([2_design.md §9](./2_design.md#phase-4-workflow-run-implemented)).
+No `orbit run` or `orbit job` subcommand migrates. Each overlapping
+subcommand is a wider operation than its tool. A local caller with no
+capability runs `run ship`, `run show`, `run history`, `run auto --stop`
+and `job resume`; the tools are governed `operator` and refuse that caller.
+`run_tool` would therefore govern a CLI the baseline leaves open. Serving the
+CLI-only inputs instead takes a new `mcp_scope: None` tool, which moves the
+authorization golden this phase must keep. Phase 3c kept contention
+hand-wired for the same reason. The inventory:
+
+| CLI subcommand | Tool | Verdict |
+|---|---|---|
+| `run ship` | `orbit.workflow.ship` | Keep. Adds `--complete`, which the tool refuses by contract ([ORB-11187]); auto-selection with no task IDs; `--strict-worker-containment`; and the registry-checkout ship-mode fallback |
+| `run show` | `orbit.workflow.run.show` | Keep. Optional ID defaulting to the latest run, `--step`, `--no-reconcile` and `--verbose`, plus pull-claim, crew-window, drain-summary, lock-holder and root-cause sections the tool does not return |
+| `run history` | `orbit.workflow.run.list` | Keep. `--task`, several states, a relative `--since`, `--incidents` and a default of 50 rows, answered as `{runs}` where the tool answers `{items}` |
+| `run auto` | `orbit.workflow.auto` | Keep. A different operation: `--pull`, complexity pools, `--allow-crew` and strict containment, with no resize, force or status; those are `run concurrency` and `run readiness` |
+| `job resume` | `orbit.workflow.run.resume` | Keep. Another noun's CLI, with `--wait` |
+| `run ship-sweep`, `task-pilot`, `job`, `agent`, `logs`, `events`, `trace`, `settlements`, `cancel`, `concurrency`, `extend`, `readiness`, `profiles` | none (`agent` has `orbit.agent.invoke`, phase 5) | Keep: no workflow tool to share a handler with |
+
+The Step 0 baseline ran 87 cases against a fixture each binary built: 67
+`tool run` calls across the five tools with and without capability and under
+a run ID, three tool schemas, six help pages, ten CLI counterparts (four
+of them without capability) and the audit list. Standard output,
+standard error and exit codes were compared after normalising paths and
+times. The help pages, schemas and CLI cases are identical, and the MCP
+snapshot and authorization golden are unchanged. These differences remain,
+all reviewed:
+
+- **Input checked at the tool entry.** A non-object input is refused as
+  "orbit.workflow.ship input must be a JSON object" rather than "missing
+  `task_ids`". A negative `run.list` `limit` is refused as "must be a
+  non-negative integer" rather than "must be a positive integer". A
+  non-boolean bounded `include_catalog` names the field in backticks. A
+  `workflow.auto` call with neither `action` nor `workspace` names `action`,
+  the first declared field, where it named `workspace`.
+- **Types before content.** Auto's `for_seconds: "abc"` is refused as "must
+  be a non-negative integer" rather than with the drain's window message.
+  When several fields are malformed, the first mistyped one is named: a
+  string `complete` before an out-of-range `concurrency`. Values of the
+  right type still get the drain control's own messages.
+- **Null is absent.** `run.show` with `view: null` reads the full record and
+  `run.list` with `include_catalog: null` lists, where both were refused.
+- **Unknown fields.** Ship, run show, list and resume warn about and audit an
+  unknown field ("ignored unknown input field"), adding one `unknown_field`
+  audit row per call; the field still has no effect. `workflow.auto` refuses
+  them as before, and its bounded and status modes keep their allowlists.
+
 ## Migrate the remaining nouns on a plan, not on contact
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
@@ -689,6 +737,55 @@ without leaving a second home behind.
   new task-ID verb has to be added to a list by hand rather than being
   prompted by a compile error.
 
+## A multiplexed tool's action is an enum parameter; per-action rules are guarded modes
+
+**Recorded:** 2026-10-13 · [ORB-15941]
+
+### Context
+
+`orbit.workflow.auto` and `orbit.routine.control` multiplex several actions
+behind one required `action` field. Each action accepts its own fields and
+may reach a different host action: auto's `status` is a desktop read that
+accepts only `workspace`, while `start`, `stop` and `resize` reach the drain
+control, which refuses a field from another action by name ("`force` is a
+stop setting; start does not accept it"). Routine control's `list` and
+`toggle` differ in the same way. The kernel declares one flat parameter list
+per operation.
+
+### Decision
+
+A multiplexed tool is one operation, and its selector is a
+`ParamType::Enum` naming every action. The spec declares the union of the
+actions' fields with their shipped types, so type checks and unknown-field
+handling cover every action. Which fields an action accepts, and which host
+action serves it, belongs to the noun's surface table. An action served by
+another host action is a `guarded_mode` that checks its own allowlist. An
+action served by the verb's handler leaves its field rules to that handler.
+This applies to each multiplexed tool that migrates, starting with
+`orbit.routine.control` in phase 5.
+
+### Rejected alternatives
+
+- **A kernel `Action` parameter kind with per-action field sets.**
+  `parse_input` would refuse a field outside the named action's set, so the
+  spec would hold the whole contract. But each action is served by one table
+  or the other, and its field rule belongs where it is served. A
+  kernel-level set would duplicate the drain control's worded refusals or
+  replace them with generic ones. It would also add a variant every surface
+  adapter must handle, for two tools.
+- **One operation per action** (`orbit.workflow.auto.status`, …). Clean
+  specs, but it renames shipped tools and moves the MCP snapshot and the
+  authorization golden.
+
+### Consequences
+
+- The MCP schema stays flat and identical to the shipped one; the actions
+  are still listed in the selector's description.
+- Cost: no surface can read an action's accepted fields from the spec. A
+  reader opens the surface table or the handler to learn them, and a field
+  meant for one action passes the type check on every action, so the action
+  rule must be written and tested where the action is served.
+
 ## Task References
 
 - [ORB-15932], [ORB-15933], [ORB-15935] — first applications of the 2026-10-12
@@ -706,6 +803,11 @@ without leaving a second home behind.
   routing keyed by tool name.
 - [ORB-15938] — migrated task `add` and `update` through the tool path, with
   the operator command's options in a hidden `cli_options` object.
+- [ORB-15941] — migrated the workflow-run tools onto a tool-only noun, kept
+  every `orbit run` and `orbit job` subcommand hand-wired, and settled the
+  multiplexed-action shape.
+- [ORB-11187] — made completion authority an operator decision the ship tool
+  does not accept.
 - [ORB-12263] — made `orbit tool run` and `orbit task artifact get` share the
   owner-workspace list with MCP instead of keeping their own.
 

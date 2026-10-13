@@ -7,6 +7,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
 
@@ -91,7 +92,6 @@ pub enum OrbitBuiltinAction {
     AgentInvoke,
     CommandExec,
     DesktopRead,
-    DesktopDrain,
     DesktopAutomation,
     DesktopTaskSnapshot,
     DesktopTaskWrite,
@@ -110,10 +110,9 @@ pub enum OrbitBuiltinAction {
     TaskReject,
     TaskReconcileReview,
     TaskReviewReset,
-    WorkflowRunList,
-    WorkflowRunResume,
-    WorkflowRunShow,
-    WorkflowShip,
+    /// Workflow-run verbs: ship, run reads and resume, and the auto-drain
+    /// control.
+    Workflow(WorkflowVerb),
     /// Workspace coordination-hold verbs.
     WorkspaceClaim(WorkspaceClaimVerb),
 }
@@ -145,6 +144,12 @@ impl From<TaskVerb> for OrbitBuiltinAction {
 impl From<FrictionVerb> for OrbitBuiltinAction {
     fn from(verb: FrictionVerb) -> Self {
         Self::Friction(verb)
+    }
+}
+
+impl From<WorkflowVerb> for OrbitBuiltinAction {
+    fn from(verb: WorkflowVerb) -> Self {
+        Self::Workflow(verb)
     }
 }
 

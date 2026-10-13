@@ -7,7 +7,7 @@ pub mod operation;
 pub mod pipeline;
 pub mod search;
 pub mod task;
-pub mod workflow;
+mod workflow;
 pub mod workspace_claim;
 
 mod dispatch;
