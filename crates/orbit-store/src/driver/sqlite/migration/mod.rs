@@ -61,7 +61,7 @@ use plugins::{
 };
 use resource_minutes::{
     apply_admission_forecasts, apply_host_resource_minutes, apply_pull_forecast_decisions,
-    apply_run_resource_minutes,
+    apply_run_resource_minutes, apply_worker_cpu_accounting,
 };
 use routine::apply_routine_scheduler_schema;
 use task_commit_journal::apply_task_commit_journal;

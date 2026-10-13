@@ -1,6 +1,7 @@
 //! The macOS process tree names the calling process and a live child, and
 //! drops the child once it has been reaped.
 
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -137,6 +138,120 @@ fn direct_rusage(pid: u32) -> DirectRusage {
     }
 }
 
+/// One-time native calibration, deliberately outside recurring gates. Uses
+/// the existing binary in an exact child, so other tests cannot charge CPU
+/// into RUSAGE_SELF. The one-thread workload targets 250 ms of wall time,
+/// checked every 1,000 arithmetic operations; tolerance is 5% plus 5 ms for
+/// non-atomic snapshot/syscall boundaries.
+#[test]
+#[ignore = "bounded native accounting calibration; run explicitly in isolation"]
+#[allow(deprecated)] // The same supported Mach API queried by the sampler.
+fn native_cpu_time_agrees_with_getrusage() {
+    const TEST: &str = "process::tests::ancestry::native_cpu_time_agrees_with_getrusage";
+    const CHILD: &str = "ORBIT_NATIVE_CPU_CALIBRATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut command = Command::new(std::env::current_exe().expect("existing test binary"));
+        crate::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        command
+            .args(["--exact", TEST, "--ignored", "--nocapture"])
+            .env(CHILD, "1");
+        let output = command.output().expect("isolated native calibration");
+        std::io::stdout()
+            .write_all(&output.stdout)
+            .expect("calibration child evidence");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    fn cpu_ns() -> u64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        // Safety: the pointer names a writable rusage structure.
+        assert_eq!(
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+            0
+        );
+        // Safety: the successful syscall initialized the structure.
+        let usage = unsafe { usage.assume_init() };
+        ((usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as u64 * 1_000_000
+            + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as u64)
+            * 1_000
+    }
+    fn tree_cpu_ns() -> u64 {
+        ancestry::process_tree(std::process::id())
+            .expect("native tree must be readable for calibration")
+            .iter()
+            .find(|process| process.key.pid == std::process::id())
+            .expect("own process")
+            .cpu_time_ns
+    }
+    fn raw_cpu_ticks() -> u64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+        // Safety: the flavor selects the writable structure's layout.
+        assert_eq!(
+            unsafe {
+                libc::proc_pid_rusage(
+                    std::process::id() as libc::c_int,
+                    libc::RUSAGE_INFO_V4,
+                    usage.as_mut_ptr().cast(),
+                )
+            },
+            0
+        );
+        // Safety: the successful syscall initialized the structure.
+        let usage = unsafe { usage.assume_init() };
+        usage.ri_user_time + usage.ri_system_time
+    }
+    let mut timebase = std::mem::MaybeUninit::<libc::mach_timebase_info_data_t>::zeroed();
+    // Safety: the pointer names a writable timebase structure.
+    assert_eq!(
+        unsafe { libc::mach_timebase_info(timebase.as_mut_ptr()) },
+        libc::KERN_SUCCESS
+    );
+    // Safety: the successful syscall initialized the structure.
+    let timebase = unsafe { timebase.assume_init() };
+    let reference_before = cpu_ns();
+    let raw_before = raw_cpu_ticks();
+    let before = tree_cpu_ns();
+    let started = Instant::now();
+    let mut value = 1_u64;
+    while started.elapsed() < Duration::from_millis(250) {
+        for _ in 0..1_000 {
+            value = std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
+        }
+    }
+    let workload_wall_ns = started.elapsed().as_nanos();
+    let measured = tree_cpu_ns() - before;
+    let raw = raw_cpu_ticks() - raw_before;
+    let reference = cpu_ns() - reference_before;
+    let tolerance = reference / 20 + 5_000_000;
+    writeln!(
+        std::io::stdout(),
+        "{}",
+        serde_json::json!({
+            "schema_version": 1, "numer": timebase.numer, "denom": timebase.denom,
+            "raw_own_counter_delta": raw, "incorrect_raw_as_ns": raw,
+            "cpu_time_ns_delta": measured, "getrusage_cpu_ns_delta": reference,
+            "tolerance_ns": tolerance, "absolute_error_ns": measured.abs_diff(reference),
+        "target_wall_ms": 250, "workload_wall_ns": workload_wall_ns, "own_cpu_only": true,
+        })
+    )
+    .expect("native calibration evidence");
+    assert!(
+        reference >= 100_000_000,
+        "insufficient CPU work for a meaningful calibration: {reference}"
+    );
+    assert!(
+        measured.abs_diff(reference) <= tolerance,
+        "tree {measured} ns vs getrusage {reference} ns; tolerance {tolerance} ns"
+    );
+}
+
 /// Kernel-call interleavings must never attribute a replacement process's
 /// usage or descendants to the tree the walk started from.
 #[test]
@@ -145,7 +260,33 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
     use std::collections::HashMap;
 
     use crate::process::ancestry::ProcessStartKey;
-    use crate::process::ancestry::darwin_tree::{ReadError, read_process_with, snapshot_with};
+    use crate::process::ancestry::darwin_tree::{
+        ReadError, own_cpu_ns, read_process_with, snapshot_with,
+    };
+
+    // Pure arithmetic and injected platform failure outcomes share this
+    // existing kernel interleaving matrix; no host load is needed.
+    for (user, system, timebase, expected) in [
+        (9, 3, Some((1, 1)), Some(12)),
+        (12_000_990, 0, Some((125, 3)), Some(500_041_250)),
+        (1, 1, Some((3, 2)), Some(3)),
+        (u64::MAX, u64::MAX, Some((1, 2)), Some(u64::MAX)),
+        (u64::MAX, 0, Some((u32::MAX, u32::MAX)), Some(u64::MAX)),
+        (u64::MAX, 1, Some((1, 1)), None),
+        (u64::MAX, 0, Some((125, 3)), None),
+        (0, 0, Some((1, 1)), Some(0)),
+        (0, 0, None, None),
+        (1, 0, Some((0, 3)), None),
+        (1, 0, Some((125, 0)), None),
+    ] {
+        match (own_cpu_ns(user, system, timebase), expected) {
+            (Ok(actual), Some(expected)) => assert_eq!(actual, expected),
+            (Err(ReadError::Unreadable), None) => {}
+            (actual, expected) => {
+                panic!("conversion {user}+{system} {timebase:?}: {actual:?}, expected {expected:?}")
+            }
+        }
+    }
 
     // Usage is charged to one identity only if the start key and parent read
     // around it agree. Reuse or reparenting reads as an exit; a refused read

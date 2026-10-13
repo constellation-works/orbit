@@ -97,3 +97,9 @@ pub(super) fn apply_pull_forecast_decisions(conn: &Connection) -> Result<(), Orb
         "TEXT",
     )
 }
+
+/// v51: nullable provenance; historical values and older writers stay intact.
+/// Never backfill old Mach counters with a fabricated unit or multiplier.
+pub(super) fn apply_worker_cpu_accounting(conn: &Connection) -> Result<(), OrbitError> {
+    super::introspect::add_column_if_missing(conn, "run_resource_minutes", "cpu_accounting", "TEXT")
+}

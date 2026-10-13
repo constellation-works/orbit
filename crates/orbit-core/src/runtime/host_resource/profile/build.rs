@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use orbit_config::AutoConcurrencySettings;
-use orbit_store::contracts::DeliveryRunResources;
+use orbit_store::contracts::{CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS, DeliveryRunResources};
 use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, auto_task_builds_by_design};
 
 use super::{
@@ -47,6 +47,7 @@ struct Delivery {
     finished_at: Option<DateTime<Utc>>,
     live: bool,
     resumed: bool,
+    untrusted_cpu: bool,
     run_ids: Vec<String>,
     /// Summed cores and memory per minute since admission.
     cpu: Vec<f64>,
@@ -87,7 +88,7 @@ pub(crate) fn build_profiles(
     let mut by_key: BTreeMap<ProfileKey, Vec<Delivery>> = BTreeMap::new();
     for delivery in deliveries(runs)
         .into_iter()
-        .filter(|delivery| !delivery.live && !delivery.resumed)
+        .filter(|delivery| !delivery.live && !delivery.resumed && !delivery.untrusted_cpu)
     {
         let complexity = if delivery.template().is_some() {
             None
@@ -183,11 +184,22 @@ fn deliveries(runs: Vec<DeliveryRunResources>) -> Vec<Delivery> {
                 finished_at: None,
                 live: false,
                 resumed: false,
+                untrusted_cpu: false,
                 run_ids: Vec::new(),
                 cpu: Vec::new(),
                 memory: Vec::new(),
             });
         delivery.resumed |= run.resumed;
+        // Exclude the whole delivery, including any good sibling runs: dropping
+        // just bad minutes would make a partial series understate its load.
+        delivery.untrusted_cpu |=
+            run.minutes
+                .iter()
+                .any(|minute| match minute.cpu_accounting.as_deref() {
+                    Some(CPU_ACCOUNTING_LINUX | CPU_ACCOUNTING_MACOS) => false,
+                    None => !cfg!(target_os = "linux"),
+                    Some(_) => true,
+                });
         // A run whose `job_runs` row is gone cannot say it finished.
         match run.finished_at {
             Some(at) if run.job_id.is_some() => {
