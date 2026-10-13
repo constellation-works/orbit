@@ -25,6 +25,76 @@ pub(crate) fn operator_json(fixture: &Fixture, args: &[&str]) -> serde_json::Val
     serde_json::from_slice(&output).unwrap_or_else(|error| panic!("JSON for {args:?}: {error}"))
 }
 
+fn auto_task_cli_update_preserves_explicit_empty_text_arguments() {
+    let fixture = Fixture::new();
+    let added = fixture.json(&[
+        "auto-task",
+        "add",
+        "--name",
+        "fixture-empty-text-update",
+        "--description",
+        "Original definition description",
+        "--every-minutes",
+        "60",
+        "--title",
+        "Original task title",
+        "--body",
+        "Original task body",
+        "--json",
+    ]);
+    assert_eq!(added["description"], "Original definition description");
+    assert_eq!(added["template"]["title"], "Original task title");
+    assert_eq!(added["template"]["description"], "Original task body");
+
+    let omitted = fixture.json(&[
+        "auto-task",
+        "update",
+        "fixture-empty-text-update",
+        "--dedupe",
+        "always",
+        "--json",
+    ]);
+    assert_eq!(omitted["description"], "Original definition description");
+    assert_eq!(omitted["template"]["title"], "Original task title");
+    assert_eq!(omitted["template"]["description"], "Original task body");
+
+    let cleared = fixture.json(&[
+        "auto-task",
+        "update",
+        "fixture-empty-text-update",
+        "--description",
+        "",
+        "--body",
+        "",
+        "--json",
+    ]);
+    assert_eq!(cleared["description"], "");
+    assert_eq!(cleared["template"]["description"], "");
+    assert_eq!(cleared["template"]["title"], "Original task title");
+
+    fixture
+        .command(&[
+            "auto-task",
+            "update",
+            "fixture-empty-text-update",
+            "--title",
+            "",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    let after_refusal = fixture.json(&["auto-task", "show", "fixture-empty-text-update", "--json"]);
+    assert_eq!(after_refusal["description"], cleared["description"]);
+    assert_eq!(
+        after_refusal["template"]["description"],
+        cleared["template"]["description"]
+    );
+    assert_eq!(
+        after_refusal["template"]["title"], cleared["template"]["title"],
+        "a refused empty title must leave the task title unchanged"
+    );
+}
+
 fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let fixture = Fixture::new();
     let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
@@ -1191,6 +1261,10 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
 #[test]
 fn auto_task_lifecycle_and_recovery() {
     for (name, check) in [
+        (
+            "auto_task_cli_update_preserves_explicit_empty_text_arguments",
+            auto_task_cli_update_preserves_explicit_empty_text_arguments as fn(),
+        ),
         (
             "auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist",
             auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist as fn(),
