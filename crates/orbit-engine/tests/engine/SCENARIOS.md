@@ -1,8 +1,8 @@
 # Engine scenario consolidation
 
 The retired nextest entries below remain named scenario rows. Their bodies and
-assertions execute in the listed surviving family test. No behavior row was
-removed as redundant. Table partitions select disjoint named rows and together
+assertions execute in the listed surviving family test. The approved duplicate
+fixture permutations below name their retained covering assertions. Table partitions select disjoint named rows and together
 cover the original table. Each family still runs in an isolated child with a
 bounded supervisor; mutable repositories, hosts and audit stores remain separate.
 Pristine Git fixture templates share initialization within a family process,
@@ -658,8 +658,8 @@ The red-test constructor seeds `failing.txt` and its Makefile together; the flak
 ## Reconciliation on landed 8e1e137e
 
 All prior mappings above remain retained. The preserved 148c candidate and its
-132.549 s Linux full-engine result remain separate evidence; this composition
-has not yet been measured.
+132.549 s Linux full-engine result remain separate evidence. The matched
+current-source Linux result is recorded below.
 
 - The retired `default-driver` untouched-output row maps to the stronger
   `custom-output` stopped-tree equality refusal in `adoption_contracts_1`.
@@ -688,3 +688,37 @@ has not yet been measured.
   (SHA256 `60fb59121c801fba040b824e27d5e22368cbc8d910237ac111261aee0361d246`)
   and occurs exactly once. The carried adjacent positive wait-credit fixture
   optimization remains distinct.
+
+## Matched current-source native measurement
+
+The single default-profile Linux pair used baseline
+`8e1e137e46412a9e2c850f8cadf157332e436139` and candidate
+`13bcb175f4b06052d79ede7959228fccc7f28096` on dk-server-1. Native Bubblewrap and
+ps controls passed; build slots, Cargo jobs and test threads were all four.
+Generated nextest metadata ran already-built images with four test threads,
+zero retries and immediate passing output. Compilation and extraction completed
+before timing; synthetic Cargo/Git work inside test bodies remains included.
+
+| Source | Passed / selected | Summed case time | Process wall time | Largest PR case |
+|---|---:|---:|---:|---:|
+| Baseline 8e1e137e | 348 / 348 | 381.413 s | 95.575 s | 43.711 s |
+| Candidate 13bcb175 | 149 / 149 | 95.394 s | 24.053 s | 4.737 s |
+
+The candidate-host count, 120 s sum and 5 s PR-case limits pass. No tests were
+skipped, no deferral or instrumentation markers appeared, and source, binary,
+config and generated metadata hashes were unchanged before/after. Both held-slot
+controls passed. This composition includes newer landed production changes;
+the gain is not attributed to a single retirement or process optimization.
+
+The complete result and full logs are owner task artifacts
+`ORB-15959/oncall-15958-native/pair-8e1e-result.json` and
+`pair-8e1e-{base,candidate}-run.log`. Result SHA256:
+`6fae7879dfe9a1525c1fed155ae835136454be4720ff241dd11349a2f8a06dce`.
+The older 148c Linux 132.549 s miss and original Mac 243.455 s / 123.455 s miss
+remain retained. This Linux result does not substitute for native Mac QA.
+Final delivery gates and review remain separate obligations.
+
+The current-base mapping covers all 291 retired nextest identities; original
+names and the final surviving family selectors are retained in the prepared PR
+body and `oncall-15958-native/delivery-retired-map.json`. No named CI selector
+or required QA behavior is intentionally dropped.
