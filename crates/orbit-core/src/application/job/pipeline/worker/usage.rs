@@ -15,7 +15,7 @@
 //!   linker peak is what triggers the OOM killer.
 //!
 //! macOS has no worker scope. The same thread sums the worker's process tree
-//! instead ([`super::usage_tree`]): CPU deltas of processes seen in both
+//! instead (`worker/usage_tree.rs`): CPU deltas of processes seen in both
 //! samples, plus the full CPU time of processes that appeared, and the sum of
 //! each process's `ri_phys_footprint`. The first read is a baseline. An
 //! unreadable tree skips that sample and leaves the baseline in place.
@@ -45,6 +45,7 @@ use orbit_types::workflow::JobRun;
 
 use super::delivery_class::DeliveryResourceClass;
 use super::scope::{ScopeUsage, WorkerScopeCgroup};
+#[cfg(any(target_os = "macos", test))]
 use super::usage_tree::TreeSampler;
 use crate::OrbitRuntime;
 use crate::runtime::host_resource::{HostUsageReading, read_host_usage};
@@ -84,6 +85,7 @@ enum ResourceSource {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Scope(WorkerScopeCgroup),
     /// macOS process tree, presented as a monotonic counter.
+    #[cfg(any(target_os = "macos", test))]
     Tree(TreeSampler),
 }
 
@@ -91,6 +93,7 @@ impl ResourceSource {
     fn usage(&mut self) -> Option<ScopeUsage> {
         match self {
             Self::Scope(scope) => scope.usage(),
+            #[cfg(any(target_os = "macos", test))]
             Self::Tree(tree) => tree.usage(),
         }
     }
@@ -154,6 +157,7 @@ impl RunResourceSampler {
 
     /// A sampler that reads the process tree `read` returns. The same minute
     /// rows as [`Self::new`]. `read` returning `None` skips that sample.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn from_process_tree(
         store: Arc<dyn ResourceUsageStoreBackend>,
         read: impl FnMut() -> Option<Vec<orbit_common::process::ancestry::ProcessTreeProcess>>

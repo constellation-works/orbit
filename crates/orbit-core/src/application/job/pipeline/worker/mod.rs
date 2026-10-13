@@ -35,6 +35,7 @@ pub(super) mod scope;
 mod start;
 pub(super) mod supervisor;
 mod usage;
+#[cfg(any(target_os = "macos", test))]
 mod usage_tree;
 
 #[cfg(test)]

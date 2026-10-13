@@ -135,8 +135,9 @@ pub struct ProcessTreeProcess {
 ///
 /// `None` when the tree cannot be read: the root itself is unreadable, a
 /// descendant listing is denied or truncated, or a process that is still
-/// listed cannot be measured. A descendant that exits during the walk is
-/// omitted. That is a snapshot, not an error. Callers that sum CPU across
+/// listed cannot be measured. A descendant that exits, is replaced, or is
+/// reparented during the walk is omitted. That is a snapshot, not an error.
+/// Callers that sum CPU across
 /// snapshots must tolerate processes appearing and disappearing.
 #[cfg(target_os = "macos")]
 pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
@@ -144,14 +145,15 @@ pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
 }
 
 #[cfg(target_os = "macos")]
-mod darwin_tree {
+pub(super) mod darwin_tree {
     use std::collections::{HashSet, VecDeque};
     use std::io::Error;
     use std::mem::{MaybeUninit, size_of};
 
     use super::{ProcessStartKey, ProcessTreeProcess};
 
-    enum ReadError {
+    #[derive(Debug)]
+    pub(in crate::process) enum ReadError {
         /// The process is gone. A descendant may be skipped; the root may not.
         Gone,
         /// The kernel refused or truncated the read. The snapshot is unusable.
@@ -159,41 +161,88 @@ mod darwin_tree {
     }
 
     pub(super) fn snapshot(root: u32) -> Option<Vec<ProcessTreeProcess>> {
+        snapshot_with(root, read_process, child_pids, read_start)
+    }
+
+    // Inject kernel reads so exit/reuse between them can be tested without
+    // exhausting PIDs or generating host load.
+    pub(in crate::process) fn snapshot_with(
+        root: u32,
+        mut read_process: impl FnMut(u32) -> Result<(ProcessTreeProcess, u32), ReadError>,
+        mut child_pids: impl FnMut(u32) -> Result<Vec<u32>, ReadError>,
+        mut read_start: impl FnMut(u32) -> Result<(u64, u32), ReadError>,
+    ) -> Option<Vec<ProcessTreeProcess>> {
         let mut found = Vec::new();
         let mut seen = HashSet::from([root]);
-        let mut queue = VecDeque::from([root]);
-        let mut root_pending = true;
-        while let Some(pid) = queue.pop_front() {
-            let process = match read_process(pid) {
+        let mut queue = VecDeque::from([(root, None::<ProcessStartKey>)]);
+        while let Some((pid, expected_parent)) = queue.pop_front() {
+            let is_root = expected_parent.is_none();
+            let (process, parent) = match read_process(pid) {
                 Ok(process) => process,
-                Err(ReadError::Gone) if !root_pending => continue,
+                Err(ReadError::Gone) if !is_root => continue,
                 Err(ReadError::Gone | ReadError::Unreadable) => return None,
             };
-            match child_pids(pid) {
-                Ok(children) => {
-                    for child in children {
-                        if seen.insert(child) {
-                            queue.push_back(child);
-                        }
-                    }
+            if let Some(expected) = expected_parent {
+                // A listed PID may already name an unrelated replacement;
+                // numeric parent membership alone also races with parent reuse.
+                if parent != expected.pid {
+                    continue;
                 }
-                Err(ReadError::Gone) if !root_pending => {}
+                match read_start(expected.pid) {
+                    Ok((start, _)) if start == expected.starttime => {}
+                    Ok(_) | Err(ReadError::Gone) => continue,
+                    Err(ReadError::Unreadable) => return None,
+                }
+            }
+            let children = match child_pids(pid) {
+                Ok(children) => children,
+                Err(ReadError::Gone) if !is_root => continue,
                 Err(ReadError::Gone | ReadError::Unreadable) => return None,
+            };
+            // Do not walk a replacement's children under the old parent's key.
+            match read_start(pid) {
+                Ok((start, current_parent))
+                    if start == process.key.starttime && current_parent == parent => {}
+                Ok(_) | Err(ReadError::Gone) if !is_root => continue,
+                Ok(_) | Err(ReadError::Gone | ReadError::Unreadable) => return None,
+            }
+            for child in children {
+                if seen.insert(child) {
+                    queue.push_back((child, Some(process.key)));
+                }
             }
             found.push(process);
-            root_pending = false;
         }
         Some(found)
     }
 
-    fn read_process(pid: u32) -> Result<ProcessTreeProcess, ReadError> {
-        let (starttime, _parent) = read_start(pid)?;
+    fn read_process(pid: u32) -> Result<(ProcessTreeProcess, u32), ReadError> {
+        read_process_with(pid, read_start, read_rusage)
+    }
+
+    pub(in crate::process) fn read_process_with(
+        pid: u32,
+        mut read_start: impl FnMut(u32) -> Result<(u64, u32), ReadError>,
+        mut read_rusage: impl FnMut(u32) -> Result<(u64, u64), ReadError>,
+    ) -> Result<(ProcessTreeProcess, u32), ReadError> {
+        let before = read_start(pid)?;
         let (cpu_time_ns, phys_footprint) = read_rusage(pid)?;
-        Ok(ProcessTreeProcess {
-            key: ProcessStartKey { pid, starttime },
-            cpu_time_ns,
-            phys_footprint,
-        })
+        // Bind usage to one identity across both calls. Reparenting means the
+        // process left the tree while measured and is omitted like an exit.
+        if read_start(pid)? != before {
+            return Err(ReadError::Gone);
+        }
+        Ok((
+            ProcessTreeProcess {
+                key: ProcessStartKey {
+                    pid,
+                    starttime: before.0,
+                },
+                cpu_time_ns,
+                phys_footprint,
+            },
+            before.1,
+        ))
     }
 
     fn read_start(pid: u32) -> Result<(u64, u32), ReadError> {

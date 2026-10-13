@@ -135,3 +135,111 @@ fn direct_rusage(pid: u32) -> DirectRusage {
         lifetime_max: info.ri_lifetime_max_phys_footprint,
     }
 }
+
+/// Kernel-call interleavings must never attribute a replacement process's
+/// usage or descendants to the tree the walk started from.
+#[test]
+fn tree_walk_omits_reused_pids_and_reparented_children() {
+    use crate::process::ancestry::ProcessStartKey;
+    use crate::process::ancestry::darwin_tree::{ReadError, read_process_with, snapshot_with};
+    use std::cell::Cell;
+
+    // A stable read is charged; reuse or reparenting during the usage read
+    // is an exit of the original process, not CPU under its former key.
+    for after in [(20, 1), (21, 1), (20, 9)] {
+        let mut reads = 0;
+        let measured = read_process_with(
+            2,
+            |_| {
+                reads += 1;
+                Ok(if reads == 1 { (20, 1) } else { after })
+            },
+            |_| Ok((900_000_000, 4096)),
+        );
+        if after == (20, 1) {
+            let (process, parent) = measured.unwrap();
+            assert_eq!(
+                process.key,
+                ProcessStartKey {
+                    pid: 2,
+                    starttime: 20
+                }
+            );
+            assert_eq!(process.cpu_time_ns, 900_000_000);
+            assert_eq!(parent, 1);
+        } else {
+            assert!(matches!(measured, Err(ReadError::Gone)), "{after:?}");
+        }
+    }
+
+    // Make each race happen at its kernel boundary. An unrelated replacement
+    // has a different parent; a parent can also be reused during its listing
+    // or before its queued child is read. Denied reads fail the whole sample.
+    for scenario in [
+        "stable",
+        "child_parent",
+        "parent_listing",
+        "parent_reuse",
+        "denied",
+    ] {
+        let listed_child = Cell::new(false);
+        let root_reads = Cell::new(0);
+        let tree = snapshot_with(
+            1,
+            |pid| {
+                let parent = if pid == 1 {
+                    0
+                } else if scenario == "child_parent" {
+                    9
+                } else {
+                    1
+                };
+                Ok((
+                    ProcessTreeProcess {
+                        key: ProcessStartKey {
+                            pid,
+                            starttime: u64::from(pid) * 10,
+                        },
+                        cpu_time_ns: u64::from(pid) * 1000,
+                        phys_footprint: u64::from(pid) * 4096,
+                    },
+                    parent,
+                ))
+            },
+            |pid| {
+                if pid == 1 {
+                    listed_child.set(true);
+                    Ok(vec![2])
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+            |pid| {
+                if pid == 1 {
+                    root_reads.set(root_reads.get() + 1);
+                    if scenario == "parent_listing" && listed_child.get()
+                        || scenario == "parent_reuse" && root_reads.get() > 1
+                    {
+                        return Ok((11, 0));
+                    }
+                    if scenario == "denied" && root_reads.get() > 1 {
+                        return Err(ReadError::Unreadable);
+                    }
+                }
+                Ok((u64::from(pid) * 10, if pid == 1 { 0 } else { 1 }))
+            },
+        );
+        match scenario {
+            "parent_listing" | "denied" => assert!(tree.is_none(), "{scenario}: {tree:?}"),
+            "stable" => assert_eq!(tree.unwrap().len(), 2, "{scenario}"),
+            _ => {
+                let tree = tree.unwrap();
+                assert_eq!(tree.len(), 1, "{scenario}: {tree:?}");
+                assert_eq!(
+                    tree[0].key.pid, 1,
+                    "only the original root belongs to this tree"
+                );
+            }
+        }
+    }
+}

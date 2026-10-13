@@ -255,6 +255,14 @@ fn macos_worker_records_a_spawned_child_tree() {
         newcomers.len() >= 2,
         "the child and its grandchild must both be in the tree: {during:#?}"
     );
+    let held_identities: Vec<_> = newcomers
+        .iter()
+        .map(|process| {
+            orbit_common::process::signal::BoundProcess::bind(process.key.pid, None)
+                .expect("bind the fixture process")
+                .expect("fixture is alive while its pages are held")
+        })
+        .collect();
     let newcomer_cpu_ns: u64 = newcomers.iter().map(|process| process.cpu_time_ns).sum();
     let during_bytes: u64 = during.iter().map(|process| process.phys_footprint).sum();
     assert!(
@@ -265,6 +273,12 @@ fn macos_worker_records_a_spawned_child_tree() {
     sampler.sample(at(5));
     sampler.finish(at(5));
     drop(hold);
+    for process in held_identities {
+        assert!(
+            !process.is_alive().expect("probe fixture cleanup"),
+            "dropping the tree guard must stop the child and grandchild"
+        );
+    }
 
     let rows = fixture
         .store
@@ -314,22 +328,7 @@ enum TreeSpawn {
 }
 
 #[cfg(target_os = "macos")]
-struct HeldTree {
-    child: std::process::Child,
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for HeldTree {
-    fn drop(&mut self) {
-        let pid = self.child.id() as libc::pid_t;
-        // Safety: the child leads the process group created at spawn, so this
-        // also ends the grandchild. `0` is not a group we created.
-        if pid > 0 {
-            unsafe { libc::kill(-pid, libc::SIGKILL) };
-        }
-        let _ = self.child.wait();
-    }
-}
+type HeldTree = orbit_common::process::OwnedChild;
 
 #[cfg(target_os = "macos")]
 fn spawn_child_tree(root: &TempDir) -> Result<HeldTree, TreeSpawn> {
@@ -348,13 +347,13 @@ fn spawn_child_tree(root: &TempDir) -> Result<HeldTree, TreeSpawn> {
         .stdout(std::process::Stdio::null())
         .stderr(stderr)
         .process_group(0);
-    let mut child = command.spawn().unwrap();
+    let mut child = HeldTree::from_spawned(command.spawn().unwrap());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
         if std::fs::read(&ready).ok().as_deref() == Some(b"ready" as &[u8]) {
-            return Ok(HeldTree { child });
+            return Ok(child);
         }
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.child_mut().try_wait().unwrap() {
             panic!(
                 "child tree exited {status} before ready:\n{}",
                 std::fs::read_to_string(&stderr_path).unwrap_or_default()
@@ -362,7 +361,7 @@ fn spawn_child_tree(root: &TempDir) -> Result<HeldTree, TreeSpawn> {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let _ = HeldTree { child };
+    drop(child);
     if orbit_common::process::ancestry::process_tree(std::process::id()).is_none() {
         return Err(TreeSpawn::Unreadable);
     }
