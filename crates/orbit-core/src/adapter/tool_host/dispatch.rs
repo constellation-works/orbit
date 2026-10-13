@@ -83,12 +83,6 @@ pub(super) fn execute(
         OrbitBuiltinAction::DesktopAutomation => {
             super::desktop::automation::control(runtime, input, submission_trigger(session_context))
         }
-        OrbitBuiltinAction::DesktopDrain => super::desktop::drain::control(
-            runtime,
-            input,
-            submission_trigger(session_context),
-            &super::workflow_tools::actor(runtime, agent.as_deref(), model.as_deref()),
-        ),
         OrbitBuiltinAction::DesktopRead => {
             super::desktop::task::read(runtime, session_context, input)
         }
@@ -161,18 +155,14 @@ pub(super) fn execute(
                 .map(ToOwned::to_owned);
             Ok(result)
         }
-        OrbitBuiltinAction::WorkflowShip => super::workflow_tools::ship(
+        OrbitBuiltinAction::Workflow(verb) => super::workflow_tools::dispatch(
             runtime,
+            verb,
             input,
             agent,
             model,
             submission_trigger(session_context),
         ),
-        OrbitBuiltinAction::WorkflowRunShow => super::workflow_tools::show(runtime, input),
-        OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
-        OrbitBuiltinAction::WorkflowRunResume => {
-            super::workflow_tools::resume(runtime, input, agent, model)
-        }
         OrbitBuiltinAction::WorkspaceClaim(verb) => {
             super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
         }

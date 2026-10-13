@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on friction, auto-task, drain, workspace claim and the task read and write verbs, plus the planned migration of the remaining nouns.
+summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on friction, auto-task, drain, workspace claim, the task read and write verbs and the workflow-run tools, plus the planned migration of the remaining nouns.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15941]
 ---
 
 # Operations as Data — Design
@@ -604,7 +604,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 1 (done) | auto-task: 5 tools (`show` inactive), 10 CLI verbs | Second pilot. First noun whose CLI calls core directly; exercises `Enum`, `default`, parameter groups, CLI-only verbs (`toggle`, `delete`, `restore`, `recover`, `reset` with `mcp_scope: None`) and the tool-path rule |
 | 2 (done) | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
 | 3 (reads, writes, nested commands done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
-| 4 | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
+| 4 (done) | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
 
 Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
@@ -612,7 +612,7 @@ Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
 fields after the window); phase 1
 [ORB-15935] (done); phase 2 [ORB-15936] (done); phase 3 [ORB-15937] (reads, done), [ORB-15938]
 (add/update, done), [ORB-15939] (artifact and locks, done), [ORB-15940] (review and
-lifecycle); phase 4 [ORB-15941]; phase 5 [ORB-15942]. [ORB-15943] verifies the
+lifecycle); phase 4 [ORB-15941] (done); phase 5 [ORB-15942]. [ORB-15943] verifies the
 authorization golden that phases 1 and 4 rely on.
 
 Out of scope: the `Desktop*` host actions (a separate host protocol), GitHub and
@@ -632,7 +632,10 @@ by the generic tool and `Task(TaskVerb)`. After phase 3b on the same date,
 they are 21 and 18: the `add` and `update` tool impls and action variants are
 gone, and `orbit.task.artifact.put`, which dispatched `TaskUpdate`, has its own
 `TaskArtifactPut` variant until its slice lands. After phase 3c, the counts
-are 16 and 13: five artifact/lock tool impls and five action variants are gone. The weekly code-health sweep reports
+are 16 and 13: five artifact/lock tool impls and five action variants are gone. After phase 4,
+they are 11 and 9: the five workflow tool impls are gone, and the four
+workflow action variants and `DesktopDrain`, which only `orbit.workflow.auto`
+dispatched, are replaced by `Workflow(WorkflowVerb)`. The weekly code-health sweep reports
 both numbers. Neither is a merge gate.
 
 ### Phase 2: tool-only nouns (Implemented)
@@ -758,6 +761,48 @@ inline byte limit. These are tool-path behavior changes, with baseline and
 candidate evidence attached to the task; help stability alone does not prove
 behavior neutrality.
 
+### Phase 4: workflow run (Implemented)
+
+`orbit.workflow.ship`, `orbit.workflow.run.show`, `orbit.workflow.run.list`,
+`orbit.workflow.run.resume` and `orbit.workflow.auto` are declared in
+[governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs)
+and served by `OperationTool<WorkflowVerb>`. The handler table in
+[workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs)
+matches exhaustively on the verb; `auto` delegates to the drain control it
+always reached. The noun is tool-only, like drain: every operation has an
+empty `cli_path`, and no CLI or dashboard surface is derived from it.
+
+The surface table in
+[workflow.rs](../../../crates/orbit-tools/src/builtin/orbit/workflow.rs)
+holds what the specs cannot:
+
+- `preempt` refuses a managed run before any field check: ship and resume
+  with the dispatch refusal, auto with the automation-control refusal.
+- `guarded_mode` serves the bounded `view` of `run.show` and `run.list`
+  (with the optional job catalog) as desktop projection reads, and refuses
+  `include_catalog` outside it.
+- `guarded_mode` also serves auto's `status` action as the drain readiness
+  read, after its own settings check. `start`, `stop` and `resize` reach the
+  verb's handler.
+
+`orbit.workflow.auto` refuses unknown fields, as it did before migrating. Its
+`agent` refusal keeps its shipped wording as a verbatim retired field. The other
+four tools warn about and audit unknown fields (§4). The action shape this
+tool sets for multiplexed tools is recorded in
+[A multiplexed tool's action is an enum parameter; per-action rules are guarded modes](./4_decisions.md#a-multiplexed-tools-action-is-an-enum-parameter-per-action-rules-are-guarded-modes).
+
+No `orbit run` or `orbit job` subcommand is registry-derived. Each overlapping
+CLI subcommand is a wider operation than its tool: it is ungoverned on the
+CLI, and it has inputs the tool refuses by contract (`run ship --complete`,
+auto-selection with no task IDs). Executing any of them through `run_tool`
+would either govern a CLI the baseline leaves open, or add a CLI-only tool
+and move the authorization golden. Phase 3c kept contention hand-wired for
+the same reason. The per-subcommand
+inventory and the Step 0 differences are in
+[Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
+The MCP snapshot, the tool-list goldens and the authorization matrix golden are
+unchanged.
+
 ## 10. Concerns & Honest Limitations
 
 - **The registry is a wall of contract strings.** Centralizing tool names,
@@ -809,7 +854,8 @@ behavior neutrality.
 - [ORB-15938] — phase 3b: migrated task `add` and `update` with the guarded
   schema extension.
 - [ORB-15939], [ORB-15940] — phase 3, the rest of the task noun.
-- [ORB-15941] — phase 4, workflow run.
+- [ORB-15941] — phase 4: migrated the workflow-run tools and settled the
+  multiplexed-action shape.
 - [ORB-15942] — phase 5, routine control and search.
 - [ORB-15943] — verifies the authorization golden still catches placement and
   permission drift.

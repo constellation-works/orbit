@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction, auto-task, drain, workspace claim and the task read, write, artifact and lock verbs are migrated onto kernel v2 and validate input at the tool entry, and a planned noun-by-noun migration is accepted and in progress.
+summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction, auto-task, drain, workspace claim, the task read, write, artifact and lock verbs and the workflow-run tools are migrated onto kernel v2 and validate input at the tool entry, and a planned noun-by-noun migration is accepted and in progress.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15941]
 ---
 
 # Operations as Data — Overview
@@ -31,8 +31,10 @@ read verbs (`show`, `list`, `eligible`, `lint`) followed in [ORB-15937]
 (phase 3a), which also settled that ID routing stays keyed by tool name, and
 task `add` and `update` followed in [ORB-15938] (phase 3b), with the guarded
 creation schema as a surface table. Task artifacts and locks followed in
-[ORB-15939] (phase 3c), adding registry-derived nested CLI groups. The remaining tool surface (the other task verbs, workflow run, and the
-single-verb tools) is hand-wired. A
+[ORB-15939] (phase 3c), adding registry-derived nested CLI groups. The five
+workflow-run tools followed in [ORB-15941] (phase 4) as a tool-only noun; the
+`orbit run` CLI stays hand-wired. The remaining tool surface (the other task
+verbs and the single-verb tools) is hand-wired. A
 2026-10-12 review found that the friction kernel declared a verb's *names* once
 but still restated its *behaviour* — read/write class, redaction, accepted
 aliases, cross-field rules — on several surfaces, and that it could not yet
@@ -105,9 +107,11 @@ and again in the tool handler.
 | The workspace-claim registry (three inactive tool-only verbs) | [crates/orbit-common/src/governance/workspace_claim.rs](../../../crates/orbit-common/src/governance/workspace_claim.rs) | [ORB-15936] |
 | The task registry and task enum value tables | [crates/orbit-common/src/governance/task/operations.rs](../../../crates/orbit-common/src/governance/task/operations.rs) | [ORB-15937] |
 | Task nested artifact and lock operations | [crates/orbit-common/src/governance/task/nested_operations.rs](../../../crates/orbit-common/src/governance/task/nested_operations.rs) | [ORB-15939] |
+| The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow.auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
 | MCP adapter: generic `OperationTool<V>`, schema, scope and execution kind | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358], [ORB-15932] |
 | Auto-task guarded modes (bounded list, acknowledged mint, checked toggle), keyed on `AutoTaskVerb` | [crates/orbit-tools/src/builtin/orbit/auto_task.rs](../../../crates/orbit-tools/src/builtin/orbit/auto_task.rs) | [ORB-15935] |
 | Task guarded modes (bounded `show`/`list`, versioned `show` snapshot), keyed on `TaskVerb` | [crates/orbit-tools/src/builtin/orbit/task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs) | [ORB-15937] |
+| Workflow guarded modes (managed-run refusals, bounded run reads, auto `status`), keyed on `WorkflowVerb` | [crates/orbit-tools/src/builtin/orbit/workflow.rs](../../../crates/orbit-tools/src/builtin/orbit/workflow.rs) | [ORB-15941] |
 | CLI adapter: generic clap impls for `Invocation<V>`, tool input | [crates/orbit-cli/src/command/operation/args.rs](../../../crates/orbit-cli/src/command/operation/args.rs) | [ORB-10358], [ORB-15932] |
 | Friction CLI surface tables (request shaping, renderers) | [crates/orbit-cli/src/command/friction.rs](../../../crates/orbit-cli/src/command/friction.rs) | [ORB-10358], [ORB-15932] |
 | Auto-task CLI surface tables (flag composition, renderers) | [crates/orbit-cli/src/command/auto_task/](../../../crates/orbit-cli/src/command/auto_task/) | [ORB-15935] |
@@ -119,6 +123,7 @@ and again in the tool handler.
 | Handler table, keyed on `DrainVerb` | [crates/orbit-core/src/adapter/tool_host/drain_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/drain_tools.rs) | [ORB-15936] |
 | Handler table, keyed on `WorkspaceClaimVerb` | [crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs) | [ORB-15936] |
 | Handler table, keyed on `TaskVerb` | [crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs) | [ORB-15937] |
+| Handler table, keyed on `WorkflowVerb` | [crates/orbit-core/src/adapter/tool_host/workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs) | [ORB-15941] |
 | ID routing, keyed by tool name (host prefix routing; owner-workspace binding is `ID_RESOLVED_WORKSPACE_TOOLS` in the CLI's MCP server) | [crates/orbit-tools/src/mcp_rules.rs](../../../crates/orbit-tools/src/mcp_rules.rs) | [ORB-15937] |
 | Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs) | [ORB-15932] |
 | Claimed-worker routing, keyed on the migrated nouns' verb enums | [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs) | [ORB-15932], [ORB-15935] |
@@ -142,5 +147,7 @@ and again in the tool handler.
   by tool name.
 - [ORB-15938] — phase 3b: migrated task `add` and `update`, adding the array
   parameter kind, refuse-mode unknown fields and the schema extension table.
+- [ORB-15941] — phase 4: migrated the workflow-run tools as a tool-only noun
+  and settled that a multiplexed tool's action is an enum parameter.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

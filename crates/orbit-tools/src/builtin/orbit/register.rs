@@ -2,17 +2,14 @@ use orbit_common::governance::auto_task::AUTO_TASK;
 use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::task::TASK;
+use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
 
-use super::{agent, command, operation, pipeline, search, task, workflow};
+use super::{agent, command, operation, pipeline, search, task};
 use crate::ToolRegistry;
 
 pub fn register(registry: &mut ToolRegistry) {
-    registry.register_mcp(
-        super::domain_control::WorkflowAutoTool,
-        McpToolScope::WorkspaceRequired,
-    );
     registry.register_mcp(
         super::domain_control::RoutineControlTool,
         McpToolScope::WorkspaceRequired,
@@ -61,20 +58,7 @@ pub fn register(registry: &mut ToolRegistry) {
     );
     registry.register(pipeline::wait::OrbitPipelineWaitTool);
     registry.register_mcp(search::OrbitSearchTool, McpToolScope::WorkspaceRequired);
-    registry.register_mcp(
-        workflow::OrbitWorkflowShipTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        workflow::OrbitWorkflowRunShowTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        workflow::OrbitWorkflowRunListTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        workflow::OrbitWorkflowRunResumeTool,
-        McpToolScope::WorkspaceRequired,
-    );
+    // Workflow ship, run reads and resume, and the auto-drain control come
+    // from the shared operation registry.
+    operation::register_noun(registry, &WORKFLOW);
 }

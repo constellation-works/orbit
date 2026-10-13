@@ -3,6 +3,8 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
@@ -23,7 +25,33 @@ use super::json::serialize_error;
 const DEFAULT_RUN_LIST_LIMIT: usize = 25;
 const MAX_RUN_LIST_LIMIT: usize = 200;
 
-pub(super) fn ship(
+/// Run a workflow operation. `trigger` is the provenance of a run this call
+/// submits.
+pub(super) fn dispatch(
+    runtime: &OrbitRuntime,
+    verb: WorkflowVerb,
+    input: Value,
+    agent: Option<String>,
+    model: Option<String>,
+    trigger: JobRunTrigger,
+) -> Result<Value, OrbitError> {
+    // Re-wraps the input the tool entry already parsed; see `parse_input`.
+    let input = verb.spec().parse_input(input)?.into_value();
+    match verb {
+        WorkflowVerb::Auto => super::desktop::drain::control(
+            runtime,
+            input,
+            trigger,
+            &actor(runtime, agent.as_deref(), model.as_deref()),
+        ),
+        WorkflowVerb::RunList => list(runtime, input),
+        WorkflowVerb::RunResume => resume(runtime, input, agent, model),
+        WorkflowVerb::RunShow => show(runtime, input),
+        WorkflowVerb::Ship => ship(runtime, input, agent, model, trigger),
+    }
+}
+
+fn ship(
     runtime: &OrbitRuntime,
     input: Value,
     agent: Option<String>,
@@ -83,7 +111,7 @@ pub(super) fn ship(
 /// dashboard about lineage instead of each reader seeing a different half of
 /// the truth. An unreadable state degrades to an empty list rather than
 /// failing the read.
-pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
     let run = runtime.show_job_run(&id)?;
     let state = runtime.read_run_state(&run.run_id).ok().flatten();
@@ -163,7 +191,7 @@ fn execution_progress_json(progress: &RunExecutionProgress) -> Value {
     })
 }
 
-pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let state = optional_string(&input, "state")?;
     let terminal_only = state.as_deref() == Some("terminal");
     let state = state
@@ -244,7 +272,7 @@ fn project_workflow_run_list(
     Ok((items, reads))
 }
 
-pub(super) fn resume(
+fn resume(
     runtime: &OrbitRuntime,
     input: Value,
     agent: Option<String>,
@@ -268,7 +296,7 @@ fn optional_string(input: &Value, field: &str) -> Result<Option<String>, OrbitEr
     orbit_common::protocol::tool_input::optional_string(input, field)
 }
 
-pub(super) fn actor(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
+fn actor(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
     normalize_optional_attribution_label(model.or(agent), model)
         .unwrap_or_else(|| runtime.actor_label().to_string())
 }
