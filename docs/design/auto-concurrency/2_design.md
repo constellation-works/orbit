@@ -595,8 +595,12 @@ changes.
   the drain, the head task, its profile source and key, the miss and the
   baseline, and keeps its id in `stall.friction_id`; a `dedupe-key` line keyed
   on the drain, the head and the stall's start keeps a retried pass from
-  filing twice. `shadow` records the stall without filing, since it holds
-  nothing.
+  filing twice. The drain persists the pass and stall start before filing,
+  then saves the returned friction id. If the first write fails, reporting
+  waits for a later pass without changing admissions; if the id write fails,
+  retry reuses the durable stall start. This also covers `head_stuck_passes = 1`
+  and progress resets, while a later distinct stall gets its own friction.
+  `shadow` records the stall without filing, since it holds nothing.
 - **While it lasts.** `orbit run show` and `orbit run readiness` print a
   `Stuck head:` line from the recorded pass. A head that improves, fits or
   leaves the backlog drops its stall and the line with it; the friction stays

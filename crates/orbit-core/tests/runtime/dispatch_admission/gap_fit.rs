@@ -854,8 +854,8 @@ fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
         assert_eq!(skip.detail, "cpu 180% at +1m");
     }
 }
-/// A protected head whose miss stays put over `head_stuck_passes` (three
-/// here) is reported stuck once: its record names the profile, the miss and
+/// A protected head whose miss stays put over `head_stuck_passes` is
+/// reported stuck once: its record names the profile, the miss and
 /// the baseline, one friction names the head, and both last only while it is
 /// the head. A head whose miss improves every pass is never reported. Neither
 /// changes what is admitted.
@@ -872,35 +872,140 @@ fn a_protected_head_whose_miss_never_improves_is_reported_stuck_once() {
     }
     // Memory in use per pass, in GiB, and each pass's stall count once the
     // head is protected (from the second pass).
-    let cases: [(&str, [u64; 5], [u32; 4]); 2] = [
-        ("constant miss", [26; 5], [1, 2, 3, 4]),
-        ("improving miss", [27, 26, 25, 24, 23], [1, 1, 1, 1]),
-    ];
-    for (case, used, passes) in cases {
-        let fixture = Fixture::new(
+    let cases = [
+        (
+            "constant miss",
             "enforce",
-            "head_max_wait_minutes = 0\nhead_stuck_passes = 3\n",
+            3,
+            [26; 5],
+            [1, 2, 3, 4],
+            [0, 0, 0, 1, 1],
+            vec![],
+        ),
+        (
+            "improving miss",
+            "enforce",
+            3,
+            [27, 26, 25, 24, 23],
+            [1, 1, 1, 1],
+            [0; 5],
+            vec![],
+        ),
+        (
+            "threshold one retry",
+            "enforce",
+            1,
+            [26; 5],
+            [1, 3, 4, 5],
+            [0, 1, 1, 1, 1],
+            vec![1],
+        ),
+        (
+            "progress reset retry",
+            "enforce",
+            1,
+            [27, 27, 26, 26, 25],
+            [1, 1, 3, 1],
+            [0, 1, 2, 2, 3],
+            vec![1, 2],
+        ),
+        (
+            "shadow stuck",
+            "shadow",
+            1,
+            [26; 5],
+            [1, 2, 3, 4],
+            [0; 5],
+            vec![],
+        ),
+    ];
+    for (case, mode, threshold, used, passes, friction_counts, retries) in cases {
+        let fixture = Fixture::new(
+            mode,
+            &format!("head_max_wait_minutes = 0\nhead_stuck_passes = {threshold}\n"),
         );
         fixture.seed_profiles();
         let running = fixture.running_hard_delivery();
         let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
         let drain = fixture.drain();
 
-        let mut friction_id = None;
+        let mut incident = None;
         for (pass, used_gib) in used.into_iter().enumerate() {
             write_proc(&fixture.proc_root, used_gib);
             if pass == 1 {
-                // The head is protected once it has failed for longer than
-                // zero minutes.
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                // Make protection deterministic without waiting on host timing.
+                let mut state = fixture.runtime.read_run_state(&drain).unwrap().unwrap();
+                state
+                    .pull_drain
+                    .drain_last_pass
+                    .as_mut()
+                    .unwrap()
+                    .admission_forecast
+                    .as_mut()
+                    .unwrap()
+                    .head
+                    .as_mut()
+                    .unwrap()
+                    .failing_since -= Duration::minutes(1);
+                fixture.runtime.write_run_state(&drain, &state).unwrap();
             }
+            let fault = retries.contains(&pass).then(|| {
+                // Fail only after this stall's friction really lands. This hits
+                // the first protected stall and a reset from a reported stall.
+                let connection =
+                    rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+                if case == "threshold one retry" {
+                    connection
+                        .execute_batch(&format!(
+                            "CREATE TRIGGER fail_stuck_pass BEFORE UPDATE ON job_run_states \
+                         WHEN NEW.run_id = '{drain}' \
+                         BEGIN SELECT RAISE(ABORT, 'injected identity write failure'); END;"
+                        ))
+                        .unwrap();
+                    let unrecorded = classify(&fixture.runtime, &drain, 4);
+                    assert!(admitted(&unrecorded).is_empty(), "{case}: {unrecorded:#}");
+                    assert!(
+                        frictions(&fixture.runtime).is_empty(),
+                        "{case}: no external friction before the stall identity is durable"
+                    );
+                    assert!(
+                        unrecorded["admission_forecast"]["head"]["stall"]["stuck"]
+                            .as_bool()
+                            .unwrap()
+                    );
+                    assert!(
+                        unrecorded["admission_forecast"]["head"]["stall"]["friction_id"].is_null()
+                    );
+                    connection
+                        .execute_batch("DROP TRIGGER fail_stuck_pass;")
+                        .unwrap();
+                }
+                connection
+                    .execute_batch(&format!(
+                        "CREATE TRIGGER fail_stuck_pass BEFORE UPDATE ON job_run_states \
+                     WHEN NEW.run_id = '{drain}' AND \
+                     (SELECT count(*) FROM friction_records) >= {} \
+                     BEGIN SELECT RAISE(ABORT, 'injected pass-state write failure'); END;",
+                        friction_counts[pass],
+                    ))
+                    .unwrap();
+                connection
+            });
             let output = classify(&fixture.runtime, &drain, 4);
             assert_eq!(
                 admitted(&output),
-                Vec::<String>::new(),
+                if mode == "shadow" {
+                    vec![heavy.clone()]
+                } else {
+                    Vec::new()
+                },
                 "{case}: {output:#}"
             );
-            let record = recorded(&fixture.runtime, &drain, &output);
+            let record: DrainAdmissionForecast =
+                serde_json::from_value(output["admission_forecast"].clone()).unwrap();
+            if fault.is_none() {
+                recorded(&fixture.runtime, &drain, &output);
+            }
             let head = record.head.as_ref().expect("the head fails gap fit");
             assert_eq!(head.task_id, heavy, "{case}");
             let miss = head.miss.as_ref().expect("the head records its miss");
@@ -933,29 +1038,74 @@ fn a_protected_head_whose_miss_never_improves_is_reported_stuck_once() {
             assert_eq!(stall.passes, expected, "{case} pass {pass}: {record:#?}");
             assert_eq!(
                 stall.stuck,
-                expected >= 3,
+                expected >= threshold,
                 "{case} pass {pass}: {record:#?}"
             );
             let filed = frictions(&fixture.runtime);
-            if stall.stuck {
-                let [friction] = filed.as_slice() else {
-                    panic!("{case} pass {pass}: exactly one friction: {filed:#?}");
-                };
-                assert_eq!(stall.friction_id.as_ref(), Some(&friction.id), "{case}");
-                friction_id.get_or_insert_with(|| friction.id.clone());
-                assert_eq!(friction_id.as_ref(), Some(&friction.id), "{case}");
+            assert_eq!(
+                filed.len(),
+                friction_counts[pass],
+                "{case} pass {pass}: {filed:#?}"
+            );
+            if stall.stuck && mode == "enforce" {
+                let friction = filed
+                    .iter()
+                    .find(|friction| Some(&friction.id) == stall.friction_id.as_ref())
+                    .expect("the output names an actually filed friction");
+                if let Some((since, id)) = &incident {
+                    assert_eq!(
+                        stall.friction_id.as_ref() == Some(id),
+                        stall.since == *since,
+                        "{case}: only distinct stalls get distinct frictions"
+                    );
+                }
+                incident = Some((stall.since, friction.id.clone()));
                 let body = &friction.body;
-                for named in [
-                    heavy.as_str(),
-                    "change/medium",
-                    "exact",
-                    "memory 88% at +0m",
-                ] {
+                for named in [heavy.as_str(), "change/medium", "exact", "memory"] {
                     assert!(body.contains(named), "{case}: {named} missing: {body}");
                 }
             } else {
-                assert!(filed.is_empty(), "{case} pass {pass}: {filed:#?}");
                 assert!(stall.friction_id.is_none(), "{case}: {record:#?}");
+            }
+            if let Some(connection) = fault {
+                let persisted = fixture.runtime.read_run_state(&drain).unwrap().unwrap();
+                let persisted_head = persisted
+                    .pull_drain
+                    .drain_last_pass
+                    .unwrap()
+                    .admission_forecast
+                    .unwrap()
+                    .head
+                    .unwrap();
+                assert_ne!(
+                    persisted_head
+                        .stall
+                        .as_ref()
+                        .and_then(|stall| stall.friction_id.as_ref()),
+                    stall.friction_id.as_ref(),
+                    "{case}: the friction-id write really failed"
+                );
+                assert_eq!(
+                    persisted_head.stall.as_ref().map(|stall| stall.since),
+                    Some(stall.since),
+                    "{case}: the identity survived even though the friction-id write failed"
+                );
+                connection
+                    .execute_batch("DROP TRIGGER fail_stuck_pass;")
+                    .unwrap();
+                let retry = classify(&fixture.runtime, &drain, 4);
+                assert!(admitted(&retry).is_empty(), "{case}: {retry:#}");
+                assert_eq!(
+                    frictions(&fixture.runtime).len(),
+                    friction_counts[pass],
+                    "{case}: retry must reuse the successful friction after the failed pass-state write"
+                );
+                let retried = recorded(&fixture.runtime, &drain, &retry);
+                let retried_stall = retried.head.unwrap().stall.unwrap();
+                assert_eq!(retried_stall.since, stall.since, "{case}");
+                assert_eq!(retried_stall.friction_id, stall.friction_id, "{case}");
+                assert_eq!(retried_stall.passes, stall.passes + 1, "{case}");
+                assert!(retried_stall.stuck, "{case}");
             }
         }
 
@@ -963,14 +1113,20 @@ fn a_protected_head_whose_miss_never_improves_is_reported_stuck_once() {
         // record goes with it. The friction stays as the incident's record.
         fixture.ended(&running);
         let output = classify(&fixture.runtime, &drain, 4);
-        assert_eq!(admitted(&output), vec![heavy.clone()], "{case}: {output:#}");
+        if mode == "shadow" {
+            // The ended delivery's task is still backlog in this fixture, so
+            // off/shadow can select it alongside the heavy head again.
+            assert!(admitted(&output).contains(&heavy), "{case}: {output:#}");
+            assert_eq!(admitted(&output).len(), 2, "{case}: {output:#}");
+        } else {
+            assert_eq!(admitted(&output), vec![heavy.clone()], "{case}: {output:#}");
+        }
         assert!(recorded(&fixture.runtime, &drain, &output).head.is_none());
         assert_eq!(
             frictions(&fixture.runtime).len(),
-            usize::from(friction_id.is_some()),
+            friction_counts[4],
             "{case}"
         );
-        assert_eq!(friction_id.is_some(), case == "constant miss");
     }
 }
 
