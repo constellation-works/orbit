@@ -14,7 +14,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::actions::admission::claim_holders::ClaimHolders;
+use crate::application::admission::claim_holders::ClaimHolders;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };

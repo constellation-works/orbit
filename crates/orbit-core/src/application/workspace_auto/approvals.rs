@@ -402,7 +402,7 @@ fn held_json(snapshot: &ApprovalSnapshot) -> Value {
 /// and `pilot_finished` (a finished pilot awaits recording) are always
 /// defined, so the loop can gate its waits on them even when the record step
 /// is skipped.
-pub(in super::super) fn select_proposed_approvals(
+pub(crate) fn select_proposed_approvals(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -474,7 +474,7 @@ pub(in super::super) fn select_proposed_approvals(
 /// tasks in its own run input this drain approved, and the refreshed held
 /// view. The pass that sees a pilot finish runs this before admission, so
 /// the tasks it approved are admitted in that same pass.
-pub(in super::super) fn record_proposed_approvals(
+pub(crate) fn record_proposed_approvals(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -524,7 +524,7 @@ pub(in super::super) fn record_proposed_approvals(
 /// interval, so admission still runs that often; after the loop it keeps the
 /// drain alive until its last pilot finishes, because the pilot's apply step
 /// refuses the authority of a drain that has ended.
-pub(in super::super) fn await_approval_pilot(
+pub(crate) fn await_approval_pilot(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

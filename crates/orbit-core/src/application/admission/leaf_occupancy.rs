@@ -41,7 +41,7 @@ const MAX_DISPATCH_DEPTH: usize = 2;
 
 /// What a live leaf wrapper is doing, as far as durable state can say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::adapter::engine_host::actions) enum LeafRunPhase {
+pub(crate) enum LeafRunPhase {
     /// The gate has parked on `reserve_locks`: it holds a slot but no lock.
     LockWaiting,
     /// An implementation run is live under the gate.
@@ -79,34 +79,34 @@ impl LeafRunPhase {
 }
 
 /// One occupied slot, its lineage, and the evidence behind its phase.
-pub(in crate::adapter::engine_host::actions) struct LeafRunOccupancy {
-    pub(in crate::adapter::engine_host::actions) run_id: String,
-    pub(in crate::adapter::engine_host::actions) task_ids: Vec<String>,
-    pub(in crate::adapter::engine_host::actions) phase: LeafRunPhase,
+pub(crate) struct LeafRunOccupancy {
+    pub(crate) run_id: String,
+    pub(crate) task_ids: Vec<String>,
+    pub(crate) phase: LeafRunPhase,
     /// Every descendant run the dispatch records name, deduplicated.
-    pub(in crate::adapter::engine_host::actions) descendant_run_ids: Vec<String>,
+    pub(crate) descendant_run_ids: Vec<String>,
     /// Selectors the gate is parked on, with the holders they resolve to.
-    pub(in crate::adapter::engine_host::actions) lock_wait: Option<LockWait>,
+    pub(crate) lock_wait: Option<LockWait>,
     /// Why the phase is `unknown`, and only then.
-    pub(in crate::adapter::engine_host::actions) unknown_reason: Option<&'static str>,
+    pub(crate) unknown_reason: Option<&'static str>,
 }
 
 /// The gate's parked-lock record, resolved against current holders.
-pub(in crate::adapter::engine_host::actions) struct LockWait {
-    pub(in crate::adapter::engine_host::actions) gate_run_id: String,
-    pub(in crate::adapter::engine_host::actions) selectors: Vec<String>,
+pub(crate) struct LockWait {
+    pub(crate) gate_run_id: String,
+    pub(crate) selectors: Vec<String>,
     /// Selectors that map to a task currently holding a lock.
-    pub(in crate::adapter::engine_host::actions) blockers: Vec<LockWaitBlocker>,
+    pub(crate) blockers: Vec<LockWaitBlocker>,
     /// Selectors no current holder explains. The gate recorded a conflict, so
     /// the wait is real; the holder has since moved on, or holds through a
     /// reservation rather than a task status. Reported rather than dropped so
     /// the missing evidence is visible instead of looking like no conflict.
-    pub(in crate::adapter::engine_host::actions) unresolved_selectors: Vec<String>,
+    pub(crate) unresolved_selectors: Vec<String>,
 }
 
-pub(in crate::adapter::engine_host::actions) struct LockWaitBlocker {
-    pub(in crate::adapter::engine_host::actions) selector: String,
-    pub(in crate::adapter::engine_host::actions) holder_task_ids: Vec<String>,
+pub(crate) struct LockWaitBlocker {
+    pub(crate) selector: String,
+    pub(crate) holder_task_ids: Vec<String>,
 }
 
 impl LeafRunOccupancy {
@@ -149,10 +149,7 @@ impl LeafRunOccupancy {
 ///
 /// `free_slots` is passed through rather than recomputed so the block cannot
 /// disagree with the capacity figures beside it.
-pub(in crate::adapter::engine_host::actions) fn occupancy_json(
-    runs: &[LeafRunOccupancy],
-    free_slots: usize,
-) -> Value {
+pub(crate) fn occupancy_json(runs: &[LeafRunOccupancy], free_slots: usize) -> Value {
     let mut phases: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("lock_waiting", 0),
         ("implementing", 0),
@@ -179,7 +176,7 @@ pub(in crate::adapter::engine_host::actions) fn occupancy_json(
 ///
 /// `lock_holders` is the readiness snapshot's selector -> holder map, reused so
 /// a blocker named here is the same task the exclusion reasons name.
-pub(in crate::adapter::engine_host::actions) fn read_leaf_occupancy(
+pub(crate) fn read_leaf_occupancy(
     runtime: &OrbitRuntime,
     leaf_runs: &[(String, Vec<String>)],
     lock_holders: &BTreeMap<String, Vec<String>>,

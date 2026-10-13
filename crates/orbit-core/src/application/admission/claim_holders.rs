@@ -15,7 +15,7 @@ use crate::OrbitRuntime;
 
 /// Each task a live execution claim holds, with that claim.
 #[derive(Debug, Default)]
-pub(in crate::adapter::engine_host::actions) struct ClaimHolders {
+pub(crate) struct ClaimHolders {
     by_task: BTreeMap<String, ExecutionClaim>,
 }
 
@@ -23,7 +23,7 @@ impl ClaimHolders {
     /// The claims that protect a footprint now. Diagnostic only: a journal
     /// that cannot be read leaves the waits unannotated rather than failing
     /// the drain pass or the readiness read that would report them.
-    pub(in crate::adapter::engine_host::actions) fn read(runtime: &OrbitRuntime) -> Self {
+    pub(crate) fn read(runtime: &OrbitRuntime) -> Self {
         match runtime.inspect_execution_claims() {
             Ok(claims) => Self {
                 by_task: claims
@@ -41,16 +41,13 @@ impl ClaimHolders {
     }
 
     /// The claims holding `task_ids`, as readiness reports them.
-    pub(in crate::adapter::engine_host::actions) fn json_for<'a>(
-        &self,
-        task_ids: impl IntoIterator<Item = &'a str>,
-    ) -> Vec<Value> {
+    pub(crate) fn json_for<'a>(&self, task_ids: impl IntoIterator<Item = &'a str>) -> Vec<Value> {
         self.held(task_ids).map(claim_json).collect()
     }
 
     /// One line naming the claims holding `task_ids`, or `None` when no live
     /// claim holds any of them.
-    pub(in crate::adapter::engine_host::actions) fn detail_for<'a>(
+    pub(crate) fn detail_for<'a>(
         &self,
         task_ids: impl IntoIterator<Item = &'a str>,
     ) -> Option<String> {
@@ -72,7 +69,7 @@ impl ClaimHolders {
 }
 
 /// What a wait says about the claim that holds its blocker.
-pub(in crate::adapter::engine_host::actions) fn claim_detail(claim: &ExecutionClaim) -> String {
+pub(crate) fn claim_detail(claim: &ExecutionClaim) -> String {
     let location = &claim.executed_on;
     format!(
         "{} is held by a live execution claim on {} (claim {}, run {})",
@@ -86,7 +83,7 @@ pub(in crate::adapter::engine_host::actions) fn claim_detail(claim: &ExecutionCl
     )
 }
 
-pub(in crate::adapter::engine_host::actions) fn claim_json(claim: &ExecutionClaim) -> Value {
+pub(crate) fn claim_json(claim: &ExecutionClaim) -> Value {
     json!({
         "task_id": claim.task_id,
         "claim_id": claim.claim_id,

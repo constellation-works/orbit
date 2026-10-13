@@ -15,19 +15,20 @@ use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::admission::{backlog_exclusion, scan_unresolved};
 use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
 use crate::application::task::pilot as task_pilot;
+use crate::application::workspace_auto;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
     merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
     task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
 };
 
-use super::admission::{backlog_exclusion, scan_unresolved};
-use super::{blocked_recovery, finding_verification, pipeline_actions, workspace_auto};
+use super::{blocked_recovery, finding_verification, pipeline_actions};
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
@@ -600,7 +601,7 @@ fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,
     action: &str,
 ) -> Result<Value, DispatchError> {
-    let mode = super::admission::backlog_exclusion::workspace_ship_mode(runtime);
+    let mode = backlog_exclusion::workspace_ship_mode(runtime);
     let mut input = crate::application::workflow::build_ship_input(
         mode,
         runtime.workspace_base_branch(),

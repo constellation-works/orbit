@@ -83,7 +83,7 @@ impl BacklogSnapshot {
     /// status: a live leaf can still carry a task that has since closed, and
     /// an explicit readiness request may name one. An id no task in this
     /// workspace has, malformed ones included, stays absent.
-    pub(in crate::adapter::engine_host::actions) fn include_tasks<'a>(
+    pub(crate) fn include_tasks<'a>(
         &mut self,
         runtime: &OrbitRuntime,
         ids: impl IntoIterator<Item = &'a String>,

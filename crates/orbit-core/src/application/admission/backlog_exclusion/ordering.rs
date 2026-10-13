@@ -10,9 +10,7 @@ pub(super) const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
 /// first, then corrective or expiring work, then priority, expiry, age, and
 /// the task ID as the total tie-breaker. Uses the same expiry-aware comparison
 /// as surface reservations (`automatic_dispatch_cmp_with_expiry`).
-pub(in crate::adapter::engine_host::actions) fn sort_tasks_for_automatic_dispatch<
-    T: Borrow<Task>,
->(
+pub(crate) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(
     tasks: &mut [T],
     expiring: &BTreeMap<String, DateTime<Utc>>,
 ) {

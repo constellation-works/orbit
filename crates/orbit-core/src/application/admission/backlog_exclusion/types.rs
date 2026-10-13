@@ -8,16 +8,16 @@ use super::super::unknown_footprint::FootprintWait;
 use crate::runtime::task::locks::TaskLockOverlap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(in crate::adapter::engine_host::actions) struct BacklogTaskExclusion {
-    pub(in crate::adapter::engine_host::actions) id: String,
-    pub(in crate::adapter::engine_host::actions) reason: BacklogTaskExclusionReason,
-    pub(in crate::adapter::engine_host::actions) conflicts: Vec<BacklogTaskConflict>,
+pub(crate) struct BacklogTaskExclusion {
+    pub(crate) id: String,
+    pub(crate) reason: BacklogTaskExclusionReason,
+    pub(crate) conflicts: Vec<BacklogTaskConflict>,
     /// The crew the task would have dispatched as, on a
     /// [`BacklogTaskExclusionReason::CrewNotAllowed`] exclusion. Naming the
     /// *effective* crew — not the raw `task.crew`, which is often unset and
     /// inherited — is what makes the exclusion actionable [ORB-11242].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::adapter::engine_host::actions) crew: Option<String>,
+    pub(crate) crew: Option<String>,
     /// What an operator has to change for this task to become admissible, on
     /// an exclusion the drain cannot resolve by itself. A lock conflict clears
     /// when the holder finishes and needs no instruction; an
@@ -27,12 +27,12 @@ pub(in crate::adapter::engine_host::actions) struct BacklogTaskExclusion {
     /// [`BacklogTaskExclusionReason::SurfaceReserved`] exclusions it causes
     /// name it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::adapter::engine_host::actions) detail: Option<String>,
+    pub(crate) detail: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::adapter::engine_host::actions) enum BacklogTaskExclusionReason {
+pub(crate) enum BacklogTaskExclusionReason {
     ContextLockConflict,
     /// The task selects a delivery job with a `delivery:<job>` tag that cannot
     /// deliver it in the drain's ship mode — its plugin is disabled or
@@ -139,12 +139,12 @@ pub(in crate::adapter::engine_host::actions) enum BacklogTaskExclusionReason {
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
 /// thing to a drain and to an operator choosing work.
-pub(in crate::adapter::engine_host::actions) type BacklogTaskConflict = TaskLockOverlap;
+pub(crate) type BacklogTaskConflict = TaskLockOverlap;
 
 /// The task population and leaf eligibility result shared by automatic
 /// dispatch and its read-only diagnostic.  Keeping the lock filter here
 /// prevents the diagnostic from becoming a second scheduler.
-pub(in crate::adapter::engine_host::actions) struct BacklogSnapshot {
+pub(crate) struct BacklogSnapshot {
     /// Every open task in the workspace and the closed tasks the snapshot's
     /// tree rules reach — ancestors for the group-conflict roll-up,
     /// descendants of an epic root that declares no context — plus whatever
@@ -154,29 +154,29 @@ pub(in crate::adapter::engine_host::actions) struct BacklogSnapshot {
     /// empty, and nothing in admission, exclusion or readiness reads them.
     /// This is the one materialized copy; the other fields refer into it by ID
     /// rather than holding clones.
-    pub(in crate::adapter::engine_host::actions) task_lookup: BTreeMap<String, Task>,
+    pub(crate) task_lookup: BTreeMap<String, Task>,
     /// The registry-global status projection. Deliberately not derived from
     /// `task_lookup`: task lists are workspace-scoped, dependency readiness
     /// is not, and a dependency on a task in another workspace resolves only
     /// here. Backlog tasks' archived dependencies that reached `done` first
     /// project as `done` (`OrbitRuntime::dependency_status_index`).
-    pub(in crate::adapter::engine_host::actions) status_by_id: BTreeMap<String, TaskStatus>,
-    pub(in crate::adapter::engine_host::actions) reference_index: TaskReferenceIndex,
+    pub(crate) status_by_id: BTreeMap<String, TaskStatus>,
+    pub(crate) reference_index: TaskReferenceIndex,
     /// Admissible leaf task IDs in dispatch order; the tasks are in
     /// `task_lookup`.
-    pub(in crate::adapter::engine_host::actions) admissible_leaves: Vec<String>,
-    pub(in crate::adapter::engine_host::actions) excluded: Vec<BacklogTaskExclusion>,
+    pub(crate) admissible_leaves: Vec<String>,
+    pub(crate) excluded: Vec<BacklogTaskExclusion>,
     /// Selector -> the `in-progress` / `review` tasks holding it. Carried on
     /// the snapshot rather than recomputed by each consumer so admission
     /// selection, exclusion reasons, and the lock-wait diagnostic all name the
     /// same holder for the same selector [ORB-11973].
-    pub(in crate::adapter::engine_host::actions) lock_holders: BTreeMap<String, Vec<String>>,
+    pub(crate) lock_holders: BTreeMap<String, Vec<String>>,
     /// Backlog tasks minted over a frozen delivery batch that nears its
     /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
     /// same-priority backlog in `admissible_leaves`.
-    pub(in crate::adapter::engine_host::actions) expiring_batches: BTreeMap<String, DateTime<Utc>>,
+    pub(crate) expiring_batches: BTreeMap<String, DateTime<Utc>>,
     /// The admissible leaves that declare no footprint, and what each waits
     /// for in a multi-slot run [ORB-15191]. The snapshot does not know the
     /// run's slots, so the wave applies them, not this filter.
-    pub(in crate::adapter::engine_host::actions) footprint_waits: BTreeMap<String, FootprintWait>,
+    pub(crate) footprint_waits: BTreeMap<String, FootprintWait>,
 }

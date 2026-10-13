@@ -35,15 +35,13 @@ use crate::runtime::task::locks::{
 /// [`OrbitRuntime::automatic_delivery_ship_mode`]: the workspace binding's
 /// mode, local when the workspace is unregistered. Readiness and doctor call
 /// the same method.
-pub(in crate::adapter::engine_host::actions) fn workspace_ship_mode(
-    runtime: &OrbitRuntime,
-) -> ShipMode {
+pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
     runtime.automatic_delivery_ship_mode()
 }
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
 /// mode.
-pub(in crate::adapter::engine_host::actions) fn backlog_snapshot(
+pub(crate) fn backlog_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,

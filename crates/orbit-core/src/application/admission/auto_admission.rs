@@ -42,7 +42,7 @@ use crate::runtime::task::locks::lock_context_files_for_task;
 /// Where a blocking footprint came from, so a deferral says whether the lock is
 /// genuinely held or merely planned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::adapter::engine_host::actions) enum ConflictProvenance {
+pub(crate) enum ConflictProvenance {
     /// The blocker holds a real task lock: it is `in-progress` or `review`.
     HeldLock,
     /// A live leaf wrapper is already carrying the blocker, which is still
@@ -65,7 +65,7 @@ pub(in crate::adapter::engine_host::actions) enum ConflictProvenance {
 }
 
 impl ConflictProvenance {
-    pub(in crate::adapter::engine_host::actions) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             ConflictProvenance::HeldLock => "held_lock",
             ConflictProvenance::LiveClaim => "live_claim",
@@ -79,19 +79,19 @@ impl ConflictProvenance {
 
 /// One overlapping selector pair that kept a candidate out of the wave.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::adapter::engine_host::actions) struct AdmissionConflict {
+pub(crate) struct AdmissionConflict {
     /// The candidate's own selector.
-    pub(in crate::adapter::engine_host::actions) requested_selector: String,
+    pub(crate) requested_selector: String,
     /// The selector it overlaps. Not necessarily equal: a `dir:` scope and a
     /// `file:` beneath it overlap without matching.
-    pub(in crate::adapter::engine_host::actions) blocking_selector: String,
-    pub(in crate::adapter::engine_host::actions) blocking_task_id: String,
-    pub(in crate::adapter::engine_host::actions) provenance: ConflictProvenance,
+    pub(crate) blocking_selector: String,
+    pub(crate) blocking_task_id: String,
+    pub(crate) provenance: ConflictProvenance,
 }
 
 /// Why an examined candidate did not take a slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::adapter::engine_host::actions) enum DeferralReason {
+pub(crate) enum DeferralReason {
     /// Its footprint overlaps one already spoken for; `conflicts` names it.
     Conflict,
     /// It declares no footprint and a task pilot will prepare one
@@ -104,7 +104,7 @@ pub(in crate::adapter::engine_host::actions) enum DeferralReason {
 
 impl DeferralReason {
     /// The readiness reason and drain hold reason for this deferral.
-    pub(in crate::adapter::engine_host::actions) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             DeferralReason::Conflict => "conflict_deferred",
             DeferralReason::AwaitingFootprint => "awaiting_footprint",
@@ -116,17 +116,17 @@ impl DeferralReason {
 /// A candidate that was examined and could not take a slot: a free slot was
 /// available, or it waits for a footprint regardless.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::adapter::engine_host::actions) struct DeferredAdmission {
-    pub(in crate::adapter::engine_host::actions) task_id: String,
-    pub(in crate::adapter::engine_host::actions) reason: DeferralReason,
-    pub(in crate::adapter::engine_host::actions) conflicts: Vec<AdmissionConflict>,
+pub(crate) struct DeferredAdmission {
+    pub(crate) task_id: String,
+    pub(crate) reason: DeferralReason,
+    pub(crate) conflicts: Vec<AdmissionConflict>,
     /// What clears a footprint wait; `None` for a conflict.
-    pub(in crate::adapter::engine_host::actions) detail: Option<String>,
+    pub(crate) detail: Option<String>,
 }
 
 impl DeferredAdmission {
     /// The distinct tasks an operator would have to wait on, in a stable order.
-    pub(in crate::adapter::engine_host::actions) fn blocking_task_ids(&self) -> Vec<String> {
+    pub(crate) fn blocking_task_ids(&self) -> Vec<String> {
         self.conflicts
             .iter()
             .map(|conflict| conflict.blocking_task_id.clone())
@@ -135,7 +135,7 @@ impl DeferredAdmission {
             .collect()
     }
 
-    pub(in crate::adapter::engine_host::actions) fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "task_id": self.task_id,
             "reason": self.reason.as_str(),
@@ -157,28 +157,25 @@ impl DeferredAdmission {
 
 /// The outcome of one wave, partitioned so every candidate is accounted for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(in crate::adapter::engine_host::actions) struct AdmissionSelection {
+pub(crate) struct AdmissionSelection {
     /// Mutually compatible tasks, in the candidate order they were offered in.
-    pub(in crate::adapter::engine_host::actions) selected: Vec<String>,
+    pub(crate) selected: Vec<String>,
     /// Examined against a free slot and blocked. A candidate gap fit refused
     /// is recorded by the gap fit instead.
-    pub(in crate::adapter::engine_host::actions) deferred: Vec<DeferredAdmission>,
+    pub(crate) deferred: Vec<DeferredAdmission>,
     /// Never examined: the wave was already full when they came up. These are
     /// saturated, not conflicted, and saying so keeps the two diagnoses apart.
-    pub(in crate::adapter::engine_host::actions) queued_behind_capacity: Vec<String>,
+    pub(crate) queued_behind_capacity: Vec<String>,
 }
 
 impl AdmissionSelection {
-    pub(in crate::adapter::engine_host::actions) fn deferred_for(
-        &self,
-        task_id: &str,
-    ) -> Option<&DeferredAdmission> {
+    pub(crate) fn deferred_for(&self, task_id: &str) -> Option<&DeferredAdmission> {
         self.deferred
             .iter()
             .find(|deferred| deferred.task_id == task_id)
     }
 
-    pub(in crate::adapter::engine_host::actions) fn deferred_json(&self) -> Vec<Value> {
+    pub(crate) fn deferred_json(&self) -> Vec<Value> {
         self.deferred
             .iter()
             .map(DeferredAdmission::to_json)
@@ -189,7 +186,7 @@ impl AdmissionSelection {
     /// section found `claim` holding it, or a footprint it overlaps, which
     /// this wave's snapshot predates. It is deferred naming the claim, as a
     /// conflict with the claimed task.
-    pub(in crate::adapter::engine_host::actions) fn refuse_claimed(
+    pub(crate) fn refuse_claimed(
         &mut self,
         task: &Task,
         claim: &ExecutionClaim,
@@ -229,7 +226,7 @@ impl AdmissionSelection {
 /// remedies differ: a held lock clears when its task leaves `in-progress`, a
 /// live claim clears when a wrapper's child finishes.
 #[derive(Clone, Debug, Default)]
-pub(in crate::adapter::engine_host::actions) struct AdmissionHolders {
+pub(crate) struct AdmissionHolders {
     held: OverlapIndex<Vec<String>>,
     claimed: OverlapIndex<Vec<String>>,
 }
@@ -241,7 +238,7 @@ impl AdmissionHolders {
     /// A claimed task that already reached `in-progress` or `review` is left to
     /// the held set: it is the same footprint, and reporting it twice under two
     /// provenances would misstate why the candidate is waiting.
-    pub(in crate::adapter::engine_host::actions) fn new(
+    pub(crate) fn new(
         lock_holders: &BTreeMap<String, Vec<String>>,
         live_claims: &BTreeSet<String>,
         task_lookup: &BTreeMap<String, Task>,
@@ -317,7 +314,7 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 /// With `gap_fit`, a candidate that passed every other check must also fit
 /// under the host load forecast; one that does not is left out of the wave
 /// and recorded by the gap fit, not in [`AdmissionSelection::deferred`].
-pub(in crate::adapter::engine_host::actions) fn select_admissions(
+pub(crate) fn select_admissions(
     ordered_candidates: &[String],
     task_lookup: &BTreeMap<String, Task>,
     workspace_root: &Path,

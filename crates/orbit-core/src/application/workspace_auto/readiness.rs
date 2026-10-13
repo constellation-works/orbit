@@ -7,22 +7,18 @@ use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::actions::admission::auto_admission::{
+use crate::application::admission::auto_admission::{
     AdmissionHolders, DeferralReason, select_admissions,
 };
-use crate::adapter::engine_host::actions::admission::backlog_exclusion::{
+use crate::application::admission::backlog_exclusion::{
     BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
 };
-use crate::adapter::engine_host::actions::admission::claim_holders::ClaimHolders;
-use crate::adapter::engine_host::actions::admission::cpu_light::{
+use crate::application::admission::claim_holders::ClaimHolders;
+use crate::application::admission::cpu_light::{
     CPU_LIGHT_BUDGET_FULL, LightBudget, ResourceGate, is_cpu_light,
 };
-use crate::adapter::engine_host::actions::admission::leaf_occupancy::{
-    occupancy_json, read_leaf_occupancy,
-};
-use crate::adapter::engine_host::actions::admission::unknown_footprint::{
-    FootprintGuard, whole_tree_holder,
-};
+use crate::application::admission::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
+use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
 use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::application::job::drain_deadline;
 use crate::runtime::engine::crew::CrewAllowlist;

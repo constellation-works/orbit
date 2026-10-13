@@ -29,7 +29,7 @@ use super::drains::live_drain_state;
 /// what makes "the window does not affect tasks already in progress" true by
 /// construction: an in-flight child is held by `invoke_and_wait`, not by the
 /// window.
-pub(in super::super) fn drain_window(
+pub(crate) fn drain_window(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

@@ -34,11 +34,11 @@ use super::auto_admission::{
 
 /// The stand-in selector a whole-tree conflict names on both sides: the
 /// blocker declared no footprint, so every path is spoken for.
-pub(in crate::adapter::engine_host::actions) const WHOLE_TREE_SELECTOR: &str = "*";
+pub(crate) const WHOLE_TREE_SELECTOR: &str = "*";
 
 /// Why a candidate with no footprint is not admitted like ordinary work.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::adapter::engine_host::actions) enum FootprintWait {
+pub(crate) enum FootprintWait {
     /// A task pilot on this host will prepare it; it waits until `until` at
     /// the latest.
     AwaitingFootprint { until: DateTime<Utc> },
@@ -48,7 +48,7 @@ pub(in crate::adapter::engine_host::actions) enum FootprintWait {
 
 impl FootprintWait {
     /// The operator-facing explanation and fix.
-    pub(in crate::adapter::engine_host::actions) fn detail(&self) -> String {
+    pub(crate) fn detail(&self) -> String {
         match self {
             Self::AwaitingFootprint { until } => format!(
                 "This task declares no context_files, so it would hold no file lock and could \
@@ -70,7 +70,7 @@ impl FootprintWait {
 ///
 /// Pilots are read once, and only when such a task exists; a task's comments
 /// only when a pilot would still prepare it.
-pub(in crate::adapter::engine_host::actions) fn footprint_waits<'a>(
+pub(crate) fn footprint_waits<'a>(
     runtime: &OrbitRuntime,
     action: &str,
     tasks: impl IntoIterator<Item = &'a Task>,
@@ -105,19 +105,19 @@ pub(in crate::adapter::engine_host::actions) fn footprint_waits<'a>(
 }
 
 /// What one wave knows about unknown footprints before it selects anything.
-pub(in crate::adapter::engine_host::actions) struct FootprintGuard<'a> {
+pub(crate) struct FootprintGuard<'a> {
     /// Off for a single-slot run, which applies none of this.
-    pub(in crate::adapter::engine_host::actions) enabled: bool,
+    pub(crate) enabled: bool,
     /// Whether any leaf already occupies a slot.
-    pub(in crate::adapter::engine_host::actions) leaves_in_flight: bool,
+    pub(crate) leaves_in_flight: bool,
     /// A live leaf carrying work with no footprint; it holds the tree.
-    pub(in crate::adapter::engine_host::actions) whole_tree_holder: Option<String>,
+    pub(crate) whole_tree_holder: Option<String>,
     /// The candidates with no footprint, from [`footprint_waits`].
-    pub(in crate::adapter::engine_host::actions) waits: &'a BTreeMap<String, FootprintWait>,
+    pub(crate) waits: &'a BTreeMap<String, FootprintWait>,
 }
 
 /// The first live-leaf task, in ID order, that declares no footprint.
-pub(in crate::adapter::engine_host::actions) fn whole_tree_holder(
+pub(crate) fn whole_tree_holder(
     live_task_ids: &BTreeSet<String>,
     task_lookup: &BTreeMap<String, Task>,
 ) -> Option<String> {
@@ -132,7 +132,7 @@ pub(in crate::adapter::engine_host::actions) fn whole_tree_holder(
 /// order. [`Self::awaiting`] runs before the capacity check (a pilot wait is
 /// worth reporting even when no slot is free); [`Self::check`] after it;
 /// [`Self::selected`] once a candidate takes a slot.
-pub(in crate::adapter::engine_host::actions) struct FootprintWave<'a> {
+pub(crate) struct FootprintWave<'a> {
     guard: FootprintGuard<'a>,
     /// Whatever holds the tree now, and how.
     whole_tree: Option<(String, ConflictProvenance)>,
@@ -141,7 +141,7 @@ pub(in crate::adapter::engine_host::actions) struct FootprintWave<'a> {
 }
 
 impl<'a> FootprintWave<'a> {
-    pub(in crate::adapter::engine_host::actions) fn new(guard: FootprintGuard<'a>) -> Self {
+    pub(crate) fn new(guard: FootprintGuard<'a>) -> Self {
         let whole_tree = guard
             .whole_tree_holder
             .clone()
@@ -163,10 +163,7 @@ impl<'a> FootprintWave<'a> {
     }
 
     /// The deferral of a candidate still waiting for its pilot.
-    pub(in crate::adapter::engine_host::actions) fn awaiting(
-        &self,
-        task: &Task,
-    ) -> Option<DeferredAdmission> {
+    pub(crate) fn awaiting(&self, task: &Task) -> Option<DeferredAdmission> {
         let wait @ FootprintWait::AwaitingFootprint { .. } = self.wait(task)? else {
             return None;
         };
@@ -181,11 +178,7 @@ impl<'a> FootprintWave<'a> {
     /// The deferral of a candidate a footprint rule keeps out of a free slot,
     /// or `None` to judge it by the ordinary lock rules. `edits` is whether
     /// its own footprint is non-empty.
-    pub(in crate::adapter::engine_host::actions) fn check(
-        &mut self,
-        task: &Task,
-        edits: bool,
-    ) -> Option<DeferredAdmission> {
+    pub(crate) fn check(&mut self, task: &Task, edits: bool) -> Option<DeferredAdmission> {
         if !self.guard.enabled {
             return None;
         }
@@ -220,7 +213,7 @@ impl<'a> FootprintWave<'a> {
     }
 
     /// Record that `task` took a slot.
-    pub(in crate::adapter::engine_host::actions) fn selected(&mut self, task: &Task, edits: bool) {
+    pub(crate) fn selected(&mut self, task: &Task, edits: bool) {
         if !self.guard.enabled {
             return;
         }

@@ -15,7 +15,7 @@ use super::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason, workspace_ship_mode,
 };
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::actions::workspace_auto::read_live_leaf_runs;
+use crate::application::workspace_auto::read_live_leaf_runs;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -37,7 +37,7 @@ fn live_claim_task_ids(
         .collect())
 }
 
-pub(in crate::adapter::engine_host::actions) fn list_backlog_tasks(
+pub(crate) fn list_backlog_tasks(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -283,7 +283,7 @@ pub(in crate::adapter::engine_host::actions) fn list_backlog_tasks(
 
 /// The run-scoped crew allowlist carried on a deterministic action's input
 /// [ORB-11242]. Absent or empty means unrestricted.
-pub(in crate::adapter::engine_host::actions) fn allowlist_from_input(
+pub(crate) fn allowlist_from_input(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
