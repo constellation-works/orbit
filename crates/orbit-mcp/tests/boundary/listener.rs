@@ -147,3 +147,118 @@ async fn initialized_sessions_remain_usable_after_the_initialization_budget() {
     client.cancel().await.expect("close session");
     accepting.abort();
 }
+
+/// Sessions one listener serves at once. Matches the listener's ceiling; the
+/// permit gate itself is not part of the public API, so release is observed
+/// by whether another client can start.
+const SESSION_CEILING: usize = 64;
+
+#[tokio::test]
+async fn non_loopback_addresses_are_refused_before_the_socket_opens() {
+    let bound = McpListener::bind(
+        "0.0.0.0:7879".parse().expect("socket address"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(NoTools),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await;
+    let Err(error) = bound else {
+        panic!("wildcard bind must be refused");
+    };
+    let OrbitError::InvalidInput(message) = error else {
+        panic!("expected an invalid-input refusal");
+    };
+    assert!(message.contains("0.0.0.0:7879"), "{message}");
+    assert!(message.contains("--allow-non-loopback"), "{message}");
+}
+
+#[tokio::test]
+async fn a_peer_that_sends_nothing_is_disconnected_and_releases_its_slot() {
+    let (addr, accepting) = listen(Duration::from_millis(100)).await;
+    let mut idle = TcpStream::connect(addr).await.expect("connect");
+    let mut buf = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(10), idle.read(&mut buf))
+        .await
+        .expect("the listener must close a silent connection instead of holding it");
+    assert!(
+        matches!(read, Ok(0) | Err(_)),
+        "a silent peer gets no data, only a close: {read:?}"
+    );
+    accepting.abort();
+
+    let budget = Duration::from_secs(2);
+    let (addr, accepting) = listen(budget).await;
+    let mut silent = Vec::new();
+    for _ in 0..SESSION_CEILING {
+        silent.push(TcpStream::connect(addr).await.expect("connect silent peer"));
+    }
+    let stream = TcpStream::connect(addr)
+        .await
+        .expect("connect legitimate peer");
+    let initialize = ClientInfo::default().serve(stream);
+    tokio::pin!(initialize);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut initialize)
+            .await
+            .is_err(),
+        "silent peers must occupy every session slot"
+    );
+    let client = tokio::time::timeout(budget * 2, &mut initialize)
+        .await
+        .expect("closing silent peers must release a session slot")
+        .expect("legitimate peer initializes");
+    for stream in &mut silent {
+        assert_closed(stream, budget).await;
+    }
+    client.cancel().await.expect("close legitimate session");
+    accepting.abort();
+}
+
+#[tokio::test]
+async fn a_peer_that_streams_an_endless_message_is_disconnected() {
+    let listener = McpListener::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(NoTools),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_max_message_bytes(4 * 1024);
+    let bound = listener.local_addr().expect("bound address");
+    let server = tokio::spawn(listener.serve());
+
+    let mut client = TcpStream::connect(bound).await.expect("connect");
+    client
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
+"#,
+        )
+        .await
+        .expect("send initialize");
+    let mut reply = [0u8; 1];
+    client
+        .read_exact(&mut reply)
+        .await
+        .expect("initialize is answered");
+
+    // A message with no newline, longer than the ceiling. The server must
+    // hang up rather than buffer it for as long as the peer keeps sending.
+    let mut chunk = vec![b'a'; 1024];
+    chunk[0] = b'{';
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        for _ in 0..64 {
+            if client.write_all(&chunk).await.is_err() {
+                return;
+            }
+        }
+        let mut sink = Vec::new();
+        let _ = client.read_to_end(&mut sink).await;
+    })
+    .await;
+    assert!(
+        closed.is_ok(),
+        "the listener must close a session whose message exceeds the size ceiling"
+    );
+    server.abort();
+}

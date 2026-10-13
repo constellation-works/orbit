@@ -342,7 +342,3 @@ fn is_resource_exhaustion(error: &std::io::Error) -> bool {
         false
     }
 }
-
-#[cfg(test)]
-#[path = "tests/listener.rs"]
-mod tests;
