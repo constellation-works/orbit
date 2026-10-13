@@ -381,11 +381,9 @@ fn register_workspace(repo: &Path, home: &Path, name: &str) -> Workspace {
     }
 }
 
-/// Create a task settled to `archived` (one of the three GC-eligible terminal
-/// statuses), a job run naming it via the legacy singular `task_id` input
-/// field, and a real, clean git worktree at the exact path GC resolves for
-/// that run — the same shape `setup_worktree` produces for a live task.
-fn seed_eligible_worktree(workspace: &Workspace, home: &Path, label: &str) -> (PathBuf, String) {
+/// Seed archived task/run facts through the registered public runtime and
+/// reap the real recorded owner. Only isolated mutable fixture rows call it.
+pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (String, String) {
     // This state is setup for GC, not a job-launch assertion. Use the CLI's
     // public registered-runtime composition so machine identity, task prefix
     // and workspace binding stay identical to the CLI path. In particular,
@@ -398,8 +396,8 @@ fn seed_eligible_worktree(workspace: &Workspace, home: &Path, label: &str) -> (P
 
     let runtime = RegisteredRuntimeFactory::open_resolved_roots(OrbitRuntimeRoots {
         global_root: home.join(".orbit"),
-        shared_root: workspace.orbit_dir.clone(),
-        local_root: workspace.orbit_dir.clone(),
+        shared_root: orbit_dir.to_path_buf(),
+        local_root: orbit_dir.to_path_buf(),
     })
     .expect("registered GC fixture runtime");
     let task = runtime
@@ -459,6 +457,15 @@ fn seed_eligible_worktree(workspace: &Workspace, home: &Path, label: &str) -> (P
     assert!(status.expect("GC fixture owner exited").success());
     let run_id = run.run_id;
     drop(runtime);
+    (run_id, task_id)
+}
+
+/// Create a task settled to `archived` (one of the three GC-eligible terminal
+/// statuses), a job run naming it via the legacy singular `task_id` input
+/// field, and a real, clean git worktree at the exact path GC resolves for
+/// that run — the same shape `setup_worktree` produces for a live task.
+fn seed_eligible_worktree(workspace: &Workspace, home: &Path, label: &str) -> (PathBuf, String) {
+    let (run_id, task_id) = seed_archived_run(&workspace.orbit_dir, home, label);
 
     let worktree = workspace
         .repo
