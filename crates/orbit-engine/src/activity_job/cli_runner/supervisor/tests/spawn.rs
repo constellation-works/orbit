@@ -71,21 +71,48 @@ fn stdin_lifecycle_child() {
         orbit_common::test_env::assert_child_test_exists(STDIN_HOLDER);
         orbit_common::test_env::assert_child_test_exists(STDIN_PROVIDER);
     }
-    for without_wakeup in [false, true] {
-        let seam = || SupervisorSeam {
-            no_wakeup_pair: without_wakeup,
-            ..SupervisorSeam::default()
-        };
-        // Exercise partial writes and EOF with an arbitrary oversized binary
-        // payload; cat cannot exit successfully until it receives all bytes.
-        for payload in [Vec::new(), (0..4 * 1024 * 1024).map(|n| n as u8).collect()] {
-            let args = Vec::new();
-            let (stdout, stderr, exit_code, _, timed_out) = with_supervisor_seam(seam(), || {
+    super::super::spawn::with_output_drain_budget(Duration::from_millis(50), || {
+        for without_wakeup in [false, true] {
+            let seam = || SupervisorSeam {
+                no_wakeup_pair: without_wakeup,
+                ..SupervisorSeam::default()
+            };
+            // Exercise partial writes and EOF with an arbitrary oversized binary
+            // payload; cat cannot exit successfully until it receives all bytes.
+            for payload in [Vec::new(), (0..4 * 1024 * 1024).map(|n| n as u8).collect()] {
+                let args = Vec::new();
+                let (stdout, stderr, exit_code, _, timed_out) =
+                    with_supervisor_seam(seam(), || {
+                        spawn_with_timeout(SpawnWithTimeoutRequest {
+                            stdin_bytes: &payload,
+                            output_capture_limit: Some(payload.len() + 1),
+                            ..spawn_test_request(
+                                "/bin/cat",
+                                &args,
+                                None,
+                                Duration::from_secs(10),
+                                stdin_trace(),
+                            )
+                        })
+                    })
+                    .expect("normal stdin delivery");
+                assert_eq!(
+                    stdout.bytes(),
+                    payload,
+                    "deliver the complete stdin payload"
+                );
+                assert!(stderr.bytes().is_empty());
+                assert_eq!(exit_code, Some(0));
+                assert!(!timed_out);
+            }
+            // An early stdin close still reports the provider's status/stderr.
+            let args = sh_args("printf 'early exit\\n' >&2; exit 7");
+            let payload = vec![b'x'; 4 * 1024 * 1024];
+            let (_, stderr, code, _, timed_out) = with_supervisor_seam(seam(), || {
                 spawn_with_timeout(SpawnWithTimeoutRequest {
                     stdin_bytes: &payload,
-                    output_capture_limit: Some(payload.len() + 1),
                     ..spawn_test_request(
-                        "/bin/cat",
+                        "/bin/sh",
                         &args,
                         None,
                         Duration::from_secs(10),
@@ -93,39 +120,15 @@ fn stdin_lifecycle_child() {
                     )
                 })
             })
-            .expect("normal stdin delivery");
-            assert_eq!(
-                stdout.bytes(),
-                payload,
-                "deliver the complete stdin payload"
-            );
-            assert!(stderr.bytes().is_empty());
-            assert_eq!(exit_code, Some(0));
+            .expect("broken stdin pipe preserves provider outcome");
+            assert_eq!(code, Some(7));
+            assert_eq!(stderr.bytes(), b"early exit\n");
             assert!(!timed_out);
-        }
-        // An early stdin close still reports the provider's status/stderr.
-        let args = sh_args("printf 'early exit\\n' >&2; exit 7");
-        let payload = vec![b'x'; 4 * 1024 * 1024];
-        let (_, stderr, code, _, timed_out) = with_supervisor_seam(seam(), || {
-            spawn_with_timeout(SpawnWithTimeoutRequest {
-                stdin_bytes: &payload,
-                ..spawn_test_request(
-                    "/bin/sh",
-                    &args,
-                    None,
-                    Duration::from_secs(10),
-                    stdin_trace(),
-                )
-            })
-        })
-        .expect("broken stdin pipe preserves provider outcome");
-        assert_eq!(code, Some(7));
-        assert_eq!(stderr.bytes(), b"early exit\n");
-        assert!(!timed_out);
 
-        #[cfg(target_os = "linux")]
-        exercise_escaped_stdin(Path::new(&root), without_wakeup);
-    }
+            #[cfg(target_os = "linux")]
+            exercise_escaped_stdin(Path::new(&root), without_wakeup);
+        }
+    });
     #[cfg(not(target_os = "linux"))]
     let _ = root;
 }
@@ -145,103 +148,152 @@ fn exercise_escaped_stdin(root: &Path, without_wakeup: bool) {
     let baseline_threads = proc_entry_count("/proc/self/task");
     let baseline_fds = proc_entry_count("/proc/self/fd");
     for mode in ["exit", "timeout", "wait_error"] {
-        for _ in 0..3 {
-            let dir = tempfile::Builder::new()
-                .prefix("holder-")
-                .tempdir_in(root)
-                .expect("holder directory");
-            let _holder = StdinHolderGuard(dir.path().to_path_buf());
-            let exe = std::env::current_exe().expect("test executable");
-            let program = exe.to_str().expect("test executable path");
-            let args = vec![
-                "--exact".to_string(),
-                STDIN_PROVIDER.to_string(),
-                "--ignored".to_string(),
-                "--nocapture".to_string(),
-            ];
-            let env = vec![
-                (HOLDER_DIR_ENV.to_string(), dir.path().display().to_string()),
-                (PROVIDER_MODE_ENV.to_string(), mode.to_string()),
-            ];
-            let filled = dir.path().join("filled");
-            let wait_failure: WaitHook = Box::new(move |child: &mut std::process::Child| {
-                if filled.exists() {
-                    Err(std::io::Error::other(
-                        "injected wait failure after stdin filled",
-                    ))
-                } else {
-                    child.try_wait()
-                }
-            });
-            let seam = SupervisorSeam {
-                wait: (mode == "wait_error").then_some(wait_failure),
-                no_wakeup_pair: without_wakeup,
-            };
-            let payload = vec![b'x'; 4 * 1024 * 1024];
-            let started = Instant::now();
-            let result = with_supervisor_seam(seam, || {
-                spawn_with_timeout(SpawnWithTimeoutRequest {
-                    stdin_bytes: &payload,
-                    env: &env,
-                    ..spawn_test_request(
-                        program,
-                        &args,
-                        None,
-                        if mode == "timeout" {
-                            Duration::from_secs(2)
-                        } else {
-                            Duration::from_secs(10)
-                        },
-                        stdin_trace(),
-                    )
-                })
-            });
-            assert!(
-                dir.path().join("filled").exists(),
-                "fixture must fill oversized stdin before {mode}: {result:?}"
-            );
-            match (mode, result) {
-                ("wait_error", Err(error)) => {
-                    assert!(!error.permanent);
-                    assert!(error.message.contains("injected wait failure"));
-                }
-                ("exit", Ok((_, _, code, _, timed_out))) => {
-                    assert_eq!(code, Some(0));
-                    assert!(!timed_out);
-                }
-                ("timeout", Ok((_, _, code, _, timed_out))) => {
-                    assert_eq!(code, None);
-                    assert!(timed_out);
-                }
-                (_, other) => panic!("unexpected {mode} outcome: {other:?}"),
+        let dir = tempfile::Builder::new()
+            .prefix("holder-")
+            .tempdir_in(root)
+            .expect("holder directory");
+        let _holder = StdinHolderGuard(dir.path().to_path_buf());
+        let handshake =
+            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("holder observation socket");
+        std::fs::write(
+            dir.path().join("observe.port"),
+            handshake
+                .local_addr()
+                .expect("observation address")
+                .port()
+                .to_string(),
+        )
+        .expect("publish observation port");
+        let exe = std::env::current_exe().expect("test executable");
+        let program = exe.to_str().expect("test executable path");
+        let args = vec![
+            "--exact".to_string(),
+            STDIN_PROVIDER.to_string(),
+            "--ignored".to_string(),
+            "--nocapture".to_string(),
+        ];
+        let env = vec![
+            (HOLDER_DIR_ENV.to_string(), dir.path().display().to_string()),
+            (PROVIDER_MODE_ENV.to_string(), mode.to_string()),
+        ];
+        let filled = dir.path().join("filled");
+        let timeout_ready = filled.clone();
+        let wait_failure: WaitHook = Box::new(move |child: &mut std::process::Child| {
+            if filled.exists() {
+                Err(std::io::Error::other(
+                    "injected wait failure after stdin filled",
+                ))
+            } else {
+                child.try_wait()
             }
-            assert!(
-                started.elapsed() < Duration::from_secs(if mode == "timeout" { 4 } else { 2 }),
-                "stdin finalization must preserve the wall-clock and cleanup bounds"
-            );
-            assert_eq!(
-                proc_entry_count("/proc/self/fd"),
-                baseline_fds,
-                "no stdin descriptor or cancel socket may survive {mode}"
-            );
-            assert!(
-                wait_until(Duration::from_secs(1), || proc_entry_count(
-                    "/proc/self/task"
-                ) == baseline_threads),
-                "no stdin thread or its owned prompt buffer may survive {mode}"
-            );
-            assert!(
-                wait_until(Duration::from_secs(1), || dir
-                    .path()
-                    .join("released")
-                    .exists()),
-                "the escaped holder must observe stdin closure before fixture cleanup"
-            );
-            assert!(
-                process_is_live(read_pid(&dir.path().join("holder.pid"))),
-                "the holder must still be alive when finalization is verified"
-            );
+        });
+        let seam = SupervisorSeam {
+            wait: (mode == "wait_error").then_some(wait_failure),
+            no_wakeup_pair: without_wakeup,
+        };
+        let payload = vec![b'x'; 4 * 1024 * 1024];
+        let started = Instant::now();
+        let origin = Instant::now();
+        let result = super::super::with_cli_supervision_clock(
+            move || {
+                if mode == "timeout" && timeout_ready.exists() {
+                    origin + Duration::from_secs(3)
+                } else if mode == "timeout" {
+                    origin
+                } else {
+                    Instant::now()
+                }
+            },
+            || {
+                with_supervisor_seam(seam, || {
+                    spawn_with_timeout(SpawnWithTimeoutRequest {
+                        stdin_bytes: &payload,
+                        env: &env,
+                        ..spawn_test_request(
+                            program,
+                            &args,
+                            None,
+                            if mode == "timeout" {
+                                Duration::from_secs(2)
+                            } else {
+                                Duration::from_secs(10)
+                            },
+                            stdin_trace(),
+                        )
+                    })
+                })
+            },
+        );
+        assert!(
+            dir.path().join("filled").exists(),
+            "fixture must fill oversized stdin before {mode}: {result:?}"
+        );
+        match (mode, result) {
+            ("wait_error", Err(error)) => {
+                assert!(!error.permanent);
+                assert!(error.message.contains("injected wait failure"));
+            }
+            ("exit", Ok((_, _, code, _, timed_out))) => {
+                assert_eq!(code, Some(0));
+                assert!(!timed_out);
+            }
+            ("timeout", Ok((_, _, code, _, timed_out))) => {
+                assert_eq!(code, None);
+                assert!(timed_out);
+            }
+            (_, other) => panic!("unexpected {mode} outcome: {other:?}"),
         }
+        assert!(
+            started.elapsed() < Duration::from_secs(if mode == "timeout" { 4 } else { 2 }),
+            "stdin finalization must preserve the wall-clock and cleanup bounds"
+        );
+        handshake.set_nonblocking(true).expect("nonblocking accept");
+        let deadline = Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE;
+        let mut observation = loop {
+            match handshake.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "holder must connect for observation"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("holder observation accept: {error}"),
+            }
+        };
+        use std::io::{Read, Write};
+        observation
+            .set_read_timeout(Some(orbit_common::test_env::FIXTURE_STEP_DEADLINE))
+            .expect("bounded holder acknowledgement");
+        observation
+            .set_write_timeout(Some(orbit_common::test_env::FIXTURE_STEP_DEADLINE))
+            .expect("bounded observation request");
+        observation
+            .write_all(b"V")
+            .expect("request finalized stdin observation");
+        let mut released = [0];
+        observation
+            .read_exact(&mut released)
+            .expect("holder must acknowledge stdin closure");
+        assert_eq!(released, *b"R", "holder observed POLLHUP with unread bytes");
+        assert!(
+            process_is_live(read_pid(&dir.path().join("holder.pid"))),
+            "the holder must still be alive when finalization is verified"
+        );
+        drop(observation);
+        drop(handshake);
+        assert_eq!(
+            proc_entry_count("/proc/self/fd"),
+            baseline_fds,
+            "no stdin descriptor or cancel socket may survive {mode}"
+        );
+        assert!(
+            wait_until(Duration::from_secs(1), || proc_entry_count(
+                "/proc/self/task"
+            ) == baseline_threads),
+            "no stdin thread or its owned prompt buffer may survive {mode}"
+        );
     }
 }
 
@@ -300,33 +352,59 @@ fn escaped_stdin_holder() {
     // inspect its capacity and queued bytes, without reading or closing it.
     let capacity = unsafe { libc::fcntl(0, libc::F_GETPIPE_SZ) };
     assert!(capacity > 0 && capacity < 4 * 1024 * 1024);
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let mut filled = false;
-    while Instant::now() < deadline {
+    let deadline = Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE;
+    loop {
         let mut queued: libc::c_int = 0;
         // SAFETY: FIONREAD writes one c_int through a valid pointer.
         assert_eq!(unsafe { libc::ioctl(0, libc::FIONREAD, &mut queued) }, 0);
-        if !filled && queued == capacity {
-            std::fs::write(dir.join("filled"), b"").expect("publish full pipe");
-            filled = true;
+        if queued == capacity {
+            break;
         }
-        let mut pipe = libc::pollfd {
-            fd: 0,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: poll inspects the owned stdin without consuming it.
-        assert!(unsafe { libc::poll(&mut pipe, 1, 0) } >= 0);
-        if pipe.revents & libc::POLLHUP != 0 {
-            assert!(filled, "stdin must fill before its writer is cancelled");
-            std::fs::write(dir.join("released"), b"").expect("publish stdin closure");
-            // Remain alive until the guard kills us, so finalization cannot
-            // pass by waiting for this fixture to close its own read end.
-            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-            return;
-        }
+        assert!(
+            Instant::now() < deadline,
+            "stdin must fill before provider termination"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
+    // Connect before telling the provider it can exit, so observation is ready
+    // even if the holder is descheduled throughout supervisor finalization.
+    use std::io::{Read, Write};
+    let mut observation = std::net::TcpStream::connect((
+        "127.0.0.1",
+        std::fs::read_to_string(dir.join("observe.port"))
+            .expect("observation port")
+            .parse::<u16>()
+            .expect("port"),
+    ))
+    .expect("connect holder observation");
+    observation
+        .set_read_timeout(Some(orbit_common::test_env::FIXTURE_STEP_DEADLINE))
+        .expect("bounded observation request");
+    std::fs::write(dir.join("filled"), b"").expect("publish full pipe");
+    let mut request = [0];
+    observation
+        .read_exact(&mut request)
+        .expect("wait for finalization observation request");
+    assert_eq!(request, *b"V");
+    let mut pipe = libc::pollfd {
+        fd: 0,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: inspect the inherited pipe without consuming any buffered bytes.
+    assert!(unsafe { libc::poll(&mut pipe, 1, 0) } >= 0);
+    assert_ne!(
+        pipe.revents & libc::POLLHUP,
+        0,
+        "finalization must close the blocked stdin writer"
+    );
+    observation
+        .write_all(b"R")
+        .expect("acknowledge observed writer closure");
+    // The helper keeps the read end alive until its explicit cleanup guard.
+    // This socket remains open in the caller through the helper-alive check.
+    let _ = observation.read_exact(&mut request);
+    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
 }
 
 #[cfg(target_os = "linux")]

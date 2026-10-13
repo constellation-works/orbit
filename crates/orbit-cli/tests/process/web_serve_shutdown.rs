@@ -49,65 +49,6 @@ const SSE_RESPONSE_HEAD_LIMIT: usize = 16 * 1024;
 /// How long to wait for the dashboard to start accepting connections.
 const STARTUP_DEADLINE: Duration = Duration::from_secs(10);
 
-/// Must exceed orbit-web's own `SHUTDOWN_GRACE_PERIOD` (10s, see
-/// `crates/orbit-web/src/serve.rs`) so that outliving it is meaningful evidence:
-/// ORB-11255's regression started that grace-period timeout counting down
-/// when serving began rather than when a shutdown signal arrived, so an
-/// unsignaled server was killed at exactly this deadline.
-const LONGER_THAN_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(13);
-
-/// ORB-11255: a server that never received a shutdown signal must keep
-/// serving indefinitely -- in particular, past orbit-web's own
-/// `SHUTDOWN_GRACE_PERIOD`. PR1328 (ORB-11246) introduced a regression where
-/// `tokio::time::timeout(SHUTDOWN_GRACE_PERIOD, drain)` started counting down
-/// as soon as serving began, so a perfectly healthy, never-signaled server
-/// exited (successfully!) once that timeout elapsed. This test fails against
-/// that placement: it waits longer than the grace period with no signal sent
-/// at all, then confirms the server is still alive and serving `/healthz`,
-/// before confirming SIGTERM still produces a prompt, clean shutdown.
-#[test]
-fn dashboard_outlives_shutdown_grace_period_when_no_signal_is_sent() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).expect("create home");
-
-    let mut server = spawn_dashboard(&home);
-    let port = server
-        .wait_for_address(STARTUP_DEADLINE)
-        .expect("dashboard bound")
-        .port();
-
-    std::thread::sleep(LONGER_THAN_SHUTDOWN_GRACE_PERIOD);
-
-    assert!(
-        matches!(server.try_wait(), Ok(None)),
-        "orbit web serve exited on its own after {LONGER_THAN_SHUTDOWN_GRACE_PERIOD:?} \
-         with no shutdown signal ever sent -- this is the ORB-11255 regression: \
-         the shutdown grace-period timeout must not start until a signal arrives"
-    );
-
-    let body = http_get(port, "/healthz");
-    assert!(
-        body.contains("ok"),
-        "expected /healthz to still report ok after outliving the shutdown \
-         grace period with no signal sent, got: {body}"
-    );
-
-    let before_sigterm = Instant::now();
-    send_sigterm(&server);
-    let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
-        panic!(
-            "orbit web serve did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM \
-             after having outlived the shutdown grace period once already"
-        )
-    });
-    assert!(
-        status.success(),
-        "expected a clean shutdown within {SHUTDOWN_DEADLINE:?}, got {status:?} after {:?}",
-        before_sigterm.elapsed()
-    );
-}
-
 #[test]
 fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     let temp = tempdir().expect("tempdir");

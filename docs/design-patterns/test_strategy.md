@@ -375,9 +375,19 @@ command guard (dk-server-2, 2026-10-09) now lives in
 That test runs the confirming command doctor prints, including its
 environment prefix, instead of supplying the operator override itself.
 
-The 15 admitted `orbit-cmd` tests remain. Their update fixture is now trimmed
-to the restore-callback fault injection, and the stale-lock holder helpers
-sit beside the one test that uses them.
+The 15 originally admitted `orbit-cmd` tests remain. Their update fixture is
+trimmed to the restore-callback fault injection, and the stale-lock holder
+helpers sit beside the one test that uses them.
+
+`update/tests/converge.rs::probe_timeouts_tear_down_descendants_before_and_after_parent_exit`
+is admitted under criterion 2 (deadline fault injection). Its four rows call the
+version probe and the private admission-contract probe, with the leader either
+alive or exited while a descendant holds its output pipes. A readiness-triggered
+supervision clock forces the real timeout/teardown path, and each row proves the
+helper is gone. This replaces the two signed-release CLI probe-lifetime tests;
+reaching the private contract entry point through the CLI would recreate a
+signed mirror and wait through each deadline. The existing hanging-candidate
+update test retains refusal, unchanged installation and no-backup assertions.
 
 ## Common-crate admission audit reconciliation
 

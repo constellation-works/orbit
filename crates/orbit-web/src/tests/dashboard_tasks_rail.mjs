@@ -132,8 +132,11 @@ const document = {
 };
 const window = { location: { search: '', hash: '' }, confirm: () => true };
 class Event { constructor(type) { this.type = type; } }
+// Unanswered stub fetches keep their timeout behavior without keeping Node
+// alive for 30 seconds after the fixture has finished all its assertions.
+const setFixtureTimeout = (callback, delay) => setTimeout(callback, delay).unref();
 const context = vm.createContext({
-  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, document, window, Node, Event,
+  URLSearchParams, URL, AbortController, console, setTimeout: setFixtureTimeout, clearTimeout, document, window, Node, Event,
   requestAnimationFrame: () => 0,
   fetch: () => new Promise(() => {}),
 });

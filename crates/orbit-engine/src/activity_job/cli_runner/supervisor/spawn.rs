@@ -27,6 +27,24 @@ const PROGRESS_WINDOW_BYTES: usize = 64 * 1024;
 /// its own session) keeps a pipe open that long.
 pub(super) const OUTPUT_DRAIN_BUDGET: Duration = Duration::from_millis(500);
 
+#[cfg(test)]
+thread_local! {
+    static FIXTURE_DRAIN_BUDGET: std::cell::Cell<Duration> = const { std::cell::Cell::new(OUTPUT_DRAIN_BUDGET) };
+}
+
+/// Bound escaped-pipe cleanup in stdin fixtures without changing the production guard.
+#[cfg(test)]
+pub(super) fn with_output_drain_budget<T>(budget: Duration, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Duration);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXTURE_DRAIN_BUDGET.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(FIXTURE_DRAIN_BUDGET.with(|slot| slot.replace(budget)));
+    operation()
+}
+
 /// Samples a running child's stdout every `interval` until it exits, so a
 /// long invocation is observable before it finishes.
 pub(in crate::activity_job::cli_runner) struct ProgressReporter<'a> {
@@ -183,6 +201,10 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         }
         None
     };
+    #[cfg(test)]
+    let output_drain_budget = FIXTURE_DRAIN_BUDGET.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    let output_drain_budget = OUTPUT_DRAIN_BUDGET;
     let outcome = child.supervise(Supervision {
         stdin,
         stdout: Stream::Sink(Box::new(TracedCaptureSink::new(
@@ -201,7 +223,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         // Whether a provider run should forward SIGINT/SIGTERM to its group
         // is open; the worker's own shutdown and Core's recovery handle it.
         intercept_signals: false,
-        drain_budget: OUTPUT_DRAIN_BUDGET,
+        drain_budget: output_drain_budget,
         cap_drain_at_deadline: false,
         require_eof: false,
         stopped_descendants: stopped_descendants

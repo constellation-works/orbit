@@ -35,5 +35,6 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orbit-common = { path = "../orbit-common", features = ["test-support"] }
 rsa.workspace = true
 sha2.workspace = true
