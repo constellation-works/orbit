@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-10-09
+last_validated: 2026-10-13
 ---
 # Per-Module Sibling tests/ Directory
 
@@ -92,7 +92,7 @@ This nests the test module as a *child* of the source module. Children can read 
 
 ## Reference: `orbit-mcp::adapter`
 
-The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. MCP proxy/discovery tests live beside their implementations under `orbit-mcp/src/remote/tests/`; Registry's crate-level tests live under `orbit-registry/src/tests/`, including the workspace-registry persistence tests in `tests/workspace_registry.rs`. Each test file accesses its sibling source through the narrowest deliberate visibility.
+The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. The private SSH proxy argv case stays in `orbit-mcp/src/remote/tests/proxy.rs`. Destination-session fault injection stays in `orbit-mcp/src/federated/probe/tests/session.rs`, beside `probe/session.rs`, because that reader is not a public seam. Listener bind policy, capability classes, server identity, and federated routing run through the crate-root `tests/boundary/` binary. Registry's crate-level tests live under `orbit-registry/src/tests/`, including the workspace-registry persistence tests in `tests/workspace_registry.rs`. Each test file accesses its sibling source through the narrowest deliberate visibility.
 
 ## Public contract tests in orbit-types
 

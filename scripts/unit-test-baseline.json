@@ -665,30 +665,15 @@
     "orbit-mcp": {
       "test_function_paths": [
         "adapter/tests/name_map.rs::build_name_map_rejects_sanitized_name_collisions",
+        "federated/probe/tests/session.rs::a_flooding_destination_is_refused_without_buffering_the_flood",
+        "federated/probe/tests/session.rs::a_lost_internal_admission_answer_is_outcome_unknown",
         "federated/probe/tests/session.rs::malformed_mutation_replies_preserve_unknown_outcome_identity_without_replay",
         "federated/probe/tests/session.rs::malformed_probe_replies_remain_unreachable_before_mutating_dispatch",
         "federated/probe/tests/session.rs::only_response_shaped_messages_can_complete_a_dispatched_call",
         "federated/probe/tests/session.rs::peer_requests_are_answered_before_correlating_the_actual_call_response",
         "federated/probe/tests/session.rs::peer_traffic_and_blocked_peer_replies_preserve_the_call_deadline_and_unknown_outcome",
         "federated/probe/tests/session.rs::replies_without_usable_structured_content_are_unknown_outcomes",
-        "federated/tests/capability.rs::a_replica_refuses_control_plane_and_runs_execute_class_tools",
-        "federated/tests/capability.rs::a_replica_refuses_the_distributed_drain_read_only_surface",
-        "federated/tests/capability.rs::a_workspace_without_an_owner_machine_id_does_not_advertise_control_plane",
-        "federated/tests/capability.rs::the_locked_mapping_covers_exactly_the_advertised_surface",
-        "federated/tests/probe/session.rs::a_flooding_destination_is_refused_without_buffering_the_flood",
-        "federated/tests/probe/session.rs::a_lost_internal_admission_answer_is_outcome_unknown",
-        "federated/tests/route.rs::a_dispatched_call_whose_answer_is_lost_is_outcome_unknown_not_unreachable",
-        "federated/tests/route.rs::unknown_selectors_fail_before_any_destination",
-        "federated/tests/task_route.rs::an_explicit_selector_wins_over_the_prefix",
-        "federated/tests/task_route.rs::an_id_only_call_goes_to_the_host_its_prefix_names_without_a_selector",
-        "federated/tests/task_route.rs::an_unreachable_holder_is_owner_unreachable_and_names_the_local_mirror",
-        "federated/tests/task_route.rs::an_unregistered_prefix_is_refused_before_any_destination",
-        "federated/tests/task_route.rs::host_workspace_selector_copies_the_listed_selector",
-        "remote/tests/identity.rs::a_default_server_serves_agent_sessions_only",
-        "remote/tests/proxy.rs::a_client_running_as_an_agent_never_propagates_operator",
-        "tests/listener.rs::a_peer_that_sends_nothing_is_disconnected_and_releases_its_slot",
-        "tests/listener.rs::a_peer_that_streams_an_endless_message_is_disconnected",
-        "tests/listener.rs::non_loopback_addresses_are_refused_before_the_socket_opens"
+        "remote/tests/proxy.rs::a_client_running_as_an_agent_never_propagates_operator"
       ]
     },
     "orbit-policy": {

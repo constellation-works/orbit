@@ -1,63 +1,13 @@
-//! Capability classes: the locked tool-to-class mapping and destination-side
-//! refusal.
+//! Destination capability classes through the exported classifier.
 
-use super::super::capability::{CapabilityClasses, McpToolClass, ensure_tool_class_held};
-use orbit_common::OrbitError;
-use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceCheckoutRole};
 use std::path::PathBuf;
 
-/// The behavior rule from the federated spec, locked tool by tool over the
-/// whole advertised surface [ORB-11012].
-const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
-    ("orbit.auto_task.add", McpToolClass::ControlPlane),
-    ("orbit.auto_task.list", McpToolClass::ControlPlane),
-    ("orbit.auto_task.mint", McpToolClass::ControlPlane),
-    ("orbit.auto_task.update", McpToolClass::ControlPlane),
-    ("orbit.command.exec", McpToolClass::Execute),
-    ("orbit.workflow.auto", McpToolClass::Execute),
-    ("orbit.routine.control", McpToolClass::Execute),
-    ("orbit.pipeline.invoke", McpToolClass::Execute),
-    ("orbit.agent.invoke", McpToolClass::Execute),
-    ("orbit.friction.add", McpToolClass::ControlPlane),
-    ("orbit.friction.update", McpToolClass::Execute),
-    ("orbit.search", McpToolClass::ControlPlane),
-    ("orbit.task.add", McpToolClass::ControlPlane),
-    ("orbit.task.artifact.get", McpToolClass::ControlPlane),
-    ("orbit.task.artifact.put", McpToolClass::ControlPlane),
-    ("orbit.task.eligible", McpToolClass::ControlPlane),
-    ("orbit.task.list", McpToolClass::ControlPlane),
-    ("orbit.task.reconcile_review", McpToolClass::ControlPlane),
-    ("orbit.task.review_reset", McpToolClass::ControlPlane),
-    ("orbit.task.show", McpToolClass::ControlPlane),
-    ("orbit.task.update", McpToolClass::ControlPlane),
-    ("orbit.workflow.run.list", McpToolClass::Execute),
-    ("orbit.workflow.run.resume", McpToolClass::Execute),
-    ("orbit.workflow.run.show", McpToolClass::Execute),
-    ("orbit.workflow.ship", McpToolClass::ControlPlane),
-    ("orbit.workspace.list", McpToolClass::Unclassified),
-];
-
-/// The classifier is a function over the live surface, so a tool added to the
-/// registry without a class assignment fails here instead of silently becoming
-/// unclassified and unrefusable.
-#[test]
-fn the_locked_mapping_covers_exactly_the_advertised_surface() {
-    let advertised = crate::canonical_mcp_tool_definitions()
-        .expect("canonical MCP definitions")
-        .into_iter()
-        .map(|definition| definition.schema.name)
-        .collect::<std::collections::BTreeSet<_>>();
-    let locked = ADVERTISED_TOOL_CLASSES
-        .iter()
-        .map(|(name, _)| (*name).to_string())
-        .collect::<std::collections::BTreeSet<_>>();
-
-    assert_eq!(advertised, locked);
-}
+use orbit_common::OrbitError;
+use orbit_mcp::federated::{CapabilityClasses, McpToolClass, ensure_tool_class_held};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceCheckoutRole};
 
 /// A replica answers for its own checkout, so it must not answer an owner
-/// question about receipts, claims, or the ship contract admission resolves
-/// [ORB-12495].
+/// question about receipts, claims, or the ship contract admission resolves.
 #[test]
 fn a_replica_refuses_the_distributed_drain_read_only_surface() {
     let held = CapabilityClasses::new(false, true);

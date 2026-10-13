@@ -1,26 +1,24 @@
-//! Fake destinations: a scripted probe stands in for every SSH session, so the
-//! mux's projection, routing, and failure handling are exercised without a
-//! live host.
+//! Scripted destinations for the federated mux. The probe stands in for SSH
+//! so routing and lost-answer classification run without a live host.
 
-use super::super::config::Destination;
-use super::super::probe::{DestinationProbe, DestinationSnapshot, RoutedSession};
-use chrono::{TimeZone, Utc};
-use orbit_common::OrbitError;
-use orbit_types::tool::{ToolSessionContext, mcp_advertised_tool_name};
-use orbit_types::workspace::{Workspace, WorkspaceStatus};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-pub(super) const OWNER_MACHINE: &str = "hm_owner";
-pub(super) const REPLICA_MACHINE: &str = "hm_replica";
+use chrono::{TimeZone, Utc};
+use orbit_common::OrbitError;
+use orbit_mcp::federated::{Destination, DestinationProbe, DestinationSnapshot, RoutedSession};
+use orbit_types::tool::{ToolSessionContext, mcp_advertised_tool_name};
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use serde_json::Value;
 
-pub(super) fn destination(ssh: &str, machine_id: &str) -> Destination {
+pub(crate) const OWNER_MACHINE: &str = "hm_owner";
+pub(crate) const REPLICA_MACHINE: &str = "hm_replica";
+
+pub(crate) fn destination(ssh: &str, machine_id: &str) -> Destination {
     Destination::ssh(ssh, machine_id)
 }
 
-pub(super) fn workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
-    // A fixed timestamp keeps descriptor assertions stable.
+pub(crate) fn workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
     let at = Utc
         .with_ymd_and_hms(2026, 8, 23, 0, 0, 0)
         .single()
@@ -38,38 +36,36 @@ pub(super) fn workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
     }
 }
 
-/// One delivered (or attempted) call: destination, tool, and arguments.
 type RoutedCall = (String, String, Value);
 
 #[derive(Clone)]
-pub(super) struct CallLog(Arc<Mutex<Vec<RoutedCall>>>);
+pub(crate) struct CallLog(Arc<Mutex<Vec<RoutedCall>>>);
 
 impl CallLog {
-    pub(super) fn calls(&self) -> Vec<RoutedCall> {
+    pub(crate) fn calls(&self) -> Vec<RoutedCall> {
         self.0.lock().expect("call log").clone()
     }
 }
 
 /// Canned destination `tools/call` result.
 ///
-/// Unscripted tools echo the rewritten arguments so tests can see the bare
+/// Unscripted tools echo the rewritten arguments so a test can see the bare
 /// `ws_*`.
 #[derive(Debug, Clone)]
-pub(super) enum ScriptedToolResult {
-    /// The destination took the `tools/call` and then stopped answering: the
-    /// mux wrote the request and never learned whether it ran.
+pub(crate) enum ScriptedToolResult {
+    /// The destination took the `tools/call` and then stopped answering.
     PostDispatchTimeout,
 }
 
 /// A probe with one canned outcome per destination `machine_id`.
-pub(super) struct ScriptedProbe {
+pub(crate) struct ScriptedProbe {
     outcomes: HashMap<String, Result<DestinationSnapshot, OrbitError>>,
     calls: HashMap<String, HashMap<String, ScriptedToolResult>>,
     call_log: Arc<Mutex<Vec<RoutedCall>>>,
 }
 
 impl ScriptedProbe {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             outcomes: HashMap::new(),
             calls: HashMap::new(),
@@ -77,17 +73,17 @@ impl ScriptedProbe {
         }
     }
 
-    pub(super) fn answering(mut self, machine_id: &str, snapshot: DestinationSnapshot) -> Self {
+    pub(crate) fn answering(mut self, machine_id: &str, snapshot: DestinationSnapshot) -> Self {
         self.outcomes.insert(machine_id.to_string(), Ok(snapshot));
         self
     }
 
-    pub(super) fn refusing(mut self, machine_id: &str, error: OrbitError) -> Self {
+    pub(crate) fn refusing(mut self, machine_id: &str, error: OrbitError) -> Self {
         self.outcomes.insert(machine_id.to_string(), Err(error));
         self
     }
 
-    pub(super) fn on_call(
+    pub(crate) fn on_call(
         mut self,
         machine_id: &str,
         tool: &str,
@@ -100,7 +96,7 @@ impl ScriptedProbe {
         self
     }
 
-    pub(super) fn call_log(&self) -> CallLog {
+    pub(crate) fn call_log(&self) -> CallLog {
         CallLog(Arc::clone(&self.call_log))
     }
 }
@@ -109,8 +105,6 @@ impl DestinationProbe for ScriptedProbe {
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
         match self.outcomes.get(&destination.machine_id) {
             Some(Ok(snapshot)) => Ok(snapshot.clone()),
-            // `OrbitError` is not `Clone`, so a refusal is restated rather than
-            // copied; the variant is what the mux branches on.
             Some(Err(error)) => Err(OrbitError::UnreachableDestination(error.to_string())),
             None => Err(OrbitError::UnreachableDestination(format!(
                 "{}: no scripted outcome",
@@ -126,20 +120,17 @@ impl DestinationProbe for ScriptedProbe {
                 "{}: no scripted outcome",
                 destination.machine_id
             ))),
-            Some(Ok(listed)) => {
-                let snapshot = listed.clone();
-                Ok(Box::new(ScriptedRoute {
-                    machine_id: destination.machine_id.clone(),
-                    snapshot,
-                    tools: canonical_advertised_names(),
-                    calls: self
-                        .calls
-                        .get(&destination.machine_id)
-                        .cloned()
-                        .unwrap_or_default(),
-                    log: Arc::clone(&self.call_log),
-                }))
-            }
+            Some(Ok(listed)) => Ok(Box::new(ScriptedRoute {
+                machine_id: destination.machine_id.clone(),
+                snapshot: listed.clone(),
+                tools: canonical_advertised_names(),
+                calls: self
+                    .calls
+                    .get(&destination.machine_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                log: Arc::clone(&self.call_log),
+            })),
         }
     }
 }
@@ -169,7 +160,7 @@ impl RoutedSession for ScriptedRoute {
         {
             return Ok(false);
         }
-        Ok(crate::canonical_mcp_tool_definitions()
+        Ok(orbit_mcp::canonical_mcp_tool_definitions()
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?
             .iter()
             .any(|definition| {
@@ -181,6 +172,7 @@ impl RoutedSession for ScriptedRoute {
                         .any(|parameter| parameter.name == argument)
             }))
     }
+
     fn call_tool(
         &mut self,
         name: &str,
@@ -209,7 +201,7 @@ impl RoutedSession for ScriptedRoute {
 }
 
 fn canonical_advertised_names() -> Vec<String> {
-    crate::canonical_mcp_tool_definitions()
+    orbit_mcp::canonical_mcp_tool_definitions()
         .map(|definitions| {
             definitions
                 .into_iter()
