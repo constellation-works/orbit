@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
-use super::super::super::tests::support::*;
-use super::super::sweep::{WorktreeGcOptions, collect_worktrees};
+use super::support::*;
+use orbit_engine::{WorktreeGcOptions, collect_worktrees};
 #[cfg(unix)]
 use orbit_types::task::TaskStatus;
 #[cfg(unix)]
@@ -13,6 +13,13 @@ use tempfile::tempdir;
 #[cfg(unix)]
 #[test]
 fn gc_reclaims_the_leftover_of_a_removal_that_failed_partway() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_reclaims_the_leftover_of_a_removal_that_failed_partway"
+    )) {
+        return;
+    }
+
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempdir().unwrap();
@@ -78,6 +85,13 @@ fn gc_reclaims_the_leftover_of_a_removal_that_failed_partway() {
 #[cfg(unix)]
 #[test]
 fn gc_reclaims_trash_directory_when_deleter_pid_is_dead() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_reclaims_trash_directory_when_deleter_pid_is_dead"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -139,6 +153,13 @@ fn gc_reclaims_trash_directory_when_deleter_pid_is_dead() {
 
 #[test]
 fn gc_reclaims_trash_directory_when_age_exceeds_timeout() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_reclaims_trash_directory_when_age_exceeds_timeout"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -183,6 +204,13 @@ fn gc_reclaims_trash_directory_when_age_exceeds_timeout() {
 
 #[test]
 fn gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -221,6 +249,13 @@ fn gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout() {
 
 #[test]
 fn gc_leaves_malformed_trash_directory_as_unrecognized() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_leaves_malformed_trash_directory_as_unrecognized"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);

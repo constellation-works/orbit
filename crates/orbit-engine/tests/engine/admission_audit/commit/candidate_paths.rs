@@ -4,9 +4,9 @@ use std::path::Path;
 use orbit_types::task::{ContextWideningStep, Task};
 use serde_json::{Value, json};
 
-use super::super::git_commit;
+use super::git_commit;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
-use crate::executor::automation::vcs::git::{git_output, git_success};
+use super::{git_output, git_success};
 
 const CLAIMED_TASK_ID: &str = "T-CLAIMED";
 
@@ -65,6 +65,13 @@ fn untracked_status(workspace: &Path) -> String {
 /// is where every worker is told to write scratch.
 #[test]
 fn scratch_under_orbit_tmp_is_never_delivered() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::scratch_under_orbit_tmp_is_never_delivered"
+    )) {
+        return;
+    }
+
     let claimed = |workspace: &Path| {
         CommitTestHost::new(
             vec![claimed_task(&["dir:src", "dir:.orbit"])],
@@ -110,6 +117,13 @@ fn scratch_under_orbit_tmp_is_never_delivered() {
 /// environment files — before any index change.
 #[test]
 fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening"
+    )) {
+        return;
+    }
+
     for (selector, new_path, widened) in [
         (
             "file:crates/one/src/lib.rs",
@@ -163,8 +177,13 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
             git_success(workspace, &["add", "--", new_path]).unwrap();
             git_success(workspace, &["commit", "-m", "candidate"]).unwrap();
             assert!(
-                crate::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD")
-                    .is_err(),
+                orbit_engine::validate_claim_new_paths(
+                    workspace,
+                    &task.context_files,
+                    &base,
+                    "HEAD"
+                )
+                .is_err(),
                 "owner validation must refuse {new_path}"
             );
             continue;
@@ -179,7 +198,8 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
             "a claimed leaf never writes the owner's selectors; the owner widens at handoff"
         );
         let (_, widening) =
-            crate::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD").unwrap();
+            orbit_engine::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD")
+                .unwrap();
         assert_eq!(
             widening,
             if widened {
@@ -197,6 +217,13 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
 /// selectors with exact `file:` entries, recording the implement step.
 #[test]
 fn owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance"
+    )) {
+        return;
+    }
+
     let temp = claimed_worktree();
     let workspace = temp.path();
     let mut task = claimed_task(&["file:src/lib.rs"]);
@@ -235,6 +262,13 @@ fn owner_delivery_commits_out_of_selector_paths_and_widens_with_provenance() {
 /// path no selector covers goes to the first task, whose selectors widen.
 #[test]
 fn per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it"
+    )) {
+        return;
+    }
+
     let temp = claimed_worktree();
     let workspace = temp.path();
     let first = {
@@ -287,6 +321,13 @@ fn per_task_bundles_attribute_each_path_to_the_task_whose_agent_changed_it() {
 #[cfg(unix)]
 #[test]
 fn owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations"
+    )) {
+        return;
+    }
+
     for symlink in [true, false] {
         let temp = claimed_worktree();
         let workspace = temp.path();
@@ -306,8 +347,12 @@ fn owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations() {
         }
         git_success(workspace, &["add", "--", path]).unwrap();
         git_success(workspace, &["commit", "-m", "untrusted candidate"]).unwrap();
-        let validated =
-            crate::validate_claim_new_paths(workspace, &["file:src/lib.rs".into()], &base, "HEAD");
+        let validated = orbit_engine::validate_claim_new_paths(
+            workspace,
+            &["file:src/lib.rs".into()],
+            &base,
+            "HEAD",
+        );
         if symlink {
             let error = validated.unwrap_err().to_string();
             assert!(

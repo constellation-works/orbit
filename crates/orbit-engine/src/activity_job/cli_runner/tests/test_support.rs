@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,13 +17,12 @@ pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> 
 
 /// A host that launches `command` as the provider CLI and otherwise keeps the
 /// trait defaults (no task context), except that deny-mode tool policies
-/// resolve against a fixed registry. Sandbox, primary checkout, and a
+/// resolve against a fixed registry. Sandbox and a
 /// persistence-refresh failure are optional so a test can force one post-run
 /// check without standing up the rest of the runtime.
 pub(in crate::activity_job::cli_runner) struct TestHost {
     command: String,
     sandbox: Option<ResolvedSandbox>,
-    workspace_root: Option<PathBuf>,
     refresh_error: Option<String>,
 }
 
@@ -32,7 +31,6 @@ impl TestHost {
         Self {
             command,
             sandbox: None,
-            workspace_root: None,
             refresh_error: None,
         }
     }
@@ -43,14 +41,6 @@ impl TestHost {
         sandbox: ResolvedSandbox,
     ) -> Self {
         self.sandbox = Some(sandbox);
-        self
-    }
-
-    pub(in crate::activity_job::cli_runner) fn with_workspace_root(
-        mut self,
-        root: PathBuf,
-    ) -> Self {
-        self.workspace_root = Some(root);
         self
     }
 
@@ -95,19 +85,6 @@ impl crate::test_support::NullRuntimeHost for TestHost {
         _subprocess_cwd: Option<&Path>,
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
         Ok(self.sandbox.clone())
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: self.workspace_root.clone(),
-            ..orbit_tools::ToolContext::default()
-        }
     }
 
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {

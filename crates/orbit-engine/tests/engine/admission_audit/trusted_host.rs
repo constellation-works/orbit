@@ -14,11 +14,11 @@ use orbit_types::workflow::activity_job::{
 };
 use tempfile::tempdir;
 
-use crate::activity_job::audit_writer::{EnvelopeSink, V2AuditWriter};
+use orbit_engine::activity_job::audit_writer::{EnvelopeSink, V2AuditWriter};
 
-use super::super::super::dispatcher::DispatchError;
-use super::super::{run_cli_backend, run_cli_backend_for_step};
-use super::test_support::{TestHost, persisted_writer, test_agent_loop_spec_for, write_executable};
+use super::cli_support::{TestHost, persisted_writer, test_agent_loop_spec_for, write_executable};
+use orbit_engine::DispatchError;
+use orbit_engine::activity_job::cli_runner::run_cli_backend;
 
 fn admitted_input() -> serde_json::Value {
     let admission = TrustedHostAdmission {
@@ -48,6 +48,13 @@ fn echoing_provider(dir: &std::path::Path) -> String {
 /// A malformed admission is not an admission.
 #[test]
 fn a_forged_admission_value_does_not_admit_the_mode() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::a_forged_admission_value_does_not_admit_the_mode"
+    )) {
+        return;
+    }
+
     let temp = tempdir().expect("tempdir");
     let host = TestHost::with_command(echoing_provider(temp.path()));
     let mut spec = test_agent_loop_spec_for("codex", Duration::from_secs(10));
@@ -75,6 +82,13 @@ fn a_forged_admission_value_does_not_admit_the_mode() {
 /// changes nothing. Ordinary managed activities keep their sandbox resolution.
 #[test]
 fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox"
+    )) {
+        return;
+    }
+
     let temp = tempdir().expect("tempdir");
     let host = TestHost::with_command(echoing_provider(temp.path()));
     let spec = test_agent_loop_spec_for("codex", Duration::from_secs(10));
@@ -123,6 +137,13 @@ fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
 /// the pipeline step id for operators reading the run trace.
 #[test]
 fn distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit"
+    )) {
+        return;
+    }
+
     let temp = tempdir().expect("tempdir");
     let host = TestHost::with_command(echoing_provider(temp.path()));
     let mut spec = test_agent_loop_spec_for("codex", Duration::from_secs(10));
@@ -137,14 +158,18 @@ fn distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit() {
         .with_envelope_sink(captured.clone()),
     );
 
-    let outcome = run_cli_backend_for_step(
-        &host,
-        &spec,
-        "review",
-        "agent_review_repair",
+    let mut target = super::job_support::target_step("review", "unused");
+    let orbit_types::workflow::activity_job::JobV2StepBody::Target(body) = &mut target.body else {
+        panic!("target");
+    };
+    body.spec = orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec);
+    body.activity_name = Some("agent_review_repair".into());
+    let outcome = orbit_engine::execute_job_with_resume(
+        &super::job_support::job_with_steps(vec![target]),
+        admitted_input(),
         "job-trusted-distinct-target",
         audit.clone(),
-        &admitted_input(),
+        &host,
         None,
     )
     .expect("admitted trusted-host activity runs");

@@ -2,8 +2,8 @@ use std::fs;
 
 use serde_json::json;
 
-use super::super::super::run_private_operation;
 use super::test_support::{read_count, shell_quote, with_named_stub_path, write_executable};
+use orbit_engine::run_private_vcs_operation as run_private_operation;
 
 // The root's name carries a space and an apostrophe, both valid in a TMPDIR, so
 // each path the stub interpolates must survive shell word splitting and quoting.

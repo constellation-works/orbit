@@ -123,7 +123,7 @@ The [orbit-config audit delivery](../reviews/unit-test-audit-orbit-config-delive
 
 - `crates/orbit-engine/src/executor/automation/ci/` attribution tests: `nextest_regions_bind_only_complete_evidence_to_the_known_failed_step` (criteria 1 and 3). This table exercises private CI attribution with streamed nextest regions and incomplete selection/command flags. Public engine fixtures cannot provide scripted CI logs to this boundary; it prevents a partial or differently attributed block from becoming actionable evidence.
 
-- [GC leftover tests](../../crates/orbit-engine/src/executor/automation/vcs/worktree/gc/tests/leftovers.rs): `gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout`, `gc_reclaims_trash_directory_when_deleter_pid_is_dead`, `gc_reclaims_trash_directory_when_age_exceeds_timeout`, and `gc_leaves_malformed_trash_directory_as_unrecognized` (criteria 1 and 4 [ORB-15702]). They verify trash-directory name parsing, age expiration against the deletion timeout, and deleter PID liveness without spawning real multi-minute deletion threads or risking disk exhaustion.
+- [GC leftover tests](../../crates/orbit-engine/tests/engine/admission_audit/gc/leftovers.rs): `gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout`, `gc_reclaims_trash_directory_when_deleter_pid_is_dead`, `gc_reclaims_trash_directory_when_age_exceeds_timeout`, and `gc_leaves_malformed_trash_directory_as_unrecognized` now call the exported `collect_worktrees` helper from the engine integration binary. Their temporary trash names and deleter PIDs reach the same parsing, age and liveness guarantees without real multi-minute deletion threads or private access [ORB-15702].
 
 - `crates/orbit-core/src/application/plugin/tests/lifecycle/remove.rs`: `a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it` (criterion 2, fault injection). A `#[cfg(test)]` seam fails the next delete of the namespace install tree or of its build log, as an unlink error partway through `remove_dir_all` would. The test asserts that the row, grant witness and build witness survive the failure, and that a retried `orbit plugin remove` deletes both trees and then the row. Permission bits would not force this failure under root-run tests, and the crate-root integration tests compile without `cfg(test)`, so they cannot reach the seam.
 
@@ -498,3 +498,39 @@ admitted session cases in `federated/probe/tests/session.rs`:
 
 The eight originally admitted orbit-mcp tests remain, including the private
 SSH proxy argv seam in `remote/tests/proxy.rs`.
+
+## Orbit-engine audit reconciliation
+
+The [per-identity delivery record](../reviews/unit-test-admission-orbit-engine-2026-10-13.json)
+accounts for all 85 owned decisions: 39 cases move to the existing `engine`
+integration binary, eight identities retire through consolidation, and 38 moves
+are corrected to admissions at specific private seams. The audit's 29 admitted
+identities remain; the diff-chunk and missing-tool invariants absorb their existing
+controls. The overflow deadline assertion joins the moved provider deadline case.
+
+The moved cases call exported provider, job, deterministic-action and worktree
+helpers. Provider launcher lookup uses its public read-only view; its existing
+permanent-error check goes through public provider dispatch. The trusted-host
+step/target distinction uses a one-step public job. Temporary Git helpers only
+prepare or inspect fixture repositories. Mutable fixtures re-execute in exact
+children with disposable homes and inherited authority cleared.
+
+The generic audit assumption that `RuntimeHost` makes every executor seam
+injectable does not hold for CI collection: the public action constructs
+`HostCiQueries` directly. The retained CI transition/fault matrices use private
+`CiQueries`, sweep identities and, for hold/reproduction cases, `collect_at`'s
+clock. Replacing these with a `gh`/Git process emulator would add authentication,
+projection and repository mechanisms without improving their behavioral proof.
+Each retained identity records its input matrix or injected fault and the public
+boundary's limitation; private visibility alone is not admission.
+
+Inspection lease exhaustion and slot ownership require retained lease handles;
+stalled copies require the constructor's copy-deadline argument. Raw process
+progress/capture, text/byte Git diagnostics, required-command stream truncation,
+base-comparator cache evidence and the delivery-message producer/parser pair also
+name their precise observers in the record. Final worktree removal keeps three
+private safety cases: Git's last non-force dirty refusal, forced removal after
+permission repair, and preserving an outside symlink target's mode. The nine
+collector cases, including the formerly admitted trash cases, use the exported
+collector independently of those final-removal seams. No production visibility
+is widened and no implementation is copied into a boundary fixture.

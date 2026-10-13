@@ -157,6 +157,14 @@ confined writers retain their required child fixtures and seams. Copying a priva
 implementation into an integration fixture or widening its visibility is not a
 public-boundary migration.
 
+The engine reconciliation uses the existing `tests/engine/main.rs` binary's
+`admission_audit/` modules for exported provider/job helpers, deterministic commit
+and shell actions, host push/PR operations, and public worktree collection. Empty
+source modules and unused resume/commit/collector fixture support are removed.
+Private inspection leases, CI query/clock injection, raw process observers and
+final-removal safety seams keep their sibling layout, as recorded in the
+[engine per-identity reconciliation](../reviews/unit-test-admission-orbit-engine-2026-10-13.json).
+
 ## Public API integration suites
 
 Tests of an exported crate API belong in the crate-root integration suite even

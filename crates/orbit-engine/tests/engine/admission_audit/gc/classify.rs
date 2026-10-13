@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
-use super::super::super::tests::support::*;
-use super::super::sweep::{WorktreeGcOptions, collect_worktrees};
+use super::support::*;
+use orbit_engine::{WorktreeGcOptions, collect_worktrees};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRunState;
 use std::fs;
@@ -10,6 +10,13 @@ use tempfile::tempdir;
 /// `git worktree repair` brings back, so GC leaves it for an operator.
 #[test]
 fn gc_keeps_an_unregistered_directory_whose_git_link_still_resolves() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_keeps_an_unregistered_directory_whose_git_link_still_resolves"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -42,6 +49,13 @@ fn gc_keeps_an_unregistered_directory_whose_git_link_still_resolves() {
 /// A leftover is reclaimed only on the same gates as any worktree.
 #[test]
 fn gc_keeps_a_leftover_whose_task_is_not_settled() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::gc_keeps_a_leftover_whose_task_is_not_settled"
+    )) {
+        return;
+    }
+
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);

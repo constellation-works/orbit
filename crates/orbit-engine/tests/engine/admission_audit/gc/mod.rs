@@ -1,6 +1,5 @@
-#![allow(missing_docs)]
-
 mod classify;
 mod leftovers;
+mod support;
 #[cfg(unix)]
 mod sweep;

@@ -9,10 +9,10 @@ use std::process::Command;
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use serde_json::json;
 
-use super::super::actions::commit_batch_changes;
-use super::super::git_commit;
+use super::git_commit as commit_batch_changes;
+use super::git_commit;
+use super::git_output;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
-use crate::executor::automation::vcs::git::git_output;
 
 fn executable(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write executable");
@@ -38,8 +38,15 @@ fn commit_candidate(repo: &Path) {
 
 #[test]
 fn commit_child_environment_excludes_parent_secrets() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::commit_child_environment_excludes_parent_secrets"
+    )) {
+        return;
+    }
+
     let exact_test = concat!(
-        "executor::automation::vcs::commit::tests::git_ops::",
+        "admission_audit::commit::git_ops::",
         "commit_child_environment_excludes_parent_secrets"
     );
     if std::env::var("ORBIT_TEST_SECRET").ok().as_deref() == Some(exact_test) {
@@ -134,6 +141,13 @@ fn commit_names(repo: &Path, revision: &str) -> BTreeSet<String> {
 /// neighbour, or another task's files such as `app/i/page.tsx`.
 #[test]
 fn glob_candidate_names_stage_and_commit_only_themselves() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::glob_candidate_names_stage_and_commit_only_themselves"
+    )) {
+        return;
+    }
+
     let temp = initialized_git_repo();
     let workspace = temp.path();
     write_rel(workspace, "*", "star\n");

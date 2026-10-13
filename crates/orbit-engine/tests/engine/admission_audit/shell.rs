@@ -5,16 +5,16 @@ use std::path::PathBuf;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::activity_job::{DispatchError, ResolvedShellExecutor};
+use orbit_engine::{DispatchError, ResolvedShellExecutor};
 
-use super::super::shell::local_shell;
+use orbit_engine::execute_deterministic_action;
 
 /// Minimal host: a workspace root and the shipped `local-shell` executor.
 struct ShellHost {
     root: PathBuf,
 }
 
-impl crate::test_support::NullRuntimeHost for ShellHost {
+impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.root.to_string_lossy().into_owned())
     }
@@ -28,11 +28,26 @@ impl crate::test_support::NullRuntimeHost for ShellHost {
 }
 
 fn run(host: &ShellHost, config: Value) -> Result<Value, OrbitError> {
-    local_shell(host, &config, &json!({}), None)
+    execute_deterministic_action(
+        host,
+        "local_shell",
+        &config,
+        &json!({}),
+        false,
+        &Default::default(),
+        None,
+    )
 }
 
 #[test]
 fn cwd_outside_the_workspace_root_is_rejected() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::cwd_outside_the_workspace_root_is_rejected"
+    )) {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     let host = ShellHost {
         root: dir.path().to_path_buf(),

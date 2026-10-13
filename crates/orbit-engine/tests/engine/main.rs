@@ -50,3 +50,5 @@ mod v2_local_shell;
 mod v2_name_resolution;
 mod v2_runtime;
 mod v2_worktree_lifecycle;
+
+mod admission_audit;

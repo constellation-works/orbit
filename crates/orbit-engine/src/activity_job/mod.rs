@@ -14,9 +14,6 @@ pub mod job_executor;
 pub mod sqlite_sink;
 pub mod workspace;
 
-#[cfg(test)]
-mod tests;
-
 pub use audit_writer::V2AuditWriter;
 pub use crew::{ResolvedAgentSettings, resolve_crew_settings};
 pub use dispatcher::{

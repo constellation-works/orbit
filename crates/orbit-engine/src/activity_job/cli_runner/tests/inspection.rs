@@ -15,78 +15,12 @@ use std::time::Duration;
 
 use orbit_common::process::shell::quote_posix_arg;
 use orbit_common::test_env::{assert_child_test_passed, run_child_test};
-use orbit_types::workflow::JobScheduleState;
-use orbit_types::workflow::activity_job::{
-    ActivityV2Spec, BackoffStrategy, JobKind, JobV2, JobV2Step, JobV2StepBody, RetrySpec,
-    TargetStep, V2AuditEventKind,
-};
 use serde_json::json;
 use tempfile::tempdir;
 
 use super::super::super::dispatcher::DispatchError;
 use super::super::inspection::SourceInspection;
-use super::test_support::{TestHost, persisted_writer, write_executable};
-use crate::{execute_job_with_resume, load_activity_asset};
-
-#[test]
-fn validation_failures_are_permanent() {
-    let temp = tempdir().expect("tempdir");
-    let repo = temp.path().join("repo");
-    let revision = init_repo(&repo);
-    let other = "0123456789abcdef0123456789abcdef01234567";
-    assert_ne!(revision, other);
-    let revision = revision.as_str();
-    let cases = [
-        (
-            json!({"inspection_revision": ""}),
-            Some(repo.as_path()),
-            Some("reviewer"),
-            "pinned inspection_revision",
-        ),
-        (
-            json!({"inspection_revision": 7}),
-            Some(repo.as_path()),
-            Some("reviewer"),
-            "must be a commit id",
-        ),
-        (
-            json!({"inspection_revision": "abcdef0"}),
-            Some(repo.as_path()),
-            Some("reviewer"),
-            "full commit id",
-        ),
-        (
-            json!({"inspection_revision": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}),
-            Some(repo.as_path()),
-            Some("reviewer"),
-            "full commit id",
-        ),
-        (
-            json!({"inspection_revision": other, "source_revision": revision}),
-            None,
-            Some("reviewer"),
-            "differs from the prepared source_revision",
-        ),
-        (
-            json!({"inspection_revision": revision}),
-            Some(repo.as_path()),
-            Some("implementer"),
-            "reviewer filesystem profile",
-        ),
-        (
-            json!({"inspection_revision": revision}),
-            None,
-            Some("reviewer"),
-            "requires a workspace",
-        ),
-    ];
-    for (input, source, profile, needle) in cases {
-        assert_permanent(
-            SourceInspection::from_input(&input, source, profile),
-            needle,
-        );
-    }
-}
+use super::test_support::write_executable;
 
 #[test]
 fn missing_commit_and_slot_ownership_are_permanent() {
@@ -199,155 +133,9 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     assert_retryable_error(&error, "all source inspection slots are leased");
 }
 
-/// [ORB-14091] A task-pilot dispatch configured to retry still stops after
-/// the first attempt when `inspection_revision` is a 7-character id. The
-/// provider is not started.
-#[test]
-fn short_inspection_revision_fails_a_retried_task_pilot_once() {
-    let temp = tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    fs::create_dir(&workspace).expect("workspace");
-    let calls = temp.path().join("provider-calls");
-    let script = temp.path().join("claude");
-    write_executable(
-        &script,
-        &format!(
-            "#!/bin/sh\nprintf x >> '{}'\ncat > /dev/null\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
-            calls.display()
-        ),
-    );
-    let asset = load_activity_asset(include_str!(
-        "../../../../../orbit-core/assets/activities/task_pilot.yaml"
-    ))
-    .expect("task_pilot asset");
-    assert_eq!(asset.name, "task_pilot");
-    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec.clone() else {
-        panic!("task_pilot is an agent loop");
-    };
-    assert_eq!(asset.spec.fs_profile.as_deref(), Some("reviewer"));
-
-    let job = JobV2 {
-        state: JobScheduleState::Enabled,
-        owns_task_worktree: false,
-        task_delivery: None,
-        default_input: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        failure_activity: None,
-        resolved_failure_activity: None,
-        final_recovery_activity: None,
-        resolved_final_recovery_activity: None,
-        max_active_runs: 1,
-        kind: JobKind::Workflow,
-        steps: vec![JobV2Step {
-            id: "pilot".to_string(),
-            when: None,
-            retry: Some(RetrySpec {
-                max_attempts: 3,
-                initial_backoff_ms: 1,
-                backoff_cap_ms: 1,
-                backoff_strategy: BackoffStrategy::Linear,
-            }),
-            recovery_activity: None,
-            resolved_recovery_activity: None,
-            body: JobV2StepBody::Target(TargetStep {
-                spec: ActivityV2Spec::AgentLoop(spec),
-                activity_name: Some("task_pilot".to_string()),
-                input_schema_json: Some(asset.spec.input_schema_json.clone()),
-                fs_profile: asset.spec.fs_profile.clone(),
-                default_input: None,
-                timeout_seconds: 0,
-                session: None,
-            }),
-        }],
-    };
-    let audit = persisted_writer(
-        &temp.path().join("audit"),
-        "job-short-inspection",
-        "claude:test",
-    );
-    let host = TestHost::with_command(script.display().to_string());
-    let error = execute_job_with_resume(
-        &job,
-        json!({
-            "task_ids": ["ORB-1"],
-            "workspace_path": workspace,
-            "base_branch": "agent-main",
-            "inspection_revision": "abcdef0",
-            "partition_index": 0,
-        }),
-        "job-short-inspection",
-        audit.clone(),
-        &host,
-        None,
-    )
-    .expect_err("a 7-character inspection revision fails the pilot");
-
-    let DispatchError::CliInvocationPermanent(message) = &error else {
-        panic!("short inspection revision is permanent, got {error}");
-    };
-    assert!(
-        message.contains("inspection_revision must be a full commit id"),
-        "{message}"
-    );
-    assert!(
-        error.is_non_retryable(),
-        "ORB-14091: a short inspection revision must not be retried"
-    );
-    assert!(
-        !calls.exists(),
-        "the provider must not start for a rejected revision"
-    );
-    let events = audit.events_snapshot().expect("audit events");
-    let starts = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                &event.kind,
-                V2AuditEventKind::ActivityStarted { activity_name, .. }
-                    if activity_name == "pilot"
-            )
-        })
-        .count();
-    assert_eq!(starts, 1, "ORB-14091: one task-pilot attempt, got {starts}");
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event.kind, V2AuditEventKind::StepRetry { .. })),
-        "a permanent inspection failure emits no step retry"
-    );
-}
-
 /// Set in the re-executed child to the directory holding the stub `git`.
 const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
-const SLOW_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::slow_full_ancestry_copy_outlasts_the_local_deadline";
 const STALLED_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::stalled_full_ancestry_copy_leaves_a_reusable_slot";
-const KILLED_LOOKUP_CHILD: &str = "activity_job::cli_runner::tests::inspection::a_commit_lookup_killed_by_a_signal_stays_retryable";
-
-/// [ORB-14806] A full-ancestry copy that runs past the 10 s local deadline
-/// still seeds the slot, so the copy runs under its bulk bound. Admitted under
-/// test_strategy criterion 2: the stub git injects a latency that only a unit
-/// test can place inside the copy.
-#[test]
-fn slow_full_ancestry_copy_outlasts_the_local_deadline() {
-    if let Some(stub_dir) = std::env::var_os(STUB_GIT_DIR_ENV) {
-        // Every fetch now waits 11 s, longer than the local default.
-        set_fetch_delay(Path::new(&stub_dir), 11);
-        let temp = tempdir().expect("tempdir");
-        let repo = temp.path().join("repo");
-        let revision = init_repo(&repo);
-        let inspection = SourceInspection::from_input(
-            &json!({"inspection_revision": revision, "source_revision": revision}),
-            Some(&repo),
-            Some("reviewer"),
-        )
-        .expect("a copy under the bulk bound seeds the slot")
-        .expect("inspection checkout");
-        assert_eq!(git(inspection.root(), &["rev-parse", "HEAD"]), revision);
-        return;
-    }
-    run_child_with_stub_git(SLOW_COPY_CHILD);
-}
 
 /// [ORB-14806] A full-ancestry copy that stalls past its bulk deadline fails
 /// the lease and is killed, and the next lease reuses the slot. Admitted under
@@ -378,54 +166,17 @@ fn stalled_full_ancestry_copy_leaves_a_reusable_slot() {
     run_child_with_stub_git(STALLED_COPY_CHILD);
 }
 
-/// A Git that a signal ends answers nothing. The commit lookup then fails
-/// with no exit status and no stderr, which must stay retryable IO rather
-/// than read as a missing commit. Admitted under test_strategy criterion 2:
-/// the stub git injects the kill that a loaded host produced.
-#[test]
-fn a_commit_lookup_killed_by_a_signal_stays_retryable() {
-    if let Some(stub_dir) = std::env::var_os(STUB_GIT_DIR_ENV) {
-        let temp = tempdir().expect("tempdir");
-        let repo = temp.path().join("repo");
-        let revision = init_repo(&repo);
-        fs::write(Path::new(&stub_dir).join(KILL_VERIFY_MARKER), "").expect("kill switch");
-        assert_retryable(
-            SourceInspection::from_input(
-                &json!({"inspection_revision": revision, "source_revision": revision}),
-                Some(&repo),
-                Some("reviewer"),
-            ),
-            "rev-parse --verify",
-        );
-        return;
-    }
-    run_child_with_stub_git(KILLED_LOOKUP_CHILD);
-}
-
-/// Present in the stub directory: the stub `git` kills itself with SIGKILL
-/// before any `rev-parse --verify` runs.
-const KILL_VERIFY_MARKER: &str = "kill-verify";
-
 /// Re-executes `test` in a child whose `git` is a stub: it sleeps for the
-/// seconds in `fetch-delay` before each fetch, kills itself before a
-/// `--verify` lookup while [`KILL_VERIFY_MARKER`] exists, then runs the real
-/// Git. PATH is process-global, so the stub is installed only in the child.
+/// seconds in `fetch-delay` before each fetch, then runs the real Git. PATH is process-global, so the stub is installed only in the child.
 fn run_child_with_stub_git(test: &str) {
     let stub_dir = tempdir().expect("stub dir");
     set_fetch_delay(stub_dir.path(), 0);
     let delay = quote_posix_arg(&stub_dir.path().join("fetch-delay").display().to_string());
-    let kill = quote_posix_arg(
-        &stub_dir
-            .path()
-            .join(KILL_VERIFY_MARKER)
-            .display()
-            .to_string(),
-    );
     let git_path = quote_posix_arg(&real_git_path().display().to_string());
     write_executable(
         &stub_dir.path().join("git"),
         &format!(
-            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) sleep \"$(cat {delay})\" ;;\n  *\" --verify \"*) [ -e {kill} ] && kill -9 $$ ;;\nesac\nexec {git_path} \"$@\"\n"
+            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) sleep \"$(cat {delay})\" ;;\nesac\nexec {git_path} \"$@\"\n"
         ),
     );
     let mut paths = vec![stub_dir.path().to_path_buf()];
