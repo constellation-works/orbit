@@ -771,21 +771,21 @@ fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
         Some(marker) => fs::write(&layout, marker).expect("repair the workspace"),
         None => fs::remove_file(&layout).expect("repair the workspace"),
     }
-    let retried = install.retry_command(retry);
+    let before_retry = fs::read(&install.installed).expect("installed before retry");
+    // Exercise the reported shell command itself. JSON changes only its
+    // output view; a later independent replay must not hide a retry that
+    // selected the wrong workspace or skipped convergence.
+    let retried = install.retry_command(&format!("{retry} --json"));
     assert_success(&retried, "retry the same candidate");
-    assert!(
-        String::from_utf8_lossy(&retried.stdout)
-            .contains("already is the accepted local candidate"),
-        "{retried:?}"
-    );
-    let replay = install.run(
-        &install.installed,
-        &install.install_args(&candidate, &manifest, COMMIT_B),
-    );
-    let converged = report(&replay);
+    let converged = report(&retried);
     assert_eq!(converged["outcome"], "already_current", "{converged}");
     assert_eq!(converged["replaced"], false);
     assert_converged(&converged);
+    assert_eq!(
+        fs::read(&install.installed).expect("installed after retry"),
+        before_retry,
+        "the quoted recovery must converge without replacing accepted bytes"
+    );
 }
 
 /// Point an executable header at the other supported architecture.
