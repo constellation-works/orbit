@@ -32,12 +32,17 @@ use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegist
 /// A guarded mode is an optional variant of a verb, selected by an input
 /// field, that another host action serves under stricter checks (an
 /// acknowledged unconditional mint, a compare-and-set toggle). Each noun
-/// implements every method as one exhaustive `match` on its verb.
+/// supplies exhaustive matches for its verb-specific behavior; legacy shape
+/// normalization defaults to preserving input.
 pub(super) trait GuardedModes: OperationVerb {
     /// Serve or refuse a call before its spec checks the input: a guarded
     /// mode that owns its whole input contract, or a refusal that must
     /// precede every field check. `None` hands the call on.
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>>;
+
+    /// Normalize a noun's legacy wire shapes before strict spec parsing.
+    /// Guarded modes have already taken ownership of their input contract.
+    fn normalize_input(self, _input: &mut Value) {}
 
     /// Serve a call that selects a guarded mode of this verb; `None` hands it
     /// to the verb's own handler.
@@ -151,6 +156,7 @@ where
         if let Some(served) = self.0.verb.preempt(ctx, &input) {
             return served;
         }
+        self.0.verb.normalize_input(&mut input);
         let input = self.0.parse_input(input)?;
         if let Some(served) = self.0.verb.guarded_mode(ctx, &input) {
             return served;

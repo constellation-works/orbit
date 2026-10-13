@@ -578,6 +578,12 @@ reviewed:
 - **Input.** Optional strings and list items are trimmed, as for every
   registry-derived CLI. An explicit JSON `null` is absent, except `update`'s
   `crew: null`, which is still refused.
+  Ordinary task writes retain the legacy singleton `relations` object and
+  trimmed, case-insensitive `true`/`false` strings for `allow_missing_context`
+  and update's `allow_drop_system_tags`. The task adapter normalizes only
+  those fields after guarded-mode preemption and before strict spec parsing;
+  guarded contracts and other nouns keep their existing shape checks. A
+  `relations` array replaces the list, `[]` clears it, and `null` preserves it.
 - **Attribution.** The CLI passes `--model`, else the environment's agent
   model or name, as the tool's `model`, so attribution goes through tool
   identity resolution. The baseline's `created_by`, `updated_by` and history
