@@ -692,20 +692,7 @@
       ]
     },
     "orbit-policy": {
-      "test_function_paths": [
-        "tests/engine.rs::check_rejects_parent_traversal_for_read_and_modify_paths",
-        "tests/engine.rs::host_modify_exception_intersects_selected_profile_authority",
-        "tests/engine.rs::modify_exception_validation_is_fail_closed",
-        "tests/engine.rs::resolved_dangling_symlink_escaping_workspace_is_denied",
-        "tests/engine.rs::resolved_dangling_symlink_into_denied_subtree_is_denied",
-        "tests/engine.rs::resolved_read_through_symlink_into_denied_subtree_is_denied",
-        "tests/engine.rs::resolved_symlink_cycle_fails_closed",
-        "tests/engine.rs::resolved_symlink_escaping_workspace_is_denied",
-        "tests/engine.rs::resolved_write_to_missing_path_under_symlinked_ancestor_uses_real_location",
-        "tests/engine.rs::workspace_policy_cannot_add_modify_exception",
-        "tests/matrix.rs::newline_segment_request_matrix",
-        "tests/matrix.rs::precedence_matrix"
-      ]
+      "test_function_paths": []
     },
     "orbit-registry": {
       "test_function_paths": [

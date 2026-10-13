@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-10-09
+last_validated: 2026-10-12
 ---
 # Per-Module Sibling tests/ Directory
 
@@ -123,3 +123,14 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 ## What tests assert (invariants vs. policy)
 
 Tests assert what the code guarantees (parses, required fields present, ships disabled, structural safeguards, tool reachability). Crew, model, schedule, complexity and prompt wording are policy owned by config and prompts; a test may not pin them unless it cites the incident it guards.
+
+## Public API integration suites
+
+Tests of an exported crate API belong in the crate-root integration suite even
+when they use only an in-memory definition or a temporary directory. For
+example, `orbit-policy`'s validation, precedence and symlink checks exercise
+`PolicyEngine` and `PolicyDef` through `tests/policy/admission.rs`; putting
+those cases under `src/tests/` would not expose a private seam that the public
+boundary needs. Keep `src/<module>/tests/` for admitted private logic,
+deterministic interleavings, fault injection and platform behavior that the
+crate-root boundary cannot reach economically.
