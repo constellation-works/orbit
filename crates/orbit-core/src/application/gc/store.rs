@@ -1,6 +1,7 @@
 //! Retention for the host store: audit rows and unreferenced audit blobs
 //! (`orbit gc audit`), and the pipeline state of old terminal runs with the
-//! host's per-minute resource history (`orbit gc runs`).
+//! host's per-minute resource history and admission forecasts
+//! (`orbit gc runs`).
 //!
 //! Both plan by default and delete only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
@@ -25,8 +26,9 @@ use crate::{OrbitError, OrbitRuntime};
 const RETENTION_BATCH_ROWS: usize = 1_000;
 /// Pause between batches, so a queued writer gets the lock.
 const BATCH_PAUSE: Duration = Duration::from_millis(20);
-/// Per-minute run and host resource history is kept this long, whatever the
-/// configured windows: profiles read the last 30 days.
+/// Per-minute run and host resource history, and the admission forecasts
+/// checked against it, are kept this long, whatever the configured windows:
+/// profiles and the accuracy report read the last 30 days.
 pub const RESOURCE_MINUTES_RETENTION_DAYS: u32 = 30;
 /// A blob written or reused this recently is never swept, whatever the
 /// reference scan saw: it covers a write published while the scan ran.
@@ -105,7 +107,7 @@ pub struct AuditGcReport {
     pub store: StoreSpaceReport,
 }
 
-/// Per-minute resource rows past [`RESOURCE_MINUTES_RETENTION_DAYS`] in one
+/// Resource history rows past [`RESOURCE_MINUTES_RETENTION_DAYS`] in one
 /// host-wide table, and how many an apply removed.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourceMinutesRetentionReport {
@@ -124,7 +126,8 @@ pub struct RunGcReport {
     pub runs: u64,
     pub state_bytes: u64,
     pub runs_archived: u64,
-    /// The host's per-minute resource history, pruned on its own fixed window.
+    /// The host's per-minute resource history and admission forecasts, pruned
+    /// on their own fixed window.
     pub resource_minutes: Vec<ResourceMinutesRetentionReport>,
     pub writes: BatchReport,
     pub store: StoreSpaceReport,
@@ -223,8 +226,9 @@ impl OrbitRuntime {
     /// of this workspace's terminal runs that finished before the cutoff and
     /// stamp their `archived_at`. Run rows and steps stay, so `run show`, run
     /// history and the scoreboard keep working. `retention_days` overrides
-    /// `retention.runs_days`. The host's per-minute resource history older
-    /// than [`RESOURCE_MINUTES_RETENTION_DAYS`] goes in the same pass.
+    /// `retention.runs_days`. The host's per-minute resource history and
+    /// admission forecasts older than [`RESOURCE_MINUTES_RETENTION_DAYS`] go
+    /// in the same pass.
     pub fn gc_runs(
         &self,
         apply: bool,
@@ -252,7 +256,11 @@ impl OrbitRuntime {
         };
         let resource_cutoff = cutoff_for(RESOURCE_MINUTES_RETENTION_DAYS)?;
         let mut resource_minutes = Vec::new();
-        for table in [ResourceMinutesTable::Run, ResourceMinutesTable::Host] {
+        for table in [
+            ResourceMinutesTable::Run,
+            ResourceMinutesTable::Host,
+            ResourceMinutesTable::AdmissionForecast,
+        ] {
             let rows = store.resource_minutes_older_than(table, resource_cutoff)?;
             let rows_removed = if apply && rows > 0 {
                 run_batches(&mut writes, || {

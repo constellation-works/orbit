@@ -503,12 +503,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_admission_reservations,
     },
+    // Each drain admission pass's forecast and decisions, checked against
+    // `host_resource_minutes` by the forecast accuracy report. A new table
+    // only, as v44.
+    Migration {
+        version: 48,
+        name: "admission_forecasts",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_admission_forecasts,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 47;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 48;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

@@ -76,7 +76,8 @@ by themselves. `orbit gc audit --apply` prunes old command-audit rows, this work
 run-audit rows, and audit blobs no remaining row or pending write references.
 `orbit gc runs --apply` drops pipeline state for terminal runs past the run window while
 keeping their run and step rows, and prunes the per-minute run and host resource history
-(`run_resource_minutes`, `host_resource_minutes`) older than 30 days. The seeded `store_gc` routine is disabled by default,
+(`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
+against it (`admission_forecasts`) older than 30 days. The seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
 See [runtime configuration](../CONFIG.md) for the retention settings.
 

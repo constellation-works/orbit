@@ -109,6 +109,21 @@ impl HeadWait<'_> {
     }
 }
 
+/// The profile lookup that prices `task` in `workspace_id`: its work class
+/// from its tags now, its complexity, and `no-diff-expected` for a
+/// template's base class.
+pub(in crate::adapter::engine_host::v2_host) fn task_lookup(
+    workspace_id: &str,
+    task: &Task,
+) -> ProfileLookup {
+    ProfileLookup::new(
+        workspace_id,
+        work_class(&task.tags),
+        task.complexity.map(|complexity| complexity.to_string()),
+        task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
+    )
+}
+
 /// One pass's gap fit against one forecast.
 pub(in crate::adapter::engine_host::v2_host) struct GapFit<'a> {
     mode: GapFitMode,
@@ -151,12 +166,7 @@ impl<'a> GapFit<'a> {
     /// from now on; one that does not, or that the starvation guard holds,
     /// is recorded with why.
     pub(in crate::adapter::engine_host::v2_host) fn admits(&mut self, task: &Task) -> bool {
-        let lookup = ProfileLookup::new(
-            self.workspace_id,
-            work_class(&task.tags),
-            task.complexity.map(|complexity| complexity.to_string()),
-            task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
-        );
+        let lookup = task_lookup(self.workspace_id, task);
         let found = self.forecast.profiles.lookup(&lookup);
         let profile_source = found.source.as_str().to_string();
         if let Some(head) = self.head.as_ref().filter(|head| head.protected) {

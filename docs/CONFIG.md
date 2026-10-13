@@ -138,6 +138,17 @@ eligibility. These are recorded observations, not a fresh fit or a reservation:
 `forecast_at` dates them, and the next pass or changed configuration can change
 the answer. Without a recorded forecast, the readiness response is unchanged.
 
+`orbit run profiles --accuracy` checks the forecast itself. Each local drain
+pass under `shadow` or `enforce` that built a forecast records it at +5, +10,
++20 and +30 minutes, counting what the pass admitted, with its decisions;
+`off` records nothing. The report pairs each point with the host's measured
+minute and shows, per offset and for CPU and memory, the mean error
+(forecast minus measured), how often the forecast was under, and the worst
+miss. Per drain it counts the tasks shadow would have held or added against
+what the drain admitted. `--json` adds the raw pairs. Records are kept for
+30 days and pruned by `orbit gc runs --apply`. See
+[auto-concurrency §8.1](design/auto-concurrency/2_design.md#81-the-accuracy-report).
+
 CPU utilization is bounded at 100% and is not compared with the resource
 throttle's CPU percentage. The auto-concurrency memory forecast and the
 resource throttle's memory percentage both measure non-reclaimable memory.
