@@ -11,6 +11,9 @@
 //! success counts [ORB-15677] [ORB-15812]. A failed check is classified from
 //! its job log: one inherited from the base updates the branch, a transient
 //! one is rerun once, and the candidate's own earns one repair [ORB-15956].
+//! Evidence that cannot be read decides none of those and spends nothing,
+//! and a branch update is verified against the base as the provider merged
+//! it, not as the owner last fetched it [ORB-15970].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -523,7 +526,33 @@ struct FakeJob {
     run_id: u64,
     job_id: u64,
     conclusion: &'static str,
-    log: &'static str,
+    log: FakeLog,
+}
+
+/// What a read of one job's log answers.
+#[derive(Clone, Copy)]
+enum FakeLog {
+    Text(&'static str),
+    /// No text, with the reason the log reader's per-job fallback gives.
+    Unrecovered,
+    /// The read itself fails.
+    Unreadable,
+}
+
+/// The head a provider branch update leaves on the published branch.
+#[derive(Clone, Copy, Default, Debug)]
+enum UpdateShape {
+    /// The candidate merged cleanly with the advanced base.
+    #[default]
+    CleanMerge,
+    /// A clean merge with a commit the landing branch does not contain.
+    Foreign,
+    /// A merge whose tree is not the clean merge of its parents.
+    Dirty,
+    /// One parent, not a merge.
+    NotAMerge,
+    /// A clean merge, after which the landing branch cannot be fetched.
+    BaseGone,
 }
 
 /// What the fake forge reports for one commit: its check's job, if any ran.
@@ -533,19 +562,25 @@ struct ForgeState {
     merged: bool,
     /// The `CI / clippy` job on each commit.
     jobs: HashMap<String, FakeJob>,
+    /// Commits whose job query fails.
+    unreadable: Vec<String>,
     /// What a rerun of a failed job leaves on the head.
     after_rerun: Option<FakeJob>,
     /// What the check reports on a head the branch update produced.
     after_update: Option<FakeJob>,
+    /// The head a branch update on a published remote produces.
+    update: UpdateShape,
 }
 
 /// A forge whose pull request #42 carries the claimed candidate, with one
 /// `CI / clippy` check per commit. It answers the reads a landing makes,
 /// reruns and updates the branch the way the provider does — an update
 /// merges `main` into the head as a real commit — and records every
-/// operation, so a test sees what the landing asked for.
+/// operation, so a test sees what the landing asked for. Once published, the
+/// update runs on the remote, the way the provider merges its own base.
 struct FakeForge {
     repo: PathBuf,
+    remote: Option<PathBuf>,
     context: HandoffLandingContext,
     state: Mutex<ForgeState>,
     ops: Mutex<Vec<(String, Value)>>,
@@ -562,6 +597,7 @@ impl FakeForge {
         }
         Self {
             repo: host.repo,
+            remote: None,
             state: Mutex::new(ForgeState {
                 head: context.candidate.candidate.commit.clone(),
                 ..ForgeState::default()
@@ -570,6 +606,19 @@ impl FakeForge {
             ops: Mutex::default(),
             updates: Mutex::default(),
         }
+    }
+
+    /// Publish the owner checkout to a bare `origin` at `remote`, so the
+    /// landing reads `origin/main` and fetches it.
+    fn publish(&mut self, remote: &Path) {
+        let repo = self.repo.to_string_lossy().into_owned();
+        git(remote, &["clone", "-q", "--bare", &repo, "."]);
+        git(
+            &self.repo,
+            &["remote", "add", "origin", &remote.to_string_lossy()],
+        );
+        git(&self.repo, &["fetch", "-q", "origin"]);
+        self.remote = Some(remote.to_path_buf());
     }
 
     fn job(&self, commit: &str, job: FakeJob) {
@@ -672,6 +721,15 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             }
             "ci.commit_jobs" => {
                 let commit = input["commit"].as_str().unwrap();
+                if state
+                    .unreadable
+                    .iter()
+                    .any(|unreadable| unreadable == commit)
+                {
+                    return Err(OrbitError::Execution(
+                        "gh api failed: HTTP 401: Bad credentials".into(),
+                    ));
+                }
                 let jobs: Vec<Value> = state
                     .jobs
                     .get(commit)
@@ -688,7 +746,18 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     .find(|job| job.job_id == job_id)
                     .map(|job| job.log)
                     .expect("a log for a job the forge reported");
-                Ok(json!({"log": log}))
+                match log {
+                    FakeLog::Text(log) => {
+                        Ok(json!({"log": log, "truncated": false, "fallback_error": null}))
+                    }
+                    FakeLog::Unrecovered => Ok(json!({
+                        "log": "", "truncated": false,
+                        "fallback_error": format!("job {job_id} (`clippy`) returned no log text"),
+                    })),
+                    FakeLog::Unreadable => Err(OrbitError::Execution(
+                        "gh api job logs failed: HTTP 502".into(),
+                    )),
+                }
             }
             "ci.rerun_failed" => {
                 let rerun = state.after_rerun.take().expect("a scripted rerun");
@@ -698,23 +767,28 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             }
             "pr.update_branch" => {
                 assert_eq!(input["expected_head_sha"], state.head.as_str());
-                let tree = git(
-                    &self.repo,
-                    &["merge-tree", "--write-tree", &state.head, "main"],
-                );
-                let merge = git(
-                    &self.repo,
-                    &[
-                        "commit-tree",
-                        &tree,
-                        "-p",
-                        &state.head,
-                        "-p",
-                        "main",
-                        "-m",
-                        "Merge branch 'main' into orbit/T1",
-                    ],
-                );
+                let merge = match &self.remote {
+                    Some(remote) => provider_update(remote, &state.head, state.update),
+                    None => {
+                        let tree = git(
+                            &self.repo,
+                            &["merge-tree", "--write-tree", &state.head, "main"],
+                        );
+                        git(
+                            &self.repo,
+                            &[
+                                "commit-tree",
+                                &tree,
+                                "-p",
+                                &state.head,
+                                "-p",
+                                "main",
+                                "-m",
+                                "Merge branch 'main' into orbit/T1",
+                            ],
+                        )
+                    }
+                };
                 let after = state.after_update.take().expect("a scripted update");
                 state.jobs.insert(merge.clone(), after);
                 state.head = merge;
@@ -737,6 +811,58 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
     }
 }
 
+/// The provider's branch update of `head` on the published `remote`, after
+/// `main` there advanced past what the owner fetched, shaped by `shape`.
+fn provider_update(remote: &Path, head: &str, shape: UpdateShape) -> String {
+    let base_tree = git(remote, &["rev-parse", "main^{tree}"]);
+    let advanced = git(
+        remote,
+        &[
+            "commit-tree",
+            &base_tree,
+            "-p",
+            "main",
+            "-m",
+            "the base advances",
+        ],
+    );
+    git(remote, &["update-ref", "refs/heads/main", &advanced]);
+    let base_side = match shape {
+        UpdateShape::Foreign => git(
+            remote,
+            &[
+                "commit-tree",
+                &base_tree,
+                "-p",
+                &advanced,
+                "-m",
+                "not on main",
+            ],
+        ),
+        _ => advanced,
+    };
+    let clean = git(remote, &["merge-tree", "--write-tree", head, &base_side]);
+    let mut args = vec!["commit-tree".to_string()];
+    match shape {
+        UpdateShape::Dirty => args.push(git(remote, &["rev-parse", &format!("{head}^{{tree}}")])),
+        _ => args.push(clean),
+    }
+    args.extend(["-p".to_string(), head.to_string()]);
+    if !matches!(shape, UpdateShape::NotAMerge) {
+        args.extend(["-p".to_string(), base_side]);
+    }
+    args.extend([
+        "-m".to_string(),
+        "Merge branch 'main' into orbit/T1".to_string(),
+    ]);
+    let merge = git(remote, &args.iter().map(String::as_str).collect::<Vec<_>>());
+    git(remote, &["update-ref", "refs/heads/orbit/T1", &merge]);
+    if matches!(shape, UpdateShape::BaseGone) {
+        git(remote, &["update-ref", "-d", "refs/heads/main"]);
+    }
+    merge
+}
+
 const CLIPPY_DEAD_CODE: &str = "Run cargo clippy --workspace -- -D warnings\n\
      error: function `stale_helper` is never used\n\
      --> crates/orbit-engine/src/lib.rs:10:4\n\
@@ -750,6 +876,10 @@ const NETWORK_FLAKE: &str = "Run cargo fetch\n\
      ##[error]Process completed with exit code 101.";
 
 fn failed(run_id: u64, job_id: u64, log: &'static str) -> FakeJob {
+    failed_reading(run_id, job_id, FakeLog::Text(log))
+}
+
+fn failed_reading(run_id: u64, job_id: u64, log: FakeLog) -> FakeJob {
     FakeJob {
         run_id,
         job_id,
@@ -763,7 +893,7 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
         run_id,
         job_id,
         conclusion: "success",
-        log: "",
+        log: FakeLog::Text(""),
     }
 }
 
@@ -839,17 +969,24 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
 /// [ORB-15956] A check the candidate itself fails stops the landing for the
 /// one automatic repair, whose evidence carries the failed step's signature
 /// and log excerpt. The repair's own landing failing again stops in review,
-/// classified, instead of asking for a second repair.
+/// classified, instead of asking for a second repair. A base whose job query
+/// succeeds with no jobs ran nothing to fail, which is not a failed read.
 #[test]
 fn a_candidate_caused_check_failure_gets_one_repair_then_stops_in_review() {
-    for (repair_spent, repairable) in [(false, true), (true, false)] {
+    for (repair_spent, base_ran, repairable) in [
+        (false, true, true),
+        (true, true, false),
+        (false, false, true),
+    ] {
         let sandbox = tempdir().unwrap();
         let mut forge = FakeForge::new(sandbox.path(), false);
         forge.context.automatic_repair_spent = repair_spent;
         let candidate = forge.context.candidate.candidate.commit.clone();
         let base = forge.context.candidate.base.commit.clone();
         forge.job(&candidate, failed(1, 11, CANDIDATE_ERROR));
-        forge.job(&base, passed(2, 21));
+        if base_ran {
+            forge.job(&base, passed(2, 21));
+        }
 
         let error = land_with(&forge, json!({"max_wait_seconds": 0}))
             .expect_err("the candidate's failure stops the landing");
@@ -857,7 +994,7 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_stops_in_review() {
         assert_eq!(
             forge.steps(),
             vec![HandoffLandingStep::Stop { repairable }],
-            "repair spent: {repair_spent}"
+            "repair spent: {repair_spent}, base ran: {base_ran}"
         );
         let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
         assert!(
@@ -908,6 +1045,169 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
                 reason.contains("classified `transient`") && reason.contains("one rerun"),
                 "{reason}"
             );
+        }
+    }
+}
+
+/// [ORB-15970] A classification needs every read it rests on. A failed job
+/// query on the base or its moved tip, a base log that cannot be read or
+/// recovered no text, and a log that names only its failed step decide
+/// nothing: the landing stops in review, unrepaired, and spends no rerun,
+/// update or repair. In every row the base branch has moved to a tip where
+/// the check passes, so a misread would have updated the branch or repaired.
+#[test]
+fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
+    use FakeLog::{Text, Unreadable, Unrecovered};
+    for (case, head_log, base_log, base_readable, tip_readable, why) in [
+        (
+            "base jobs unreadable",
+            Text(CLIPPY_DEAD_CODE),
+            Some(Text(CLIPPY_DEAD_CODE)),
+            false,
+            true,
+            "the jobs on base",
+        ),
+        (
+            "current base jobs unreadable",
+            Text(CANDIDATE_ERROR),
+            None,
+            true,
+            false,
+            "the jobs on the current base",
+        ),
+        (
+            "base log unreadable",
+            Text(CLIPPY_DEAD_CODE),
+            Some(Unreadable),
+            true,
+            true,
+            "HTTP 502",
+        ),
+        (
+            "base log recovered no text",
+            Text(CLIPPY_DEAD_CODE),
+            Some(Unrecovered),
+            true,
+            true,
+            "recovered no text",
+        ),
+        (
+            "head log recovered no text",
+            Unrecovered,
+            Some(Text("")),
+            true,
+            true,
+            "recovered no text",
+        ),
+        (
+            "step names only",
+            Text(""),
+            Some(Text("")),
+            true,
+            true,
+            "names no diagnostic",
+        ),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let forge = FakeForge::new(sandbox.path(), true);
+        let candidate = forge.context.candidate.candidate.commit.clone();
+        let base = forge.context.candidate.base.commit.clone();
+        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
+        git(&forge.repo, &["add", "fix.txt"]);
+        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
+        let fixed = git(&forge.repo, &["rev-parse", "main"]);
+        forge.job(&candidate, failed_reading(1, 11, head_log));
+        forge.job(
+            &base,
+            base_log.map_or_else(|| passed(2, 21), |log| failed_reading(2, 21, log)),
+        );
+        forge.job(&fixed, passed(3, 31));
+        {
+            let mut state = forge.state.lock().unwrap();
+            if !base_readable {
+                state.unreadable.push(base);
+            }
+            if !tip_readable {
+                state.unreadable.push(fixed);
+            }
+        }
+
+        land_with(&forge, json!({"max_wait_seconds": 0}))
+            .expect_err("unreadable evidence stops the landing");
+
+        assert_eq!(
+            forge.steps(),
+            vec![HandoffLandingStep::Stop { repairable: false }],
+            "{case}: no automatic repair"
+        );
+        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        assert!(
+            reason.contains(why) && reason.contains("stays in review"),
+            "{case}: {reason}"
+        );
+        for spent in ["ci.rerun_failed", "pr.update_branch", "pr.merge"] {
+            assert!(forge.sent(spent).is_empty(), "{case}: sent {spent}");
+        }
+    }
+}
+
+/// [ORB-15970] The provider merges the base as it is when the branch update
+/// runs, which may be past the landing ref the owner fetched when it
+/// classified the failure. A clean two-parent merge of the candidate with
+/// that newer base is verified against a freshly fetched landing ref and
+/// lands; a merge with a commit off the landing branch, one whose tree is
+/// not the clean merge, a head that is not a merge, and a landing branch
+/// that cannot be fetched are still refused.
+#[test]
+fn a_branch_update_is_verified_against_the_base_it_merged() {
+    for (shape, lands) in [
+        (UpdateShape::CleanMerge, true),
+        (UpdateShape::Foreign, false),
+        (UpdateShape::Dirty, false),
+        (UpdateShape::NotAMerge, false),
+        (UpdateShape::BaseGone, false),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let remote = tempdir().unwrap();
+        let mut forge = FakeForge::new(sandbox.path(), true);
+        let candidate = forge.context.candidate.candidate.commit.clone();
+        let base = forge.context.candidate.base.commit.clone();
+        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
+        git(&forge.repo, &["add", "fix.txt"]);
+        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
+        let fixed = git(&forge.repo, &["rev-parse", "main"]);
+        forge.publish(remote.path());
+        forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
+        forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
+        forge.job(&fixed, passed(3, 31));
+        {
+            let mut state = forge.state.lock().unwrap();
+            state.after_update = Some(passed(4, 41));
+            state.update = shape;
+        }
+
+        let outcome = land_with(&forge, json!({"max_wait_seconds": 0}));
+
+        assert_eq!(forge.sent("pr.update_branch").len(), 1, "{shape:?}");
+        let head = forge.state.lock().unwrap().head.clone();
+        if lands {
+            assert_eq!(
+                outcome.expect("the verified update lands")["phase"],
+                "landed",
+                "{shape:?}"
+            );
+            assert_eq!(
+                forge.sent("pr.merge")[0]["reviewed_head_sha"],
+                head.as_str()
+            );
+        } else {
+            outcome.expect_err("an unverified head stops the landing");
+            assert_eq!(
+                forge.steps(),
+                vec![HandoffLandingStep::Stop { repairable: false }],
+                "{shape:?}"
+            );
+            assert!(forge.sent("pr.merge").is_empty(), "{shape:?}");
         }
     }
 }
