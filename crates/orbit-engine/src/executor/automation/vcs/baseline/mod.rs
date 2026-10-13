@@ -76,7 +76,6 @@ pub use compare::BaseCommandResult;
 pub(crate) use compare::FAILING_TESTS_KEY;
 pub(super) use compare::{
     BaselineCheck, baseline_red_failure, candidate_failure, compare_candidate_with_base,
-    compare_claimed_with_base_until, compare_with_base, compare_with_base_until, hold_failures,
-    known_red,
+    compare_claimed_with_base_until, compare_with_base_until, hold_failures, known_red,
 };
 pub use hold::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};
