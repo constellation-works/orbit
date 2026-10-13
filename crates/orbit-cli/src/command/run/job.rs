@@ -1,9 +1,5 @@
-use orbit_core::application::job::{
-    ActivityInvocationEvidence, job_run_to_json_with_activity_provenance,
-};
-use orbit_core::{
-    InvocationQuery, JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry,
-};
+use orbit_core::application::job::job_run_to_json_with_activity_provenance;
+use orbit_core::{JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -232,19 +228,8 @@ pub(crate) fn cli_job_run_to_json_with_activity_provenance(
     state: Option<&PipelineState>,
 ) -> Value {
     let evidence = runtime
-        .invocation_records(InvocationQuery {
-            job_run_id: Some(run.run_id.clone()),
-            limit: 1_000,
-            ..InvocationQuery::default()
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|record| ActivityInvocationEvidence {
-            activity_id: record.activity_id,
-            provider: record.agent,
-            model: record.model,
-        })
-        .collect::<Vec<_>>();
+        .activity_invocation_evidence(&run.run_id)
+        .unwrap_or_default();
     let mut value = job_run_to_json_with_activity_provenance(run, state, &evidence);
     value["pid"] = json!(run.pid);
     value

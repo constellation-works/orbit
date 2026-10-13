@@ -170,6 +170,92 @@ fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_recor
     assert_eq!(rows, ["1", "2", "3", "4", "5"], "{text}");
 }
 
+/// `orbit run show` and MCP `orbit.workflow.run.show`/`list` choose and
+/// reconcile an ended run's steps by one rule: the audit trail answers for a
+/// run-level-only record, and the step the run died in reads as the run's
+/// terminal state with an `interrupted` outcome rather than `running`.
+#[test]
+fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    seed_interrupted_run(&fixture);
+    // The MCP run tools are an operator surface.
+    let tool = |name: &str, input: serde_json::Value| {
+        let output = fixture
+            .orbit()
+            .env("ORBIT_OPERATOR", "1")
+            .args(["tool", "run", name, "--input", &input.to_string()])
+            .output()
+            .expect("spawn orbit");
+        assert!(output.status.success(), "{name}: {output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).expect("tool JSON")
+    };
+
+    let cli = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
+    let shown = tool(
+        "orbit.workflow.run.show",
+        serde_json::json!({ "id": INTERRUPTED }),
+    );
+    let listed = tool("orbit.workflow.run.list", serde_json::json!({}));
+    let listed = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["run_id"] == INTERRUPTED)
+        .unwrap_or_else(|| panic!("{INTERRUPTED} absent from {listed}"))
+        .clone();
+    for (surface, run, steps, source) in [
+        ("cli", &cli["run"], &cli["steps"], &cli["steps_source"]),
+        ("mcp show", &shown, &shown["steps"], &shown["steps_source"]),
+        (
+            "mcp list",
+            &listed,
+            &listed["steps"],
+            &listed["steps_source"],
+        ),
+    ] {
+        assert_eq!(source, "audit", "{surface}: {run}");
+        let steps = steps.as_array().unwrap();
+        let ids = steps
+            .iter()
+            .map(|step| step["target_id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, STEP_IDS, "{surface}");
+        let died_in = steps.last().unwrap();
+        assert_eq!(died_in["state"], "interrupted", "{surface}: {died_in}");
+        assert_eq!(died_in["outcome"], "interrupted", "{surface}: {died_in}");
+        assert_eq!(steps[0]["state"], "success", "{surface}");
+        assert_eq!(steps[0]["outcome"], "success", "{surface}");
+        assert_eq!(steps[0]["lock_wait_ms"], 42, "{surface}");
+        // The run-level step explains the outcome on every surface.
+        assert_eq!(run["error_code"], "worker_terminated", "{surface}: {run}");
+        assert_eq!(
+            run["error_message"], "job run marked interrupted",
+            "{surface}: {run}"
+        );
+    }
+    assert_eq!(
+        shown["activity_provenance"],
+        cli["run"]["activity_provenance"]
+    );
+
+    let step = fixture.json(&[
+        "run",
+        "show",
+        INTERRUPTED,
+        "--no-reconcile",
+        "--step",
+        "commit",
+        "--json",
+    ]);
+    assert_eq!(step["step"]["state"], "interrupted", "{step}");
+    assert_eq!(step["step"]["outcome"], "interrupted", "{step}");
+}
+
 #[test]
 fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     let fixture = Fixture::init();

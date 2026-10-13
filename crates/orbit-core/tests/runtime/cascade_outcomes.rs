@@ -11,6 +11,7 @@
 //! worker, the step a gate's `require_child_success` and an auto pipeline's
 //! `require_gate_success` run, over a child result named in its input.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, JobTargetType, PipelineState,
     REVIEW_LANDING_DECISION_PENDING, RunRootCause,
@@ -188,6 +190,34 @@ impl Fixture {
             )
             .unwrap();
     }
+}
+
+/// An operator's read of `run_id` through MCP `orbit.workflow.run.show` and
+/// through its row of `orbit.workflow.run.list`.
+fn mcp_views(runtime: &OrbitRuntime, run_id: &str) -> [(&'static str, Value); 2] {
+    let call = |tool: &str, input: Value| {
+        runtime
+            .execute_tool_command_with_session_context(
+                tool,
+                input,
+                None,
+                None,
+                ToolSessionContext {
+                    effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("{tool}: {error}"))
+    };
+    let shown = call("orbit.workflow.run.show", json!({ "id": run_id }));
+    let listed = call("orbit.workflow.run.list", json!({}))["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["run_id"] == run_id)
+        .cloned()
+        .unwrap_or_else(|| panic!("{run_id} absent from the run list"));
+    [("show", shown), ("list", listed)]
 }
 
 /// The error codes a run's recorded steps carry.
@@ -386,6 +416,22 @@ fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {
     let projected = job_run_to_json(&auto, Some(&fixture.state(&auto.run_id)));
     assert_eq!(projected["root_cause"]["leaf_run_id"], leaf.run_id.as_str());
     assert_eq!(projected["root_cause"]["task_id"], task);
+    assert!(projected["error_message"].is_string(), "{projected}");
+    // [ORB-15897] MCP reads the run through the same projection, so an agent
+    // sees its root cause and error. Only the displayed steps and the live
+    // invocation evidence `show` adds differ.
+    for (surface, mcp) in mcp_views(&fixture.runtime, &auto.run_id) {
+        for (field, value) in projected.as_object().unwrap() {
+            if field != "steps" && field != "agent_invocation" {
+                assert_eq!(&mcp[field], value, "{surface} `{field}`: {mcp}");
+            }
+        }
+        assert_eq!(mcp["input"], json!(auto.input), "{surface}");
+        // A failed run's record holds only its run-level step, so the audit
+        // trail says what the run did.
+        assert_eq!(mcp["steps_source"], "audit", "{surface}: {mcp}");
+        assert_eq!(mcp["steps"][0]["target_id"], "require_child_success");
+    }
 
     let runs = [auto.clone(), gate.clone(), leaf.clone()];
     let states = runs
@@ -442,5 +488,45 @@ fn failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output() 
         let projected = job_run_to_json(&gate, Some(&state));
         assert_eq!(projected["root_cause"]["code"], expected);
         assert!(!failure_text(&gate).contains("foo_bar:"));
+    }
+}
+
+/// [ORB-15897] A successful run's record keeps the steps its audit trail
+/// holds, and the record answers on MCP as on every run view.
+#[test]
+fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
+    if !isolated("cascade_outcomes::mcp_shows_a_finished_runs_recorded_steps_with_their_provenance")
+    {
+        return;
+    }
+    let fixture = Fixture::new();
+    let run = fixture.guard(None, json!([{ "status": "success" }]));
+    assert_eq!(run.state, JobRunState::Success, "{:?}", run.steps);
+    assert!(
+        !fixture
+            .runtime
+            .collect_run_audit_steps(&run.run_id)
+            .unwrap()
+            .is_empty(),
+        "the audit trail holds the steps too"
+    );
+    let projected = job_run_to_json(&run, Some(&fixture.state(&run.run_id)));
+    for (surface, mcp) in mcp_views(&fixture.runtime, &run.run_id) {
+        assert_eq!(mcp["steps_source"], "record", "{surface}: {mcp}");
+        assert_eq!(mcp["steps"], projected["steps"], "{surface}");
+        assert_eq!(mcp["error_code"], Value::Null, "{surface}");
+        if surface == "show" {
+            assert_eq!(
+                mcp["activity_provenance"],
+                json!([{
+                    "activity_id": "require_child_success",
+                    "actual_status": "unavailable",
+                    "invocations": [],
+                }]),
+                "a deterministic step records no provider invocation"
+            );
+        } else {
+            assert!(mcp.get("activity_provenance").is_none(), "{mcp}");
+        }
     }
 }

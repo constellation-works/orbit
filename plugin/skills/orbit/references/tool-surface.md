@@ -129,6 +129,19 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
+`orbit_workflow_run_show` and each `orbit_workflow_run_list` item carry the
+same run projection as `.run` in `orbit run show --json` and the dashboard:
+state and timing, `error_code`/`error_message` from the step that explains the
+outcome, `root_cause` for a run that failed only because a child did,
+`run_role`, crew, `trigger`, `child_dispatches` and drain controls. They add
+the submitted `input`, the worker's `pid`/`pid_start_time`, `drain_last_pass`,
+`drain_approvals` and `recovery_attempts`; `show` also adds
+`activity_provenance` and `execution_progress`. `steps` are the steps every
+run view displays, and `steps_source` says whether they came from the run
+record or, when the record is empty or holds only a run-level step, its audit
+trail. A step still open when its run ended reads as the run's terminal state
+with `outcome: "interrupted"`, never `running`.
+
 Provider/gateway prefixes are transport wrappers around these names. A connected
 server may expose additional tools; use its advertised schema rather than
 assuming every installation has that extension.

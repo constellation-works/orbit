@@ -548,6 +548,145 @@ fn save_step(fixture: &Fixture, run: &JobRun, message: &str) {
         .unwrap();
 }
 
+fn save_record_step(fixture: &Fixture, run: &JobRun, step: &JobRunStep) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_step_for_workspace(
+            &fixture.runtime.workspace_id().unwrap(),
+            &run.run_id,
+            step,
+        )
+        .unwrap();
+}
+
+/// One `step_started` or `step_finished` event in a run's audit trail.
+fn insert_step_audit(fixture: &Fixture, run_id: &str, step_id: &str, body_kind: &str, minute: u32) {
+    let ts = at(6, minute);
+    let event_id = format!("evt-{run_id}-{step_id}-{body_kind}");
+    fixture
+        .runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: fixture.runtime.workspace_id().unwrap(),
+            event_id: event_id.clone(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "activity.progress".into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: "fixture".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: json!({
+                "event_id": event_id,
+                "body_kind": body_kind,
+                "step_id": step_id,
+                "outcome": "success",
+                "lock_wait_ms": 42,
+                "ts": ts,
+            })
+            .to_string(),
+        })
+        .unwrap();
+}
+
+/// [ORB-15897] The run detail chooses its steps by the rule every run view
+/// shares and names their source. A record with activity steps answers over
+/// the audit trail; a run-level-only record defers to the trail, whose step
+/// the run died in reads as interrupted rather than running.
+#[test]
+fn run_detail_steps_follow_the_shared_rule_and_name_their_source() {
+    isolated(
+        "runs::run_detail_steps_follow_the_shared_rule_and_name_their_source",
+        || {
+            let fixture = Fixture::new();
+            let step = |target_type, target_id: &str, state, lock_wait_ms| JobRunStep {
+                lock_wait_ms,
+                step_index: 0,
+                target_type,
+                target_id: target_id.into(),
+                started_at: Some(at(6, 0)),
+                finished_at: Some(at(6, 1)),
+                duration_ms: Some(60_000),
+                exit_code: None,
+                agent_response_json: None,
+                state,
+                error_code: (state == JobRunState::Interrupted).then(|| "worker_terminated".into()),
+                error_message: None,
+            };
+
+            let interrupted = fixture.seed_run(
+                "jrun-20261010-0600",
+                "task_pr_pipeline",
+                JobRunState::Interrupted,
+            );
+            save_record_step(
+                &fixture,
+                &interrupted,
+                &step(
+                    JobTargetType::Job,
+                    "task_pr_pipeline",
+                    JobRunState::Interrupted,
+                    None,
+                ),
+            );
+            insert_step_audit(&fixture, &interrupted.run_id, "prepare", "step_started", 0);
+            insert_step_audit(&fixture, &interrupted.run_id, "prepare", "step_finished", 1);
+            insert_step_audit(
+                &fixture,
+                &interrupted.run_id,
+                "implement",
+                "step_started",
+                2,
+            );
+
+            let recorded = fixture.seed_run(
+                "jrun-20261010-0610",
+                "task_pr_pipeline",
+                JobRunState::Success,
+            );
+            save_record_step(
+                &fixture,
+                &recorded,
+                &step(
+                    JobTargetType::Activity,
+                    "prepare",
+                    JobRunState::Success,
+                    Some(7),
+                ),
+            );
+            insert_step_audit(&fixture, &recorded.run_id, "prepare", "step_started", 0);
+            insert_step_audit(&fixture, &recorded.run_id, "prepare", "step_finished", 1);
+            insert_step_audit(&fixture, &recorded.run_id, "unrecorded", "step_started", 2);
+
+            let server = fixture.server(false);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", interrupted.run_id)));
+            assert_eq!(detail["steps_source"], "audit", "{detail}");
+            assert_eq!(detail["run"]["error_code"], "worker_terminated");
+            assert!(detail["run"].get("steps").is_none(), "{detail}");
+            let steps = detail["steps"].as_array().unwrap();
+            assert_eq!(steps.len(), 2, "{detail}");
+            assert_eq!(steps[0]["state"], "success");
+            assert_eq!(steps[0]["lock_wait_ms"], 42);
+            assert_eq!(steps[1]["target_id"], "implement");
+            assert_eq!(steps[1]["state"], "interrupted");
+            assert_eq!(steps[1]["outcome"], "interrupted");
+
+            let detail = json_ok(server.get(&format!("/api/runs/{}", recorded.run_id)));
+            assert_eq!(detail["steps_source"], "record", "{detail}");
+            let steps = detail["steps"].as_array().unwrap();
+            assert_eq!(
+                steps.len(),
+                1,
+                "the record answers, not the trail: {detail}"
+            );
+            assert_eq!(steps[0]["target_id"], "prepare");
+            assert_eq!(steps[0]["lock_wait_ms"], 7);
+        },
+    );
+}
+
 fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<Utc>) {
     let payload = json!({
         "schemaVersion": 1,
