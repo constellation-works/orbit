@@ -467,17 +467,20 @@ impl OrbitRuntime {
         // document. Replacing the whole state would silently resume
         // admissions.
         if let Some(existing) = self.read_run_state(&run.run_id)? {
-            if initial_state.drain_worker_limit.is_none() {
-                initial_state.drain_worker_limit = existing.drain_worker_limit;
+            if initial_state.pull_drain.drain_worker_limit.is_none() {
+                initial_state.pull_drain.drain_worker_limit =
+                    existing.pull_drain.drain_worker_limit;
             }
-            if initial_state.drain_admissions_stop.is_none() {
-                initial_state.drain_admissions_stop = existing.drain_admissions_stop;
+            if initial_state.pull_drain.drain_admissions_stop.is_none() {
+                initial_state.pull_drain.drain_admissions_stop =
+                    existing.pull_drain.drain_admissions_stop;
             }
-            if initial_state.drain_window_extension.is_none() {
-                initial_state.drain_window_extension = existing.drain_window_extension;
+            if initial_state.pull_drain.drain_window_extension.is_none() {
+                initial_state.pull_drain.drain_window_extension =
+                    existing.pull_drain.drain_window_extension;
             }
-            if initial_state.drain_cancel.is_none() {
-                initial_state.drain_cancel = existing.drain_cancel;
+            if initial_state.pull_drain.drain_cancel.is_none() {
+                initial_state.pull_drain.drain_cancel = existing.pull_drain.drain_cancel;
             }
             if initial_state.child_dispatches.is_empty() {
                 initial_state.child_dispatches = existing.child_dispatches;
@@ -750,7 +753,7 @@ impl OrbitRuntime {
         state.sync_pipeline(result.pipeline.clone());
         // A resumed run starts from its source's hold; its own outcome
         // replaces it, so only a run that is held carries one.
-        state.forge_hold = result.forge_hold.clone();
+        state.pull_drain.forge_hold = result.forge_hold.clone();
         // [ORB-10002] Per-step checkpoints already maintain step records for
         // this run; only fall back to the legacy single-summary step record
         // when no checkpoint was ever written, so a later `resume` never sees
@@ -881,7 +884,7 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
     seeded.job_id = run.job_id.clone();
-    seeded.forge_hold_expired_at = None;
+    seeded.pull_drain.forge_hold_expired_at = None;
     // The resumed run's own outcome decides whether it echoes a child.
     seeded.root_cause = None;
     if let Some(pipeline) = seeded.pipeline.as_object_mut() {

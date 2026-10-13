@@ -1392,6 +1392,7 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
             .read_run_state(&old)
             .unwrap()
             .unwrap()
+            .pull_drain
             .drain_admissions_stop
             .is_some()
     );
@@ -1567,6 +1568,7 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     assert_eq!(shown["run"]["state"], "running");
     let before = runtime.read_run_state(id).unwrap().unwrap();
     let limit = before
+        .pull_drain
         .drain_worker_limit
         .as_ref()
         .expect("persisted CLI worker limit");
@@ -1659,7 +1661,7 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
     assert_eq!(changed["concurrency"]["previous_concurrency"], 2);
     assert_eq!(changed["concurrency"]["concurrency"], 4);
     let extended = runtime.read_run_state(id).unwrap().unwrap();
-    let extension = extended.drain_window_extension.as_ref().unwrap();
+    let extension = extended.pull_drain.drain_window_extension.as_ref().unwrap();
     assert_eq!(
         changed["deadline"],
         extension
@@ -1671,6 +1673,7 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
     assert_eq!(extension.reason.as_deref(), Some("CLI fixture"));
     assert_eq!(
         extended
+            .pull_drain
             .drain_worker_limit
             .as_ref()
             .unwrap()
@@ -1849,7 +1852,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+    state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
         capacity: None,
         recorded_at: now,
         queued: 0,
@@ -1947,7 +1950,7 @@ fn run_show_counts_local_deferred_tasks_once() {
         "workspace_auto_pipeline".into(),
         serde_json::json!({}),
     );
-    state.drain_last_pass = Some(DrainAdmissionPass {
+    state.pull_drain.drain_last_pass = Some(DrainAdmissionPass {
         capacity: None,
         recorded_at: now,
         queued: 3,
@@ -2036,7 +2039,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.drain_last_pass = Some(DrainAdmissionPass {
+    state.pull_drain.drain_last_pass = Some(DrainAdmissionPass {
         capacity: None,
         recorded_at: now,
         queued: 9,
@@ -2133,6 +2136,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
 
     // Fewer than several idle passes: the per-task lines stand alone.
     state
+        .pull_drain
         .drain_last_pass
         .as_mut()
         .unwrap()
@@ -2174,7 +2178,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+    state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
         capacity: None,
         recorded_at: now,
         queued: 0,
@@ -2249,7 +2253,7 @@ fn run_show_names_the_pull_breaker() {
         serde_json::json!({}),
     );
     let half_open_at = now + chrono::Duration::minutes(15);
-    state.pull_breaker = Some(orbit_types::workflow::PullBreaker {
+    state.pull_drain.pull_breaker = Some(orbit_types::workflow::PullBreaker {
         failures: 3,
         failure_classes: vec!["candidate".into(), "task_input".into(), "untyped".into()],
         opened_at: now,
@@ -2282,7 +2286,8 @@ fn run_show_names_the_pull_breaker() {
         assert!(open.contains(expected), "missing {expected:?} in:\n{open}");
     }
 
-    state.pull_breaker.as_mut().unwrap().half_open_at = now - chrono::Duration::minutes(1);
+    state.pull_drain.pull_breaker.as_mut().unwrap().half_open_at =
+        now - chrono::Duration::minutes(1);
     runtime.write_run_state(id, &state).unwrap();
     let probing = text(&fixture);
     assert!(probing.contains("half-open since"), "{probing}");
@@ -2312,7 +2317,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+    state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
         capacity: None,
         recorded_at: now,
         queued: 0,
@@ -2353,7 +2358,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         "{text}"
     );
     assert!(text.contains("Drain degraded:"), "{text}");
-    let pass = state.drain_last_pass.as_mut().unwrap();
+    let pass = state.pull_drain.drain_last_pass.as_mut().unwrap();
     pass.last_pass_error_code = Some("protocol_skew".into());
     pass.last_pass_error =
         Some("protocol_skew: caller and owner request fingerprints differ".into());

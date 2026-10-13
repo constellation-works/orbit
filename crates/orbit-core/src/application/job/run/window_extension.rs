@@ -228,7 +228,7 @@ impl OrbitRuntime {
                     request.reason.map(str::to_string),
                 );
                 let revision = state
-                    .drain_window_extension
+                    .pull_drain.drain_window_extension
                     .as_ref()
                     .map_or(0, |extension| extension.revision);
                 decided = Some((
@@ -295,8 +295,11 @@ impl OrbitRuntime {
                 closed = pull_window_closed(state, forwarded_expired, Utc::now());
                 // Only a stamped window can be extended, so only its close
                 // needs recording; an unstamped one keeps the forwarded answer.
-                if closed && state.pull_window_close.is_none() && drain_deadline(state).is_some() {
-                    state.pull_window_close = Some(PullWindowClose {
+                if closed
+                    && state.pull_drain.pull_window_close.is_none()
+                    && drain_deadline(state).is_some()
+                {
+                    state.pull_drain.pull_window_close = Some(PullWindowClose {
                         closed_at: Utc::now(),
                     });
                     state.updated_at = Utc::now();
@@ -389,7 +392,7 @@ pub(crate) fn pull_window_closed(
     forwarded_expired: bool,
     now: DateTime<Utc>,
 ) -> bool {
-    if state.pull_window_close.is_some() {
+    if state.pull_drain.pull_window_close.is_some() {
         return true;
     }
     drain_deadline(state).map_or(forwarded_expired, |deadline| {
@@ -423,20 +426,20 @@ fn refuse_closed_drain(
             "job run '{run_id}' is being cancelled; an extension does not reopen it, so start a new drain"
         )));
     }
-    if let Some(stop) = &state.drain_admissions_stop {
+    if let Some(stop) = &state.pull_drain.drain_admissions_stop {
         return Err(OrbitError::JobValidation(format!(
             "job run '{run_id}' had its admissions stopped by {} at {}; an extension does not reopen them, so start a new drain",
             stop.actor,
             rfc3339(stop.stopped_at)
         )));
     }
-    if let Some(close) = &state.pull_window_close {
+    if let Some(close) = &state.pull_drain.pull_window_close {
         return Err(OrbitError::JobValidation(format!(
             "job run '{run_id}' closed its window at {}: its last pass found nothing left to settle and ended admissions, so start a new drain",
             rfc3339(close.closed_at)
         )));
     }
-    if state.pull_single_pass.is_some()
+    if state.pull_drain.pull_single_pass.is_some()
         || submitted_window_seconds(&state.initial_input)
             .or_else(|| run.input.as_ref().and_then(submitted_window_seconds))
             .is_none_or(|seconds| seconds <= 0.0)

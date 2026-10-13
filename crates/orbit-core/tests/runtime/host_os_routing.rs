@@ -169,6 +169,7 @@ fn a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let waiting = pass

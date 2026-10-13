@@ -816,7 +816,7 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
                 drain_run.job_id.clone(),
                 json!({}),
             );
-            drain_state.drain_cancel = Some(DrainCancelRequest {
+            drain_state.pull_drain.drain_cancel = Some(DrainCancelRequest {
                 actor: "dashboard".into(),
                 source: "web".into(),
                 reason: Some("operator stopped the drain".into()),

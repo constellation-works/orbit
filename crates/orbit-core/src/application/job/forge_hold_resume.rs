@@ -62,10 +62,10 @@ impl OrbitRuntime {
             let Some(state) = self.read_run_state(&run.run_id)? else {
                 continue;
             };
-            if state.forge_hold_expired_at.is_some() {
+            if state.pull_drain.forge_hold_expired_at.is_some() {
                 continue;
             }
-            let Some(hold) = state.forge_hold else {
+            let Some(hold) = state.pull_drain.forge_hold else {
                 continue;
             };
             // A retry already resumed this run; that retry is the lineage's
@@ -224,7 +224,7 @@ impl OrbitRuntime {
         self.stores()
             .jobs()
             .update_run_state(&run.run_id, &mut |_, state| {
-                state.forge_hold_expired_at = Some(now);
+                state.pull_drain.forge_hold_expired_at = Some(now);
                 Ok(())
             })?;
         Ok(blocked)

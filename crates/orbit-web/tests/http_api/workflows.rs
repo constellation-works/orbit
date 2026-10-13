@@ -790,7 +790,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 )
                 .unwrap();
             let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
-            state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+            state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
                 capacity: None,
                 recorded_at: now,
                 queued: 0,
@@ -1151,7 +1151,7 @@ fn auto_start_and_ship_report_the_submission_notices() {
                 JobRunState::Running,
             );
             let mut state = PipelineState::new(pull.run_id.clone(), pull.job_id.clone(), json!({}));
-            state.drain_last_pass = Some(
+            state.pull_drain.drain_last_pass = Some(
                 serde_json::from_value(json!({
                     "recorded_at": Utc::now(),
                     "queued": 0,

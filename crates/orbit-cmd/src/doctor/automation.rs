@@ -81,7 +81,7 @@ pub(super) fn doctor_check_pull_protocol(runtime: &OrbitRuntime) -> WorkspaceDoc
         let state = runtime.read_run_state(&run.run_id)?;
         let pass = state
             .as_ref()
-            .and_then(|state| state.drain_last_pass.as_ref());
+            .and_then(|state| state.pull_drain.drain_last_pass.as_ref());
         let failure = run
             .steps
             .iter()

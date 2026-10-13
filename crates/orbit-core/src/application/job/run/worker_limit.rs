@@ -188,7 +188,7 @@ impl OrbitRuntime {
                     // invalidate the compare-and-set handle every other
                     // operator is holding.
                     unchanged = true;
-                    applied = state.drain_worker_limit.clone();
+                    applied = state.pull_drain.drain_worker_limit.clone();
                     return Ok(());
                 }
                 state.set_drain_worker_limit(
@@ -198,7 +198,7 @@ impl OrbitRuntime {
                     request.reason.map(str::to_string),
                     request.expected_revision,
                 );
-                applied = state.drain_worker_limit.clone();
+                applied = state.pull_drain.drain_worker_limit.clone();
                 Ok(())
             },
         )?;

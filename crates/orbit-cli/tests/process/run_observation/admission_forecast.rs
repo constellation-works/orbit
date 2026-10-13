@@ -53,7 +53,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
     ).unwrap();
     let mut state = PipelineState::new(id.into(), "workspace_auto_pipeline".into(), json!({}));
-    state.drain_last_pass = Some(
+    state.pull_drain.drain_last_pass = Some(
         serde_json::from_value::<DrainAdmissionPass>(json!({
             "recorded_at": now, "queued": 3,
         }))
@@ -80,7 +80,12 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
             "head": {"task_id": ids[0], "failing_since": now, "protected": true},
         });
         let forecast = serde_json::from_value::<DrainAdmissionForecast>(block).unwrap();
-        state.drain_last_pass.as_mut().unwrap().admission_forecast = Some(forecast.clone());
+        state
+            .pull_drain
+            .drain_last_pass
+            .as_mut()
+            .unwrap()
+            .admission_forecast = Some(forecast.clone());
         runtime.write_run_state(id, &state).unwrap();
         let before = fixture.snapshot();
         let before_state = json!(runtime.read_run_state(id).unwrap());
@@ -176,6 +181,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
 
     // A protected head can be carried through a pass that builds no forecast.
     let forecast = state
+        .pull_drain
         .drain_last_pass
         .as_mut()
         .unwrap()
@@ -202,6 +208,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
 
     // Unknown host size must not be formatted as zero headroom.
     let forecast = state
+        .pull_drain
         .drain_last_pass
         .as_mut()
         .unwrap()
@@ -224,6 +231,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
 
     // The last terminal drain remains useful history, not a current hold.
     let forecast = state
+        .pull_drain
         .drain_last_pass
         .as_mut()
         .unwrap()
@@ -266,7 +274,12 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         )
         .unwrap();
 
-    state.drain_last_pass.as_mut().unwrap().admission_forecast = None;
+    state
+        .pull_drain
+        .drain_last_pass
+        .as_mut()
+        .unwrap()
+        .admission_forecast = None;
     runtime.write_run_state(id, &state).unwrap();
     let absent = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(absent, baseline, "absent forecast changed readiness JSON");

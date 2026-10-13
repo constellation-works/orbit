@@ -134,7 +134,7 @@ impl crate::OrbitRuntime {
         }
         let preflight = self
             .read_run_state(drain_run_id)?
-            .and_then(|state| state.pull_crew_preflight);
+            .and_then(|state| state.pull_drain.pull_crew_preflight);
         self.crew_window_from(drain_run_id, preflight).map(Some)
     }
 
@@ -151,7 +151,7 @@ impl crate::OrbitRuntime {
             .unwrap_or_default();
         let stored_recovery = self
             .read_run_state(drain_run_id)?
-            .map(|state| state.pull_auth_recovery)
+            .map(|state| state.pull_drain.pull_auth_recovery)
             .unwrap_or_default();
         let mut auth_exclusions = Vec::new();
         let mut capacity = BTreeMap::<String, CapacityFailures>::new();

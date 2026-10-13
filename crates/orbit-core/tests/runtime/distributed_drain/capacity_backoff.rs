@@ -184,7 +184,7 @@ fn a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts() {
         .follower
         .read_run_state(&drain)
         .unwrap()
-        .and_then(|state| state.drain_last_pass)
+        .and_then(|state| state.pull_drain.drain_last_pass)
         .and_then(|last| last.admission_refusal);
     assert_eq!(recorded.as_deref(), Some(refusal), "{pass}");
 }

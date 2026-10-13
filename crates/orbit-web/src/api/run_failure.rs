@@ -218,7 +218,7 @@ fn cancellation_value(
     run: &JobRun,
     state: Option<&PipelineState>,
 ) -> Value {
-    if let Some(cancel) = state.and_then(|state| state.drain_cancel.as_ref()) {
+    if let Some(cancel) = state.and_then(|state| state.pull_drain.drain_cancel.as_ref()) {
         return json!({
             "actor": owned(Some(cancel.actor.as_str())),
             "source": owned(Some(cancel.source.as_str())),

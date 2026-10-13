@@ -190,7 +190,7 @@ impl OrbitRuntime {
         let forge_held = source.state == JobRunState::Held
             && self
                 .read_run_state(&source.run_id)?
-                .is_some_and(|state| state.forge_hold.is_some());
+                .is_some_and(|state| state.pull_drain.forge_hold.is_some());
         if !forge_held
             && !matches!(
                 source.state,

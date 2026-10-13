@@ -3,7 +3,7 @@
 use chrono::Utc;
 
 use orbit_types::workflow::{
-    ChildCancellation, ChildCancellationPolicy, ChildDispatch, PipelineState,
+    ChildCancellation, ChildCancellationPolicy, ChildDispatch, PipelineState, PullDrainState,
 };
 
 fn state() -> PipelineState {
@@ -63,4 +63,39 @@ fn a_late_re_record_cannot_reopen_a_cancelled_child() {
         state.child_dispatches[0], closed,
         "phase, status, error, cancellation, and submitted_at must all survive"
     );
+}
+
+/// Captured with PipelineState's derived serializer before the fields were
+/// grouped. This guards the persisted file contract, including key order and
+/// omission of empty records, through the public type boundary.
+#[test]
+fn pre_grouping_state_files_keep_their_exact_bytes() {
+    for (name, bytes) in [
+        (
+            "sparse",
+            include_str!("fixtures/pipeline-sparse-before-grouping.json"),
+        ),
+        (
+            "populated",
+            include_str!("fixtures/pipeline-populated-before-grouping.json"),
+        ),
+    ] {
+        let state: PipelineState = serde_json::from_str(bytes).unwrap();
+        if name == "sparse" {
+            assert_eq!(state.pull_drain, PullDrainState::default());
+        } else {
+            assert_eq!(state.effective_max_active_leaf_runs(2), 3);
+            assert_eq!(state.drain_worker_limit_revision(), 1);
+            assert!(state.admissions_stopped());
+            assert!(state.drain_cancelling());
+            assert_eq!(state.pull_drain.pull_auth_recovery.len(), 1);
+            assert_eq!(state.pull_drain.forge_hold.as_ref().unwrap().attempts, 2);
+            assert!(state.pull_drain.forge_hold_expired_at.is_some());
+        }
+        assert_eq!(
+            serde_json::to_string_pretty(&state).unwrap().as_bytes(),
+            bytes.as_bytes(),
+            "{name}: persisted names, order, values and omission rules must survive grouping"
+        );
+    }
 }

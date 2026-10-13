@@ -106,8 +106,8 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
 
 fn due(pair: &Pair, drain: &str) {
     let mut state = pair.follower.read_run_state(drain).unwrap().unwrap();
-    assert!(!state.pull_auth_recovery.is_empty());
-    for incident in state.pull_auth_recovery.values_mut() {
+    assert!(!state.pull_drain.pull_auth_recovery.is_empty());
+    for incident in state.pull_drain.pull_auth_recovery.values_mut() {
         if incident.recovered_at.is_none() {
             incident.exclusion.next_probe_at = Some(Utc::now() - chrono::Duration::seconds(1));
         }
@@ -198,6 +198,7 @@ fn auth_probe_backoff_recovery_fixture() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_auth_recovery
         .into_values()
         .next()
@@ -222,6 +223,7 @@ fn auth_probe_backoff_recovery_fixture() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_auth_recovery
         .into_values()
         .next()
@@ -274,7 +276,7 @@ fn auth_probe_backoff_recovery_fixture() {
         "Reply with exactly ORBIT_AUTH_OK."
     );
     let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-    let recovery = state.pull_auth_recovery.values().next().unwrap();
+    let recovery = state.pull_drain.pull_auth_recovery.values().next().unwrap();
     assert!(recovery.recovered_at.is_some());
     assert_eq!(recovery.recovery_source.as_deref(), Some("auth_probe"));
     assert!(

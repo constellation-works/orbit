@@ -662,6 +662,7 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let recorded = pass
@@ -1755,6 +1756,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let recorded = pass
@@ -1850,6 +1852,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
             .read_run_state(&drain)
             .unwrap()
             .unwrap()
+            .pull_drain
             .drain_last_pass
             .unwrap()
             .resource_throttle
@@ -2501,6 +2504,7 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("local pass");
     assert_eq!(held_pass.admission_refusal, None, "{held_pass:?}");
@@ -2532,6 +2536,7 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("local pass");
     assert_eq!(open_pass.admission_refusal, None, "{open_pass:?}");

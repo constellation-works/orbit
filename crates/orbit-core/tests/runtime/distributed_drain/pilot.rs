@@ -391,6 +391,7 @@ fn recorded_wait(pair: &Pair, drain: &str, task: &str) -> (String, String) {
         .read_run_state(drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     recorded

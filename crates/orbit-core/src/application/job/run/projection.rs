@@ -74,19 +74,19 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     )
     .unwrap_or_else(|_| Value::Array(Vec::new()));
     let drain_worker_limit = state
-        .and_then(|state| state.drain_worker_limit.as_ref())
+        .and_then(|state| state.pull_drain.drain_worker_limit.as_ref())
         .and_then(|limit| serde_json::to_value(limit).ok())
         .unwrap_or(Value::Null);
     let drain_admissions_stop = state
-        .and_then(|state| state.drain_admissions_stop.as_ref())
+        .and_then(|state| state.pull_drain.drain_admissions_stop.as_ref())
         .and_then(|stop| serde_json::to_value(stop).ok())
         .unwrap_or(Value::Null);
     let drain_window_extension = state
-        .and_then(|state| state.drain_window_extension.as_ref())
+        .and_then(|state| state.pull_drain.drain_window_extension.as_ref())
         .and_then(|extension| serde_json::to_value(extension).ok())
         .unwrap_or(Value::Null);
     let drain_cancel = state
-        .and_then(|state| state.drain_cancel.as_ref())
+        .and_then(|state| state.pull_drain.drain_cancel.as_ref())
         .and_then(|cancel| serde_json::to_value(cancel).ok())
         .unwrap_or(Value::Null);
     // Read before the terminal filter below: an invocation's result is most

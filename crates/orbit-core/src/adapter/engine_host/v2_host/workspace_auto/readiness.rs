@@ -573,7 +573,7 @@ pub fn explain_workspace_auto_readiness(
     // non-forecast hold that now takes precedence over the last pass.
     let admission_forecast = status_state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
         .and_then(|pass| pass.admission_forecast.as_ref());
     let forecast_view = admission_forecast.map(|forecast| {
         let settings = runtime.context.settings().auto_concurrency();

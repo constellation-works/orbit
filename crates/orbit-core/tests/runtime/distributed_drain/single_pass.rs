@@ -20,6 +20,7 @@ fn single_pass_taken(pair: &Pair, drain: &str) -> bool {
         .read_run_state(drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_single_pass
         .is_some()
 }
@@ -236,7 +237,7 @@ fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
     );
     assert!(pair.owner_claims().is_empty());
     let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-    assert!(state.pull_single_pass.is_some());
+    assert!(state.pull_drain.pull_single_pass.is_some());
     assert!(
         state.iteration <= 1,
         "the drain ended on its first iteration: {}",
@@ -494,6 +495,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
             .read_run_state(&resumed)
             .unwrap()
             .unwrap()
+            .pull_drain
             .pull_single_pass
             .is_none(),
         "the legacy checkpoint remains marker-free"
@@ -523,6 +525,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
             .read_run_state(&run.run_id)
             .unwrap()
             .unwrap()
+            .pull_drain
             .pull_single_pass
             .is_none(),
         "a legacy retry cannot mint a new marker"
@@ -574,6 +577,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
             .read_run_state(&replayed)
             .unwrap()
             .unwrap()
+            .pull_drain
             .pull_single_pass
             .is_none(),
         "a replay cannot mint a new marker"

@@ -275,7 +275,7 @@ pub(crate) fn run_show_payload(
         header.push_str(&summary.lines(run.state).join("\n"));
     } else if let Some(pass) = state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
     {
         // A pull drain records its passes too, without a leaf summary.
         for line in pass_throttle_line(pass)
@@ -289,7 +289,7 @@ pub(crate) fn run_show_payload(
     }
     if let Some(pass) = state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
     {
         if let Some(forecast) = &pass.admission_forecast {
             let forecast = json!(forecast);
@@ -313,7 +313,10 @@ pub(crate) fn run_show_payload(
     }
     // [ORB-15639] An open or half-open pull breaker: its failures, their
     // classes and when it next admits a probe claim. Absent while closed.
-    if let Some(breaker) = state.as_ref().and_then(|state| state.pull_breaker.as_ref()) {
+    if let Some(breaker) = state
+        .as_ref()
+        .and_then(|state| state.pull_drain.pull_breaker.as_ref())
+    {
         header.push_str(&format!(
             "\n{} {}",
             crate::output::color::bold("Breaker:"),
@@ -516,7 +519,7 @@ fn claimed_leaf_lines(
 ) -> String {
     let mut lines = String::new();
     if !run.state.is_terminal()
-        && let Some(cancel) = state.and_then(|state| state.drain_cancel.as_ref())
+        && let Some(cancel) = state.and_then(|state| state.pull_drain.drain_cancel.as_ref())
     {
         lines.push_str(&format!(
             "\n{} waiting for {} leaves (requested by {} at {}{}); `orbit run cancel {} --confirm --force` stops them",

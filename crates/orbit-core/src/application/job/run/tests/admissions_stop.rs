@@ -61,7 +61,7 @@ fn admissions_stop_initialization_preserves_worker_checkpoint_and_merges_control
         assert_eq!(result.outcome, DrainAdmissionsStopOutcome::Stopped);
         assert_eq!(result.coordinators.len(), 1);
         let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
-        let stop = state.drain_admissions_stop.as_ref().unwrap();
+        let stop = state.pull_drain.drain_admissions_stop.as_ref().unwrap();
         assert_eq!(stop.actor, "operator");
         assert_eq!(stop.reason.as_deref(), request().reason);
         if let Some(checkpoint) = checkpoint {

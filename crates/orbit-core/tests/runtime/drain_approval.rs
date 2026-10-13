@@ -566,6 +566,7 @@ fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pa
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_approvals
         .unwrap();
     assert_eq!(report.approved_total, 2);
@@ -592,6 +593,7 @@ fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pa
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_approvals
         .unwrap();
     assert_eq!(report.approved_total, 2);
@@ -1227,6 +1229,7 @@ fn an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_approvals
         .unwrap();
     assert_eq!(report.closed_total, 1);
@@ -1456,6 +1459,7 @@ fn an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_cl
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_approvals
         .unwrap();
     let held = report

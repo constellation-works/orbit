@@ -107,7 +107,7 @@ impl OrbitRuntime {
     pub(crate) fn recover_pull_auth_exclusions(&self, run_id: &str) -> Result<(), OrbitError> {
         let stored = self
             .read_run_state(run_id)?
-            .map(|state| state.pull_auth_recovery)
+            .map(|state| state.pull_drain.pull_auth_recovery)
             .unwrap_or_default();
         let mut incidents = BTreeMap::new();
         for record in self.stores().jobs().local_pull_claims_admitted_by(run_id)? {
@@ -123,6 +123,7 @@ impl OrbitRuntime {
             .update_run_state(run_id, &mut |_, state| {
                 for (id, incident) in &incidents {
                     state
+                        .pull_drain
                         .pull_auth_recovery
                         .entry(id.clone())
                         .or_insert_with(|| incident.clone());
@@ -157,29 +158,35 @@ impl OrbitRuntime {
             self.stores()
                 .jobs()
                 .update_run_state(run_id, &mut |_, state| {
-                    if state.drain_cancel.is_some() || state.drain_admissions_stop.is_some() {
+                    if state.pull_drain.drain_cancel.is_some()
+                        || state.pull_drain.drain_admissions_stop.is_some()
+                    {
                         return Ok(());
                     }
                     // Read the current due time under the store lock: a concurrent
                     // pass that reserved this probe wins and this one launches none.
                     if !ids.iter().any(|id| {
-                        state.pull_auth_recovery.get(id).is_some_and(|incident| {
-                            incident.recovered_at.is_none()
-                                && incident.exclusion.next_probe_at.is_some_and(|at| at <= now)
-                        })
+                        state
+                            .pull_drain
+                            .pull_auth_recovery
+                            .get(id)
+                            .is_some_and(|incident| {
+                                incident.recovered_at.is_none()
+                                    && incident.exclusion.next_probe_at.is_some_and(|at| at <= now)
+                            })
                     }) {
                         return Ok(());
                     }
                     let attempts = ids
                         .iter()
-                        .filter_map(|id| state.pull_auth_recovery.get(id))
+                        .filter_map(|id| state.pull_drain.pull_auth_recovery.get(id))
                         .map(|incident| incident.exclusion.attempts)
                         .max()
                         .unwrap_or(0)
                         .saturating_add(1);
                     let delay = (INITIAL_DELAY * 2_i32.pow(attempts.min(2))).min(MAX_DELAY);
                     for id in &ids {
-                        if let Some(incident) = state.pull_auth_recovery.get_mut(id) {
+                        if let Some(incident) = state.pull_drain.pull_auth_recovery.get_mut(id) {
                             incident.exclusion.attempts = attempts;
                             incident.exclusion.next_probe_at = Some(now + delay);
                         }
@@ -197,7 +204,7 @@ impl OrbitRuntime {
                 .jobs()
                 .update_run_state(run_id, &mut |_, state| {
                     for id in &ids {
-                        if let Some(incident) = state.pull_auth_recovery.get_mut(id) {
+                        if let Some(incident) = state.pull_drain.pull_auth_recovery.get_mut(id) {
                             if let Ok(outcome) = &outcome {
                                 incident
                                     .exclusion

@@ -711,6 +711,7 @@ fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
             .read_run_state(&run.run_id)
             .unwrap()
             .unwrap()
+            .pull_drain
             .drain_last_pass
             .unwrap();
         assert!(pass.degraded);
@@ -747,7 +748,7 @@ fn repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it() {
         assert_eq!(pass["consecutive_pass_failures"], count);
         assert_eq!(pass["degraded"], count == 3);
         let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-        let health = state.drain_last_pass.unwrap();
+        let health = state.pull_drain.drain_last_pass.unwrap();
         assert_eq!(health.consecutive_pass_failures, count);
         assert!(
             health
@@ -888,6 +889,7 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert!(
@@ -933,6 +935,7 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         .read_run_state(&restarted)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert_eq!(cleared.admission_refusal, None, "{cleared:?}");
@@ -948,6 +951,7 @@ fn breaker(pair: &Pair, drain: &str) -> PullBreaker {
         .read_run_state(drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_breaker
         .expect("the breaker is recorded")
 }
@@ -955,7 +959,11 @@ fn breaker(pair: &Pair, drain: &str) -> PullBreaker {
 /// Let the breaker's cooldown pass, as the clock would.
 fn cooldown_passes(pair: &Pair, drain: &str) {
     let mut state = pair.follower.read_run_state(drain).unwrap().unwrap();
-    let breaker = state.pull_breaker.as_mut().expect("an open breaker");
+    let breaker = state
+        .pull_drain
+        .pull_breaker
+        .as_mut()
+        .expect("an open breaker");
     breaker.half_open_at = Utc::now() - chrono::Duration::seconds(1);
     pair.follower.write_run_state(drain, &state).unwrap();
 }
@@ -1036,7 +1044,7 @@ fn an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome
     assert_eq!(closed["consecutive_failures"], 0, "{closed}");
     assert!(closed["refusal"].is_null(), "{closed}");
     let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-    assert_eq!(state.pull_breaker, None);
+    assert_eq!(state.pull_drain.pull_breaker, None);
     pair.running_leaf(&drain, 4);
     assert_eq!(pulls(&pair), 6, "a closed breaker admits again");
 }
@@ -1664,6 +1672,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .and_then(|pass| pass.resource_throttle)
         .expect("the pull pass records the throttle");
@@ -1757,6 +1766,7 @@ fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert_eq!(
@@ -2018,6 +2028,7 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
         .read_run_state(&local_drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let held = pass
@@ -2442,6 +2453,7 @@ fn a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requ
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert!(

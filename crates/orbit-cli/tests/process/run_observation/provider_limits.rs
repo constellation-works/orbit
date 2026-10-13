@@ -169,7 +169,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.pull_crew_preflight = Some(PullCrewPreflight {
+    state.pull_drain.pull_crew_preflight = Some(PullCrewPreflight {
         checked_at: at,
         runnable: vec!["opus".into(), "sol".into()],
         default_crew: Some("sol".into()),
