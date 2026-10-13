@@ -24,7 +24,7 @@ use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, Toke
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider};
 use serde_json::{Value, json};
 
-use super::provider_capacity::{CapacityHost, FakeProvider, agent_spec, writer};
+use super::provider_capacity::{CapacityHost, FakeProvider, agent_spec, outcome_writer};
 
 const CODEX_STDOUT: &str = include_str!("fixtures/provider_usage/codex_exec_stdout.jsonl");
 const CODEX_ROLLOUT: &str = include_str!("fixtures/provider_usage/codex_rollout.jsonl");
@@ -53,7 +53,7 @@ fn dispatch(
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
         input: json!({ "prompt": "implement", "crew": "fixture-crew" }),
-        audit: writer(audit.path(), "usage-run"),
+        audit: outcome_writer("usage-run"),
         run_id: "usage-run",
         host: Some(&host),
     })

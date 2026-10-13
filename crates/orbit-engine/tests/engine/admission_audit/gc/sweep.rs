@@ -9,7 +9,6 @@ use tempfile::tempdir;
 /// Safety gate: the collector never follows a symlink standing where a
 /// worktree should be.
 #[cfg(unix)]
-#[test]
 fn symlink_at_a_known_worktree_path_is_never_followed() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -46,7 +45,6 @@ fn symlink_at_a_known_worktree_path_is_never_followed() {
 }
 
 #[cfg(unix)]
-#[test]
 fn gc_removes_a_worktree_holding_a_read_only_directory() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -80,4 +78,24 @@ fn gc_removes_a_worktree_holding_a_read_only_directory() {
     assert!(result.reports[0].bytes_reclaimed > 0);
     assert!(!worktree.exists(), "the whole directory must be gone");
     assert!(!listed_worktrees(&repo).contains("readonly"));
+}
+
+#[test]
+fn gc_symlink_and_read_only_contracts() {
+    super::super::run_family(
+        concat!(module_path!(), "::gc_symlink_and_read_only_contracts"),
+        module_path!(),
+        &[
+            #[cfg(unix)]
+            (
+                "symlink_at_a_known_worktree_path_is_never_followed",
+                symlink_at_a_known_worktree_path_is_never_followed,
+            ),
+            #[cfg(unix)]
+            (
+                "gc_removes_a_worktree_holding_a_read_only_directory",
+                gc_removes_a_worktree_holding_a_read_only_directory,
+            ),
+        ],
+    );
 }

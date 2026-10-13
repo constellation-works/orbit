@@ -99,7 +99,6 @@ fn scripted_heads(old: &str, new: &str, old_reads: usize) -> Vec<String> {
 
 /// Regression for ORB-14315: provider metadata may lag a verified lease-push,
 /// but both the merge mutation and review landing must keep the new exact SHA.
-#[test]
 fn previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins() {
     isolated(
         "previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins",
@@ -262,7 +261,6 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
 /// may briefly name the previous head too. Completion waits inside the same
 /// bound while the task branch on origin already names the candidate, and
 /// still merges only that exact SHA.
-#[test]
 fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin() {
     isolated(
         "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
@@ -454,7 +452,6 @@ fn pull_ref_refusal_rows(test: &str, selected: &[&str]) {
 
 /// An in-run conflict repair retains the head it replaces even without an
 /// upstream previous-head checkpoint, so its verified push can settle too.
-#[test]
 fn previous_published_head_metadata_lag_after_in_run_conflict_repair() {
     isolated(
         "previous_published_head_metadata_lag_after_in_run_conflict_repair",
@@ -497,7 +494,6 @@ fn previous_published_head_metadata_lag_after_in_run_conflict_repair() {
     );
 }
 
-#[test]
 fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr() {
     isolated(
         "pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr",
@@ -541,7 +537,6 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr() {
     );
 }
 
-#[test]
 fn pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase() {
     isolated(
         "pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase",
@@ -566,7 +561,6 @@ fn pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase()
     );
 }
 
-#[test]
 fn pr_open_permanent_create_failures_never_retry_or_look_up_again() {
     isolated(
         "pr_open_permanent_create_failures_never_retry_or_look_up_again",
@@ -625,7 +619,6 @@ fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &s
 /// reviewed candidate is merged with a request conditional on its head SHA.
 /// The merge is read back from the forge, the landing is recorded for review
 /// coverage, and only then does the task reach `done`.
-#[test]
 fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery() {
     isolated(
         "passing_checks_merge_the_reviewed_candidate_and_record_its_delivery",
@@ -723,7 +716,6 @@ fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery() {
 /// fix reaches the PR branch only under a lease on the published head the
 /// review settled on, and completion merges exactly the head that review
 /// settled, never a head pushed after it.
-#[test]
 fn a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges() {
     isolated(
         "a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges",
@@ -797,7 +789,6 @@ fn a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merge
 /// lose the before-landing repair. Both shipped pipelines preserve it and
 /// block with the operator recipe. A branch that moved somewhere else, or
 /// that moved and was then merged, still loses the lease and preserves nothing.
-#[test]
 fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease() {
     isolated(
         "a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease",
@@ -1145,7 +1136,6 @@ fn run_shipped_landing_push(
 
 /// Both creation's view and reuse's list/view retain the provider number
 /// representations the private PR reader already accepted.
-#[test]
 fn pr_open_preserves_provider_number_representations() {
     isolated(
         "pr_open_preserves_provider_number_representations",
@@ -1187,7 +1177,6 @@ fn pr_open_preserves_provider_number_representations() {
 /// A required check that fails, before or after a wait, or an outstanding
 /// required review, refuses completion before any merge request. The PR stays
 /// open, the remote base does not move, and the task stays in `review`.
-#[test]
 fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
     isolated(
         "a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review",
@@ -1279,7 +1268,6 @@ fn approve_batch(fx: &Fixture, host: &DeliveryHost) {
         .pr_status = Some("APPROVED".into());
 }
 
-#[test]
 fn a_pr_merge_batch_lands_the_checked_head_at_its_pin() {
     isolated(
         "a_pr_merge_batch_lands_the_checked_head_at_its_pin",
@@ -1305,7 +1293,6 @@ fn a_pr_merge_batch_lands_the_checked_head_at_its_pin() {
 
 /// A PR head that moves after the freshness check must not merge: the batch
 /// pins the commit it checked, and the provider refuses the moved head.
-#[test]
 fn a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check() {
     isolated(
         "a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check",
@@ -1367,7 +1354,6 @@ fn open_for_completion(fx: &Fixture, host: &DeliveryHost) -> usize {
 /// same authorized SHA, so the unchanged candidate lands without a provider
 /// recovery activity. Pending checks on that fresh read are waited out as
 /// before. A reviewed and an ungated-but-published candidate behave alike.
-#[test]
 fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() {
     isolated(
         "a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence",
@@ -1456,7 +1442,6 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
 /// another status, a body that disagrees or is not JSON, extra diagnostics, a
 /// transport timeout and a server error each fail on the one request, with the
 /// provider's message, and the task stays in review.
-#[test]
 fn other_merge_refusals_fail_on_the_first_request() {
     isolated(
         "other_merge_refusals_fail_on_the_first_request",
@@ -1543,7 +1528,6 @@ fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str
 /// The read after a base-modification refusal still pins the candidate: a
 /// moved head or repointed base, a closed or contradictory PR, or a merge of
 /// some other head refuses without a second merge request.
-#[test]
 fn a_base_race_refresh_refuses_a_changed_candidate_without_another_merge() {
     isolated(
         "a_base_race_refresh_refuses_a_changed_candidate_without_another_merge",
@@ -1610,7 +1594,6 @@ fn a_base_race_refresh_refuses_a_changed_candidate_without_another_merge() {
 /// checks, an outstanding review, a merge policy that no longer permits a
 /// method, or a real conflict on a reviewed head refuses without a second
 /// merge request.
-#[test]
 fn a_base_race_refresh_refuses_unmet_gates_without_another_merge() {
     isolated(
         "a_base_race_refresh_refuses_unmet_gates_without_another_merge",
@@ -1656,7 +1639,6 @@ fn a_base_race_refresh_refuses_unmet_gates_without_another_merge() {
 /// through the pinned delivery check without another merge request. The
 /// refused request produced no merge commit, so the landing is not
 /// attributed to this run as a managed merge.
-#[test]
 fn an_already_merged_refresh_reconciles_without_another_merge_request() {
     isolated(
         "an_already_merged_refresh_reconciles_without_another_merge_request",
@@ -1692,7 +1674,6 @@ fn an_already_merged_refresh_reconciles_without_another_merge_request() {
 /// is zero or runs out first stops sooner; the refusal never resets the wait.
 /// Each exit names the provider refusal and the attempts made, and leaves the
 /// task in review.
-#[test]
 fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget() {
     isolated(
         "repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget",
@@ -1736,7 +1717,6 @@ fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget() {
 
 /// A freshly created stacked base shares the landing tip but has not landed
 /// any work yet. Its first candidate can open a PR and enter review.
-#[test]
 fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
     isolated(
         "pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip",
@@ -1806,7 +1786,6 @@ fn pr_promote_records_the_pull_request_page_with_its_number() {
 /// A base with its own work merged into the landing branch remains obsolete
 /// at publication and on a resumed promotion, before any forge call or status
 /// transition.
-#[test]
 fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch() {
     isolated(
         "pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch",
@@ -1855,7 +1834,6 @@ fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch() {
 /// anything. The refusal is recorded on the task. Opening the same fixture with
 /// the current head and base as the reviewed pair then succeeds, so each
 /// refusal is caused by the mismatch alone.
-#[test]
 fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
     isolated(
         "pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate",
@@ -1959,7 +1937,6 @@ fn pr_open_appends_the_review_fixes_section_to_the_published_body() {
 /// uncommitted is refused, because the result would not describe the committed
 /// candidate. Once the repair is committed, as step recovery does, the retry
 /// passes on the new head and replaces the logs.
-#[test]
 fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes() {
     isolated(
         "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
@@ -2040,7 +2017,6 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
 }
 
 /// Large captured output belongs only to artifacts, on both delivery routes.
-#[test]
 fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() {
     isolated(
         "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
@@ -2306,7 +2282,6 @@ fn a_missing_validation_tool_is_an_environment_failure() {
 /// environment's failure, which no recovery repairs, and keep the notice in the
 /// log. The refusal is narrow: a real failure stays the candidate's, and a
 /// `DEFERRED:` that does not lead a line is ordinary output [ORB-15287].
-#[test]
 fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
     isolated(
         "a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure",
@@ -2388,7 +2363,6 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
 /// that reports no executed tests (a lint or golden gate) replays nothing and
 /// is refused, and a replay red on the base too is held as `baseline_red`. A
 /// later implementation that deferred nothing clears the obligation.
-#[test]
 fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     isolated(
         "a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery",
@@ -2476,7 +2450,6 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
 /// before commit: nothing is validated, replayed or kept, and the failure
 /// names what is wrong. The gate summary, Orbit's own probes and any
 /// hand-written field each decide [ORB-15516].
-#[test]
 fn a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step() {
     isolated(
         "a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step",
@@ -2760,7 +2733,6 @@ fn a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step() {
 /// the replay among the results [ORB-15287]. A replay that defers again is
 /// the validation environment's failure, and a record whose command this
 /// host does not name as a gate is refused.
-#[test]
 fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
     isolated(
         "a_claimed_leaf_replays_its_implementers_deferral_before_publication",
@@ -2826,7 +2798,6 @@ fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
 /// gate and records the native pass as the gate's evidence. A replay that
 /// still skips is the validation environment's failure, and a replay that
 /// fails is not a pass.
-#[test]
 fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() {
     isolated(
         "a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication",
@@ -2911,7 +2882,6 @@ fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() 
 /// fails the step, and a replay that still cannot run `ps` holds the
 /// candidate. The same notices from a claimed leaf on Linux are refused
 /// before commit.
-#[test]
 fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication() {
     isolated(
         "a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication",
@@ -3000,7 +2970,6 @@ fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication() {
 /// native pass with no deferral line is pinned as the gate's evidence, and a
 /// replay that still skips Seatbelt or still cannot run `ps` holds the
 /// candidate.
-#[test]
 fn a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs() {
     isolated(
         "a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs",
@@ -3704,7 +3673,6 @@ const RED_LINT: &str = "make ci-lint";
 
 /// Normal child output cannot impersonate a supervisor stop [ORB-15507].
 /// The synchronized base prints the same note but passes the command.
-#[test]
 fn printed_supervisor_notes_remain_candidate_failures_on_both_streams() {
     isolated(
         "printed_supervisor_notes_remain_candidate_failures_on_both_streams",
@@ -3776,7 +3744,6 @@ fn printed_supervisor_notes_remain_candidate_failures_on_both_streams() {
     );
 }
 
-#[test]
 fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
     isolated(
         "supervisor_stops_are_environment_failures_and_never_poison_the_base_cache",
@@ -3891,7 +3858,6 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
 /// pushed, no PR is opened, and the candidate is kept. The hold stands while
 /// the base ref points at the red commit and lifts once it moves to a commit
 /// that passes.
-#[test]
 fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
     isolated(
         "a_required_command_red_on_the_base_holds_the_task_without_a_pr",
@@ -4093,7 +4059,6 @@ fn nextest_failures(tests: &[&str]) -> String {
 /// history and the pull request name the known-red tests. A candidate that
 /// fails a test the base does not, beside the base's or instead of them,
 /// requires repair, retaining both complete failure sets in durable logs.
-#[test]
 fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
     isolated(
         "a_candidate_failing_only_known_red_tests_proceeds_and_records_them",
@@ -4675,7 +4640,6 @@ fn claimed_known_red_rows(test: &str, selected: &[&str]) {
 /// the middle of a long run never reaches the log. The failing-test set is
 /// read from the complete output: a candidate whose extra failure only the
 /// dropped middle names requires repair, retaining that identity in its log.
-#[test]
 fn a_failure_only_the_truncated_middle_names_still_requires_candidate_repair() {
     isolated(
         "a_failure_only_the_truncated_middle_names_still_requires_candidate_repair",
@@ -4729,7 +4693,6 @@ fn a_failure_only_the_truncated_middle_names_still_requires_candidate_repair() {
 /// A red base discovered while revalidating a rebased, already-published PR
 /// still holds the task. The earlier completion-failure path used to preserve
 /// every PR failure in `review`, bypassing the baseline hold.
-#[test]
 fn a_red_base_during_pr_revalidation_holds_the_task() {
     isolated(
         "a_red_base_during_pr_revalidation_holds_the_task",
@@ -4801,7 +4764,6 @@ fn a_red_base_during_pr_revalidation_holds_the_task() {
 /// A failure that looks network-inconclusive is rerun after a backoff. One
 /// that clears passes, with the rerun recorded. One that persists stops after
 /// two reruns and is judged as any failure is.
-#[test]
 fn a_network_flake_is_rerun_before_the_candidate_is_judged() {
     isolated(
         "a_network_flake_is_rerun_before_the_candidate_is_judged",
@@ -4851,7 +4813,6 @@ fn a_network_flake_is_rerun_before_the_candidate_is_judged() {
 /// A claimed leaf's required command that fails the same way on its base is
 /// typed `baseline_red`. The hold names the claim's base ref, the owner is
 /// sent the candidate's and the base's logs, and nothing is handed off.
-#[test]
 fn a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs() {
     isolated(
         "a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs",
@@ -4888,7 +4849,6 @@ fn a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs() {
 /// network after its reruns, on a base that passes, says nothing about the
 /// candidate: it fails typed `transient`, so the leaf releases its claim
 /// instead of blocking the task, and the owner is still sent both logs.
-#[test]
 fn a_claimed_candidate_that_cannot_reach_the_network_fails_transient() {
     isolated(
         "a_claimed_candidate_that_cannot_reach_the_network_fails_transient",
@@ -4930,7 +4890,6 @@ fn a_claimed_candidate_that_cannot_reach_the_network_fails_transient() {
 /// no log and pins no candidate. After `pr_open`, the pin step attaches the
 /// logs for the published candidate without running a command again, and the
 /// owner's handoff accepts them. A pin for a different commit is refused.
-#[test]
 fn a_pr_claim_validates_before_publication_and_pins_after_it() {
     isolated(
         "a_pr_claim_validates_before_publication_and_pins_after_it",
@@ -5033,7 +4992,6 @@ fn login_shell_toolchain(sandbox: &Path) -> (Vec<(String, String)>, PathBuf, Pat
 /// rebase checkpoint. Once that head is (re)reviewed and republished under
 /// the rebase lease, completing it with the new reviewed head merges exactly
 /// that head and reaches `done`.
-#[test]
 fn a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes() {
     isolated(
         "a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes",
@@ -5132,7 +5090,6 @@ const FEATURE: &str = "src/feature.txt";
 /// the retry used to refuse the provenance and block. The provenance guard
 /// still refuses a recovered HEAD whose checkpoint is not the one this
 /// attempt prepared.
-#[test]
 fn a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands() {
     isolated(
         "a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands",
@@ -5212,7 +5169,6 @@ fn a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands() {
 /// until the step has followed its base as often as allowed. The next advance
 /// blocks as `base_chase_exhausted`, keeping the last certified recovery and
 /// requesting no merge.
-#[test]
 fn conflicting_base_advances_after_recovery_are_chased_until_the_bound() {
     isolated(
         "conflicting_base_advances_after_recovery_are_chased_until_the_bound",
@@ -5624,7 +5580,6 @@ fn review_revalidation_widens_selectors_for_a_reviewer_change_outside_task_owner
 /// candidate. The handoff keeps the implementation commit and the reviewer
 /// commit exactly as they are, pushes them so they are recoverable, blocks the
 /// task, and opens no PR.
-#[test]
 fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
     isolated(
         "a_failed_review_revalidation_rejects_and_preserves_both_commits",
@@ -5868,7 +5823,6 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
 
 /// Both the fixture guard and Git itself refuse HTTPS before opening a socket,
 /// including the engine's VCS child that clears GIT_ALLOW_PROTOCOL.
-#[test]
 fn fixture_push_refuses_non_file_transports_without_network() {
     isolated(
         "fixture_push_refuses_non_file_transports_without_network",
@@ -5931,7 +5885,6 @@ fn fixture_push_refuses_non_file_transports_without_network() {
 
 /// Check effective push URLs, including a second pushurl and rewrite rules,
 /// rather than trusting a local fetch URL.
-#[test]
 fn fixture_push_guard_checks_all_effective_push_urls() {
     isolated(
         "fixture_push_guard_checks_all_effective_push_urls",
@@ -5990,7 +5943,6 @@ fn fixture_push_guard_checks_all_effective_push_urls() {
 
 /// ORB-14717: a silent origin must not turn reviewed work into a candidate
 /// failure. Only a cached ref sharing ancestry can complete the handoff.
-#[test]
 fn claimed_handoff_fetch_timeout_uses_only_a_related_cached_base() {
     isolated(
         "claimed_handoff_fetch_timeout_uses_only_a_related_cached_base",
@@ -6088,7 +6040,6 @@ fn claimed_handoff_missing_remote_ref_never_uses_the_cached_base() {
 
 /// Drive real Git's local upload-pack: temporary connection failures retry and
 /// can recover; access refusals stay untyped and never retry or use the cache.
-#[test]
 fn remote_base_transport_retries_preserve_access_refusals() {
     isolated(
         "remote_base_transport_retries_preserve_access_refusals",
@@ -7547,7 +7498,6 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
     );
 }
 
-#[test]
 fn validation_environment_contracts() {
     isolated("validation_environment_contracts", |_| {
         git_fixture::run_scenarios(&[
@@ -7567,7 +7517,6 @@ fn validation_environment_contracts() {
     });
 }
 
-#[test]
 fn empty_validation_and_handoff_contracts() {
     isolated("empty_validation_and_handoff_contracts", |_| {
         git_fixture::run_scenarios(&[
@@ -7591,7 +7540,6 @@ fn empty_validation_and_handoff_contracts() {
     });
 }
 
-#[test]
 fn failure_handoff_contracts() {
     isolated("failure_handoff_contracts", |_| {
         git_fixture::run_scenarios(&[
@@ -7615,7 +7563,6 @@ fn failure_handoff_contracts() {
     });
 }
 
-#[test]
 fn implementation_handoff_contracts() {
     isolated("implementation_handoff_contracts", |_| {
         git_fixture::run_scenarios(&[
@@ -7696,7 +7643,6 @@ fn known_red_replay_coverage() {
     );
 }
 
-#[test]
 fn pull_ref_identity_refusals() {
     pull_ref_refusal_rows(
         "pull_ref_identity_refusals",
@@ -7726,7 +7672,6 @@ fn pull_ref_wait_and_review_refusals() {
     );
 }
 
-#[test]
 fn claimed_known_red_equal_and_subset() {
     claimed_known_red_rows("claimed_known_red_equal_and_subset", &["equal", "subset"]);
 }
@@ -7737,4 +7682,191 @@ fn claimed_known_red_superset_and_disjoint() {
         "claimed_known_red_superset_and_disjoint",
         &["shared-plus-new", "disjoint-six-vs-one", "candidate-unknown", "base-unknown", "both-unknown"],
     );
+}
+
+#[test]
+fn metadata_lag_pins_and_repair() {
+    isolated("metadata_lag_pins_and_repair", |_| {
+        previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins();
+        previous_published_head_metadata_lag_after_in_run_conflict_repair();
+    });
+}
+
+#[test]
+fn pull_ref_pins_and_identity() {
+    isolated("pull_ref_pins_and_identity", |_| {
+        previous_published_head_pull_ref_lag_settles_with_exact_merge_pin();
+        pull_ref_identity_refusals();
+    });
+}
+
+#[test]
+fn pr_open_branch_identity() {
+    isolated("pr_open_branch_identity", |_| {
+        pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip();
+        pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch();
+        pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate();
+    });
+}
+
+#[test]
+fn pr_create_retry_contracts() {
+    isolated("pr_create_retry_contracts", |_| {
+        pr_open_permanent_create_failures_never_retry_or_look_up_again();
+        pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr();
+        pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase();
+    });
+}
+
+#[test]
+fn pr_number_and_push_transports() {
+    isolated("pr_number_and_push_transports", |_| {
+        pr_open_preserves_provider_number_representations();
+        fixture_push_guard_checks_all_effective_push_urls();
+        fixture_push_refuses_non_file_transports_without_network();
+    });
+}
+
+#[test]
+fn base_race_fresh_gates() {
+    isolated("base_race_fresh_gates", |_| {
+        a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence();
+        a_base_race_refresh_refuses_unmet_gates_without_another_merge();
+    });
+}
+
+#[test]
+fn base_race_candidate_identity() {
+    isolated("base_race_candidate_identity", |_| {
+        a_base_race_refresh_refuses_a_changed_candidate_without_another_merge();
+        an_already_merged_refresh_reconciles_without_another_merge_request();
+    });
+}
+
+#[test]
+fn merge_refusal_bounds() {
+    isolated("merge_refusal_bounds", |_| {
+        other_merge_refusals_fail_on_the_first_request();
+        repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget();
+    });
+}
+
+#[test]
+fn recovered_base_advances() {
+    isolated("recovered_base_advances", |_| {
+        conflicting_base_advances_after_recovery_are_chased_until_the_bound();
+        a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands();
+    });
+}
+
+#[test]
+fn review_checks_and_delivery() {
+    isolated("review_checks_and_delivery", |_| {
+        a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review();
+        passing_checks_merge_the_reviewed_candidate_and_record_its_delivery();
+    });
+}
+
+#[test]
+fn review_fix_revalidation() {
+    isolated("review_fix_revalidation", |_| {
+        a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges();
+        a_failed_review_revalidation_rejects_and_preserves_both_commits();
+        a_red_base_during_pr_revalidation_holds_the_task();
+    });
+}
+
+#[test]
+fn review_repair_leases() {
+    isolated("review_repair_leases", |_| {
+        a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease();
+        a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes();
+    });
+}
+
+#[test]
+fn claimed_validation_failures() {
+    isolated("claimed_validation_failures", |_| {
+        a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs();
+        a_claimed_candidate_that_cannot_reach_the_network_fails_transient();
+        a_required_command_red_on_the_base_holds_the_task_without_a_pr();
+    });
+}
+
+#[test]
+fn claimed_publication_and_merge_pins() {
+    isolated("claimed_publication_and_merge_pins", |_| {
+        a_pr_claim_validates_before_publication_and_pins_after_it();
+        a_pr_merge_batch_lands_the_checked_head_at_its_pin();
+        a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check();
+    });
+}
+
+#[test]
+fn validation_repairs_and_logs() {
+    isolated("validation_repairs_and_logs", |_| {
+        required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes();
+        required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs();
+        printed_supervisor_notes_remain_candidate_failures_on_both_streams();
+    });
+}
+
+#[test]
+fn supervisor_and_truncated_failures() {
+    isolated("supervisor_and_truncated_failures", |_| {
+        supervisor_stops_are_environment_failures_and_never_poison_the_base_cache();
+        a_failure_only_the_truncated_middle_names_still_requires_candidate_repair();
+    });
+}
+
+#[test]
+fn network_retry_and_cached_base() {
+    isolated("network_retry_and_cached_base", |_| {
+        a_network_flake_is_rerun_before_the_candidate_is_judged();
+        remote_base_transport_retries_preserve_access_refusals();
+        claimed_handoff_fetch_timeout_uses_only_a_related_cached_base();
+    });
+}
+
+#[test]
+fn linux_deferral_contracts() {
+    isolated("linux_deferral_contracts", |_| {
+        a_claimed_leaf_replays_its_implementers_deferral_before_publication();
+        a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step();
+        a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery();
+    });
+}
+
+#[test]
+fn macos_deferral_contracts() {
+    isolated("macos_deferral_contracts", |_| {
+        a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication();
+        a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication();
+        a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs();
+        a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure();
+    });
+}
+
+#[test]
+fn validation_and_empty_handoffs() {
+    isolated("validation_and_empty_handoffs", |_| {
+        validation_environment_contracts();
+        empty_validation_and_handoff_contracts();
+    });
+}
+
+#[test]
+fn failure_and_implementation_handoffs() {
+    isolated("failure_and_implementation_handoffs", |_| {
+        failure_handoff_contracts();
+        implementation_handoff_contracts();
+    });
+}
+
+#[test]
+fn known_red_validation_and_subset() {
+    isolated("known_red_validation_and_subset", |_| {
+        a_candidate_failing_only_known_red_tests_proceeds_and_records_them();
+        claimed_known_red_equal_and_subset();
+    });
 }

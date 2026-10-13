@@ -11,7 +11,6 @@ use std::process::Command;
 use tempfile::tempdir;
 
 #[cfg(unix)]
-#[test]
 fn gc_reclaims_the_leftover_of_a_removal_that_failed_partway() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -83,7 +82,6 @@ fn gc_reclaims_the_leftover_of_a_removal_that_failed_partway() {
 }
 
 #[cfg(unix)]
-#[test]
 fn gc_reclaims_trash_directory_when_deleter_pid_is_dead() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -151,7 +149,6 @@ fn gc_reclaims_trash_directory_when_deleter_pid_is_dead() {
     assert!(!trash_dir.exists());
 }
 
-#[test]
 fn gc_reclaims_trash_directory_when_age_exceeds_timeout() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -202,7 +199,6 @@ fn gc_reclaims_trash_directory_when_age_exceeds_timeout() {
     assert!(!trash_dir.exists());
 }
 
-#[test]
 fn gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -247,7 +243,6 @@ fn gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout() {
     assert!(trash_dir.exists());
 }
 
-#[test]
 fn gc_leaves_malformed_trash_directory_as_unrecognized() {
     if !super::super::run_isolated(concat!(
         module_path!(),
@@ -291,4 +286,36 @@ fn reaped_child_pid() -> u32 {
     let pid = child.id();
     child.wait().expect("reap child");
     pid
+}
+
+#[test]
+fn gc_leftover_lifetime_contracts() {
+    super::super::run_family(
+        concat!(module_path!(), "::gc_leftover_lifetime_contracts"),
+        module_path!(),
+        &[
+            #[cfg(unix)]
+            (
+                "gc_reclaims_the_leftover_of_a_removal_that_failed_partway",
+                gc_reclaims_the_leftover_of_a_removal_that_failed_partway,
+            ),
+            #[cfg(unix)]
+            (
+                "gc_reclaims_trash_directory_when_deleter_pid_is_dead",
+                gc_reclaims_trash_directory_when_deleter_pid_is_dead,
+            ),
+            (
+                "gc_reclaims_trash_directory_when_age_exceeds_timeout",
+                gc_reclaims_trash_directory_when_age_exceeds_timeout,
+            ),
+            (
+                "gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout",
+                gc_keeps_trash_directory_when_deleter_pid_is_alive_and_within_timeout,
+            ),
+            (
+                "gc_leaves_malformed_trash_directory_as_unrecognized",
+                gc_leaves_malformed_trash_directory_as_unrecognized,
+            ),
+        ],
+    );
 }

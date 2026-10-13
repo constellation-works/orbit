@@ -144,6 +144,16 @@ pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
     .unwrap()
 }
 
+/// Classification and host telemetry rows do not observe audit persistence.
+/// Job rows keep `writer` for their durable envelope/readback assertions.
+pub(super) fn outcome_writer(run_id: &str) -> Arc<V2AuditWriter> {
+    Arc::new(V2AuditWriter::new(
+        run_id,
+        "capacity",
+        Arc::new(orbit_agent::loop_engine::audit::NullSink),
+    ))
+}
+
 /// Stands in for Core: resolves the fake provider, records deterministic
 /// actions, and admits final recovery so a skip is the executor's own.
 pub(super) struct CapacityHost {
@@ -432,7 +442,7 @@ fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
             spec: &ActivityV2Spec::AgentLoop(agent_spec(provider)),
             fs_profile: None,
             input: json!({ "prompt": "implement" }),
-            audit: writer(audit.path(), &run_id),
+            audit: outcome_writer(&run_id),
             run_id: &run_id,
             host: Some(&host),
         })
@@ -619,7 +629,7 @@ fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
             spec: &ActivityV2Spec::AgentLoop(agent_spec(provider)),
             fs_profile: None,
             input: json!({ "prompt": "implement" }),
-            audit: writer(audit.path(), &run_id),
+            audit: outcome_writer(&run_id),
             run_id: &run_id,
             host: Some(&host),
         })

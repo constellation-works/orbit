@@ -156,7 +156,9 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                             head,
                             "reconciling pull request creation after a transient GitHub failure"
                         );
-                        super::super::retry_wait::sleep(operations::GITHUB_TRANSIENT_RETRY_DELAY);
+                        super::super::remote_probe::fixed_wait(
+                            operations::GITHUB_TRANSIENT_RETRY_DELAY,
+                        );
                         attempt += 1;
                         continue;
                     }

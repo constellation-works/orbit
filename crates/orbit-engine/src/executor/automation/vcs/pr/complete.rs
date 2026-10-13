@@ -64,7 +64,7 @@
 //! SHA. At most [`BASE_MODIFIED_MERGE_ATTEMPTS`] requests are made, within the
 //! unchanged wait budget.
 
-use super::super::retry_wait::sleep;
+use super::super::remote_probe::fixed_wait as sleep;
 use std::path::Path;
 use std::time::Duration;
 
