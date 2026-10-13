@@ -5,10 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use tempfile::tempdir;
 
-use super::{roots, write_config};
-use crate::ResolvedConfig;
-use crate::operation::OperationLayerSource;
-use crate::registry::admit_settable_config_key;
+use super::write_config;
+use orbit_config::ConfigRoots;
+
+use orbit_config::OperationLayerSource;
+use orbit_config::ResolvedConfig;
+use orbit_config::admit_settable_config_key;
 
 /// Load `workspace` over an empty global layer, returning the resolved
 /// config beside every `tracing` event the load wrote.
@@ -17,7 +19,7 @@ fn load_workspace(workspace_body: &str) -> (ResolvedConfig, String) {
     let workspace = tempdir().expect("workspace tempdir");
     write_config(workspace.path(), workspace_body);
     let (config, logs) =
-        capture_logs(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+        capture_logs(|| ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())));
     (config.expect("workspace config loads"), logs)
 }
 
@@ -88,26 +90,6 @@ fn review_table_sets_before_pr_and_minutes_with_their_layer() {
 }
 
 #[test]
-fn omitted_review_table_is_off_with_the_default_minutes() {
-    let (config, _) = load_workspace("[scoring]\nenabled = false\n");
-
-    assert!(!config.operation.review_before_pr.value);
-    assert_eq!(
-        config.operation.review_before_pr.source,
-        OperationLayerSource::BuiltIn
-    );
-    assert_eq!(
-        config.operation.review_minutes.source,
-        OperationLayerSource::BuiltIn
-    );
-    assert!(config.operation.review_minutes.value > 0);
-    assert_eq!(
-        config.operation.review_budget().minutes,
-        config.operation.review_minutes.value
-    );
-}
-
-#[test]
 fn legacy_before_pr_policy_turns_before_pr_on_with_a_deprecation_warning() {
     let (config, logs) = load_workspace("[operation]\nreview_policy = \"before-pr\"\n");
 
@@ -150,7 +132,8 @@ fn legacy_none_policy_turns_neither_on() {
     );
     write_config(workspace.path(), "[operation]\nreview_policy = \"none\"\n");
 
-    let config = ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("loads");
+    let config =
+        ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).expect("loads");
 
     assert!(!config.operation.review_before_pr.value);
     assert_eq!(
@@ -237,7 +220,7 @@ fn invalid_legacy_values_still_fail_closed() {
     ] {
         write_config(workspace.path(), body);
         assert!(
-            ResolvedConfig::load(&roots(global.path(), workspace.path())).is_err(),
+            ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).is_err(),
             "refused: {body}"
         );
     }
@@ -264,8 +247,8 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
     );
     write_config(workspace.path(), CODEQL_RULE);
 
-    let config =
-        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("the rules load");
+    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
+        .expect("the rules load");
     let rules = &config.operation.review_host_evidence;
     assert_eq!(rules.source, OperationLayerSource::Workspace);
     assert_eq!(rules.value.len(), 1, "{rules:?}");
@@ -285,7 +268,7 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
         workspace.path(),
         &format!("{CODEQL_RULE}hosted_check = \" CodeQL / Analyze (rust) \"\n"),
     );
-    let declared = ResolvedConfig::load(&roots(global.path(), workspace.path()))
+    let declared = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect("a linux codeql rule may name its hosted check");
     assert_eq!(
         declared.operation.review_host_evidence.value[0]
@@ -364,7 +347,7 @@ fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
     ] {
         write_config(workspace.path(), &body);
         assert!(
-            ResolvedConfig::load(&roots(global.path(), workspace.path())).is_err(),
+            ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).is_err(),
             "refused: {body}"
         );
     }

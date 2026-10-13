@@ -1,6 +1,6 @@
-//! `review.before_landing` [ORB-14849]: it resolves through the config layers
-//! like `review.before_pr`, and a load with both on fails, because there is
-//! one review layer before landing.
+//! Public review and machine config admission, provenance and migration.
+//! `review.before_landing` [ORB-14849] resolves like `review.before_pr`; a load
+//! with both on fails because there is one review layer before landing.
 #![allow(clippy::expect_used, missing_docs)]
 
 use std::path::Path;
@@ -529,3 +529,9 @@ fn workspace_machine_auto_concurrency_table_is_refused() {
         "{error}"
     );
 }
+
+#[path = "review_layers/operation.rs"]
+mod operation;
+
+#[path = "review_layers/machine.rs"]
+mod machine;

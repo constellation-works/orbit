@@ -1,4 +1,8 @@
-use super::*;
+use super::write_config;
+use orbit_config::ConfigRoots;
+
+use orbit_config::{ExecutionEnvPolicy, ResolvedConfig};
+use tempfile::tempdir;
 
 /// The ambient environment an operator would reasonably expect
 /// `inherit = false` to exclude: benignly named credentials and service URLs
@@ -24,6 +28,23 @@ fn value_of<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 #[test]
 fn default_policy_excludes_benignly_named_ambient_credentials() {
+    const CHILD: &str = "ORBIT_CONFIG_AMBIENT_ENV_CHILD";
+    const TEST: &str = "execution_env::default_policy_excludes_benignly_named_ambient_credentials";
+    if std::env::var_os(CHILD).is_none() {
+        let output = tempfile::tempdir().expect("child output directory");
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1");
+        let result = orbit_common::test_env::run_child_test(&mut command, TEST, output.path());
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            result.status,
+            &result.stdout,
+            &result.stderr,
+        );
+        return;
+    }
     let _ambient = ambient_env_with_credentials();
     let policy = ExecutionEnvPolicy::default();
 
@@ -49,8 +70,8 @@ fn config_admission_pins_inherit_off() {
         "[execution.env]\ninherit = true\npass = [\"HOME\"]\n",
     );
 
-    let resolved =
-        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("config loads");
+    let resolved = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
+        .expect("config loads");
 
     assert!(
         !resolved.execution_env.inherit(),

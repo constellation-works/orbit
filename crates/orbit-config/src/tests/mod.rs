@@ -1,9 +1,6 @@
 mod crew_pools;
 mod machine;
-mod operation;
-mod plugin_enablement;
 mod seed;
-mod store;
 
 use crate::ConfigRoots;
 use std::path::Path;

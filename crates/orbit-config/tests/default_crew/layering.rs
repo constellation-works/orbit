@@ -2,8 +2,10 @@
 
 use tempfile::tempdir;
 
-use crate::tests::{roots, write_config};
-use crate::{ConfigSnapshot, ResolvedConfig};
+use super::write_config;
+use orbit_config::ConfigRoots;
+
+use orbit_config::{ConfigSnapshot, ResolvedConfig};
 
 #[test]
 fn workspace_file_does_not_inherit_security_relevant_global_keys() {
@@ -23,7 +25,7 @@ pass = ["GLOBAL_SECRET"]
     );
     write_config(workspace.path(), "[scoring]\nenabled = false\n");
 
-    let config = ResolvedConfig::load(&roots(global.path(), workspace.path()))
+    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect("workspace config loads");
 
     assert_eq!(config.codex_execution.sandbox(), "workspace-write");
@@ -64,7 +66,7 @@ model = "workspace-model"
 "#,
     );
 
-    let config = ResolvedConfig::load(&roots(global.path(), workspace.path()))
+    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect("layered crew config loads");
 
     let build = config.crews.get("build").expect("overridden crew remains");
