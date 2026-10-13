@@ -759,9 +759,6 @@ fn concurrent_pull_admission_obeys_the_shared_ceiling() {
         selector: "owner/ws".into(),
         execution_machine_id: "owner".into(),
     };
-    // Bootstrap the feature before independent connections race for admission.
-    jobs.local_pull_admissions().unwrap();
-
     let barrier = Arc::new(Barrier::new(RACERS));
     let racers = (0..RACERS)
         .map(|index| {

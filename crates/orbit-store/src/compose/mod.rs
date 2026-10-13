@@ -299,7 +299,6 @@ pub mod auto_task {
 pub fn automation_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::AutomationStoreBackend>, orbit_common::OrbitError> {
-    crate::driver::sqlite::automation::initialize(&store)?;
     Ok(Arc::new(store))
 }
 
@@ -307,6 +306,5 @@ pub fn automation_store(
 pub fn review_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
-    crate::driver::sqlite::review::initialize(&store)?;
     Ok(Arc::new(store))
 }
