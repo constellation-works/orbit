@@ -17,8 +17,9 @@ related_artifacts: [ORB-15722]
 # Process Supervision — Design
 
 This doc covers every place Orbit waits on a child process it spawned:
-the three supervisors, two ad-hoc wait loops, and their callers, verified
-at `f9d7a0ccd`, with the changes of steps 1–3, 5 and 6 reflected below. §1–§3
+the bounded runner, the shared supervisor and its exec, engine, build and
+source adapters, plus long-lived MCP session ownership, verified
+at `99f2b2e55`, with the changes of steps 1–3 and 5–7 reflected below. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -56,7 +57,7 @@ Normal completion disarms the handle after descendant cleanup. It installs
 no signal handling: a SIGTERM to Orbit during a call leaves the child's
 group running.
 
-### 1.2 Shared supervisor — `orbit-common`, driven by `orbit-exec`
+### 1.2 Shared supervisor — `orbit-common`
 
 [`process/supervisor/`](../../../crates/orbit-common/src/process/supervisor/mod.rs)
 is the most complete supervisor. It was exec's until step 3 moved it into
@@ -76,14 +77,18 @@ the supervision notes to stderr.
   to a lock-free table of live child groups. The last guard restores the
   previous disposition and re-raises the signal.
 - **Pipes.** One thread drains each stream, and a stdin writer thread
-  delivers a payload. All of them `poll(2)` on their pipe and on a socket
+  delivers a payload when requested. `Stream::Sink` uses a pipe worker;
+  `Stream::Redirected` attaches no sink or reader because the caller has
+  already directed the output to a file or null. `Stdin::Null` writes
+  nothing and preserves the stdin configured before spawn, including a
+  caller's temp file. All pipe workers `poll(2)` on their pipe and on a socket
   pair owned by `DrainStop` (`drain.rs`). After the child is reaped,
   `settle(drain_budget)` (exec: 1 s) stops any worker whose pipe is still
   held by a descendant outside the group.
   When the pair, or a worker's clone of it, cannot be created (`EMFILE`),
   that worker polls its pipe every 25 ms and rechecks a stop flag instead
   of failing the run.
-- **Capture.** Each stream goes to an `OutputSink`. Exec's `CaptureSink`
+- **Capture.** Each piped stream goes to an `OutputSink`. Exec's `CaptureSink`
   has a 1 MiB limit (`ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES`). Reaching it
   terminates the group and fails the run with
   `ProcessStopCause::OutputCaptureLimit`. Debug mode echoes both streams to
@@ -91,15 +96,19 @@ the supervision notes to stderr.
   instead of capturing it.
 - **Termination.** `Termination::Grace` sends SIGTERM (or the intercepted
   signal), allows a grace period (exec: 5 s), then SIGKILL.
-  `Termination::KillNow` sends SIGKILL at once, for probes.
+  `Termination::KillNow` sends SIGKILL at once, for probes and source commands.
   Callers can also stop a run with a cancellation `AtomicBool`.
 - **Stopped descendants.** With the opt-in watch, a descendant that stays
   stopped past the threshold is ended and reported in the outcome; exec
   notes it on stderr.
 - **Periodic checks.** `Supervision::every` runs a caller's check on the
-  supervisor thread at a nonzero interval. A returned stop cause ends the
-  group under the requested termination policy; `None` continues the run.
+  supervisor thread at a nonzero wall-clock interval. A returned stop cause
+  ends the group under the requested termination policy; `None` continues the run.
   Build phases use `ProcessStopCause::Requested` for their directory cap.
+  Source commands use `ProcessStopCause::Periodic` for their stdout-file cap.
+- **Clock and deadline.** `timeout` is measured from supervision's start,
+  using the caller's `clock` when supplied, otherwise wall time. An
+  `extendable_deadline` takes precedence and uses wall-clock instants.
 - **Outcome.** The result carries `timed_out`, typed `ProcessStopCause`s
   and `drain_stopped`, so callers never parse stderr to classify a run.
 
@@ -148,26 +157,42 @@ binding or `on_spawn`. The Linux mount plan outlives supervision, which
 reaps the child before returning. The macOS profile is passed inline; there
 is no profile temp file to retain. Non-Unix stdin is refused.
 
-### 1.4 Ad-hoc wait loops
+### 1.4 Build and source supervisor adapters
 
 - **Plugin build phases** —
   [`build_sandbox/supervise.rs`](../../../crates/orbit-exec/src/build_sandbox/supervise.rs).
   It keeps `setsid` and `RLIMIT_CORE=0` in `pre_exec` and adopts the child
   into the shared supervisor. Both stream sinks share one head/tail
   `BuildLog` (1 MiB), retained across phases. A fixed deadline enforces the
-  wall clock, and the supervisor's one-second periodic hook checks the
-  build-directory size, requesting a stop when the cap is exceeded. The
-  caller also checks the directory after exit to catch fast writes.
-  Termination uses exec's five-second grace. The sandbox guard stays live
-  through supervision; after exit the supervisor drains for 2 s and joins
-  both pipe workers, stopping readers whose pipes remain held outside the
-  group.
+  wall clock (`clock: None`), and the supervisor's one-second periodic hook
+  checks the build-directory size, requesting a stop when the cap is
+  exceeded. The caller also checks the directory after exit to catch fast writes.
+  Termination uses exec's five-second grace. The shared supervisor owns
+  group cleanup and reaping, including on supervision failure. The sandbox
+  guard stays live through supervision; after exit the supervisor drains for
+  2 s and joins both pipe workers, stopping readers whose pipes remain held
+  outside the group.
 - **Automation source commands** —
   [`source/command.rs`](../../../crates/orbit-core/src/application/automation/source/command.rs).
-  Stdin, stdout and stderr are unlinked temp files, so a large Git listing
-  streams from disk. A 10 ms `try_wait` loop enforces the per-command budget,
-  `SOURCE_DEADLINE` and the size of the stdout file.
-  `OwnedChild` kills and reaps its group on completion, timeout or I/O failure.
+  `Source::capture` configures stdin as an unlinked temp file when input is
+  supplied, otherwise null; stdout and stderr are unlinked temp files, so a
+  large Git listing streams from disk. It adopts the child into
+  `SupervisedChild` and calls `supervise` with `Stdin::Null` (preserving
+  that configured stdin) and two `Stream::Redirected` outputs, with no
+  pipe workers. `supervision_timeout` supplies the shorter of the command
+  budget and the time left on `SOURCE_DEADLINE`, measured by the source's
+  `budget_now` clock. With test-support, a frozen source clock supplies no
+  timeout unless the budget is already exhausted. A 10 ms wall-clock
+  `Periodic` hook checks the stdout file size and returns
+  `ProcessStopCause::Periodic` when over limit or metadata is unreadable;
+  the caller rechecks the size after exit to catch writes between polls.
+  `Termination::KillNow` stops the group at once. The supervisor owns
+  cleanup on completion, timeout and supervision errors through
+  `OwnedChild::kill_and_reap`, including its 1 s group-drain bound.
+  The pipe-drain budget is zero because no pipe workers are attached.
+
+### 1.5 Long-lived sessions
+
 - **Plugin MCP sessions** —
   [`crates/orbit-tools/src/plugin/mcp.rs`](../../../crates/orbit-tools/src/plugin/mcp.rs). This is
   a long-lived stdio JSON-RPC session, not a run to completion. It uses the
@@ -200,7 +225,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-exec/src/macos_sandbox/probe.rs` (Seatbelt probe) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-common/src/test_env/process.rs`, `test_env/child.rs` (fixtures) | `run_bounded_capped(_typed)`; `OwnedChild` | Deadline; a fixture-owned group killed on teardown |
 
-### 2.2 Exec supervisor callers
+### 2.2 Shared supervisor callers (exec wrappers and direct adapters)
 
 | Caller | Entry point | What it needs |
 |--------|-------------|---------------|
@@ -215,7 +240,8 @@ Tests that call a supervisor directly are left out.
 | `orbit-engine/src/executor/automation/vcs/required_command.rs` | `run_process_supervised` | Deadline, typed stop cause for inconclusive runs |
 | `orbit-engine/src/executor/automation/shell.rs`, `vcs/deferral_probe.rs` | `spawn_owned_supervised_cancellable` (sandbox-spawned child) | Adopt an owned child, empty stdin, deadline, `timed_out` |
 | `orbit-exec/src/validation_env.rs` | `run_probe_process` | Kill at once on deadline (an interactive shell ignores SIGTERM) |
-| `orbit-exec/src/build_sandbox/supervise.rs` | `SupervisedChild::supervise` | Shared head/tail log, deadline, periodic directory cap, group termination with grace (§1.4) |
+| `orbit-exec/src/build_sandbox/mod.rs` (plugin install phases), `build_sandbox/supervise.rs` | `build_sandbox::supervise::run` → `SupervisedChild::adopt` + `supervise` | Null stdin; two sinks sharing a head/tail log; wall-clock timeout; 1 s periodic directory cap and post-exit check; group termination with 5 s grace; 2 s pipe drain with workers joined; sandbox guard retained through cleanup (§1.4) |
+| `orbit-core/src/application/automation/source/command.rs` (`Source::command*`, `Source::git*`, used by automation evidence collection) | `Source::capture` → `SupervisedChild::adopt` + `supervise` | Preconfigured file/null stdin; redirected stdout/stderr files; source clock, command budget clamped to global deadline; 10 ms wall-clock stdout-size check and post-exit check; kill at once; owned group cleanup; no pipe workers (§1.4) |
 
 ### 2.3 Engine provider supervisor callers
 
@@ -224,12 +250,10 @@ Tests that call a supervisor directly are left out.
 | `orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs` (provider run) | `spawn_for_supervision` + `spawn_with_timeout` | Pre-supervision work on the child (worker registration, PID namespace, broker bind, Linux post-run guard), prompt on stdin, rolling capture with protocol tail, line trace events, `on_spawn`, progress, stopped-descendant reports, build-budget deadline extension, kill at once |
 | `orbit-engine/src/activity_job/cli_runner/auth_probe.rs` (provider auth probe) | `spawn_for_supervision` + `spawn_with_timeout` | Same spawn path, worker registration, 16 KiB capture, deadline |
 
-### 2.4 Ad-hoc loop callers
+### 2.4 Long-lived session callers
 
-| Caller | Loop | What it needs |
+| Caller | Lifetime | What it needs |
 |--------|------|---------------|
-| `orbit-exec/src/build_sandbox/mod.rs` (plugin install phases) | `build_sandbox::supervise::run` | `setsid` + no core dumps, merged head/tail log, wall clock, periodic size check that stops the phase |
-| `orbit-core/src/application/automation/source/command.rs` (`Source::command*`, `Source::git*`, used by automation evidence collection) | `Source::capture` | File-backed streams, budget plus a global deadline, periodic stdout-size check, kill at once |
 | `orbit-tools/src/plugin/mcp.rs` (`McpBackend::spawn`) | session lifetime | Owned group killed when the session ends (no wait loop) |
 
 ## 3. Capability matrix
@@ -239,13 +263,13 @@ Tests that call a supervisor directly are left out.
 | Kill-on-drop ownership | yes | yes | yes | yes | yes |
 | Survives `?` from pipe/wait errors | yes | yes | yes | yes | yes |
 | SIGINT/SIGTERM fan-out to child groups | no | yes | no | no | no |
-| Stdin payload | no (null) | yes (thread, stop-aware) | yes (shared writer) | no | temp file |
+| Stdin payload | no (null) | yes (thread, stop-aware) | yes (shared writer) | no (null) | preconfigured temp file or null; `Stdin::Null`, no writer |
 | Capture policy | prefix, continue | fail at limit | redacted head + protocol tail, continue | merged head/tail | file + size limit |
 | Stdout relay to a consumer | no | yes | no | no | no |
 | Line trace events | no | debug echo only | yes | no | no |
 | Termination | TERM, 200 ms, KILL | TERM, 5 s, KILL (or KILL) | KILL, 1 s group drain | exec's (5 s) | KILL, 1 s group drain |
 | Cancellation flag | no | yes | no | no | no |
-| Post-exit drain bound | 500 ms (≤ deadline) | 1 s, workers stopped | 500 ms, workers stopped | 2 s, readers detached | n/a |
+| Post-exit drain bound | 500 ms (≤ deadline) | 1 s, workers stopped | 500 ms, workers stopped | 2 s, workers stopped and joined | no pipes; 1 s group drain |
 | Require EOF before success | optional | no | no | no | n/a |
 | Stopped-descendant handling | no | end + stderr note | end + callback | no | no |
 | Progress / periodic hook | no | no | progress sampling | size check | size check |
@@ -287,7 +311,7 @@ module.
 pub struct OwnedChild { /* Child, reaped flag; Drop = SIGKILL group, reap, bounded drain */ }
 
 pub struct Supervision<'a> {
-    pub stdin: Stdin,                         // Null | Payload(Vec<u8>) | Redirected
+    pub stdin: Stdin,                         // Null (preserves configured stdin) | Payload(Vec<u8>)
     pub stdout: Stream<'a>,                   // Sink(Box<dyn OutputSink>) | Relay(PipeWriter) | Redirected
     pub stderr: Stream<'a>,
     pub deadline: Deadline<'a>,               // None | Fixed(Duration) | Extendable(base, &dyn Fn() -> Instant)
@@ -334,7 +358,7 @@ returning it from `finish`, because progress sampling reads it while the
 child runs. The remaining options and `SuperviseError` arrive with the steps
 that need them.
 
-Step 7 adds the options automation source needs. Each output is a `Stream`:
+Step 7 added the options automation source needs. Each output is a `Stream`:
 `Sink` keeps the pipe worker, and `Redirected` means the caller already
 pointed the descriptor at a file or null, so the supervisor attaches no sink
 and starts no reader. `every` reuses `Periodic::run`, on the wall clock, at
@@ -354,8 +378,8 @@ instants; its cached value is refreshed before supervision acts on expiry.
 | Bounded runner wrappers | Null | keep-prefix (`BoundedOutputCapture`) | Grace(200 ms) | `completion` per mode; drain 500 ms ≤ deadline; no signal interception; no stopped watch |
 | Exec runner wrappers | Payload or Null | fail-at-limit (+ redacting echo in debug) or Relay | Grace(5 s); KillNow for probes | `intercept_signals`; `cancelled`; stopped watch with a stderr note; drain 1 s |
 | Engine provider runner | Payload | engine-owned rolling head/tail sink with line trace events | KillNow + group drain | `on_spawn`; `every` = progress; extendable deadline; stopped watch with callback |
-| Build phase | Null | one shared `BuildLog` for both streams | Grace(5 s) | `every` = build-directory size; drain 2 s |
-| Automation source | Redirected (temp file) | none (Redirected) | KillNow | `every` = stdout file size |
+| Build phase | Null | two `Sink`s sharing one `BuildLog` | Grace(5 s) | wall-clock timeout; `every` = build-directory size every 1 s; post-exit size check; drain 2 s, workers joined |
+| Automation source | Null (preserves preconfigured temp file or null) | none (both `Redirected`) | KillNow | `clock` = source `budget_now`; timeout = min(command budget, remaining source deadline); `every` = stdout file size every 10 ms on wall time; post-exit size check; pipe drain zero, group drain 1 s |
 
 Engine-specific capture (`capture.rs`) and the build log stay with their
 owners as `OutputSink` implementations. The supervisor owns no
@@ -436,7 +460,7 @@ it moves the most callers with the least new API.
   `test-support` feature). The engine's clock stays behind its
   `test-support` feature and only moves the deadline it hands over. The
   unused live-reader counter was dropped.
-- **Line numbers.** File references in §1–§2 were verified at `f9d7a0ccd`;
+- **Line numbers.** File references in §1–§2 were verified at `99f2b2e55`;
   the migration tasks re-verify before editing.
 
 ## Task References
