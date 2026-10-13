@@ -5,7 +5,9 @@ last_validated: 2026-10-13
 ---
 # Boundary-First Testing
 
-Test behaviour where callers meet it. New and changed behaviour is proven at a stable boundary by default: a crate-root integration test, a golden, or an e2e flow. A unit test is the exception, and it must earn its place by meeting one of the admission criteria below.
+Test behaviour where callers meet it. A new test is written when a bug or defect is fixed: one regression test that fails before the fix, preferably as a row in an existing table-driven test. Features, refactors and chores add no new tests unless an acceptance criterion asks for one; the existing suite gates them, and a change updates the tests it breaks. When a regression test is written, it goes at a stable boundary by default: a crate-root integration test, a golden, or an e2e flow. A unit test is the exception, and it must earn its place by meeting one of the admission criteria below.
+
+Gate time is the main throughput bottleneck for Orbit's drains (on 2026-10-13 one affected-crates run was 2,688 tests and 652 s on dk-server-2), so the suite should shrink over time, not grow.
 
 ## Why
 
