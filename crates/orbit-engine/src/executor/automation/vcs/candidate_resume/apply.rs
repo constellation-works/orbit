@@ -267,6 +267,9 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
             "exit_code": run.exit_code,
             "timed_out": run.timed_out,
             "output": tail(&run.output),
+            "failures": run.failures,
+            "baseline": check.record(None),
+            "baseline_reproduces": false,
         })));
     }
     Ok(Outcome::Validated)

@@ -1329,9 +1329,9 @@ fn an_env_prefixed_claim_on_a_registered_check_is_that_check() {
 
 /// [ORB-15546] Failures shaped like known red that the host cannot vouch
 /// for keep their refusal: a failing run that also deferred a sandbox-confined
-/// path, or named no failure at all, is held as before; an open finding or
-/// external evidence still owed keeps the review from settling. None records
-/// a known-red entry.
+/// path is held; a run naming no failure leaves the comparison unconfirmed
+/// and the review incomplete. An open finding or external evidence still owed
+/// keeps the review from settling. None records a known-red entry.
 fn a_known_red_shaped_failure_the_host_cannot_vouch_for_still_refuses() {
     let notice = orbit_exec::bwrap_deferral_notice(
         "runtime::sandbox_path",
@@ -1351,9 +1351,31 @@ fn a_known_red_shaped_failure_the_host_cannot_vouch_for_still_refuses() {
     unnamed.put_report(&report);
     let failure = unnamed
         .settle()
-        .expect_err("a failure naming no test is held")
+        .expect_err("unidentified failures cannot confirm the reviewer's baseline claim")
         .to_string();
-    assert!(is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&unnamed);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(!settled.validation_complete);
+    assert!(
+        settled.baseline_red.is_empty(),
+        "no inherited failure was established"
+    );
+    let evidence: Value = serde_json::from_slice(
+        &unnamed
+            .runtime
+            .get_task_artifact(&unnamed.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the inconclusive comparison preserves both runs")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "refused", "{evidence}");
+    for run in ["candidate", "base"] {
+        assert_eq!(check[run]["exit_code"], 1, "{run}: {evidence}");
+        assert_eq!(check[run]["failures"], json!([]), "{run}: {evidence}");
+    }
 
     let mut open = fixture(RED, "after\n");
     open.admit();
