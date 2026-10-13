@@ -24,17 +24,18 @@
 //! without an intentional rendering change is the regression this suite
 //! exists to catch.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface, authorize,
-    governed_tool,
+    CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface,
+    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, authorize, governed_tool,
 };
 use orbit_common::test_env;
 use orbit_tools::ToolRegistry;
-use orbit_types::tool::{McpTransport, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use regex::Regex;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir_in};
@@ -603,6 +604,41 @@ spec:
     assert_golden("plugin_build_doctor.json", &actual);
 }
 
+/// Whether MCP advertises a governed tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Placement {
+    /// Listed by `tools/list`.
+    Advertised,
+    /// Kept off MCP listing; reached via CLI or dashboard.
+    Unadvertised,
+}
+
+/// Every governed tool operation paired with its expected MCP advertisement placement.
+const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
+    ("orbit.agent.invoke", Placement::Advertised),
+    ("orbit.command.exec", Placement::Advertised),
+    ("orbit.drain.claim.bind", Placement::Unadvertised),
+    ("orbit.drain.claim.settle", Placement::Unadvertised),
+    ("orbit.drain.claims", Placement::Unadvertised),
+    ("orbit.drain.probe", Placement::Unadvertised),
+    ("orbit.drain.receipt.lookup", Placement::Unadvertised),
+    ("orbit.pipeline.invoke", Placement::Advertised),
+    ("orbit.routine.control", Placement::Advertised),
+    ("orbit.task.delete", Placement::Unadvertised),
+    ("orbit.task.locks.release", Placement::Unadvertised),
+    ("orbit.task.locks.reserve", Placement::Unadvertised),
+    ("orbit.task.pull", Placement::Unadvertised),
+    ("orbit.task.reconcile_review", Placement::Advertised),
+    ("orbit.task.reject", Placement::Unadvertised),
+    ("orbit.task.review_reset", Placement::Advertised),
+    ("orbit.workflow.auto", Placement::Advertised),
+    ("orbit.workflow.run.list", Placement::Advertised),
+    ("orbit.workflow.run.resume", Placement::Advertised),
+    ("orbit.workflow.run.show", Placement::Advertised),
+    ("orbit.workflow.ship", Placement::Advertised),
+    ("orbit.workspace.claim.release", Placement::Unadvertised),
+];
+
 #[test]
 fn authorization_matrix_matches_live_registry() {
     let agent = ToolSessionContext::trusted_local(None, Some("local".into()), None);
@@ -631,6 +667,56 @@ fn authorization_matrix_matches_live_registry() {
     .map(|(name, envelope)| (name, CallerCapabilities::resolve(&envelope)));
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
+
+    let advertised = registry
+        .mcp_tool_definitions()
+        .expect("the builtin registry composes valid MCP definitions")
+        .into_iter()
+        .map(|definition| definition.schema.name)
+        .collect::<BTreeSet<_>>();
+
+    let mut observed_placement: Vec<(&str, Placement)> = GOVERNED_OPERATIONS
+        .iter()
+        .filter(|op| {
+            op.surface == OperationSurface::Tool
+                && op.id != PLUGIN_TOOL_READ_ONLY.id
+                && op.id != PLUGIN_TOOL_MUTATING.id
+        })
+        .map(|op| {
+            let placement = if advertised.contains(op.id) {
+                Placement::Advertised
+            } else {
+                Placement::Unadvertised
+            };
+            (op.id, placement)
+        })
+        .collect();
+    observed_placement.sort_unstable();
+
+    let mut declared_placement = GOVERNED_TOOL_PLACEMENT.to_vec();
+    declared_placement.sort_unstable();
+
+    assert_eq!(
+        observed_placement, declared_placement,
+        "the governed tools' MCP placement drifted from what GOVERNED_TOOL_PLACEMENT declares. \
+         Advertisement authorizes nothing, so a mismatch is not automatically a bug — \
+         but it is a decision, so record it in GOVERNED_TOOL_PLACEMENT and in \
+         docs/design/operations-as-data/4_decisions.md rather than letting the two \
+         axes diverge unobserved"
+    );
+
+    for operation in GOVERNED_OPERATIONS
+        .iter()
+        .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
+    {
+        assert!(
+            !operation.allowed.contains(&McpCapability::Agent),
+            "'{}' is advertised to MCP and governed, yet lists `agent` among its allowed \
+             capabilities — governing an operation an ordinary MCP caller already holds \
+             buys nothing and hides the entries that do refuse",
+            operation.id
+        );
+    }
     let mut operations = std::collections::BTreeMap::new();
     for schema in registry.all_schemas() {
         operations.insert(("tool", schema.name.clone()), governed_tool(&schema.name));
