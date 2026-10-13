@@ -24,9 +24,9 @@
 //! row, written as soon as the minute ends; the last, partial minute is
 //! written when the run ends. The same thread offers the host's
 //! `host_resource_minutes` row for each wall-clock minute it observed whole:
-//! busy cores from `/proc/stat` ticks and `MemTotal - MemAvailable`, in the
-//! same units. Concurrent workers offer the same minute and the first insert
-//! wins.
+//! busy cores from native tick deltas and native used memory bytes (see
+//! `runtime::host_resource::usage`), in the same units. Concurrent workers
+//! offer the same minute and the first insert wins.
 //!
 //! A Linux worker with no scope (`machine.worker_containment = false`, no
 //! user manager) starts no sampler, records nothing and logs nothing.
@@ -311,12 +311,8 @@ impl RunResourceSampler {
             return;
         }
         if let Some((previous_at, previous)) = self.last_host
-            && let (Some(wall), Some(total), Some(busy)) = (
-                positive_usec(at - previous_at),
-                reading.total_ticks.checked_sub(previous.total_ticks),
-                reading.busy_ticks.checked_sub(previous.busy_ticks),
-            )
-            && busy <= total
+            && let (Some(wall), Some((busy, total))) =
+                (positive_usec(at - previous_at), reading.cpu_delta(previous))
         {
             let mut cursor = previous_at;
             let mut covered = 0;

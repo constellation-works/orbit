@@ -1,8 +1,8 @@
 //! The host's measured load now, for the forecast baseline.
 //!
-//! CPU is busy cores from `/proc/stat` tick deltas and memory is
-//! `MemTotal - MemAvailable` bytes: the units the task samples use. It never
-//! reads `/proc/loadavg`, which counts the run queue: a saturated host at load
+//! CPU is busy cores from native tick deltas and memory uses the native
+//! unavailable-memory accounting: the same reader as host-minute history.
+//! It never reads `/proc/loadavg`, which counts the run queue: a saturated host at load
 //! 36 on 15 cores would otherwise show about 20 phantom cores of load that is
 //! not from tasks.
 
@@ -39,7 +39,15 @@ impl HostLoadProbe {
         }
     }
 
-    /// Make sure a recent reading at least [`MIN_CPU_WINDOW`] old exists,
+    fn min_cpu_window(&self) -> Duration {
+        #[cfg(target_os = "macos")]
+        if self.proc_root == std::path::Path::new("/proc") {
+            return crate::runtime::host_resource::platform::CPU_BASELINE_WINDOW;
+        }
+        MIN_CPU_WINDOW
+    }
+
+    /// Make sure a recent reading at least one native CPU window old exists,
     /// waiting for it if not. Called before the host admission lock, so the
     /// wait never holds it.
     pub(crate) fn prepare(&self) {
@@ -50,13 +58,13 @@ impl HostLoadProbe {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match previous.as_ref() {
                 Some((at, _)) if at.elapsed() <= MAX_CPU_WINDOW => {
-                    MIN_CPU_WINDOW.saturating_sub(at.elapsed())
+                    self.min_cpu_window().saturating_sub(at.elapsed())
                 }
                 _ => {
                     *previous =
                         read_host_usage(&self.proc_root).map(|reading| (Instant::now(), reading));
                     if previous.is_some() {
-                        MIN_CPU_WINDOW
+                        self.min_cpu_window()
                     } else {
                         Duration::ZERO
                     }
@@ -79,15 +87,20 @@ impl HostLoadProbe {
     /// memory as read. `None` when the host cannot be read; CPU alone is
     /// unknown when no ticks passed since the previous reading.
     pub(crate) fn measure(&self) -> Option<HostLoad> {
-        let reading = read_host_usage(&self.proc_root)?;
         let mut previous = self
             .previous
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let cpu_cores = previous.as_ref().and_then(|(_, before)| {
-            let total = reading.total_ticks.checked_sub(before.total_ticks)?;
-            let busy = reading.busy_ticks.checked_sub(before.busy_ticks)?;
-            (total > 0).then(|| busy as f64 / total as f64 * f64::from(reading.cpu_count))
+        let Some(reading) = read_host_usage(&self.proc_root) else {
+            *previous = None;
+            return None;
+        };
+        let cpu_cores = previous.as_ref().and_then(|(at, before)| {
+            if at.elapsed() > MAX_CPU_WINDOW {
+                return None;
+            }
+            let (busy, total) = reading.cpu_delta(*before)?;
+            Some(busy as f64 / total as f64 * f64::from(reading.cpu_count))
         });
         *previous = Some((Instant::now(), reading));
         Some(HostLoad {
