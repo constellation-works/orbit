@@ -238,7 +238,6 @@ fn artifact(path: &str, content: Value) -> TaskArtifact {
     TaskArtifact::from_text(path, serde_json::to_string_pretty(&content).unwrap())
 }
 
-#[test]
 fn per_task_commit_delivers_both_sides_of_a_staged_rename() {
     let temp = tempdir().expect("create tempdir");
     let repo = temp.path();
@@ -283,7 +282,6 @@ fn per_task_commit_delivers_both_sides_of_a_staged_rename() {
     );
 }
 
-#[test]
 fn commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -359,7 +357,6 @@ fn commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields() {
     );
 }
 
-#[test]
 fn commit_verifier_refuses_already_landed_with_unknown_fields() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -420,7 +417,6 @@ fn commit_verifier_refuses_already_landed_with_unknown_fields() {
     );
 }
 
-#[test]
 fn commit_verifier_accepts_valid_no_diff_evidence() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -462,7 +458,6 @@ fn commit_verifier_accepts_valid_no_diff_evidence() {
     assert_eq!(result["committed"], false);
 }
 
-#[test]
 fn commit_verifier_accepts_valid_already_landed_evidence() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -521,7 +516,6 @@ fn commit_verifier_accepts_valid_already_landed_evidence() {
 }
 
 #[cfg(unix)]
-#[test]
 fn commit_verifier_accepts_already_landed_through_symlinked_parent_workspace() {
     let temp = tempdir().expect("create tempdir");
     let real_parent = temp.path().join("real");
@@ -589,7 +583,6 @@ fn commit_verifier_accepts_already_landed_through_symlinked_parent_workspace() {
 }
 
 #[cfg(unix)]
-#[test]
 fn commit_verifier_refuses_already_landed_with_escaping_anchor_symlink() {
     let temp = tempdir().expect("create tempdir");
     let repo = temp.path().join("repo");
@@ -723,7 +716,6 @@ fn already_landed_refusal(
         .to_string()
 }
 
-#[test]
 fn commit_verifier_refusal_names_already_landed_field_contract() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -749,7 +741,6 @@ fn commit_verifier_refusal_names_already_landed_field_contract() {
     );
 }
 
-#[test]
 fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -783,7 +774,6 @@ fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
 /// A clean tree at the pinned HEAD with neither route artifact must name both
 /// routes, so a task that correctly changed nothing is pointed at no-diff.json
 /// [F2026-10-169]. The reason keeps its already_landed_unverified prefix.
-#[test]
 fn commit_verifier_clean_tree_without_evidence_names_both_routes() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -808,7 +798,6 @@ fn commit_verifier_clean_tree_without_evidence_names_both_routes() {
 /// A `no-diff-expected` task skips a clean stage and commits an unexpected
 /// diff. The commit is the normal shipment commit; `sync_base` remains the
 /// conflict boundary for that diff [ORB-14247].
-#[test]
 fn no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree() {
     let clean = tempdir().expect("create tempdir");
     init_git_repo(clean.path());
@@ -901,7 +890,6 @@ fn pipeline_commit_step_input(pipeline_asset: &str, repo: &Path, head: &str) -> 
 /// step when backed by valid no-diff evidence, without manufacturing a diff.
 /// Both local and PR ship modes accept the clean tree, while missing evidence
 /// remains refused as an empty stage [ORB-14644].
-#[test]
 fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence() {
     let temp = tempdir().expect("create tempdir");
     let repo = temp.path();
@@ -1020,7 +1008,6 @@ fn make_nested_stat_stale(sub: &Path) {
 /// which `git add` would commit as a gitlink, and leaves the index unchanged.
 /// With a gitlink already in history, delivery's host status and diff never
 /// recurse into it, so the nested repository's filter never runs on the host.
-#[test]
 fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
     let temp = tempdir().expect("create tempdir");
     let repo = temp.path();
@@ -1088,4 +1075,92 @@ fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
         .expect("run git status");
     assert!(status.status.success());
     assert!(marker.exists(), "the fixture's filter must be reachable");
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn commit_evidence_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "per_task_commit_delivers_both_sides_of_a_staged_rename",
+                per_task_commit_delivers_both_sides_of_a_staged_rename,
+            ),
+            (
+                "commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields",
+                commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields,
+            ),
+            (
+                "commit_verifier_refuses_already_landed_with_unknown_fields",
+                commit_verifier_refuses_already_landed_with_unknown_fields,
+            ),
+            (
+                "commit_verifier_accepts_valid_no_diff_evidence",
+                commit_verifier_accepts_valid_no_diff_evidence,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn commit_evidence_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "commit_verifier_accepts_valid_already_landed_evidence",
+                commit_verifier_accepts_valid_already_landed_evidence,
+            ),
+            #[cfg(unix)]
+            (
+                "commit_verifier_accepts_already_landed_through_symlinked_parent_workspace",
+                commit_verifier_accepts_already_landed_through_symlinked_parent_workspace,
+            ),
+            #[cfg(unix)]
+            (
+                "commit_verifier_refuses_already_landed_with_escaping_anchor_symlink",
+                commit_verifier_refuses_already_landed_with_escaping_anchor_symlink,
+            ),
+            (
+                "commit_verifier_refusal_names_already_landed_field_contract",
+                commit_verifier_refusal_names_already_landed_field_contract,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn commit_evidence_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "commit_verifier_keeps_refusing_unaccepted_already_landed_evidence",
+                commit_verifier_keeps_refusing_unaccepted_already_landed_evidence,
+            ),
+            (
+                "commit_verifier_clean_tree_without_evidence_names_both_routes",
+                commit_verifier_clean_tree_without_evidence_names_both_routes,
+            ),
+            (
+                "no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree",
+                no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree,
+            ),
+            (
+                "clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence",
+                clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn commit_evidence_contracts_4() {
+    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[(
+            "owner_delivery_refuses_nested_repos_and_never_runs_their_filters",
+            owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
+        )]);
+    });
 }

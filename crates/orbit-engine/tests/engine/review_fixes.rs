@@ -28,7 +28,6 @@ use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, Determinis
 use orbit_types::workflow::{FinalRecoveryDecision, ReviewGateRefusal};
 use serde_json::{Value, json};
 
-#[test]
 fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication() {
     let host = ScriptedHost::new(Settlement::Timeout, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -59,7 +58,6 @@ fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication()
 
 /// No findings: the reviewed head is the implementation head, nothing is
 /// revalidated, and the PR opens with no "Review fixes" section.
-#[test]
 fn accept_publishes_the_implementation_head_without_revalidation() {
     let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -106,7 +104,6 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
 /// to the reviewer once, with the typed defect, in the same attempt: the
 /// reviewer step dispatches a second time carrying `report_correction`, the
 /// engine never asks again, and one admission and one settlement follow.
-#[test]
 fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
     const DEFECT: &str = "validation_contradicted: negative control `make test-guard` names \
                           `crates/orbit-cmd/src/update/converge.rs`, outside the candidate's scope";
@@ -166,7 +163,6 @@ fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
 /// validation reruns on it with the implementation head as the ownership
 /// base, and only then is it pushed and opened with the "Review fixes"
 /// section the settlement produced.
-#[test]
 fn accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it() {
     let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -213,7 +209,6 @@ fn accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it() {
 /// A reviewer commit that fails owner revalidation rejects the candidate:
 /// no step recovery, no second review, nothing pushed or opened, and the
 /// failure handoff blocks the task naming the revalidation step.
-#[test]
 fn a_failed_revalidation_rejects_without_a_second_review() {
     let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Fails);
     let result = run_shipped_pipeline(&host);
@@ -250,7 +245,6 @@ fn a_failed_revalidation_rejects_without_a_second_review() {
 /// An unfixable finding: settlement refuses, nothing is published, final
 /// recovery gets its one look, and the failure handoff blocks the task with
 /// the candidate preserved.
-#[test]
 fn reject_blocks_the_task_after_final_recovery() {
     let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -311,7 +305,6 @@ fn reject_blocks_the_task_after_final_recovery() {
     );
 }
 
-#[test]
 fn reject_supplies_fixture_log_tail_to_final_recovery() {
     let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes)
         .with_log_tail("fixture-owned recovery evidence");
@@ -757,4 +750,50 @@ impl DeterministicFailure {
             message: format!("required validation 'make test' did not pass on candidate {head}"),
         }
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn review_settlement_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "review_settlement_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication",
+                a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication,
+            ),
+            (
+                "accept_publishes_the_implementation_head_without_revalidation",
+                accept_publishes_the_implementation_head_without_revalidation,
+            ),
+            (
+                "a_report_shape_defect_returns_to_the_reviewer_once_before_settlement",
+                a_report_shape_defect_returns_to_the_reviewer_once_before_settlement,
+            ),
+            (
+                "accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it",
+                accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn review_settlement_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "review_settlement_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_failed_revalidation_rejects_without_a_second_review",
+                a_failed_revalidation_rejects_without_a_second_review,
+            ),
+            (
+                "reject_blocks_the_task_after_final_recovery",
+                reject_blocks_the_task_after_final_recovery,
+            ),
+            (
+                "reject_supplies_fixture_log_tail_to_final_recovery",
+                reject_supplies_fixture_log_tail_to_final_recovery,
+            ),
+        ]);
+    });
 }

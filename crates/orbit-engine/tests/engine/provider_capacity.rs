@@ -349,7 +349,6 @@ pub(super) fn failure_message(outcome: &Result<JobOutcome, DispatchError>) -> St
 
 /// Capacity is typed only from the provider's own failure, never from the
 /// agent's transcript or an Orbit envelope, and never on a turn that finished.
-#[test]
 fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
     let envelope_answer = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
@@ -467,7 +466,6 @@ fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
 /// The incident run: recovery cannot change capacity and the rerun used the
 /// same model. Now the provider is invoked once, neither recovery runs, and
 /// the worktree still holds the partial candidate for the failure handoff.
-#[test]
 fn a_capacity_failure_skips_recovery_and_keeps_the_candidate() {
     let worktree = tempfile::tempdir().unwrap();
     let candidate = worktree.path().join("candidate.rs");
@@ -537,7 +535,6 @@ fn a_capacity_failure_skips_recovery_and_keeps_the_candidate() {
 /// failure: Codex's content-filter frames on a failed exit, or Claude's
 /// terminal result stopping for a refusal, which fails the turn even on exit
 /// 0. It is a provider failure, but not an unavailability.
-#[test]
 fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
     let envelope_answer = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
@@ -651,7 +648,6 @@ fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
 /// The incident runs: final recovery escalated a content-filter refusal it
 /// could not change. Now neither recovery runs, the provider is invoked once,
 /// and the failure handoff gets the typed code with the candidate intact.
-#[test]
 fn a_content_filter_refusal_skips_recovery_and_keeps_the_candidate() {
     let worktree = tempfile::tempdir().unwrap();
     let candidate = worktree.path().join("candidate.rs");
@@ -695,7 +691,6 @@ fn a_content_filter_refusal_skips_recovery_and_keeps_the_candidate() {
 /// A declared `owner_route_unavailable` envelope is typed for the pull drain
 /// and skips both recoveries; the same envelope with any other code reaches
 /// step recovery (the last case of the test below).
-#[test]
 fn a_declared_owner_route_failure_skips_recovery() {
     let worktree = tempfile::tempdir().unwrap();
     let fake = FakeProvider::new(
@@ -741,7 +736,6 @@ fn a_declared_owner_route_failure_skips_recovery() {
 /// its post-recovery attempt: a failed exit (whose answer may even quote the
 /// capacity text) and a declared `status: "failed"` envelope. A timeout takes
 /// the same path; see `a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt`.
-#[test]
 fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() {
     let failed_envelope = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"red","message":"tests failed"}}"#;
     let cases: Vec<(&str, Provider, String, &str, i32)> = vec![
@@ -800,7 +794,6 @@ fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() 
 /// attempt times out. The rerun is counted at dispatch, not by the fake's
 /// invocation log, because a loaded host can spend the whole budget before the
 /// fake writes its first line.
-#[test]
 fn a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt() {
     let worktree = tempfile::tempdir().unwrap();
     let fake = FakeProvider::new("claude", "", "", 0, "sleep 10");
@@ -834,7 +827,6 @@ fn a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt() {
 
 /// A required validation failure remains a candidate defect, so it still
 /// spends step recovery and reruns validation on the repaired candidate.
-#[test]
 fn a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt() {
     let worktree = tempfile::tempdir().unwrap();
     let fake = FakeProvider::new("codex", "", "", 0, "");
@@ -872,7 +864,6 @@ fn a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_a
 /// [ORB-14258] A required validation failure the base shares is not the
 /// candidate's: no step or final recovery is dispatched, so the provider is
 /// not invoked again, and the failure handoff receives the typed failure.
-#[test]
 fn a_red_base_validation_failure_dispatches_no_recovery() {
     let worktree = tempfile::tempdir().unwrap();
     let answer = format!(
@@ -931,4 +922,67 @@ fn a_red_base_validation_failure_dispatches_no_recovery() {
             .is_some(),
         "the handoff can read the hold: {handoff:?}"
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_failure_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "capacity_is_typed_only_from_text_the_failed_provider_wrote",
+                capacity_is_typed_only_from_text_the_failed_provider_wrote,
+            ),
+            (
+                "a_capacity_failure_skips_recovery_and_keeps_the_candidate",
+                a_capacity_failure_skips_recovery_and_keeps_the_candidate,
+            ),
+            (
+                "refusal_is_typed_only_from_text_the_failed_provider_wrote",
+                refusal_is_typed_only_from_text_the_failed_provider_wrote,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_failure_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_content_filter_refusal_skips_recovery_and_keeps_the_candidate",
+                a_content_filter_refusal_skips_recovery_and_keeps_the_candidate,
+            ),
+            (
+                "a_declared_owner_route_failure_skips_recovery",
+                a_declared_owner_route_failure_skips_recovery,
+            ),
+            (
+                "other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt",
+                other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_failure_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt",
+                a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt,
+            ),
+            (
+                "a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt",
+                a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt,
+            ),
+            (
+                "a_red_base_validation_failure_dispatches_no_recovery",
+                a_red_base_validation_failure_dispatches_no_recovery,
+            ),
+        ]);
+    });
 }

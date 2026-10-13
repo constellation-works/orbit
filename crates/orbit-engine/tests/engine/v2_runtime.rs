@@ -37,7 +37,6 @@ use orbit_types::workflow::activity_job::{
 use orbit_types::workflow::{JobRunState, PipelineState, ReviewerInvocationEvent};
 use serde_json::{Value, json};
 
-#[test]
 fn deterministic_reference_dispatches_and_persists_audit_events() -> Result<(), String> {
     let references_dir = workspace_root().join("crates/orbit-core/assets/activities/examples");
     let tmp_audit = tempfile::tempdir().map_err(|err| err.to_string())?;
@@ -51,7 +50,6 @@ fn deterministic_reference_dispatches_and_persists_audit_events() -> Result<(), 
 /// serve from the dispatcher, not from the tool arguments the step forwards.
 /// The host binds the run; the dispatcher adds the task from the run's own
 /// input, the value a CLI agent step would export as `ORBIT_TASK_ID`.
-#[test]
 fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args() {
     use orbit_agent::loop_engine::audit::{AuditSink, NullSink};
     use orbit_tools::{ActivityBinding, ToolContext};
@@ -265,7 +263,6 @@ pub(crate) fn workspace_root() -> PathBuf {
 /// `parallel:` decides the block from its `join` policy, reports every branch
 /// in declaration order on `step.join`, and turns a panicking branch into a
 /// failed branch instead of unwinding through the job thread.
-#[test]
 fn parallel_join_policy_decides_the_block_from_its_branches() {
     let cases = [
         ("all, no branches", json!({"mode": "all"}), "", true),
@@ -375,7 +372,6 @@ fn parallel_join_policy_decides_the_block_from_its_branches() {
 /// `fan_out:` runs one worker per item under the `max_workers` cap and
 /// collects outputs in item order (not completion order) under both the step
 /// id and the `fan_in.collect` alias.
-#[test]
 fn fan_out_collects_outputs_in_item_order_within_the_worker_cap() {
     let items: Vec<Value> = [120, 0, 40, 40, 40, 40]
         .iter()
@@ -409,7 +405,6 @@ fn fan_out_collects_outputs_in_item_order_within_the_worker_cap() {
 
 /// `fan_in.join` judges the collected workers; a failed or panicked worker is
 /// collected as `null` and counted on `fanin.joined`.
-#[test]
 fn fan_in_join_policy_decides_the_block_from_its_workers() {
     let cases = [
         ("all, no workers", json!({"mode": "all"}), "", true),
@@ -551,7 +546,6 @@ fn fan_in_join_policy_decides_the_block_from_its_workers() {
 /// match, reports a loop that exhausted its budget without converging, stops
 /// at the first failed body, and refuses more items than `max_iterations`
 /// before running any of them.
-#[test]
 fn loop_iterates_until_break_failure_or_budget() {
     let stops = |values: &[bool]| -> Vec<Value> {
         values
@@ -613,7 +607,6 @@ fn loop_iterates_until_break_failure_or_budget() {
 /// `JobExecution` naming `fan_out.items` or `loop.items`, and no worker runs.
 /// A JSON array still parses, including one that holds an object, and a bare
 /// `A, B` string still splits on the comma.
-#[test]
 fn items_expression_rejects_non_array_json() {
     let rejected = [
         ("null", Value::Null),
@@ -693,7 +686,6 @@ fn items_expression_rejects_non_array_json() {
 /// A step whose `when:` guard is false is ordinary control flow and logs its
 /// skip at INFO; a skip that is not a guard decision, such as a resumed step,
 /// stays at WARN so the operational feed still shows it.
-#[test]
 fn when_false_step_skips_log_below_warn_and_other_skips_keep_warn() {
     // Tracing callsite interest is shared by parallel libtest bodies. Keep
     // this capture in its own process while the parent suite stays parallel.
@@ -950,7 +942,6 @@ fn assert_empty_join_resume(
 /// Ordinary resume keeps the seeded conflict, and step recovery replaces it
 /// with the newer one. Final-recovery invalidation is covered by
 /// `final_recovery_resume_checkpoints_the_latest_conflict_diagnostics`.
-#[test]
 fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint() {
     use orbit_common::{ConflictedFile, RecoverableVcsConflict};
     use orbit_types::workflow::activity_job::JobV2StepBody;
@@ -1243,7 +1234,6 @@ impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
 /// gets one `step_failure_recovery` and one re-attempt, and only then fails
 /// the run. Each reviewer dispatch — and nothing else — reports its start
 /// and end, so backoff and recovery are never charged as review minutes.
-#[test]
 fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
     for (failures, succeeds, expected_calls) in [
         (1, true, vec![REVIEWER, REVIEWER]),
@@ -1319,7 +1309,6 @@ pub(crate) const RECOVERY: &str = "step_failure_recovery";
 
 /// Both dispatch errors and unsuccessful CLI outcomes bypass recovery when
 /// the provider is unusable; the CLI-outcome case lives in v2_cli_agent.
-#[test]
 fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
     struct UnavailableHost;
     impl orbit_engine::test_support::NullRuntimeHost for UnavailableHost {
@@ -1385,7 +1374,6 @@ fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
 /// follows, and the job has final recovery plus a failure activity. None of
 /// the retry, step recovery, commit, or final recovery dispatches run. The
 /// failure activity is invoked once with `task_blocked_by_agent` and the kind.
-#[test]
 fn an_implementer_blocker_ends_implement_one_without_recovery() {
     let marker = orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER;
     let host = ScriptedHost {
@@ -1457,7 +1445,6 @@ fn an_implementer_blocker_ends_implement_one_without_recovery() {
 /// `task_blocked_by_agent`. The failure activity receives that code, so the
 /// handoff keeps the candidate without blocking the task, and a claimed
 /// leaf's settlement reads it as transient.
-#[test]
 fn an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending() {
     for kind in [
         "upgrade_admission_refused",
@@ -1518,7 +1505,6 @@ fn an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending() {
 /// A reviewer meets the same refusal as the implementer, so an upgrade
 /// refusal ends any agent step. A task blocker stays the implementer's: on
 /// another step it is not a stop.
-#[test]
 fn an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers() {
     for (kind, stops) in [("conflict", false), ("upgrade_admission_refused", true)] {
         let host = ScriptedHost {
@@ -1556,7 +1542,6 @@ fn an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers() {
 /// A blocker shape that is not `{kind, evidence}` stays ordinary success, and
 /// a resolved `agent_implement` target honors a well-formed blocker even when
 /// the step id is not `implement_one`.
-#[test]
 fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
     let malformed = ScriptedHost {
         implement_output: json!({
@@ -1618,7 +1603,6 @@ fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
 /// delivery steps after it never run, so nothing is committed, pushed or
 /// opened for a handoff that cannot be accepted. Well-formed findings, and
 /// output with no findings, still deliver.
-#[test]
 fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
     let malformed = [
         json!(["The owner refused this. It needs a follow-up."]),
@@ -1934,7 +1918,6 @@ impl orbit_engine::test_support::NullRuntimeHost for ReviewerHost {
 
 /// Execute the shipped prefix, so an admission refusal must stop the graph
 /// before `implement_one`, even when that step has failure recovery enabled.
-#[test]
 fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation() {
     struct ExhaustedHost {
         calls: Mutex<Vec<String>>,
@@ -2014,7 +1997,6 @@ fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation()
     );
 }
 
-#[test]
 fn fan_in_retains_position_aligned_errors_through_successful_join_and_resume() {
     let mut fan = fan_out_step(3, json!({"mode": "any"}));
     fan["fan_in"]["errors"] = json!("worker_errors");
@@ -2046,7 +2028,6 @@ fn fan_in_retains_position_aligned_errors_through_successful_join_and_resume() {
     );
 }
 
-#[test]
 fn a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume() {
     let mut empty = fan_out_step(1, json!({"mode": "all"}));
     empty["id"] = json!("empty");
@@ -2085,7 +2066,6 @@ fn a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume() {
     }
 }
 
-#[test]
 fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() {
     use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
     use orbit_store::Store;
@@ -2204,4 +2184,129 @@ fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() 
             assert!(finished["failed_wait"].unwrap() >= 25);
         }
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "deterministic_reference_dispatches_and_persists_audit_events",
+                || deterministic_reference_dispatches_and_persists_audit_events().unwrap(),
+            ),
+            (
+                "a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args",
+                a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args,
+            ),
+            (
+                "parallel_join_policy_decides_the_block_from_its_branches",
+                parallel_join_policy_decides_the_block_from_its_branches,
+            ),
+            (
+                "fan_out_collects_outputs_in_item_order_within_the_worker_cap",
+                fan_out_collects_outputs_in_item_order_within_the_worker_cap,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "fan_in_join_policy_decides_the_block_from_its_workers",
+                fan_in_join_policy_decides_the_block_from_its_workers,
+            ),
+            (
+                "loop_iterates_until_break_failure_or_budget",
+                loop_iterates_until_break_failure_or_budget,
+            ),
+            (
+                "items_expression_rejects_non_array_json",
+                items_expression_rejects_non_array_json,
+            ),
+            (
+                "when_false_step_skips_log_below_warn_and_other_skips_keep_warn",
+                when_false_step_skips_log_below_warn_and_other_skips_keep_warn,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint",
+                incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint,
+            ),
+            (
+                "the_shipped_review_step_retries_then_recovers_a_failing_reviewer",
+                the_shipped_review_step_retries_then_recovers_a_failing_reviewer,
+            ),
+            (
+                "provider_unavailable_dispatch_errors_do_not_attempt_recovery",
+                provider_unavailable_dispatch_errors_do_not_attempt_recovery,
+            ),
+            (
+                "an_implementer_blocker_ends_implement_one_without_recovery",
+                an_implementer_blocker_ends_implement_one_without_recovery,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_4() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending",
+                an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending,
+            ),
+            (
+                "an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers",
+                an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers,
+            ),
+            (
+                "a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is",
+                a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is,
+            ),
+            (
+                "malformed_unfiled_findings_fail_implement_one_before_delivery",
+                malformed_unfiled_findings_fail_implement_one_before_delivery,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_5() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_5", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation",
+                exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation,
+            ),
+            (
+                "fan_in_retains_position_aligned_errors_through_successful_join_and_resume",
+                fan_in_retains_position_aligned_errors_through_successful_join_and_resume,
+            ),
+            (
+                "a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume",
+                a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume,
+            ),
+            (
+                "leaf_completion_records_file_and_store_waits_without_leaking_between_steps",
+                leaf_completion_records_file_and_store_waits_without_leaking_between_steps,
+            ),
+        ]);
+    });
 }

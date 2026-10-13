@@ -37,7 +37,6 @@ fn failure_note(error: &str) -> String {
 /// `dirty_paths` list — stays bounded and says where the full text lives.
 /// Error text is arbitrary subprocess bytes, so the cut must never land
 /// mid-codepoint and panic the best-effort terminalization path.
-#[test]
 fn a_failure_note_inlines_ordinary_errors_and_elides_bulk_with_its_retrieval_path() {
     let ordinary = format!("worktree integrity violation: {}", "p".repeat(640));
     let note = failure_note(&ordinary);
@@ -81,7 +80,6 @@ fn a_failure_note_inlines_ordinary_errors_and_elides_bulk_with_its_retrieval_pat
 
 /// An interrupted run's block reads as an interruption with its resume
 /// command, keeps the `run_id=…,` shape readers match on, and shares the cap.
-#[test]
 fn an_interruption_note_names_its_resume_and_shares_the_cap() {
     let error = "z".repeat(50_000);
     let update = blocked_workflow_interruption_update(
@@ -110,4 +108,21 @@ fn an_interruption_note_names_its_resume_and_shares_the_cap() {
         "note must stay bounded, got {} B",
         note.len()
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn history_note_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "history_note_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_failure_note_inlines_ordinary_errors_and_elides_bulk_with_its_retrieval_path",
+                a_failure_note_inlines_ordinary_errors_and_elides_bulk_with_its_retrieval_path,
+            ),
+            (
+                "an_interruption_note_names_its_resume_and_shares_the_cap",
+                an_interruption_note_names_its_resume_and_shares_the_cap,
+            ),
+        ]);
+    });
 }

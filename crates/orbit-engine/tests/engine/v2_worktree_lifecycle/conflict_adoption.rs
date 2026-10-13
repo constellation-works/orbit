@@ -113,7 +113,6 @@ fn marker_free_stop(
 /// No-op recovery cannot certify Git's untouched marker-free output, even
 /// when a failing driver writes content different from either side.
 #[cfg(unix)]
-#[test]
 fn untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted() {
     isolated_in(
         module_path!(),
@@ -175,7 +174,6 @@ fn untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted() {
 /// A text repair may still take one side verbatim, and custom-driver repairs
 /// are distinguished from the actual stopped output rather than either side.
 #[cfg(unix)]
-#[test]
 fn earlier_repairs_of_binary_ancestor_and_custom_driver_stops_continue() {
     isolated_in(
         module_path!(),
@@ -250,7 +248,6 @@ fn earlier_repairs_of_binary_ancestor_and_custom_driver_stops_continue() {
 /// Original stopped-output evidence must exist for custom drivers and stay
 /// unchanged while the provider runs; neither case may stage the repair.
 #[cfg(unix)]
-#[test]
 fn custom_driver_repairs_require_unchanged_stopped_output_evidence() {
     isolated_in(
         module_path!(),
@@ -310,7 +307,6 @@ fn custom_driver_repairs_require_unchanged_stopped_output_evidence() {
 /// payload it left and its `.orbit/` scratch stay out, and the retry delivers
 /// the certified rewrite.
 #[cfg(unix)]
-#[test]
 fn a_no_op_recovery_continues_the_rebase_from_earlier_repairs() {
     isolated_in(
         module_path!(),
@@ -417,7 +413,6 @@ fn a_no_op_recovery_continues_the_rebase_from_earlier_repairs() {
 /// refused as unrepaired; an earlier repair with whitespace errors fails
 /// `git diff --check`.
 #[cfg(unix)]
-#[test]
 fn earlier_repairs_still_refuse_markers_whitespace_and_unrepaired_conflicts() {
     isolated_in(
         module_path!(),
@@ -537,7 +532,6 @@ fn earlier_repairs_still_refuse_markers_whitespace_and_unrepaired_conflicts() {
 /// base is refused before the provider launches; a provider that stages a
 /// companion beside earlier repairs is refused after it exits.
 #[cfg(unix)]
-#[test]
 fn earlier_repairs_are_not_continued_after_head_branch_or_index_moved() {
     isolated_in(
         module_path!(),
@@ -631,7 +625,6 @@ fn earlier_repairs_are_not_continued_after_head_branch_or_index_moved() {
 /// or conflict set is refused before the provider launches, and recovery
 /// metadata rewritten while the provider ran is refused after it exits.
 #[cfg(unix)]
-#[test]
 fn earlier_repairs_are_not_continued_for_a_mismatched_checkpoint() {
     isolated_in(
         module_path!(),
@@ -720,7 +713,6 @@ fn earlier_repairs_are_not_continued_for_a_mismatched_checkpoint() {
 /// run, task or worktree that no longer owns the recovery, or a revoked
 /// recovery authorization, refuses continuation.
 #[cfg(unix)]
-#[test]
 fn earlier_repairs_are_not_continued_once_ownership_or_authorization_changed() {
     isolated_in(
         module_path!(),
@@ -767,4 +759,62 @@ fn earlier_repairs_are_not_continued_once_ownership_or_authorization_changed() {
             }
         },
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn adoption_contracts_1() {
+    isolated_in(module_path!(), "adoption_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted",
+                untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted,
+            ),
+            #[cfg(unix)]
+            (
+                "earlier_repairs_of_binary_ancestor_and_custom_driver_stops_continue",
+                earlier_repairs_of_binary_ancestor_and_custom_driver_stops_continue,
+            ),
+            #[cfg(unix)]
+            (
+                "custom_driver_repairs_require_unchanged_stopped_output_evidence",
+                custom_driver_repairs_require_unchanged_stopped_output_evidence,
+            ),
+            #[cfg(unix)]
+            (
+                "a_no_op_recovery_continues_the_rebase_from_earlier_repairs",
+                a_no_op_recovery_continues_the_rebase_from_earlier_repairs,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn adoption_contracts_2() {
+    isolated_in(module_path!(), "adoption_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "earlier_repairs_still_refuse_markers_whitespace_and_unrepaired_conflicts",
+                earlier_repairs_still_refuse_markers_whitespace_and_unrepaired_conflicts,
+            ),
+            #[cfg(unix)]
+            (
+                "earlier_repairs_are_not_continued_after_head_branch_or_index_moved",
+                earlier_repairs_are_not_continued_after_head_branch_or_index_moved,
+            ),
+            #[cfg(unix)]
+            (
+                "earlier_repairs_are_not_continued_for_a_mismatched_checkpoint",
+                earlier_repairs_are_not_continued_for_a_mismatched_checkpoint,
+            ),
+            #[cfg(unix)]
+            (
+                "earlier_repairs_are_not_continued_once_ownership_or_authorization_changed",
+                earlier_repairs_are_not_continued_once_ownership_or_authorization_changed,
+            ),
+        ]);
+    });
 }

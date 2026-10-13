@@ -84,7 +84,6 @@ fn snapshot_commit(checkout: &Path) -> String {
     )
 }
 
-#[test]
 fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
     isolated_in(
         module_path!(),
@@ -183,7 +182,6 @@ fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
     );
 }
 
-#[test]
 fn distinct_staged_and_working_versions_keep_the_settled_worktree() {
     isolated_in(
         module_path!(),
@@ -259,7 +257,6 @@ fn distinct_staged_and_working_versions_keep_the_settled_worktree() {
     );
 }
 
-#[test]
 fn a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside() {
     isolated_in(
         module_path!(),
@@ -299,7 +296,6 @@ fn a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside() {
     );
 }
 
-#[test]
 fn unpublished_head_content_recovers_after_branch_deletion_and_object_expiry() {
     isolated_in(
         module_path!(),
@@ -433,7 +429,6 @@ fn unpublished_head_content_recovers_after_branch_deletion_and_object_expiry() {
     );
 }
 
-#[test]
 fn an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output() {
     isolated_in(
         module_path!(),
@@ -485,7 +480,6 @@ fn an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output
     );
 }
 
-#[test]
 fn a_live_or_too_recent_dirty_worktree_is_never_removed() {
     isolated_in(
         module_path!(),
@@ -560,4 +554,46 @@ fn git_bytes(current_dir: &Path, args: &[&str]) -> Vec<u8> {
         .unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     output.stdout
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn rescue_contracts_1() {
+    isolated_in(module_path!(), "rescue_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable",
+                a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable,
+            ),
+            (
+                "distinct_staged_and_working_versions_keep_the_settled_worktree",
+                distinct_staged_and_working_versions_keep_the_settled_worktree,
+            ),
+            (
+                "a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside",
+                a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn rescue_contracts_2() {
+    isolated_in(module_path!(), "rescue_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "unpublished_head_content_recovers_after_branch_deletion_and_object_expiry",
+                unpublished_head_content_recovers_after_branch_deletion_and_object_expiry,
+            ),
+            (
+                "an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output",
+                an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output,
+            ),
+            (
+                "a_live_or_too_recent_dirty_worktree_is_never_removed",
+                a_live_or_too_recent_dirty_worktree_is_never_removed,
+            ),
+        ]);
+    });
 }

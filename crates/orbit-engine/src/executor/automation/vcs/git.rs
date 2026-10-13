@@ -562,7 +562,7 @@ fn fetch_remote_base_locked(
             tracing::warn!(attempt, branch, %error, "retrying remote base fetch after transport failure");
             last_transport_error = Some(error);
             let backoff = Duration::from_millis(250 * (1 << attempt));
-            std::thread::sleep(backoff.min(hold_limit.saturating_sub(held_since.elapsed())));
+            super::retry_wait::sleep(backoff.min(hold_limit.saturating_sub(held_since.elapsed())));
             continue;
         }
         last_stderr = outcome.stderr.trim().to_string();
@@ -573,7 +573,7 @@ fn fetch_remote_base_locked(
                 branch,
                 "retrying origin fetch after git ref update contention"
             );
-            std::thread::sleep(git_fetch_cas_retry_delay());
+            super::retry_wait::sleep(git_fetch_cas_retry_delay());
             continue;
         }
         break;

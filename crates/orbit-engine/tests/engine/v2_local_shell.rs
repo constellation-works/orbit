@@ -24,7 +24,6 @@ use serde_json::{Value, json};
 
 /// The shipped example must dispatch as written, so the documented reference
 /// cannot drift from the action it documents.
-#[test]
 fn shipped_reference_asset_runs_git_status_in_the_workspace() {
     let repo = tempfile::tempdir().expect("tempdir");
     init_repo(repo.path());
@@ -46,7 +45,6 @@ fn shipped_reference_asset_runs_git_status_in_the_workspace() {
     );
 }
 
-#[test]
 fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -99,7 +97,6 @@ fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     assert_eq!(finished[0].envelope.run_id, "jrun-local-shell");
 }
 
-#[test]
 fn a_missing_executable_fails_the_activity() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -117,7 +114,6 @@ fn a_missing_executable_fails_the_activity() {
     );
 }
 
-#[test]
 fn a_timed_out_step_is_terminated_and_reported() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -142,7 +138,6 @@ fn a_timed_out_step_is_terminated_and_reported() {
 
 /// The dispatcher injects `run_id` and the step id into deterministic input.
 /// Neither may become part of the child's argv.
-#[test]
 fn dispatch_input_never_reaches_argv() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -160,7 +155,6 @@ fn dispatch_input_never_reaches_argv() {
 
 /// The activity's `fsProfile` travels to sandbox resolution, so a shell step is
 /// scoped by the same filesystem policy as the activity that declared it.
-#[test]
 fn the_activity_fs_profile_reaches_sandbox_resolution() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -183,7 +177,6 @@ fn the_activity_fs_profile_reaches_sandbox_resolution() {
 /// and neither does the Orbit registry or workspace identity the host carries,
 /// so a nested `orbit` call cannot inherit the run's authority the way a
 /// dispatched CLI agent deliberately does.
-#[test]
 fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -362,4 +355,50 @@ impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
             .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
         Ok(None)
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn shell_dispatch_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "shell_dispatch_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "shipped_reference_asset_runs_git_status_in_the_workspace",
+                shipped_reference_asset_runs_git_status_in_the_workspace,
+            ),
+            (
+                "a_nonzero_exit_fails_the_activity_and_is_audited",
+                a_nonzero_exit_fails_the_activity_and_is_audited,
+            ),
+            (
+                "a_missing_executable_fails_the_activity",
+                a_missing_executable_fails_the_activity,
+            ),
+            (
+                "a_timed_out_step_is_terminated_and_reported",
+                a_timed_out_step_is_terminated_and_reported,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn shell_dispatch_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "shell_dispatch_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "dispatch_input_never_reaches_argv",
+                dispatch_input_never_reaches_argv,
+            ),
+            (
+                "the_activity_fs_profile_reaches_sandbox_resolution",
+                the_activity_fs_profile_reaches_sandbox_resolution,
+            ),
+            (
+                "a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env",
+                a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env,
+            ),
+        ]);
+    });
 }
