@@ -55,6 +55,7 @@ use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::candidate::stopping_candidate;
 use super::drain::{
     PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
+    recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
@@ -114,7 +115,11 @@ impl OrbitRuntime {
             return Ok(Some(record));
         }
         let state = jobs.read_run_state(run_id)?;
-        let settlement = leaf_failure_settlement(&record, &run, diagnostic, state.as_ref());
+        let repo = &self.paths().repo_root;
+        let settlement =
+            leaf_failure_settlement(&record, &run, diagnostic, state.as_ref(), &|hold| {
+                recorded_base_no_longer_red(repo, hold)
+            });
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,

@@ -20,9 +20,7 @@ use tempfile::tempdir;
 /// [ORB-12245] `done` and `archived` are terminal on the governed surface.
 /// A human on the bare CLI can still override the table with `--force`, and
 /// the override is named in the task's history.
-#[test]
-fn update_status_reopens_terminal_tasks_only_with_an_explicit_force() {
-    let workspace = workspace();
+fn update_status_reopens_terminal_tasks_only_with_an_explicit_force(workspace: &TestWorkspace) {
     let id = workspace.add_task("Terminal task");
     workspace.drive_to_done(&id);
 
@@ -58,9 +56,7 @@ fn update_status_reopens_terminal_tasks_only_with_an_explicit_force() {
 
 /// `orbit task archive` shelves a task from any status; restoring it is the
 /// same human override as reopening a completed one.
-#[test]
-fn update_status_restores_an_archived_task_with_force() {
-    let workspace = workspace();
+fn update_status_restores_an_archived_task_with_force(workspace: &TestWorkspace) {
     let id = workspace.add_task("Restore me");
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
     workspace.run(&["task", "archive", &id], "archive");
@@ -79,9 +75,7 @@ fn update_status_restores_an_archived_task_with_force() {
 
 /// Completion evidence is required wherever the status is set: the CLI is no
 /// more able to mint a `done` task out of a proposal than an agent is.
-#[test]
-fn update_status_refuses_completion_without_review_and_evidence() {
-    let workspace = workspace();
+fn update_status_refuses_completion_without_review_and_evidence(workspace: &TestWorkspace) {
     let id = workspace.add_task("Fabricated completion");
 
     let skipped = workspace.run_raw(&["task", "update", &id, "--status", "done"]);
@@ -126,10 +120,7 @@ fn update_status_refuses_completion_without_review_and_evidence() {
     assert_eq!(done["status"], json!("done"));
 }
 
-#[test]
-fn update_status_performs_approve_and_reject_transitions() {
-    let workspace = workspace();
-
+fn update_status_performs_approve_and_reject_transitions(workspace: &TestWorkspace) {
     let [approve, reject] = workspace.add_tasks(["Approve via update", "Reject via update"]);
 
     // proposed -> backlog (former `approve`).
@@ -144,9 +135,7 @@ fn update_status_performs_approve_and_reject_transitions() {
 /// [ORB-13985] `--discard-candidate` records the operator's discard in task
 /// history, alongside a requeue, so the next run implements fresh; it is
 /// refused while a run is still working on the task.
-#[test]
-fn update_discard_candidate_records_the_discard_unless_a_run_is_active() {
-    let workspace = workspace();
+fn update_discard_candidate_records_the_discard_unless_a_run_is_active(workspace: &TestWorkspace) {
     let id = workspace.add_task("Discard a candidate");
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
     workspace.run(
@@ -194,21 +183,7 @@ fn update_discard_candidate_records_the_discard_unless_a_run_is_active() {
     assert_eq!(discards(&requeued), 1);
 }
 
-#[test]
-fn task_update_complexity_roundtrips_through_a_real_task_record() {
-    let workspace = workspace();
-    let id = workspace.add_task("Complexity update");
-
-    let updated = workspace.task_json(&["task", "update", &id, "--complexity", "medium", "--json"]);
-    assert_eq!(updated["complexity"], json!("medium"));
-
-    let shown = workspace.task_json(&["task", "show", &id, "--json"]);
-    assert_eq!(shown["complexity"], json!("medium"));
-}
-
-#[test]
-fn task_update_repeats_dependencies_and_clears_context() {
-    let workspace = workspace();
+fn task_update_repeats_dependencies_and_clears_context(workspace: &TestWorkspace) {
     let [dependency_a, dependency_b, id] =
         workspace.add_tasks(["First dependency", "Second dependency", "List update"]);
     fs::write(workspace.work.join("one.rs"), "// one\n").expect("write one file");
@@ -238,9 +213,7 @@ fn task_update_repeats_dependencies_and_clears_context() {
     assert_eq!(context, json!([]));
 }
 
-#[test]
-fn task_update_rejects_missing_context_file_and_leaves_task_unchanged() {
-    let workspace = workspace();
+fn task_update_rejects_missing_context_file_and_leaves_task_unchanged(workspace: &TestWorkspace) {
     let id = workspace.add_task("Target task");
     let before = workspace.task_json(&["task", "show", &id, "--json"]);
 
@@ -259,30 +232,7 @@ fn task_update_rejects_missing_context_file_and_leaves_task_unchanged() {
     );
 }
 
-#[test]
-fn task_add_rejects_missing_context_file() {
-    let workspace = workspace();
-    let output = workspace.run_raw(&[
-        "task",
-        "add",
-        "--title",
-        "Add with missing context",
-        "--complexity",
-        "low",
-        "--context",
-        "file:does/not/exist.rs",
-    ]);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("file:does/not/exist.rs"),
-        "stderr must name selector: {stderr}"
-    );
-}
-
-#[test]
-fn task_update_and_add_accept_valid_context_selectors() {
-    let workspace = workspace();
+fn task_update_and_add_accept_valid_context_selectors(workspace: &TestWorkspace) {
     fs::write(
         workspace.work.join("existing.rs"),
         "pub fn my_symbol() {}\n",
@@ -324,9 +274,9 @@ fn task_update_and_add_accept_valid_context_selectors() {
 
 /// [ORB-13753] Scope extensions must send the full union: a tool update with
 /// only additions previously dropped the task's original selectors.
-#[test]
-fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
-    let workspace = workspace();
+fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears(
+    workspace: &TestWorkspace,
+) {
     let routing = workspace.task_json(&["workspace", "show", "--format", "json"]);
     let work = fs::canonicalize(&workspace.work).expect("canonical fixture work");
     assert_eq!(routing["registered"], json!(true));
@@ -408,9 +358,7 @@ fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
 /// A proposed or backlog task's readiness gaps reach whoever files or edits
 /// it — the `orbit.task.add` / `orbit.task.update` responses — and
 /// `orbit task show` prints them as a `Readiness:` line.
-#[test]
-fn task_show_and_write_tools_report_readiness_gaps() {
-    let workspace = workspace();
+fn task_show_and_write_tools_report_readiness_gaps(workspace: &TestWorkspace) {
     fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
     let codes = |readiness: &Value| -> Vec<(String, String)> {
         readiness["gaps"]
@@ -473,9 +421,7 @@ fn task_show_and_write_tools_report_readiness_gaps() {
 /// surfaces alike. The warning is the task's own advisory backlog readiness
 /// gap with its fix, so the assertion pins that consistency rather than the
 /// wording. A task with selectors or tagged `no-diff-expected` gets none.
-#[test]
-fn backlog_writes_without_context_warn_about_the_missing_file_lock() {
-    let workspace = workspace();
+fn backlog_writes_without_context_warn_about_the_missing_file_lock(workspace: &TestWorkspace) {
     fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
     let expected = |task: &Value| -> Value {
         let gaps = task["readiness"]["gaps"]
@@ -535,9 +481,7 @@ fn backlog_writes_without_context_warn_about_the_missing_file_lock() {
 /// declaration is durable creation intent for exactly the selectors it named.
 /// Re-sending a declared target needs no new escape; a typo, a revoked
 /// target, a traversal and a wrong-kind target are refused.
-#[test]
-fn allow_missing_context_records_durable_exact_creation_intent() {
-    let workspace = workspace();
+fn allow_missing_context_records_durable_exact_creation_intent(workspace: &TestWorkspace) {
     fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
 
     let added = workspace.task_json(&[
@@ -638,9 +582,7 @@ fn allow_missing_context_records_durable_exact_creation_intent() {
     );
 }
 
-#[test]
-fn locks_list_projects_files_held_by_active_tasks() {
-    let workspace = workspace();
+fn locks_list_projects_files_held_by_active_tasks(workspace: &TestWorkspace) {
     fs::write(workspace.work.join("held.rs"), "// held\n").expect("write held file");
 
     let id = workspace.add_task("Holds a lock");
@@ -674,133 +616,6 @@ fn locks_list_projects_files_held_by_active_tasks() {
     let text = workspace.run(&["task", "locks", "list"], "task locks list text");
     let stdout = String::from_utf8_lossy(&text.stdout);
     assert!(stdout.contains("file:held.rs"), "{stdout}");
-}
-
-/// [ORB-12490] The sweep that dropped selectors whose target had disappeared
-/// is retired: a declaration for a file that does not exist is the scope the
-/// task owns, and the lint now reports it without touching it.
-#[test]
-fn lint_sweep_keeps_declared_context_when_its_target_disappears() {
-    let workspace = workspace();
-    fs::write(workspace.work.join("real.rs"), "// real\n").expect("write real file");
-    fs::write(workspace.work.join("ghost.rs"), "// ghost\n").expect("write ghost file");
-
-    let id = workspace.add_task("Has a disappearing target");
-    workspace.run(
-        &[
-            "task",
-            "update",
-            &id,
-            "--context",
-            "file:real.rs,file:ghost.rs",
-        ],
-        "set context files",
-    );
-    fs::remove_file(workspace.work.join("ghost.rs")).expect("remove ghost file");
-
-    let sweep = workspace.run(&["task", "lint", "--json"], "lint sweep");
-    let sweep: Value = serde_json::from_slice(&sweep.stdout).expect("sweep JSON");
-    assert_eq!(sweep["dry_run"], json!(true));
-    assert_eq!(sweep["tasks_needing_repair"], json!(0));
-
-    // An unrelated edit does not shrink the declaration either.
-    workspace.run(
-        &["task", "update", &id, "--title", "Still has one"],
-        "unrelated edit",
-    );
-    let task = workspace.task_json(&["task", "show", &id, "--json"]);
-    assert_eq!(
-        task["context_files"],
-        json!(["file:real.rs", "file:ghost.rs"])
-    );
-
-    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
-    let missing = single["findings"]
-        .as_array()
-        .expect("findings")
-        .iter()
-        .find(|finding| finding["check"] == json!("context_target_missing"))
-        .expect("a missing-target warning");
-    assert_eq!(missing["severity"], json!("warning"));
-    assert!(
-        missing["message"]
-            .as_str()
-            .expect("message")
-            .contains("file:ghost.rs"),
-        "{missing}"
-    );
-}
-
-/// [ORB-12490] A task that declares nothing is reported for operator repair
-/// and never handed a guessed scope — not even by `--restore-pruned`, which
-/// restores only what task history recorded.
-#[test]
-fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
-    let workspace = workspace();
-    let id = workspace.add_task("Never declared anything");
-
-    let dry = workspace.run(&["task", "lint", "--json"], "lint sweep dry run");
-    let dry: Value = serde_json::from_slice(&dry.stdout).expect("dry-run JSON");
-    assert_eq!(dry["dry_run"], json!(true));
-    assert_eq!(dry["total_restorable"], json!(0));
-    let entry = dry["tasks"]
-        .as_array()
-        .expect("swept tasks")
-        .iter()
-        .find(|entry| entry["id"] == json!(id))
-        .expect("the task with no declaration");
-    assert_eq!(entry["empty_surface"], json!(true));
-    assert_eq!(entry["restorable"], json!([]));
-
-    let applied = workspace.run(
-        &["task", "lint", "--restore-pruned", "--json"],
-        "lint sweep restore",
-    );
-    let applied: Value = serde_json::from_slice(&applied.stdout).expect("restore JSON");
-    assert_eq!(applied["tasks_written"], json!(0));
-    assert_eq!(
-        workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
-        json!([])
-    );
-
-    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
-    assert!(
-        single["findings"]
-            .as_array()
-            .expect("findings")
-            .iter()
-            .any(|finding| finding["check"] == json!("context_surface")),
-        "{single}"
-    );
-}
-
-/// [ORB-14825] A path cited at the end of a parenthesised sentence
-/// (`(see src/cited.rs).`) is the existing file, not `src/cited.rs)`.
-#[test]
-fn lint_reads_a_path_closed_by_a_parenthesis_and_full_stop_as_the_file() {
-    let workspace = workspace();
-    fs::create_dir_all(workspace.work.join("src")).expect("create src");
-    fs::write(workspace.work.join("src/cited.rs"), "// cited\n").expect("write cited file");
-    let id = workspace.add_task("Cites a path inside parentheses");
-    workspace.run(
-        &[
-            "task",
-            "update",
-            &id,
-            "--description",
-            "The closed case (in src/cited.rs). Also [src/cited.rs]!",
-        ],
-        "set description",
-    );
-
-    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
-    let findings = single["findings"].as_array().expect("findings");
-    assert!(
-        !findings
-            .iter()
-            .any(|finding| finding["check"] == json!("path_validity")),
-        "{single}"
-    );
 }
 
 #[test]
@@ -906,9 +721,9 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
     );
 }
 
-#[test]
-fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability() {
-    let workspace = workspace();
+fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability(
+    workspace: &TestWorkspace,
+) {
     // ORB-10651: reservation ids must have the `reservation-<id>` form or
     // `release` now rejects them before reaching the "no matching row" path
     // this test otherwise exercises.
@@ -957,47 +772,7 @@ fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability() {
     );
 }
 
-#[test]
-fn locks_reserve_requires_the_same_operator_capability_as_release() {
-    let workspace = workspace();
-    fs::write(workspace.work.join("reserve_me.rs"), "// reserve\n").expect("write fixture file");
-    const RESERVE: &[&str] = &[
-        "task",
-        "locks",
-        "reserve",
-        "--file",
-        "file:reserve_me.rs",
-        "--json",
-    ];
-
-    // ORB-12251: an unidentified caller could previously reserve a surface it
-    // was then refused `release` on — creating a claim it was not trusted to
-    // clear. `reserve` must be refused the same way `release` already is.
-    let ungoverned = workspace.run_raw(RESERVE);
-    assert!(!ungoverned.status.success());
-    let denial = String::from_utf8_lossy(&ungoverned.stderr);
-    assert!(denial.contains("capability denied"), "{denial}");
-    assert!(denial.contains("operator or runner"), "{denial}");
-
-    let output = workspace.run_as_operator(RESERVE, "task locks reserve");
-    let value: Value = serde_json::from_slice(&output.stdout).expect("reserve JSON");
-    assert_eq!(value["reserved"], json!(true));
-    let reservation_id = value["reservation_id"]
-        .as_str()
-        .expect("reservation id")
-        .to_string();
-
-    // The same operator capability that created the reservation can also
-    // release it — the symmetry this task requires.
-    workspace.run_as_operator(
-        &["task", "locks", "release", &reservation_id, "--confirm"],
-        "task locks release",
-    );
-}
-
-#[test]
-fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed() {
-    let workspace = workspace();
+fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed(workspace: &TestWorkspace) {
     workspace.add_task("Create an audit event");
     let before = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
     assert!(!before.as_array().expect("audit rows").is_empty());
@@ -1015,70 +790,6 @@ fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed() {
     assert!(String::from_utf8_lossy(&confirmed.stdout).contains("Pruned"));
     let after = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
     assert!(after.as_array().expect("audit rows").is_empty());
-}
-
-#[test]
-fn run_cancel_confirmation_precedes_run_lookup() {
-    let workspace = workspace();
-
-    let refused = workspace.run_raw(&["run", "cancel", "jrun-does-not-exist"]);
-    assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("--confirm"));
-
-    let confirmed = workspace.run_raw(&["run", "cancel", "jrun-does-not-exist", "--confirm"]);
-    assert!(!confirmed.status.success());
-    let stderr = String::from_utf8_lossy(&confirmed.stderr);
-    assert!(stderr.contains("jrun-does-not-exist"), "{stderr}");
-    assert!(!stderr.contains("pass --confirm"), "{stderr}");
-}
-
-#[test]
-fn migrate_bare_invocation_inspects_and_confirm_applies() {
-    let workspace = workspace();
-    let marker = workspace.work.join(".orbit/state/layout.version");
-    fs::write(&marker, "1\n").expect("restore prior layout version");
-
-    let preview = workspace.run_raw(&["migrate"]);
-    assert!(!preview.status.success());
-    assert_eq!(
-        fs::read_to_string(&marker).expect("read previewed marker"),
-        "1\n",
-        "bare migrate must not advance the layout"
-    );
-    assert!(
-        String::from_utf8_lossy(&preview.stderr).contains("migrate --confirm"),
-        "{}",
-        String::from_utf8_lossy(&preview.stderr)
-    );
-
-    workspace.run(&["migrate", "--confirm"], "confirmed migration");
-    assert_eq!(
-        fs::read_to_string(&marker).expect("read applied marker"),
-        "3\n",
-        "confirmed migrate must advance the layout"
-    );
-}
-
-#[test]
-fn workspace_remove_is_recoverable_by_reinitializing_the_checkout() {
-    let workspace = workspace();
-
-    workspace.run_as_operator(
-        &["workspace", "remove", "trimmed-surface-test"],
-        "deregister workspace",
-    );
-    let unregistered = workspace.run(&["workspace", "show"], "show unregistered workspace");
-    assert!(
-        String::from_utf8_lossy(&unregistered.stdout).contains("not registered as a workspace")
-    );
-
-    workspace.run(
-        &["workspace", "init", "--name", "trimmed-surface-test"],
-        "reregister workspace",
-    );
-    let restored = workspace.run(&["workspace", "show"], "show restored workspace");
-    assert!(String::from_utf8_lossy(&restored.stdout).contains("name:"));
-    assert!(String::from_utf8_lossy(&restored.stdout).contains("trimmed-surface-test"));
 }
 
 use crate::task_workspace::{TaskSeed, TestWorkspace};
@@ -1167,4 +878,108 @@ fn run_orbit_with_identity(
         .env("ORBIT_RUN_ID", "task-trimmed-surface-managed")
         .args(args);
     command.output().expect("run orbit with managed identity")
+}
+
+#[test]
+fn governed_status_transitions() {
+    let workspace = workspace();
+    for (name, check) in [
+        (
+            "update_status_reopens_terminal_tasks_only_with_an_explicit_force",
+            update_status_reopens_terminal_tasks_only_with_an_explicit_force as fn(&TestWorkspace),
+        ),
+        (
+            "update_status_restores_an_archived_task_with_force",
+            update_status_restores_an_archived_task_with_force as fn(&TestWorkspace),
+        ),
+        (
+            "update_status_refuses_completion_without_review_and_evidence",
+            update_status_refuses_completion_without_review_and_evidence as fn(&TestWorkspace),
+        ),
+        (
+            "update_status_performs_approve_and_reject_transitions",
+            update_status_performs_approve_and_reject_transitions as fn(&TestWorkspace),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check(&workspace);
+    }
+}
+
+#[test]
+fn candidate_and_context_updates() {
+    let workspace = workspace();
+    for (name, check) in [
+        (
+            "update_discard_candidate_records_the_discard_unless_a_run_is_active",
+            update_discard_candidate_records_the_discard_unless_a_run_is_active
+                as fn(&TestWorkspace),
+        ),
+        (
+            "task_update_repeats_dependencies_and_clears_context",
+            task_update_repeats_dependencies_and_clears_context as fn(&TestWorkspace),
+        ),
+        (
+            "task_update_rejects_missing_context_file_and_leaves_task_unchanged",
+            task_update_rejects_missing_context_file_and_leaves_task_unchanged
+                as fn(&TestWorkspace),
+        ),
+        (
+            "task_update_and_add_accept_valid_context_selectors",
+            task_update_and_add_accept_valid_context_selectors as fn(&TestWorkspace),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check(&workspace);
+    }
+}
+
+#[test]
+fn scope_readiness_and_creation_grants() {
+    let workspace = workspace();
+    for (name, check) in [
+        (
+            "tool_task_update_context_preserves_omissions_replaces_lists_and_clears",
+            tool_task_update_context_preserves_omissions_replaces_lists_and_clears
+                as fn(&TestWorkspace),
+        ),
+        (
+            "task_show_and_write_tools_report_readiness_gaps",
+            task_show_and_write_tools_report_readiness_gaps as fn(&TestWorkspace),
+        ),
+        (
+            "backlog_writes_without_context_warn_about_the_missing_file_lock",
+            backlog_writes_without_context_warn_about_the_missing_file_lock as fn(&TestWorkspace),
+        ),
+        (
+            "allow_missing_context_records_durable_exact_creation_intent",
+            allow_missing_context_records_durable_exact_creation_intent as fn(&TestWorkspace),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check(&workspace);
+    }
+}
+
+#[test]
+fn lock_and_audit_administration() {
+    let workspace = workspace();
+    for (name, check) in [
+        (
+            "locks_list_projects_files_held_by_active_tasks",
+            locks_list_projects_files_held_by_active_tasks as fn(&TestWorkspace),
+        ),
+        (
+            "locks_release_reaches_the_admin_tool_only_with_the_operator_capability",
+            locks_release_reaches_the_admin_tool_only_with_the_operator_capability
+                as fn(&TestWorkspace),
+        ),
+        (
+            "audit_prune_refuses_unconfirmed_then_deletes_when_confirmed",
+            audit_prune_refuses_unconfirmed_then_deletes_when_confirmed as fn(&TestWorkspace),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check(&workspace);
+    }
 }

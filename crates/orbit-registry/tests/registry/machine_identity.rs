@@ -1,4 +1,4 @@
-use crate::machine_identity::{
+use orbit_registry::machine_identity::{
     LEGACY_HOST_TOML_FILE, MachineIdentityOutcome, NewMachineIdentity, ensure_machine_identity,
     inspect_machine_identity, load_machine_identity,
 };

@@ -16,8 +16,9 @@ pub(in super::super) const NETWORK_RETRIES: u32 = 2;
 const NETWORK_RETRY_BACKOFF: [Duration; NETWORK_RETRIES as usize] =
     [Duration::from_secs(2), Duration::from_secs(6)];
 
-/// Evidence that a failed command could not reach the network.
-fn network_inconclusive(output: &str) -> Option<String> {
+/// Evidence that a failed command could not reach the network. Landing reads
+/// a failed hosted check's log with the same rule [ORB-15956].
+pub(in super::super) fn network_inconclusive(output: &str) -> Option<String> {
     static PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     let pattern = PATTERN
         .get_or_init(|| {

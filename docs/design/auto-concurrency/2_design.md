@@ -385,6 +385,14 @@ counting the ones before it. When a candidate does not fit, it is recorded
 with the minute and resource that failed, for example `cpu 94% at +6m`, and
 the walk continues: a smaller task may fit the gap.
 
+**Idle host.** While `F` holds no running delivery and no reservation, and
+the pass has admitted nothing yet, a candidate that does not fit is admitted
+anyway. Nothing on the host would make room for it by finishing, so a
+refusal would last for good: a profile larger than a threshold on its own, as
+a pessimistic fallback of §3 often is, or one pushed over only by the
+baseline `B`, would never fit. Once admitted it counts in `F` like any other,
+so the next candidate in the pass is judged against it.
+
 Every existing gate still applies, and gap fit only removes candidates:
 
 - the drain's maximum concurrency;
@@ -397,9 +405,11 @@ admitted, whatever the forecast says. This is what makes it safe to admit
 into a host that is busy now but forecast to be quiet when the task's load
 arrives. If the forecast is wrong, real pressure stops further admission.
 
-Default thresholds are CPU 80% and memory 75%. Both sit below the throttle's
-90% high and 85% resume marks, so forecast admission and the throttle do not
-fight each other.
+Default thresholds are CPU 90% and memory 75%. The memory threshold must stay
+below the throttle's memory high mark (90%), so forecast admission and the
+throttle do not fight each other. The CPU threshold is forecast utilization
+of the host's cores; the throttle's CPU mark is a Linux load average, which
+counts the run queue and can exceed 100%, so the two are not compared.
 
 Implemented for local and pull drains, with local passes in `admission/gap_fit.rs`, over
 `HostLoadForecast::gap` (`runtime/host_resource/forecast/fit.rs`):
@@ -423,12 +433,17 @@ Implemented for local and pull drains, with local passes in `admission/gap_fit.r
 - **Unmeasured host.** A host whose cores or memory cannot be read has no
   threshold to fit under, so every candidate fits, as on a host with no
   profiles.
+- **Idle host.** `ForecastGap::fit` applies the idle-host rule for local and
+  pull drains alike (§6). An admitted candidate, profiled or not, ends the
+  idle state for the rest of the pass.
 - **Record.** `drain_last_pass.admission_forecast` holds the mode, the CPU
   and memory peaks of the forecast before the pass admitted, as values and
   percentages of the host, the admitted and skipped candidates with their
   profile source, and each skip's resource, minute, percentage and detail
   (`cpu 94% at +6m`). In `enforce` a skip is also a `gap_fit` deferral in
-  `deferred`.
+  `deferred`. A candidate the idle-host rule admitted carries `idle_host`:
+  its first miss and whether its profile made it alone or only with the
+  baseline, e.g. `cpu 125% at +3m on its own; admitted on an idle host`.
 - **Waiting.** A pass whose candidates gap fit refused still has a pending
   backlog, so it sleeps `poll_sleep_seconds`. The forecast is per minute, so
   no gap it shows opens sooner than that poll.
@@ -471,6 +486,12 @@ first candidate in priority order has failed gap fit for longer than
 `head_max_wait_minutes` (30), the drain admits nothing else until that
 candidate fits.
 
+The head waits only on running deliveries and reservations: a candidate is
+refused only while `F` holds one (§5.1, idle host). Deliveries end and
+reservations expire, so a head too large for the thresholds, even one larger
+on its own, is admitted on the first pass after the host has neither. Work
+behind it is then judged against its reservation, not held by the guard.
+
 Implemented with the head as the first candidate gap fit judges in a pass, so
 one a lock or the footprint guard holds back is not the head. Its
 `failing_since` is carried in `drain_last_pass.admission_forecast.head` from
@@ -496,7 +517,8 @@ admission lock (§5.2):
 
 1. The follower gap-fits (§5.1) every kind of work it could be granted
    against its forecast, each priced by its profile through the fallback chain
-   of §3:
+   of §3, by the local drain's rule, idle host included: while the forecast
+   holds no running delivery or reservation, every kind fits:
    - each work class `no-diff` and `change` with each complexity, unset
      included;
    - each `auto-task:` template this workspace has a profile of on this host.
@@ -654,9 +676,15 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   thresholds. It does not check that more concurrency lands more work. When
   the bottleneck is something else, such as conflicts or review, it fills
   the host anyway, up to the operator's maximum.
-- **Starvation guard is crude.** The head-of-queue wait can idle a host for
-  up to 30 minutes while it waits for one heavy task to fit.
-- **Thresholds are guesses.** 80% CPU and 75% memory are starting points.
+- **Starvation guard is crude.** Once the head is protected, a drain admits
+  nothing else until the running deliveries and reservations it waits on are
+  gone. Other drains on the host are not held by it, so while they keep
+  admitting, its wait has no bound.
+- **An idle host admits whatever comes first.** The idle-host rule admits a
+  candidate larger than the thresholds, and judges one without the baseline
+  `B`, which includes memory used outside Orbit. Such a delivery can push the
+  host past the thresholds; the resource throttle is the backstop.
+- **Thresholds are guesses.** 90% CPU and 75% memory are starting points.
   The shadow report is where they get tuned.
 
 ## Task References

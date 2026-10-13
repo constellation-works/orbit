@@ -131,7 +131,9 @@ impl PullDrain<'_> {
         }
         let record = self.ensure_bound(record)?;
         let state = self.jobs.read_run_state(id)?;
-        let settlement = leaf_failure_settlement(&record, &run, None, state.as_ref());
+        let settlement = leaf_failure_settlement(&record, &run, None, state.as_ref(), &|hold| {
+            self.launcher.base_no_longer_red(hold)
+        });
         self.record_settlement(&record, settlement).map(Some)
     }
 

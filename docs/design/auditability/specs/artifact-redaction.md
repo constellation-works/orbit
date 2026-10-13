@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Artifact Write Redaction"
 tags: ["auditability"]
-last_validated: 2026-10-09
+last_validated: 2026-10-13
 ---
 
 # Spec: Artifact Write Redaction
@@ -23,7 +23,6 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.friction.add` | `title`, `body`, `description` | - | `model`, `during_task`, tags |
 | `orbit.friction.update` | `title`, `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
 | `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
-| `orbit.docs.add` | - | - | DocsAdd only registers a validated repo-relative path; it does not persist document content. |
 
 For `orbit.task.update`, `note` is the optional note attached to a lifecycle status change; it is sanitized before the transition body persists it in task history. Task and friction tags are taxonomy fields and pass through verbatim.
 
@@ -40,7 +39,7 @@ records and raw artifact bytes retain their existing contracts.
 reconciliation response; its selected `command` is preserved byte-for-byte for
 exact evidence matching.
 
-The table establishes the artifact boundary: tasks, frictions, and auto-task definitions are covered on their listed write operations. `DocsAdd` makes an explicit no-redaction decision because it only registers a checked path; registered docs remain ordinary repository files rather than a tool mutation primitive. The retired ADR tools are refused by the tool host before any write, so they have no field policy. Session-log writes are no longer a public tool mutation, so they are not in this inventory ([ORB-11097]).
+The table establishes the artifact boundary: task, friction, and auto-task writes are covered on their listed operations. The current source tree no longer defines `orbit.docs.add`; documentation is maintained as repository content outside this tool-write inventory. Session-log writes are not public tool mutations, so they are not in this inventory ([ORB-11097]).
 
 `policy_for_action` exhaustively matches `OrbitBuiltinAction`. Adding any builtin action therefore fails to compile until it receives either a field policy or an explicit no-redaction decision, instead of falling through to an unredacted default.
 

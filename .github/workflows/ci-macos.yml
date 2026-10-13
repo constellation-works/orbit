@@ -171,6 +171,13 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
+      # The worker-profile integration test runs the build-budget self-test,
+      # whose bounded subprocess probes use GNU timeout.
+      - name: Install build-budget test prerequisite
+        run: |
+          brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
       # Exercises the real sandbox-exec profiles, compiled SBPL goldens and
       # tests/sandbox/macos_sandbox.rs enforcement tests. The shared apply guard
       # reports a nested sandbox_apply refusal elsewhere, but must fail here:
@@ -229,7 +236,7 @@ jobs:
           cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
           cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
           cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
-          cargo test --no-fail-fast -p orbit-cli --locked absent_unwritable_partition_keeps_cli_tool_reads_observational --test mcp
+          cargo test --no-fail-fast -p orbit-cli --locked observational_read_only_stores --test mcp
           cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep

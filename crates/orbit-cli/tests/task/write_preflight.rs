@@ -50,7 +50,6 @@ fn add_proposed(fixture: &Fixture, title: &str) -> String {
     created["id"].as_str().expect("task id").to_string()
 }
 
-#[test]
 fn add_warnings_match_on_cli_and_tool() {
     let fixture = Fixture::new();
     fixture.json(&["tool", "disable", DISABLED_TOOL, "--format", "json"]);
@@ -110,7 +109,6 @@ fn add_warnings_match_on_cli_and_tool() {
     assert_names(&cli_warnings, "EXT-2", &cli);
 }
 
-#[test]
 fn update_and_approval_warnings_match_on_cli_and_tool() {
     let fixture = Fixture::new();
     let [cli_id, tool_id] = ["CLI twin", "Tool twin"].map(|title| add_proposed(&fixture, title));
@@ -157,4 +155,21 @@ fn update_and_approval_warnings_match_on_cli_and_tool() {
     let cli_warnings = warnings(&cli);
     assert_names(&cli_warnings, blocker, &cli);
     assert_eq!(warnings(&via_tool), cli_warnings, "{via_tool}");
+}
+
+#[test]
+fn write_preflight_cli_tool_parity() {
+    for (name, check) in [
+        (
+            "add_warnings_match_on_cli_and_tool",
+            add_warnings_match_on_cli_and_tool as fn(),
+        ),
+        (
+            "update_and_approval_warnings_match_on_cli_and_tool",
+            update_and_approval_warnings_match_on_cli_and_tool as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

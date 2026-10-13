@@ -449,17 +449,8 @@
     },
     "orbit-registry": {
       "test_function_paths": [
-        "tests/machine_identity.rs::a_symlinked_host_toml_is_refused_rather_than_followed",
-        "tests/machine_identity.rs::concurrent_ensure_on_absent_root_creates_one_identity",
-        "tests/machine_identity.rs::disagreeing_host_toml_and_machine_table_fail_closed_naming_both_files",
-        "tests/workspace_publication.rs::bind_rejects_replica_equivalent_remote_credentials_branch_authority_and_reused_ids",
-        "tests/workspace_registry.rs::a_deleted_checkout_is_found_by_a_path_spelled_through_a_symlinked_ancestor",
-        "tests/workspace_registry.rs::exact_id_lookup_survives_a_name_that_matches_another_workspace_id",
         "tests/workspace_registry.rs::injected_migration_write_failure_preserves_readable_legacy_registry",
-        "tests/workspace_registry.rs::legacy_registry_migrates_to_path_free_catalog_and_is_byte_stable",
-        "tests/workspace_registry.rs::migrating_read_rechecks_under_lock_and_preserves_interleaved_registration",
-        "tests/workspace_registry.rs::multi_host_modes_reject_missing_unknown_and_contradictory_roles_by_workspace_id",
-        "tests/workspace_registry.rs::registry_io_rejects_a_symlinked_registry_file"
+        "tests/workspace_registry.rs::migrating_read_rechecks_under_lock_and_preserves_interleaved_registration"
       ]
     },
     "orbit-search": {

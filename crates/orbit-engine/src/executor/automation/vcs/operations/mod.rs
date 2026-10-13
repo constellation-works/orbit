@@ -1,3 +1,4 @@
+mod ci;
 mod dispatch;
 mod input;
 mod pr;
@@ -23,6 +24,14 @@ pub(crate) const PR_MERGE_CAPABILITIES: &str = "pr.merge_capabilities";
 pub(crate) const PR_STATUS: &str = "pr.status";
 /// [ORB-15308] Close a pull request a superseding run replaced.
 pub(crate) const PR_CLOSE: &str = "pr.close";
+/// [ORB-15956] Merge the base's current tip into a pull request's branch.
+pub(crate) const PR_UPDATE_BRANCH: &str = "pr.update_branch";
+/// [ORB-15956] The hosted CI jobs that ran on one commit.
+pub(crate) const CI_COMMIT_JOBS: &str = "ci.commit_jobs";
+/// [ORB-15956] One failed job's bounded failed-step log.
+pub(crate) const CI_JOB_LOG: &str = "ci.job_log";
+/// [ORB-15956] Rerun one workflow run's failed jobs.
+pub(crate) const CI_RERUN_FAILED: &str = "ci.rerun_failed";
 
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const SLOW_TIMEOUT_MS: u64 = 30_000;

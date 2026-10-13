@@ -263,14 +263,7 @@ fn publisher(fixture: &Fixture) -> std::path::PathBuf {
 
 /// A commit that lands only on the bare remote mints a batch, and the
 /// checkout's branch, index and worktree stay where they were.
-#[test]
 fn remote_only_landing_mints_a_batch_without_moving_the_checkout() {
-    const TEST: &str =
-        "delivery_remote_source::remote_only_landing_mints_a_batch_without_moving_the_checkout";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let runtime = baselined_remote_consumer(&fixture);
     let local = local_branch(&fixture);
@@ -343,14 +336,7 @@ fn remote_only_landing_mints_a_batch_without_moving_the_checkout() {
 
 /// A broken origin defers the pass and leaves the cursor on the last observed
 /// remote head, including when the local branch has since moved.
-#[test]
 fn fetch_failure_defers_without_falling_back_to_the_local_branch() {
-    const TEST: &str =
-        "delivery_remote_source::fetch_failure_defers_without_falling_back_to_the_local_branch";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let runtime = baselined_remote_consumer(&fixture);
     let observed = observed_commit(&runtime);
@@ -378,14 +364,7 @@ fn fetch_failure_defers_without_falling_back_to_the_local_branch() {
 }
 
 /// A force-push still fails the ancestry check against the fetched head.
-#[test]
 fn force_pushed_remote_history_defers_as_history_diverged() {
-    const TEST: &str =
-        "delivery_remote_source::force_pushed_remote_history_defers_as_history_diverged";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let runtime = baselined_remote_consumer(&fixture);
     let observed = observed_commit(&runtime);
@@ -613,14 +592,7 @@ fn stopped_action_with_coverage(
 /// write without reading anything, never settles; evidence whose examined
 /// paths miss the frozen diff does not either. Each refusal is recorded on
 /// the attempt, and complete evidence then settles the batch [ORB-15186].
-#[test]
 fn stamp_coverage_is_refused_and_per_delivery_evidence_settles() {
-    const TEST: &str =
-        "delivery_remote_source::stamp_coverage_is_refused_and_per_delivery_evidence_settles";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, attempt, run_id) = admitted_action(&fixture, 1, REVIEW_CONSUMER);
     let action_id = attempt.action_id.clone().expect("admitted action");
@@ -773,13 +745,7 @@ fn put_coverage(
 /// action holds coverage defers the pass: the attempt and covered cursor stay
 /// put. Doctor verifies the valid evidence against the existing tracking ref
 /// without fetching and does not report the action as wedged.
-#[test]
 fn fetch_failure_during_evidence_verification_defers_without_spending_a_retry() {
-    const TEST: &str = "delivery_remote_source::fetch_failure_during_evidence_verification_defers_without_spending_a_retry";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, _) = stopped_action_with_coverage(&fixture, 1, CONSUMER, true);
     let before = consumer_state(&runtime);
@@ -805,13 +771,7 @@ fn fetch_failure_during_evidence_verification_defers_without_spending_a_retry() 
 
 /// Stopped invalid coverage stays visible online and offline. Both doctor's
 /// health paths and adoption-refusal inspection must avoid even a failed fetch.
-#[test]
 fn doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching() {
-    const TEST: &str = "delivery_remote_source::doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, _) = stopped_action_with_coverage(&fixture, 1, REVIEW_CONSUMER, false);
     let before = named_consumer_state(&runtime, REVIEW_CONSUMER);
@@ -874,14 +834,7 @@ fn doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching() {
 /// A force-push is a real batch mismatch, so evidence is rejected and one
 /// retry is spent. Observation then sees the same divergence and may stall.
 /// The stall write only moves the marker, so the settled attempt remains.
-#[test]
 fn diverged_history_rejects_stopped_evidence_as_source_unverifiable() {
-    const TEST: &str =
-        "delivery_remote_source::diverged_history_rejects_stopped_evidence_as_source_unverifiable";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let (runtime, _) = stopped_action_with_coverage(&fixture, 1, CONSUMER, true);
     let before = consumer_state(&runtime);
@@ -1002,14 +955,7 @@ fn fetch_remote_tracking(fixture: &Fixture) {
 /// Doctor names the remote-tracking head. A missing ref is not ok once the
 /// consumer has a cursor. A trail younger than `max_wait_minutes` is reported
 /// and still ok. The local branch does not move.
-#[test]
 fn doctor_reports_the_remote_tracking_head_without_fetching() {
-    const TEST: &str =
-        "delivery_remote_source::doctor_reports_the_remote_tracking_head_without_fetching";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     let fixture = Fixture::new();
     let local = baseline_review_consumer(&fixture, 60);
     let row = doctor_review(&fixture);
@@ -1089,14 +1035,7 @@ fn doctor_reports_the_remote_tracking_head_without_fetching() {
 
 /// Remote trail health follows the oldest pending first-parent commit, even
 /// when the tip is recent. Cover both sides of the wait boundary [ORB-14142].
-#[test]
 fn doctor_uses_the_oldest_pending_commit_for_remote_trail_health() {
-    const TEST: &str =
-        "delivery_remote_source::doctor_uses_the_oldest_pending_commit_for_remote_trail_health";
-    if !in_isolated_child(TEST) {
-        return;
-    }
-
     for (oldest_age_minutes, expected_status) in [(30, "ok"), (120, "error")] {
         let fixture = Fixture::new();
         let local = baseline_review_consumer(&fixture, 60);
@@ -1155,5 +1094,77 @@ fn doctor_uses_the_oldest_pending_commit_for_remote_trail_health() {
             expected_status == "error",
             "{message}"
         );
+    }
+}
+
+#[test]
+fn remote_delivery_contracts_0() {
+    if !in_isolated_child("delivery_remote_source::remote_delivery_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "remote_only_landing_mints_a_batch_without_moving_the_checkout",
+            remote_only_landing_mints_a_batch_without_moving_the_checkout as fn(),
+        ),
+        (
+            "fetch_failure_defers_without_falling_back_to_the_local_branch",
+            fetch_failure_defers_without_falling_back_to_the_local_branch as fn(),
+        ),
+        (
+            "force_pushed_remote_history_defers_as_history_diverged",
+            force_pushed_remote_history_defers_as_history_diverged as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "Recovery contract row");
+        check();
+    }
+}
+
+#[test]
+fn remote_delivery_contracts_1() {
+    if !in_isolated_child("delivery_remote_source::remote_delivery_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "stamp_coverage_is_refused_and_per_delivery_evidence_settles",
+            stamp_coverage_is_refused_and_per_delivery_evidence_settles as fn(),
+        ),
+        (
+            "fetch_failure_during_evidence_verification_defers_without_spending_a_retry",
+            fetch_failure_during_evidence_verification_defers_without_spending_a_retry as fn(),
+        ),
+        (
+            "doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching",
+            doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "Recovery contract row");
+        check();
+    }
+}
+
+#[test]
+fn remote_delivery_contracts_2() {
+    if !in_isolated_child("delivery_remote_source::remote_delivery_contracts_2") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "diverged_history_rejects_stopped_evidence_as_source_unverifiable",
+            diverged_history_rejects_stopped_evidence_as_source_unverifiable as fn(),
+        ),
+        (
+            "doctor_reports_the_remote_tracking_head_without_fetching",
+            doctor_reports_the_remote_tracking_head_without_fetching as fn(),
+        ),
+        (
+            "doctor_uses_the_oldest_pending_commit_for_remote_trail_health",
+            doctor_uses_the_oldest_pending_commit_for_remote_trail_health as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "Recovery contract row");
+        check();
     }
 }

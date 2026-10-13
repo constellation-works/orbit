@@ -6,7 +6,6 @@ use std::fs;
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
-#[test]
 fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest() {
     let fixture = Fixture::new();
     let keys = fixture.json(&["config", "keys", "--json"]);
@@ -88,7 +87,6 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), before);
 }
 
-#[test]
 fn task_show_formats_status_history_and_whole_second_timestamps_without_changing_json() {
     let fixture = Fixture::new();
     let id = fixture.json(&["task", "list", "--json"])[0]["id"]
@@ -198,7 +196,6 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
 /// projection (including `job_run_machine`) and, for the full record, the same
 /// sidecars, artifact manifest and crew enrichment. A tool-host write response
 /// keeps the base record without the sidecars.
-#[test]
 fn task_show_and_list_json_match_the_tool_host_projection() {
     let fixture = Fixture::new();
     let id = fixture.json(&["task", "list", "--json"])[0]["id"]
@@ -294,5 +291,27 @@ fn task_show_and_list_json_match_the_tool_host_projection() {
             row.as_object().unwrap().contains_key("job_run_machine"),
             "every list row carries job_run_machine: {row}"
         );
+    }
+}
+
+#[test]
+fn local_read_projection_contracts() {
+    for (name, check) in [
+        (
+            "local_read_projections_return_registered_keys_task_flow_and_artifact_manifest",
+            local_read_projections_return_registered_keys_task_flow_and_artifact_manifest as fn(),
+        ),
+        (
+            "task_show_formats_status_history_and_whole_second_timestamps_without_changing_json",
+            task_show_formats_status_history_and_whole_second_timestamps_without_changing_json
+                as fn(),
+        ),
+        (
+            "task_show_and_list_json_match_the_tool_host_projection",
+            task_show_and_list_json_match_the_tool_host_projection as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

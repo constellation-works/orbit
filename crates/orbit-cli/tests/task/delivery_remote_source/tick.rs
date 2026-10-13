@@ -112,12 +112,7 @@ fn tick(fixture: &Fixture, path: &str) -> Value {
 }
 
 #[cfg(unix)]
-#[test]
 fn clock_tick_expired_source_preserves_debt_without_running_commands() {
-    const TEST: &str = "delivery_remote_source::tick::clock_tick_expired_source_preserves_debt_without_running_commands";
-    if !in_isolated_child(TEST) {
-        return;
-    }
     let fixture = Fixture::new();
     let runtime = consumers(&fixture);
     land(&fixture, 1);
@@ -174,13 +169,7 @@ fn clock_tick_expired_source_preserves_debt_without_running_commands() {
 }
 
 #[cfg(unix)]
-#[test]
 fn clock_tick_shares_fetch_and_each_lookup_across_consumers() {
-    const TEST: &str =
-        "delivery_remote_source::tick::clock_tick_shares_fetch_and_each_lookup_across_consumers";
-    if !in_isolated_child(TEST) {
-        return;
-    }
     let fixture = Fixture::new();
     let runtime = consumers(&fixture);
     land(&fixture, 24);
@@ -238,12 +227,7 @@ fn clock_tick_shares_fetch_and_each_lookup_across_consumers() {
 }
 
 #[cfg(unix)]
-#[test]
 fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
-    const TEST: &str = "delivery_remote_source::tick::clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched";
-    if !in_isolated_child(TEST) {
-        return;
-    }
     let fixture = Fixture::new();
     let runtime = consumers(&fixture);
     let commits = land(&fixture, 24);
@@ -355,5 +339,30 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
                 "parked debt and coverage remain unchanged"
             );
         }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_source_contracts() {
+    if !in_isolated_child("delivery_remote_source::tick::clock_source_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "clock_tick_expired_source_preserves_debt_without_running_commands",
+            clock_tick_expired_source_preserves_debt_without_running_commands as fn(),
+        ),
+        (
+            "clock_tick_shares_fetch_and_each_lookup_across_consumers",
+            clock_tick_shares_fetch_and_each_lookup_across_consumers as fn(),
+        ),
+        (
+            "clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched",
+            clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "Recovery contract row");
+        check();
     }
 }

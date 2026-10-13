@@ -489,6 +489,10 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     assert!(after_landing["next_batch_due"].is_string(), "{config}");
     assert_eq!(config["review"]["healthy"], true, "{config}");
 
+    crate::config_show_task_reads::assert_one_config_show_takes_the_task_commit_lock_once(
+        &open_runtime(&fixture),
+    );
+
     plant_retired_coverage(&fixture);
     assert_doctor_fails(&fixture, "instead of `landed_code_review_v1`");
     retarget(&fixture, &trigger());

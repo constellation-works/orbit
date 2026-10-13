@@ -7,7 +7,6 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-#[test]
 fn task_cli_roundtrips_filters_and_replaces_tags() {
     let workspace = workspace();
     let perf = workspace.add_task_cli_with_tags("Perf task", &["perf"]);
@@ -55,7 +54,6 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
     assert_eq!(updated["tags"], json!(["docs"]));
 }
 
-#[test]
 fn search_status_modes_include_blocked_and_deferred_tasks() {
     let workspace = workspace();
     let routing = workspace.run_with_stdin(
@@ -137,7 +135,6 @@ fn search_status_modes_include_blocked_and_deferred_tasks() {
 }
 
 /// ORB-10310: `orbit task list` is status-neutral and bounded by `--limit`.
-#[test]
 fn task_list_is_status_neutral_and_bounded_by_limit() {
     let workspace = workspace();
     // Every task starts in `proposed`; the default listing must include them
@@ -187,7 +184,6 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
     );
 }
 
-#[test]
 fn task_update_refuses_dropping_system_identity_tag_without_override() {
     let workspace = workspace();
     let task = workspace.add_task_with_tags(
@@ -370,4 +366,29 @@ fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");
     template.description = "Shared tag-search marker.".into();
     TestWorkspace::new("task-tags-test", template)
+}
+
+#[test]
+fn task_tags_status_filters_and_identity() {
+    for (name, check) in [
+        (
+            "task_cli_roundtrips_filters_and_replaces_tags",
+            task_cli_roundtrips_filters_and_replaces_tags as fn(),
+        ),
+        (
+            "search_status_modes_include_blocked_and_deferred_tasks",
+            search_status_modes_include_blocked_and_deferred_tasks as fn(),
+        ),
+        (
+            "task_list_is_status_neutral_and_bounded_by_limit",
+            task_list_is_status_neutral_and_bounded_by_limit as fn(),
+        ),
+        (
+            "task_update_refuses_dropping_system_identity_tag_without_override",
+            task_update_refuses_dropping_system_identity_tag_without_override as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

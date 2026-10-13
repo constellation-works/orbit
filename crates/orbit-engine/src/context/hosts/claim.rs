@@ -49,6 +49,10 @@ pub struct HandoffLandingContext {
     /// owed to the owner instead of running them. The landing merges only
     /// once each has passed on the pinned head.
     pub owed_hosted_checks: Vec<String>,
+    /// [ORB-15956] This claim already is the one automatic repair of an
+    /// earlier landing stop. A hosted check its candidate fails then stops
+    /// the landing in review instead of asking for another repair.
+    pub automatic_repair_spent: bool,
 }
 
 /// One durable step of a landing attempt, recorded by the owner store.
@@ -63,8 +67,9 @@ pub enum HandoffLandingStep {
     Complete,
     /// Durable evidence for a landing that must not proceed. `repairable`
     /// marks a candidate that conflicts with, or is stale against, the base
-    /// it lands on: the owner hands it to one automatic repair rather than
-    /// leaving it in review [ORB-14261].
+    /// it lands on [ORB-14261], or whose pull request fails a hosted check
+    /// the candidate caused [ORB-15956]: the owner hands it to one automatic
+    /// repair rather than leaving it in review.
     Stop { repairable: bool },
 }
 

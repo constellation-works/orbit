@@ -80,12 +80,16 @@ makes each local drain pass record in `drain_last_pass.admission_forecast`
 what gap fit would admit, while it admits as `off` and reserves nothing.
 `enforce` admits local candidates whose profile fits under the forecast
 within `admit_cpu_percent` and `admit_memory_percent`, after the drain's
-ceiling, the resource throttle and the conflict checks.
+ceiling, the resource throttle and the conflict checks. While the forecast
+holds no running delivery or reservation, the first candidate is admitted
+even when it does not fit, so work larger than the thresholds still runs on
+an idle host; its admission records the miss as `idle_host`.
 
 For a pull drain (`orbit run auto --pull`), under `enforce` each
 `orbit.task.pull` request names the work this host's load forecast has room
 for, the owner grants only a task inside it, and the drain requests nothing
-while nothing fits (`forecast_no_headroom`). `shadow` records that list on
+while nothing fits (`forecast_no_headroom`). On an idle host every kind of
+work fits, as in a local drain. `shadow` records that list on
 the drain as `pull_admission_fit` and requests as with `off`. A host without
 resource profiles requests as with `off`. Claims are reserved before the
 next request is forecast. `profile_window`, `min_profile_deliveries` and
@@ -111,7 +115,7 @@ head_max_wait_minutes = 30
 | `machine.auto_concurrency.profile_window` | `50` deliveries | Most recent completed deliveries retained per profile key; must be at least `min_profile_deliveries`. |
 | `machine.auto_concurrency.min_profile_deliveries` | `10` deliveries | Minimum samples before using a profile key rather than falling back along the profile chain. |
 | `machine.auto_concurrency.horizon_cap_minutes` | `120` minutes | Maximum forecast horizon for a candidate. |
-| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits. |
+| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits, or until the host holds no running delivery or reservation, when it is admitted. |
 
 **Observing admission.** `orbit run show <drain>` renders an `Admission:`
 line from `pipeline_state.drain_last_pass.admission_forecast`: skipped
@@ -918,7 +922,7 @@ Both tables resolve built-in → global → workspace, and an unknown key in eit
 Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`), `name`, `paths` (workspace-relative globs), `os` (`linux` or `macos`), the exact `command`, and a result `artifact` (a relative `.json` path, unique across rules). A rule Orbit could never fulfil fails load.
 
 - A `codeql` rule is owed on a host of another OS and fulfilled by the owner on `os`.
-- A `linux` `codeql` rule may add `hosted_check`, the pull request check that runs exactly its `command` on every candidate, named as the forge reports it (`CodeQL / Analyze (rust)`, or the check's own name). On a before-landing review on a claim host of another known OS, such as macOS, the requirement is then owed to the owner (`owner_owed_evidence`) instead of holding the review: owner acceptance refuses a certificate that owes it any check its captured rules did not declare that way, and the owner's landing merges the pull request only after that check reports an explicit success on the reviewed head (a CheckRun `SUCCESS` or a StatusContext `SUCCESS`). It waits while the check is absent, still running, or completed without a success (`SKIPPED` or `NEUTRAL`), and it stops when the check failed, whatever branch protection requires. Branch protection's own reading of a skipped or neutral required check is unchanged. Without `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the review like any other owed check. Declare it only for a check that really runs the rule's command: Orbit compares the name, not the queries the job runs. Any other kind or OS with `hosted_check`, or an empty one, fails load.
+- A `linux` `codeql` rule may add `hosted_check`, the pull request check that runs exactly its `command` on every candidate, named as the forge reports it (`CodeQL / Analyze (rust)`, or the check's own name). On a before-landing review on a claim host of another known OS, such as macOS, the requirement is then owed to the owner (`owner_owed_evidence`) instead of holding the review: owner acceptance refuses a certificate that owes it any check its captured rules did not declare that way, and the owner's landing merges the pull request only after that check reports an explicit success on the reviewed head (a CheckRun `SUCCESS` or a StatusContext `SUCCESS`). It waits while the check is absent, still running, or completed without a success (`SKIPPED` or `NEUTRAL`), and when the check failed it recovers or stops as for any failed pull request check (one branch update for a failure inherited from the base, one rerun for a transient one, the one automatic repair for the candidate's own; see the [distributed drain runbook](runbooks/distributed-drain.md)), whatever branch protection requires. Branch protection's own reading of a skipped or neutral required check is unchanged. Without `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the review like any other owed check. Declare it only for a check that really runs the rule's command: Orbit compares the name, not the queries the job runs. Any other kind or OS with `hosted_check`, or an empty one, fails load.
 - A `host_sandbox_test` rule is owed on a host of `os`, which runs it outside the agent sandbox at settlement, so its command must be one settlement admits. A held `linux` rule the leaf could not run is fulfilled by a Linux owner whose host can create namespaces.
 - The owner captures the rules on each claim. The reviewer records an owed check `not_run` and never attempts it, and a verdict whose only gaps are owed checks holds for them instead of blocking.
 
