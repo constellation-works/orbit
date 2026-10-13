@@ -2,12 +2,13 @@
 // Pure vanilla JS, split into ES module with no build step.
 //
 // Moved from app.js (router was the widest cross-cut for subsequent module splits).
-// Owns: TABS, DIAG_SUBTABS, RUN_DETAIL_SUBTABS, KNOWLEDGE_SUBTABS, parseHashRoute,
-// setActiveTab, set*Subtab helpers, initTabs, navigateToRun.
+// Owns: TABS, the Health and Analytics subtabs and their secondary views,
+// RUN_DETAIL_SUBTABS, KNOWLEDGE_SUBTABS, parseHashRoute, setActiveTab, set*Subtab
+// helpers, initTabs, navigateToRun.
 //
 // All mutable dashboard state remains in app.js. Router receives a context object
 // (from app.js routerContext()) providing getters/setters + callbacks for renders,
-// refresh, log fit, and audit pass-throughs. This avoids circular imports and keeps
+// refresh, log fit, and audit/codebase pass-throughs. This avoids circular imports and keeps
 // the "state lives in app" contract.
 //
 // The public exports (setActiveTab, navigateToRun, initTabs) are thin wrappers over
@@ -23,7 +24,7 @@ import { renderRuns, showAllFailedRuns } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
 
-// ORB-10872: Reliability is fleet-wide. While that subtab is showing, the
+// ORB-10872: Reliability › Pipeline is fleet-wide. While it is showing, the
 // header workspace selector must not look like it scopes the visible panel.
 function markWorkspaceSelectorScope(fleetWide) {
   const select = $("workspace-select");
@@ -41,30 +42,41 @@ function markWorkspaceSelectorScope(fleetWide) {
 }
 
 // ORB-10444: the top-level nav is exactly these tabs plus the hash-only
-// `run-detail` route. A deprecated tab was retired outright. Health › Cost
-// routes as `#diagnostics/cost`; `#diagnostics/scoreboard` rewrites to it.
-// Auto-drain is not a destination: its window card is the Tasks dock's Drain
-// mode (ORB-12898). The retired `#auto-drain` and older
+// `run-detail` route. Observe splits by the question a page answers: Health
+// (`#diagnostics/…`) is what is broken now, Analytics (`#analytics/…`) is how
+// delivery is trending. Auto-drain is not a destination: its window card is
+// the Tasks dock's Drain mode (ORB-12898). The retired `#auto-drain` and older
 // `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
-const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
-const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "doctor", "reliability", "cost"];
+const TABS = ["tasks", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+// `runs` is the Runs rail entry's list, which lives under this route.
+const DIAG_SUBTABS = ["runs", "incidents", "doctor"];
+// Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
+const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
+const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "cost"];
+// Analytics › Reliability views: `#analytics/reliability[/tools]`.
+const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
-// ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
-// with their own full-width <main>, keyed by the element they reveal.
-const DIAG_FULL_WIDTH_MAINS = {
-  metrics: "diagnostics-metrics-main",
+// Health views that replace the list panel with their own full-width <main>.
+const HEALTH_MAINS = {
+  events: "diagnostics-events-main",
   doctor: "diagnostics-doctor-main",
-  cost: "diagnostics-cost-main",
-  reliability: "diagnostics-reliability-main",
+};
+// Every Analytics view brings its own <main>, keyed by the view it shows.
+const ANALYTICS_MAINS = {
+  metrics: "analytics-metrics-main",
+  pipeline: "analytics-reliability-main",
+  tools: "analytics-tools-main",
+  codebase: "analytics-codebase-main",
+  cost: "analytics-cost-main",
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
-// Rail labels name destinations the way an operator reads them. The hashes
-// underneath keep their original names so bookmarks and links still resolve.
+// Rail labels name destinations the way an operator reads them; some hashes
+// underneath keep older names (`diagnostics` is Health).
 const RAIL_LABELS = {
   tasks: "Tasks",
   runs: "Runs",
-  audit: "Audit",
   diagnostics: "Health",
+  analytics: "Analytics",
   operations: "Automation",
   knowledge: "Knowledge",
   plugins: "Plugins",
@@ -80,11 +92,64 @@ export function destinationLabel(top, diagSubtab) {
   return RAIL_LABELS[railKey] || RAIL_LABELS[top] || top;
 }
 
-// Runs is its own rail entry, so Health opens its remembered view unless that
-// view is the run list, in which case it opens Incidents.
+// The route a rail entry opens: its remembered view, with Events keeping its
+// filters. Runs is its own rail entry, so Health opens Incidents rather than
+// the run list.
 function railRoute(ctx, tab) {
-  if (tab === "diagnostics" && ctx.getDiagSubtab() === "runs") return "diagnostics/incidents";
+  if (tab === "diagnostics") {
+    const sub = ctx.getDiagSubtab();
+    return sub === "incidents" || sub === "doctor" ? healthHash(ctx).slice(1) : incidentsRoute(ctx);
+  }
+  if (tab === "analytics") return analyticsSubtabRoute(ctx, ctx.getAnalyticsSubtab());
   return tab;
+}
+
+function incidentsRoute(ctx, view = ctx.getIncidentsView()) {
+  if (view === "events") return ctx.buildAuditHash().slice(1);
+  return view === "errors" ? "diagnostics/incidents/errors" : "diagnostics/incidents";
+}
+
+function analyticsSubtabRoute(ctx, sub) {
+  if (!ANALYTICS_SUBTABS.includes(sub)) sub = "metrics";
+  if (sub === "codebase") return ctx.buildCodebaseHash().slice(1);
+  if (sub === "reliability" && ctx.getReliabilityView() === "tools") return "analytics/reliability/tools";
+  return `analytics/${sub}`;
+}
+
+function windowQuery() {
+  return `window=${encodeURIComponent(getWindow())}`;
+}
+
+/// The canonical hash of the Health view on screen.
+function healthHash(ctx) {
+  const sub = ctx.getDiagSubtab();
+  if (sub !== "incidents") return `#diagnostics/${sub}?${windowQuery()}`;
+  const view = ctx.getIncidentsView();
+  if (view === "events") return ctx.buildAuditHash();
+  return `#${incidentsRoute(ctx, view)}?${windowQuery()}`;
+}
+
+/// The canonical hash of the Analytics view on screen. Codebase has its own
+/// window, so it serializes its own selection instead of the shared window.
+function analyticsHash(ctx, query) {
+  const sub = ctx.getAnalyticsSubtab();
+  if (sub === "codebase") return ctx.buildCodebaseHash();
+  let hash = `#${analyticsSubtabRoute(ctx, sub)}?${windowQuery()}`;
+  if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
+  return hash;
+}
+
+// Marks the active button of a secondary-tab bar and shows the bar only while
+// its view is open.
+function syncViewTabs(id, view, shown) {
+  const bar = $(id);
+  if (!bar) return;
+  bar.hidden = !shown;
+  for (const btn of bar.querySelectorAll(".subtab")) {
+    const on = btn.dataset.view === view;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-current", on ? "page" : "false");
+  }
 }
 const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
@@ -149,60 +214,49 @@ const DIAG_TITLES = {
   incidents: "Incidents",
 };
 
-function setDiagSubtabImpl(ctx, name) {
+function setDiagSubtabImpl(ctx, name, view = ctx.getIncidentsView()) {
   if (!DIAG_SUBTABS.includes(name)) name = "runs";
+  if (!INCIDENTS_VIEWS.includes(view)) view = "incidents";
   ctx.setDiagSubtab(name);
+  ctx.setIncidentsView(view);
+  // The view on screen: Incidents shows one of its three views.
+  const shown = name === "incidents" ? view : name;
   const title = $("diag-title");
-  if (title && DIAG_TITLES[name]) title.textContent = DIAG_TITLES[name];
+  if (title && DIAG_TITLES[shown]) title.textContent = DIAG_TITLES[shown];
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
   }
 
   const subIndicator = $("subtab-indicator") || el("div", {id: "subtab-indicator", class: "tab-indicator"});
   if (!subIndicator.parentNode) document.querySelector("#diag-subtabs").appendChild(subIndicator);
-  const activeBtn = document.querySelector(`.subtab[data-subtab="${name}"]`);
+  const activeBtn = document.querySelector(`#diag-subtabs .subtab[data-subtab="${name}"]`);
   if (activeBtn) {
     subIndicator.style.width = `${activeBtn.offsetWidth}px`;
     subIndicator.style.left = `${activeBtn.offsetLeft}px`;
   }
+  syncViewTabs("incidents-views", view, name === "incidents");
 
-  // ORB-10444/ORB-10588: Cost, Reliability, Doctor and Metrics are
-  // diagnostics subtabs that render into their own full-width <main>, so the
-  // list panel is swapped out for them while the subtab nav stays reachable.
-  const fullWidthMain = DIAG_FULL_WIDTH_MAINS[name];
-  const diagMain = $("diagnostics-main");
-  for (const [subtab, mainId] of Object.entries(DIAG_FULL_WIDTH_MAINS)) {
+  // Events and Doctor render into their own full-width <main>, so the list
+  // panel is swapped out for them; it would otherwise sit there as an empty,
+  // titled box.
+  const fullWidthMain = HEALTH_MAINS[shown];
+  for (const [key, mainId] of Object.entries(HEALTH_MAINS)) {
     const node = $(mainId);
-    if (node) node.style.display = subtab === name ? "grid" : "none";
+    if (node) node.style.display = key === shown ? "grid" : "none";
   }
-  // A full-width subtab brings its own panels; the list panel above it would
-  // otherwise sit there as an empty, titled box.
+  const diagMain = $("diagnostics-main");
   if (diagMain) diagMain.style.display = fullWidthMain ? "none" : "";
-  document.body.classList.toggle("reliability-active", name === "reliability");
-  markWorkspaceSelectorScope(name === "reliability");
   if (fullWidthMain) {
     $("diag-body").style.display = "none";
     $("runs-body").style.display = "none";
-    // Reliability aggregates across workspaces server-side, so it stays live
-    // in the aggregate view; Cost is per-workspace and does not.
-    if (name === "cost" && isAggregateView()) renderPanelPlaceholder("scoreboard-orchestration");
-    // Metrics reads as soon as it opens, not on the next refresh tick.
-    if (name === "metrics" && ctx.fetchMetrics) {
-      ctx.fetchMetrics();
-    }
-    if (name === "reliability" && ctx.fetchReliability) {
-      ctx.fetchReliability();
-    }
     // Doctor runs on open, not on the poll: show the cached report or read one.
-    if (name === "doctor" && ctx.openDoctor) {
-      ctx.openDoctor();
-    }
+    if (shown === "doctor" && ctx.openDoctor) ctx.openDoctor();
     return;
   }
 
   // Runs remains live in the aggregate view. Other per-workspace diagnostics
   // must keep their placeholder and never repaint a prior workspace's rows.
-  if (name === "runs") {
+  if (shown === "runs") {
     $("diag-body").style.display = "none";
     $("runs-body").style.display = "block";
     renderRuns(ctx.getLastRuns ? ctx.getLastRuns() : []);
@@ -215,6 +269,30 @@ function setDiagSubtabImpl(ctx, name) {
       ctx.renderDiagnostics();
     }
   }
+}
+
+function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
+  if (!ANALYTICS_SUBTABS.includes(name)) name = "metrics";
+  if (!RELIABILITY_VIEWS.includes(view)) view = "pipeline";
+  ctx.setAnalyticsSubtab(name);
+  ctx.setReliabilityView(view);
+  const shown = name === "reliability" ? view : name;
+  for (const btn of document.querySelectorAll("#analytics-subtabs .subtab")) {
+    btn.classList.toggle("active", btn.dataset.subtab === name);
+  }
+  syncViewTabs("reliability-views", view, name === "reliability");
+  for (const [key, mainId] of Object.entries(ANALYTICS_MAINS)) {
+    const node = $(mainId);
+    if (node) node.style.display = key === shown ? "grid" : "none";
+  }
+  document.body.classList.toggle("reliability-active", shown === "pipeline");
+  markWorkspaceSelectorScope(shown === "pipeline");
+  // Pipeline aggregates across workspaces server-side, so it stays live in the
+  // aggregate view; Cost is per-workspace and does not.
+  if (name === "cost" && isAggregateView()) renderPanelPlaceholder("scoreboard-orchestration");
+  // Metrics and Pipeline read as soon as they open, not on the next tick.
+  if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
+  if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
 }
 
 function setOperationsSubtabImpl(ctx, name) {
@@ -262,17 +340,12 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let head = segments[0] || "tasks";
   // Legacy routes: auto-drain was a destination, and before that an
   // Operations subtab. Both open Tasks with the dock in Drain mode.
-  // Health › Scoreboard is Cost; the window query is preserved below.
   let legacyRoute = false;
   if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain")) {
     head = "tasks";
     segments.splice(1);
     legacyRoute = true;
     if (ctx.showDrainDock) ctx.showDrainDock();
-  }
-  if (head === "diagnostics" && segments[1] === "scoreboard") {
-    segments[1] = "cost";
-    legacyRoute = true;
   }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
@@ -332,18 +405,20 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // destination there too instead of every entry saying "orbit".
   document.title = `${destination} · orbit`;
   document.body.classList.toggle("operations-active", top === "operations" || top === "config");
-  // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
-  // so the remembered-subtab highlight must be muted while another destination
-  // is active — otherwise the rail shows two things selected at once. The
-  // `.active` class itself is left alone; it is still the remembered choice.
+  // ORB-10972: a destination's subtabs show in the rail only while it is
+  // open, so the remembered-subtab highlight never reads as a second
+  // selection. The `.active` class itself is left alone; it is still the
+  // remembered choice.
   const diagSubtabs = $("diag-subtabs");
   if (diagSubtabs) diagSubtabs.classList.toggle("dimmed", railKey !== "diagnostics");
+  const analyticsSubtabs = $("analytics-subtabs");
+  if (analyticsSubtabs) analyticsSubtabs.classList.toggle("dimmed", top !== "analytics");
   // The Operations subtabs live in the rail the same way.
   const operationsSubtabs = $("operations-subtabs");
   if (operationsSubtabs) operationsSubtabs.classList.toggle("dimmed", top !== "operations");
   const configSubtabs = $("config-subtabs");
   if (configSubtabs) configSubtabs.classList.toggle("dimmed", top !== "config");
-  if (top !== "diagnostics") {
+  if (top !== "analytics") {
     document.body.classList.remove("reliability-active");
     markWorkspaceSelectorScope(false);
   }
@@ -370,24 +445,43 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     indicator.style.display = "none";
   }
 
-  let hash;
-  if (top === "diagnostics") {
-    const sub = DIAG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getDiagSubtab();
+  // The shared window rides in the hash of every Health and Analytics view
+  // except Events and Codebase, whose queries carry their own windows.
+  const adoptHashedWindow = () => {
     const hashedWindow = parseDashboardWindow(query.get("window"));
     if (hashedWindow && hashedWindow !== getWindow()) {
       setWindow(hashedWindow);
       persistScopeToUrl();
       syncWindowSelectors();
     }
-    setDiagSubtabImpl(ctx, sub);
-    hash = `#diagnostics/${sub}?window=${encodeURIComponent(getWindow())}`;
-    if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
-  } else if (top === "audit") {
-    const sub = ["events", "codebase"].includes(segments[1]) ? segments[1] : ctx.getActiveAuditSubtab();
-    ctx.applyAuditHashQuery(query, sub);
-    ctx.setAuditSubtab(sub);
-    hash = ctx.buildAuditHash();
-    ctx.syncAuditControls();
+  };
+  let hash;
+  if (top === "diagnostics") {
+    const sub = DIAG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getDiagSubtab();
+    // `#diagnostics/incidents` is the Incidents view itself; the other views
+    // name themselves. A bare `#diagnostics` keeps the remembered view.
+    const view = sub !== "incidents" ? ctx.getIncidentsView()
+      : !segments[1] ? ctx.getIncidentsView()
+      : INCIDENTS_VIEWS.includes(segments[2]) ? segments[2] : "incidents";
+    if (sub === "incidents" && view === "events") {
+      if (segments[1]) ctx.applyAuditHashQuery(query);
+      ctx.syncAuditControls();
+    } else {
+      adoptHashedWindow();
+    }
+    setDiagSubtabImpl(ctx, sub, view);
+    hash = healthHash(ctx);
+  } else if (top === "analytics") {
+    const sub = ANALYTICS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getAnalyticsSubtab();
+    const view = sub !== "reliability" || !segments[1] ? ctx.getReliabilityView()
+      : segments[2] === "tools" ? "tools" : "pipeline";
+    if (sub === "codebase") {
+      if (segments[1]) ctx.applyCodebaseHashQuery(query);
+    } else {
+      adoptHashedWindow();
+    }
+    setAnalyticsSubtabImpl(ctx, sub, view);
+    hash = analyticsHash(ctx, query);
   } else if (top === "run-detail") {
     setRunDetailSubtabImpl(ctx, ctx.getRunSubtab());
     hash = `#runs/${encodeURIComponent(ctx.getRunId() || "")}` +
@@ -533,10 +627,11 @@ function initTabsImpl(ctx) {
         if (windowChanged) notifyScopeChange();
         return;
       }
-      // The denial badge opens Audit › Events filtered to denials for the
-      // window it counted; the Audit label keeps the view already on screen.
-      const denials = event.target && event.target.closest && event.target.closest("#rail-count-audit-denials");
-      if (denials && denials.dataset.route && tab.dataset.tab === "audit") {
+      // The denial badge opens Health › Incidents › Events filtered to
+      // denials for the window it counted; the Health label keeps the view
+      // already on screen.
+      const denials = event.target && event.target.closest && event.target.closest("#rail-count-denials");
+      if (denials && denials.dataset.route && tab.dataset.tab === "diagnostics") {
         setActiveTabImpl(ctx, denials.dataset.route, { refresh: false });
         return;
       }
@@ -544,9 +639,26 @@ function initTabsImpl(ctx) {
     });
   }
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
+    btn.addEventListener("click", () => {
+      const route = btn.dataset.subtab === "incidents" ? incidentsRoute(ctx) : `diagnostics/${btn.dataset.subtab}`;
+      setActiveTabImpl(ctx, route, { refresh: false });
+    });
+  }
+  for (const btn of document.querySelectorAll("#incidents-views .subtab")) {
     btn.addEventListener("click", () =>
-      setActiveTabImpl(ctx, `diagnostics/${btn.dataset.subtab}`, { refresh: false }),
+      setActiveTabImpl(ctx, incidentsRoute(ctx, btn.dataset.view), { refresh: false }),
     );
+  }
+  for (const btn of document.querySelectorAll("#analytics-subtabs .subtab")) {
+    btn.addEventListener("click", () =>
+      setActiveTabImpl(ctx, analyticsSubtabRoute(ctx, btn.dataset.subtab), { refresh: false }),
+    );
+  }
+  for (const btn of document.querySelectorAll("#reliability-views .subtab")) {
+    btn.addEventListener("click", () => {
+      const route = btn.dataset.view === "tools" ? "analytics/reliability/tools" : "analytics/reliability";
+      setActiveTabImpl(ctx, route, { refresh: false });
+    });
   }
   for (const btn of document.querySelectorAll("#run-detail-subtabs .subtab")) {
     btn.addEventListener("click", () => {
@@ -555,17 +667,6 @@ function initTabsImpl(ctx) {
         (ctx.getRunSubtab() !== "steps" ? `/${ctx.getRunSubtab()}` : "");
       setActiveTabImpl(ctx, path, { refresh: false });
       ctx.refreshDashboard();
-    });
-  }
-  for (const btn of document.querySelectorAll("#audit-subtabs .subtab")) {
-    btn.addEventListener("click", () => {
-      ctx.setActiveAuditSubtabFromButton(btn.dataset.subtab);
-      const newHash = ctx.buildAuditHash();
-      if (window.location.hash !== newHash) {
-        window.location.hash = newHash;
-      } else {
-        ctx.refreshDashboard();
-      }
     });
   }
   for (const btn of document.querySelectorAll("#knowledge-subtabs .subtab")) {
@@ -622,6 +723,16 @@ export function navigateToRun(runId, workspaceId = null) {
 export function initTabs() {
   const ctx = getCtx();
   return initTabsImpl(ctx);
+}
+
+/// The canonical hash of the Health or Analytics view on screen, for a scope
+/// change to write in place; null on other destinations.
+export function scopeRouteHash() {
+  const ctx = getCtx();
+  const { query } = parseHashRoute(window.location.hash);
+  if (ctx.getTab() === "diagnostics") return healthHash(ctx);
+  if (ctx.getTab() === "analytics") return analyticsHash(ctx, query);
+  return null;
 }
 
 export function setRunDetailSubtab(name) {

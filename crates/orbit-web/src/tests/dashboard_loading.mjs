@@ -4,6 +4,8 @@ const node = id => document.getElementById(id);
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
 const response = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), { status, headers });
+// The summary read on every tick paints the Tools view's tool-call total.
+const summaryToolCalls = () => document.getElementById('audit-summary-body').textContent.match(/\/ (\d+) tool calls/)?.[1];
 let heldPath = '/api/tasks';
 let networkDown = false;
 let metricsError = false;
@@ -180,7 +182,8 @@ function fixture(url) {
     }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
-    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h' };
+    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h',
+      tool_call_failure_rate: { failed: 0, total: summaryReads, denied: 0 } };
     case '/api/codebase/analytics': {
       codebaseQueries.push(url.searchParams);
       const empty = { rows: [], below_support: 0 };
@@ -352,7 +355,7 @@ await settle();
 const surfaces = [
   { route: 'tasks', body: 'tasks-body', path: '/api/tasks', empty: list([]), emptyText: 'No tasks' },
   { route: 'diagnostics/runs', body: 'runs-body', path: '/api/job-runs', empty: list([]), emptyText: 'No job runs' },
-  { route: 'diagnostics/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: { items: [], since: null, coverage_since: null }, emptyText: 'No error events' },
+  { route: 'diagnostics/incidents/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: { items: [], since: null, coverage_since: null }, emptyText: 'No error events' },
   { route: 'operations/routines', body: 'routines-body', path: '/api/routines', empty: { routines: [], clock: {} }, emptyText: 'No routines' },
 ];
 for (const surface of surfaces) {
@@ -576,11 +579,11 @@ heldPath = null;
 taskPaging = false;
 metricsError = true;
 const priorSummaryReads = summaryReads;
-setActiveTab('diagnostics/metrics');
+setActiveTab('analytics/metrics');
 await settle();
 check(text('metrics-body').includes('Metrics fixture failure'), 'HTTP failure visible in Metrics panel');
 check(node('conn-status').className.includes('orange') && text('meta-text').includes('Metrics') && !text('meta-text').includes('offline'), 'one HTTP panel error is amber, names the failing panel, and does not imply offline');
-check(summaryReads > priorSummaryReads && text('rail-count-audit') === String(summaryReads), 'audit summary renders updated data independently of failed panel');
+check(summaryReads > priorSummaryReads && summaryToolCalls() === String(summaryReads), 'audit summary renders updated data independently of failed panel');
 networkDown = true;
 refresh(); await settle();
 check(node('conn-status').className.includes('red') && text('meta-text').includes('offline'), 'network outage reports offline');
@@ -588,14 +591,14 @@ networkDown = false;
 metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
-check(text('meta-text').includes('refreshed') && !text('meta-text').includes('diagnostics/'), 'connection line names the destination, not its route');
+check(text('meta-text').includes('refreshed') && !text('meta-text').includes('analytics/'), 'connection line names the destination, not its route');
 check(document.title !== 'orbit' && document.title.endsWith('orbit'), 'the page title names the current destination');
 // Exercise Health through the full request builder and DOM rendering path.
 healthFixture = true;
 for (const selectedWindow of ['24h', '7d']) {
   setWindow(selectedWindow);
   for (const subtab of ['metrics', 'errors']) {
-    setActiveTab(`diagnostics/${subtab}`); await settle(); refresh(); await settle();
+    setActiveTab(subtab === 'metrics' ? 'analytics/metrics' : 'diagnostics/incidents/errors'); await settle(); refresh(); await settle();
     check(healthQueries.at(-1).window === selectedWindow, `${subtab} requests selected window ${selectedWindow}`);
     check(text(subtab === 'metrics' ? 'metrics-count' : 'diag-count').includes(selectedWindow), `${subtab} header labels selected range`);
   }
@@ -648,7 +651,7 @@ for (const selectedWindow of ['24h', '7d']) {
 }
 click(node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a')); await settle();
 check(window.location.hash === '#runs/jrun-health-fixture', 'Errors run link navigates to the run detail route');
-setActiveTab('diagnostics/metrics'); await settle();
+setActiveTab('analytics/metrics'); await settle();
 check(node('metrics-body').querySelectorAll('.mx-sc').length === 4 && node('metrics-body').querySelector('.mx-sc-value').textContent === '26.0m',
   'Metrics renders the four series cards, All first with the window average');
 setActiveTab('diagnostics/incidents'); await settle();
@@ -694,7 +697,7 @@ click(evidenceTaskLink); await settle();
 check(document.querySelector('.tab-pane.active')?.dataset.tab === 'tasks', 'incident evidence task link opens the Tasks view');
 healthFixture = false;
 setWindow('24h');
-setActiveTab('diagnostics/metrics'); await settle();
+setActiveTab('analytics/metrics'); await settle();
 const realTimeout = globalThis.setTimeout;
 const realFetch = globalThis.fetch;
 globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 30000 ? 1 : ms, ...args);
@@ -783,12 +786,12 @@ globalThis.fetch = (path, options = {}) => {
   return fetchDuringHostHang(path, options);
 };
 const summaryBeforeHostHang = summaryReads;
-const eventsBeforeHostHang = text('rail-count-audit');
+const toolCallsBeforeHostHang = summaryToolCalls();
 await runPoll();
 const liveTimers = () => scheduledPolls.filter(entry => !entry.handle.cancelled);
 const polls = liveTimers().filter(entry => String(entry.fn).includes('refreshDashboard'));
 check(hungHostSignals.length >= 1 && hungHostSignals.every(signal => signal && !signal.aborted), 'host request stays unanswered and carries an abort signal');
-check(summaryReads > summaryBeforeHostHang && text('rail-count-audit') !== eventsBeforeHostHang, 'other panels refresh while host resources never answer');
+check(summaryReads > summaryBeforeHostHang && summaryToolCalls() !== toolCallsBeforeHostHang, 'other panels refresh while host resources never answer');
 check(!text('meta-text').includes('fetching') && node('conn-status').className.includes('green'), 'hung host request does not leave the dashboard fetching');
 check(polls.length === 1 && polls[0].ms === 30000, 'next poll is scheduled while host resources are still unanswered');
 check(liveTimers().some(entry => entry !== polls[0] && entry.ms === 30000), 'unanswered host request remains bounded by the 30s timeout');
@@ -829,23 +832,30 @@ await settle();
 check(frictionText().includes('during ORB-200') && !frictionText().includes('during ORB-100'), 'edited during-task replaces the list meta');
 check(frictionText().includes('retitled friction') && frictionText().includes('rewritten friction body'), 'later field edits keep the updated title and body');
 
-// Audit › Codebase replaced Audit › Policy: its hash restores the view through
-// the router, and the denial badge beside Audit opens Events filtered to denials.
+// Analytics › Codebase: its hash restores the view through the router. The
+// denial badge on Health opens Health › Incidents › Events filtered to
+// denials; the Events tab itself opens on failures and denials.
 summaryDenials = 4;
-window.location.hash = '#audit/codebase?window=30d&rollup=crate';
+window.location.hash = '#analytics/codebase?window=30d&rollup=crate';
 await settle();
-check(node('audit-codebase-body').style.display !== 'none' && node('audit-body').style.display === 'none', '#audit/codebase restores the Codebase view');
+check(node('analytics-codebase-main').style.display !== 'none' && document.querySelector('.tab-pane.active')?.dataset.tab === 'analytics', '#analytics/codebase restores the Codebase view');
+check(document.querySelector('#analytics-subtabs .subtab.active')?.dataset.subtab === 'codebase' && node('reliability-views').hidden, 'Codebase is the active Analytics subtab, without the Reliability views');
 const pressedValue = id => node(id).querySelector('[aria-pressed="true"]')?.dataset.value;
 check(pressedValue('codebase-window') === '30d' && pressedValue('codebase-rollup') === 'crate' && node('codebase-min-support').value === '15', 'the hash restores the codebase controls');
-check(node('audit-summary-column').style.display === 'none', 'the codebase view hides the audit summary');
 const codebaseQuery = codebaseQueries.at(-1);
 check(codebaseQuery && codebaseQuery.get('window') === '30d' && codebaseQuery.get('rollup') === 'crate' && codebaseQuery.get('min_support') === '15', 'the restored view requests its selection');
-check(node('audit-codebase-body').querySelectorAll('.codebase-tile[aria-pressed]').length === 7, 'the codebase view renders its seven ranking tiles');
-const denialBadge = node('rail-count-audit-denials');
+check(node('codebase-body').querySelectorAll('.codebase-tile[aria-pressed]').length === 7, 'the codebase view renders its seven ranking tiles');
+const denialBadge = node('rail-count-denials');
+check(denialBadge.closest('.tab')?.dataset.tab === 'diagnostics', 'the denial badge sits on the Health rail entry');
 check(!denialBadge.hidden && denialBadge.textContent === '4 denied', 'the denial badge shows the canonical denial count');
 denialBadge.click();
 await settle();
-check(window.location.hash === '#audit?since=24h&status=denied' && node('audit-body').style.display !== 'none', `the denial badge opens Events filtered to denials: ${window.location.hash}`);
+check(window.location.hash === '#diagnostics/incidents/events?since=24h&status=denied' && node('diagnostics-events-main').style.display !== 'none', `the denial badge opens Events filtered to denials: ${window.location.hash}`);
+check(document.querySelector('#incidents-views .subtab.active')?.dataset.view === 'events', 'the badge lands on the Events view of Incidents');
+click(document.querySelector('#incidents-views [data-view="incidents"]')); await settle();
+check(window.location.hash.startsWith('#diagnostics/incidents?') && node('diagnostics-events-main').style.display === 'none', 'the Incidents view tab leaves Events');
+click(document.querySelector('#incidents-views [data-view="events"]')); await settle();
+check(new URLSearchParams(window.location.hash.split('?')[1]).get('status') === 'denied', 'Events keeps the filter it was left with');
 summaryDenials = 0;
 
 globalThis.showTaskPaginationEvidence = async () => {
@@ -859,7 +869,7 @@ globalThis.showTaskPaginationEvidence = async () => {
 };
 globalThis.showDiagnosticsEvidence = async () => {
   taskPaging = false;
-  setActiveTab('diagnostics/metrics');
+  setActiveTab('analytics/metrics');
   refresh();
   await settle();
 };
@@ -867,7 +877,7 @@ globalThis.showHealthEvidence = async subtab => {
   healthFixture = true;
   heldPath = null;
   setWindow('7d');
-  setActiveTab(`diagnostics/${subtab}`);
+  setActiveTab({ metrics: 'analytics/metrics', incidents: 'diagnostics/incidents', errors: 'diagnostics/incidents/errors' }[subtab]);
   refresh();
   await settle();
 };

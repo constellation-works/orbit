@@ -96,7 +96,7 @@ function matchesChain(path, chain) {
 }
 
 const ids = [
-  'audit-body', 'audit-codebase-body', 'audit-count', 'audit-search',
+  'audit-body', 'codebase-body', 'audit-count', 'audit-search',
   'plugins-body', 'plugins-count',
   'scoreboard-orchestration', 'scoreboard-orchestration-count',
 ];
@@ -224,7 +224,7 @@ shows('audit-body', 'audit-workspace-b', 'audit-workspace-a');
 
 common.setWorkspace('ws-a');
 await overlap(() => codebase.fetchAndRenderCodebase(), analytics('codebase-old-refresh'), analytics('codebase-new-refresh'));
-shows('audit-codebase-body', 'codebase-new-refresh', 'codebase-old-refresh');
+shows('codebase-body', 'codebase-new-refresh', 'codebase-old-refresh');
 
 const lateCodebase = codebase.fetchAndRenderCodebase();
 common.setWorkspace('ws-b');
@@ -235,7 +235,7 @@ await settle();
 pending.at(-2).resolve(response(analytics('codebase-workspace-a')));
 await settle();
 await Promise.all([lateCodebase, currentCodebase]);
-shows('audit-codebase-body', 'codebase-workspace-b', 'codebase-workspace-a');
+shows('codebase-body', 'codebase-workspace-b', 'codebase-workspace-a');
 
 common.setWorkspace('ws-a');
 await overlap(() => scoreboard.fetchAndRenderScoreboard(), summary('score-old-refresh'), summary('score-new-refresh'));
@@ -274,7 +274,7 @@ assert.ok(!text('scoreboard-orchestration').includes('score-after-aggregate'), '
 await audit.fetchAndRenderAudit(ctx);
 await codebase.fetchAndRenderCodebase();
 assert.ok(placeheld('audit-body') && !text('audit-body').includes('audit-workspace-b'), 'aggregate audit drops the previous workspace');
-assert.ok(placeheld('audit-codebase-body') && !text('audit-codebase-body').includes('codebase-workspace-b'), 'aggregate codebase drops the previous workspace');
+assert.ok(placeheld('codebase-body') && !text('codebase-body').includes('codebase-workspace-b'), 'aggregate codebase drops the previous workspace');
 
 common.setWorkspace('ws-a');
 const initialPlugins = plugins.fetchAndRenderPlugins();

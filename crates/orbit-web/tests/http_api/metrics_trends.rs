@@ -1,4 +1,4 @@
-//! Health › Metrics trends [ORB-15746]: implement_one durations and terminal
+//! Analytics › Metrics trends [ORB-15746]: implement_one durations and terminal
 //! task transitions, bucketed on the clock and scoped to the workspace.
 
 use chrono::{DateTime, Duration, Utc};

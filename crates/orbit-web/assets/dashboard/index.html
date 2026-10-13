@@ -27,7 +27,7 @@
                and disk. The group names that host. Each chip is sized for its
                widest usual reading, so a new reading or a throttle verdict does
                not move the bar. The windowed counts sit on the rail (failed runs
-               on Runs, events on Audit). -->
+               on Runs, denials on Health). -->
           <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
             <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
             <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
@@ -44,11 +44,9 @@
           </div>
           <button id="refresh-btn" class="refresh-btn" type="button" title="Refresh dashboard"><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 0 4M16 3v5h-5"/></svg><span class="refresh-label">Refresh</span></button>
       </header>
-      <!-- ORB-10972: the top-level nav is a left rail. It keeps the `.tab` /
-           `.subtab` classes and the `#diag-subtabs` id the router selects on,
-           so every prior hash route resolves unchanged — only the nav's
-           position and presentation moved. Diagnostics' subtabs are visible
-           children here instead of a second row hidden inside the tab. -->
+      <!-- ORB-10972: the top-level nav is a left rail of `.tab` destinations.
+           A destination's `.subtab` views are its children here, shown while
+           it is open; the router selects on these classes and ids. -->
       <nav class="rail" aria-label="Dashboard sections">
         <!-- The host and workspace pickers head the rail: they scope every
              view, so they belong above the destinations they scope, not below
@@ -65,15 +63,17 @@
 
           <div class="rail-group">
             <div class="rail-group-label">Observe</div>
-          <button class="tab" data-tab="audit" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3h9l3 3v11H4z"/><path d="M7 9h6M7 12h4"/></svg><span class="rail-label">Audit</span><span class="rail-count" id="rail-count-audit"></span><span class="rail-count alert" id="rail-count-audit-denials" hidden></span></button>
-          <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span><span class="rail-count alert" id="rail-count-routine-failures" hidden></span></button>
+          <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span><span class="rail-count alert" id="rail-count-denials" hidden></span><span class="rail-count alert" id="rail-count-routine-failures" hidden></span></button>
             <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
               <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
               <button class="subtab" data-subtab="doctor" type="button">Doctor</button>
-              <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
-              <button class="subtab" data-subtab="reliability" type="button">Reliability<span class="rail-count" id="rail-count-diag-reliability"></span></button>
-              <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
-              <button class="subtab" data-subtab="cost" type="button">Cost<span class="rail-count" id="rail-count-diag-cost"></span></button>
+            </nav>
+          <button class="tab" data-tab="analytics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16V10M10 16V4M15 16v-8"/><path d="M2.5 16.5h15"/></svg><span class="rail-label">Analytics</span></button>
+            <nav class="subtabs rail-subtabs" id="analytics-subtabs" aria-label="Analytics views">
+              <button class="subtab" data-subtab="metrics" type="button">Metrics</button>
+              <button class="subtab" data-subtab="reliability" type="button">Reliability</button>
+              <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
+              <button class="subtab" data-subtab="cost" type="button">Cost</button>
             </nav>
           </div>
 
@@ -210,83 +210,6 @@
         </div>
       </main>
     </section>
-    <section class="tab-pane" data-tab="audit" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <main class="tasks-layout audit-layout" id="audit-main">
-        <div class="audit-primary">
-          <section class="panel" id="audit-pane">
-            <header><span id="audit-title">Audit events</span><span class="count" id="audit-count">-</span></header>
-            <nav class="subtabs" id="audit-subtabs">
-              <button class="subtab" data-subtab="events" type="button">Events</button>
-              <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
-            </nav>
-            <div class="controls" id="audit-events-controls">
-              <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" />
-              <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
-              <div id="audit-filter"></div>
-            </div>
-            <div class="body scoreboard-table-wrap" id="audit-body" tabindex="0" role="region" aria-label="Audit events">
-              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row" style="width: 80%"></div>
-                <div class="skeleton skeleton-row" style="width: 70%"></div>
-              </div>
-            </div>
-            <div class="codebase-head" id="audit-codebase-controls" style="display: none;">
-              <div class="codebase-intro">
-                <p class="codebase-purpose">Which paths are costly for agents to change: how often the tasks that declared a path regressed, missed their footprint, got blocked or were rejected.</p>
-                <div class="codebase-meta-row">
-                  <span class="codebase-meta" id="codebase-meta"></span>
-                  <details class="codebase-how">
-                    <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>“Declared” is not the landed diff</summary>
-                    <p>A task counts against a path when its <code>context_files</code> name it, widened selectors included. What the merged commit actually changed is not read. Rates count distinct tasks, so a path does not lead just because many tasks touch it.</p>
-                  </details>
-                </div>
-              </div>
-              <div class="codebase-controls">
-                <div class="codebase-ctl" role="group" aria-labelledby="codebase-window-label">
-                  <span class="codebase-ctl-label" id="codebase-window-label">Window</span>
-                  <div class="codebase-segs" id="codebase-window">
-                    <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
-                    <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
-                    <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
-                    <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
-                  </div>
-                </div>
-                <div class="codebase-ctl" role="group" aria-labelledby="codebase-rollup-label">
-                  <span class="codebase-ctl-label" id="codebase-rollup-label">Group by</span>
-                  <div class="codebase-segs" id="codebase-rollup">
-                    <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
-                    <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
-                    <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
-                  </div>
-                </div>
-                <div class="codebase-ctl" role="group" aria-labelledby="codebase-min-label">
-                  <span class="codebase-ctl-label" id="codebase-min-label">Min. tasks per path</span>
-                  <div class="codebase-stepper">
-                    <button type="button" id="codebase-min-down" aria-label="Fewer tasks per path">−</button>
-                    <output id="codebase-min-support" aria-live="polite">15</output>
-                    <button type="button" id="codebase-min-up" aria-label="More tasks per path">+</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="body codebase-body" id="audit-codebase-body" tabindex="0" role="region" aria-label="Codebase analytics" style="display: none;">
-              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row" style="width: 80%"></div>
-              </div>
-            </div>
-          </section>
-        </div>
-        <div class="audit-side" id="audit-summary-column">
-          <section class="panel" id="audit-summary-panel">
-            <header><span id="audit-summary-title">Audit summary 24h</span></header>
-            <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
-            </div>
-          </section>
-        </div>
-      </main>
-    </section>
     <section class="tab-pane" data-tab="run-detail" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: 1fr;">
         <section class="panel" id="run-detail-panel">
@@ -312,6 +235,14 @@
       </main>
     </section>
     <section class="tab-pane" data-tab="diagnostics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <!-- Health answers "what is broken now". Incidents has three views:
+           incident signatures, the raw audit event log and the error feed.
+           The router shows this bar only on Incidents. -->
+      <nav class="subtabs view-tabs" id="incidents-views" aria-label="Incidents views">
+        <button class="subtab" data-view="incidents" type="button">Incidents</button>
+        <button class="subtab" data-view="events" type="button">Events</button>
+        <button class="subtab" data-view="errors" type="button">Errors</button>
+      </nav>
       <main class="tasks-layout" id="diagnostics-main" style="grid-template-columns: minmax(0, 1fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="diagnostics-panel">
@@ -334,9 +265,49 @@
           </section>
         </div>
       </main>
+      <!-- Health › Incidents › Events: the audit log. It opens on failures
+           and denials, since nearly every row is a successful poll. -->
+      <main id="diagnostics-events-main" style="grid-template-columns: minmax(0, 1fr); display: none;">
+        <section class="panel" id="audit-pane">
+          <header><span id="audit-title">Events</span><span class="count" id="audit-count">-</span></header>
+          <div class="controls" id="audit-events-controls">
+            <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" />
+            <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
+            <div id="audit-filter"></div>
+          </div>
+          <div class="body scoreboard-table-wrap" id="audit-body" tabindex="0" role="region" aria-label="Audit events">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+              <div class="skeleton skeleton-row" style="width: 70%"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
+           host. Read-only: the panel runs the checks on open and on Refresh,
+           and offers each remediation's commands to copy; repairs stay CLI. -->
+      <main id="diagnostics-doctor-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="doctor-panel">
+          <header>
+            <span>Doctor</span>
+            <span class="count" id="doctor-count">-</span>
+          </header>
+          <div class="scoreboard-controls" id="doctor-controls">
+            <span class="scoreboard-controls-meta doctor-meta" id="doctor-meta">Not run yet</span>
+            <span class="scoreboard-controls-spacer"></span>
+            <button class="action preview" id="doctor-refresh" type="button" title="Run orbit doctor again (read-only)">Refresh</button>
+          </div>
+          <div class="body doctor-body" id="doctor-body" tabindex="0" role="region" aria-label="Doctor checks" aria-live="polite"></div>
+        </section>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="analytics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <!-- Analytics answers "how is delivery trending". Each view brings its
+           own full-width <main>; Reliability has a Pipeline and a Tools view. -->
       <!-- ORB-15746: implement_one duration and task completion trends over
            the shared window, by complexity, with the per-actor tables. -->
-      <main id="diagnostics-metrics-main" style="grid-template-columns: 1fr; display: none;">
+      <main id="analytics-metrics-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="metrics-panel">
           <header>
             <span>Metrics</span>
@@ -359,28 +330,14 @@
           <div class="body metrics-body" id="metrics-body" tabindex="0" role="region" aria-label="Metrics"></div>
         </section>
       </main>
-      <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
-           host. Read-only: the panel runs the checks on open and on Refresh,
-           and offers each remediation's commands to copy; repairs stay CLI. -->
-      <main id="diagnostics-doctor-main" style="grid-template-columns: 1fr; display: none;">
-        <section class="panel" id="doctor-panel">
-          <header>
-            <span>Doctor</span>
-            <span class="count" id="doctor-count">-</span>
-          </header>
-          <div class="scoreboard-controls" id="doctor-controls">
-            <span class="scoreboard-controls-meta doctor-meta" id="doctor-meta">Not run yet</span>
-            <span class="scoreboard-controls-spacer"></span>
-            <button class="action preview" id="doctor-refresh" type="button" title="Run orbit doctor again (read-only)">Refresh</button>
-          </div>
-          <div class="body doctor-body" id="doctor-body" tabindex="0" role="region" aria-label="Doctor checks" aria-live="polite"></div>
-        </section>
-      </main>
-      <!-- ORB-10588: pipeline reliability. Like the scoreboard it replaces the
-           two-column diagnostics layout with its own full-width <main>. Every
-           rate rendered here states its window (panel header) and its n (in
-           the cell itself); small-n cells are withheld rather than rounded. -->
-      <main id="diagnostics-reliability-main" style="grid-template-columns: 1fr; display: none;">
+      <nav class="subtabs view-tabs" id="reliability-views" aria-label="Reliability views">
+        <button class="subtab" data-view="pipeline" type="button">Pipeline</button>
+        <button class="subtab" data-view="tools" type="button">Tools</button>
+      </nav>
+      <!-- ORB-10588: Reliability › Pipeline. Every rate rendered here states
+           its window (panel header) and its n (in the cell itself); small-n
+           cells are withheld rather than rounded. -->
+      <main id="analytics-reliability-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="reliability-panel">
           <header>
             <span>Pipeline reliability</span>
@@ -419,10 +376,67 @@
           <div class="body" id="reliability-activities" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);"></div>
         </section>
       </main>
-      <!-- Health › Cost. The retired family leaderboard lived here; only
-           managed-execution cost and token usage remain. #diagnostics/scoreboard
-           rewrites to #diagnostics/cost. -->
-      <main id="diagnostics-cost-main" style="grid-template-columns: 1fr; display: none;">
+      <!-- Reliability › Tools: tool-call failure rates from the audit
+           summary. Selecting a tool opens its events under Health. -->
+      <main id="analytics-tools-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="audit-summary-panel">
+          <header><span id="audit-summary-title">Tool calls</span></header>
+          <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
+          </div>
+        </section>
+      </main>
+      <main id="analytics-codebase-main" style="grid-template-columns: minmax(0, 1fr); display: none;">
+        <section class="panel" id="codebase-panel">
+          <header><span>Codebase</span></header>
+          <div class="codebase-head" id="codebase-controls">
+            <div class="codebase-intro">
+              <p class="codebase-purpose">Which paths are costly for agents to change: how often the tasks that declared a path regressed, missed their footprint, got blocked or were rejected.</p>
+              <div class="codebase-meta-row">
+                <span class="codebase-meta" id="codebase-meta"></span>
+                <details class="codebase-how">
+                  <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>“Declared” is not the landed diff</summary>
+                  <p>A task counts against a path when its <code>context_files</code> name it, widened selectors included. What the merged commit actually changed is not read. Rates count distinct tasks, so a path does not lead just because many tasks touch it.</p>
+                </details>
+              </div>
+            </div>
+            <div class="codebase-controls">
+              <div class="codebase-ctl" role="group" aria-labelledby="codebase-window-label">
+                <span class="codebase-ctl-label" id="codebase-window-label">Window</span>
+                <div class="codebase-segs" id="codebase-window">
+                  <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
+                  <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
+                  <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
+                  <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
+                </div>
+              </div>
+              <div class="codebase-ctl" role="group" aria-labelledby="codebase-rollup-label">
+                <span class="codebase-ctl-label" id="codebase-rollup-label">Group by</span>
+                <div class="codebase-segs" id="codebase-rollup">
+                  <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
+                  <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
+                  <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
+                </div>
+              </div>
+              <div class="codebase-ctl" role="group" aria-labelledby="codebase-min-label">
+                <span class="codebase-ctl-label" id="codebase-min-label">Min. tasks per path</span>
+                <div class="codebase-stepper">
+                  <button type="button" id="codebase-min-down" aria-label="Fewer tasks per path">−</button>
+                  <output id="codebase-min-support" aria-live="polite">15</output>
+                  <button type="button" id="codebase-min-up" aria-label="More tasks per path">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="body codebase-body" id="codebase-body" tabindex="0" role="region" aria-label="Codebase analytics">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <!-- Analytics › Cost: managed-execution cost and token usage. -->
+      <main id="analytics-cost-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="scoreboard-orchestration-panel">
           <header>
             <span>Managed execution cost &amp; token usage</span>

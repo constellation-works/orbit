@@ -87,7 +87,7 @@ try {
   page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`${origin}#diagnostics/metrics`);
+  await page.goto(`${origin}#analytics/metrics`);
   await page.locator('#metrics-body .mx-actors tbody tr').first().waitFor();
   await page.getByRole('button', { name: 'Show all 55 actors' }).click();
   await page.waitForFunction(() => document.querySelectorAll('#metrics-body .mx-actors tbody tr').length === 55);

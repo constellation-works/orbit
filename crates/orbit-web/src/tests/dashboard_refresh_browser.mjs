@@ -29,7 +29,7 @@ try {
     let offline = false;
     let failedPath = null;
     let failureStatus = 500;
-    let events = 15700;
+    let failedRuns = 99;
     const aborted = [];
     // Use real browser fetches and Playwright request aborts; only the API
     // responses are fixture data. The shipped app, markup and CSS run intact.
@@ -56,7 +56,7 @@ try {
           payload = { crews: [] };
           break;
         case '/api/audit/summary':
-          payload = { events, failed_runs: 99, denials: 4, active_long_runs: 2, window: '24h' };
+          payload = { events: 15700, failed_runs: failedRuns, denials: 4, active_long_runs: 2, window: '24h' };
           break;
         case '/api/workflows/auto/readiness':
           payload = { capacity: { drain_phase: 'draining', drain_run_id: 'fixture', drain_status_run_id: 'fixture', running_admitted_workers: 1, active_leaf_runs: 1, max_active_leaf_runs: 4, free_slots: 3, ends_at: new Date(Date.now() + 3600000).toISOString() }, tasks: [] };
@@ -138,14 +138,14 @@ try {
     await settled();
     assert.match((await snapshot('workspace-file-clean')).label, /refreshed Settings/);
     failedPath = '/api/config/file';
-    events = 18000;
+    failedRuns = 18000;
     await refresh();
     const partial = await snapshot('workspace-file-failure');
     assert.match(partial.status, /orange/);
     assert.notEqual(partial.color, clean.color, 'A failed panel must not display the clean green dot');
     assert.match(partial.label, /Settings › Workspace file/);
     assert(!partial.label.includes('offline'), 'An HTTP panel failure must remain distinct from offline');
-    assert.equal(partial.nodes.find(node => node.id === 'rail-count-audit').text, '18.0k', 'Healthy panels must keep updating during a partial failure');
+    assert.equal(partial.nodes.find(node => node.id === 'rail-count-diag-runs').text, '18.0k', 'Healthy panels must keep updating during a partial failure');
     expectStale(partial);
     await page.screenshot({ path: path.join(evidence, `partial-${width}.png`) });
     await refresh();

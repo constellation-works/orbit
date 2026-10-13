@@ -72,6 +72,9 @@ try {
     let diag = 'runs';
     let operations = 'routines';
     let knowledge = 'frictions';
+    let incidentsView = 'incidents';
+    let analytics = 'metrics';
+    let reliabilityView = 'pipeline';
     let config = 'effective';
     let runId = null;
     let runSubtab = 'steps';
@@ -87,9 +90,12 @@ try {
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
       fitLogPanelToViewport: () => {}, showDrainDock: () => setDockMode('drain'),
-      getActiveAuditSubtab: () => 'events', setAuditSubtab: () => {}, applyAuditHashQuery: () => {},
-      syncAuditControls: () => {}, buildAuditHash: () => '#audit/events',
-      setActiveAuditSubtabFromButton: () => {},
+      getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
+      getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
+      getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
+      applyAuditHashQuery: () => {}, syncAuditControls: () => {},
+      buildAuditHash: () => '#diagnostics/incidents/events?status=non_success',
+      applyCodebaseHashQuery: () => {}, buildCodebaseHash: () => '#analytics/codebase',
     });
     initTabs();
   });
@@ -103,10 +109,11 @@ try {
   // ORB-14442: task dock breakpoints must not override Health's router-owned
   // list grid. These checks exercise the shipped CSS and router at the widths
   // where the shared tasks-layout rules used to leave an empty column.
-  const diagnosticLayout = async (subtab, width) => {
+  const diagnosticLayout = async (view, width) => {
     await page.setViewportSize({ width, height: 730 });
     await page.click('.tab[data-tab="diagnostics"]');
-    await page.click(`#diag-subtabs .subtab[data-subtab="${subtab}"]`);
+    await page.click('#diag-subtabs .subtab[data-subtab="incidents"]');
+    await page.click(`#incidents-views .subtab[data-view="${view}"]`);
     const layout = await page.evaluate(() => {
       const main = document.getElementById('diagnostics-main');
       const panel = document.getElementById('diagnostics-panel');
@@ -125,40 +132,35 @@ try {
     });
     if (layout.tracks !== 1 || Math.abs(layout.panelWidth - layout.contentWidth) > 1
       || Math.abs(layout.panelLeft - layout.contentLeft) > 1) {
-      throw new Error(`Health ${subtab} should fill one column at ${width}px: ${JSON.stringify(layout)}`);
+      throw new Error(`Health ${view} should fill one column at ${width}px: ${JSON.stringify(layout)}`);
     }
   };
-  for (const width of [1073, 1250]) {
-    for (const subtab of ['incidents', 'errors']) await diagnosticLayout(subtab, width);
-    // ORB-15746: Metrics swaps the list out for its own full-width view.
-    await page.click('#diag-subtabs .subtab[data-subtab="metrics"]');
-    const metrics = await page.evaluate(() => {
-      const list = document.getElementById('diagnostics-main');
-      const main = document.getElementById('diagnostics-metrics-main');
-      const pane = main.parentElement.getBoundingClientRect();
+  // Events, Metrics and Tools each bring one full-width <main>.
+  const fullWidthView = async (label, clicks, mainId, panelId) => {
+    for (const selector of clicks) await page.click(selector);
+    return page.evaluate(([mainId, panelId]) => {
+      const main = document.getElementById(mainId);
+      const style = getComputedStyle(main);
+      const box = main.getBoundingClientRect();
       return {
-        listHidden: getComputedStyle(list).display === 'none',
-        width: main.getBoundingClientRect().width,
-        pane: pane.width,
+        shown: main.checkVisibility(),
+        tracks: style.gridTemplateColumns.trim().split(/\s+/).length,
+        contentWidth: box.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        panelWidth: document.getElementById(panelId).getBoundingClientRect().width,
       };
+    }, [mainId, panelId]).then(layout => {
+      if (!layout.shown || layout.tracks !== 1 || Math.abs(layout.panelWidth - layout.contentWidth) > 1) {
+        throw new Error(`${label} should fill one full-width column: ${JSON.stringify(layout)}`);
+      }
     });
-    if (!metrics.listHidden || metrics.width < metrics.pane * 0.9) {
-      throw new Error(`Health Metrics should replace the list at full width at ${width}px: ${JSON.stringify(metrics)}`);
-    }
+  };
+  for (const width of [1073, 1250]) {
+    for (const view of ['incidents', 'errors']) await diagnosticLayout(view, width);
+    await fullWidthView(`Health › Events at ${width}px`, ['#incidents-views .subtab[data-view="events"]'], 'diagnostics-events-main', 'audit-pane');
+    // ORB-15746: Metrics is its own full-width view under Analytics.
+    await fullWidthView(`Analytics › Metrics at ${width}px`, ['.tab[data-tab="analytics"]', '#analytics-subtabs .subtab[data-subtab="metrics"]'], 'analytics-metrics-main', 'metrics-panel');
+    await fullWidthView(`Analytics › Reliability › Tools at ${width}px`, ['#analytics-subtabs .subtab[data-subtab="reliability"]', '#reliability-views .subtab[data-view="tools"]'], 'analytics-tools-main', 'audit-summary-panel');
   }
-
-  await page.setViewportSize({ width: 1073, height: 730 });
-  await page.click('.tab[data-tab="audit"]');
-  const audit = await page.evaluate(() => {
-    const main = document.querySelector('.tab-pane[data-tab="audit"] > main');
-    const first = document.getElementById('audit-pane').getBoundingClientRect();
-    const second = document.getElementById('audit-summary-panel').getBoundingClientRect();
-    return {
-      tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
-      sideBySide: first.width > 0 && second.width > 0 && first.right <= second.left,
-    };
-  });
-  if (audit.tracks !== 2 || !audit.sideBySide) throw new Error(`Audit columns should remain side by side at 1073px: ${JSON.stringify(audit)}`);
 
   await page.click('.tab[data-tab="tasks"]');
   for (const width of [1251, 1250, 1073, 901, 900]) {
@@ -852,11 +854,16 @@ try {
     await page.waitForFunction(id => document.getElementById(id).closest('.tab-pane').classList.contains('active'), panel);
     await page.locator(`#${panel}`).evaluate(node => Promise.all(node.closest('.tab-pane').getAnimations().map(animation => animation.finished)));
     const layout = await page.locator(`#${panel}`).evaluate(node => {
-      node.closest('.tab-pane').scrollTop = 0;
+      const pane = node.closest('.tab-pane');
+      pane.scrollTop = 0;
       const box = node.getBoundingClientRect();
-      return { top: box.top, width: box.width, scrollWidth: document.scrollingElement.scrollWidth };
+      // A view's secondary tabs head the pane; its panel follows right under them.
+      const views = [...pane.querySelectorAll(':scope > .view-tabs')].find(bar => !bar.hidden);
+      const bar = views ? views.getBoundingClientRect() : null;
+      return { top: bar ? bar.top : box.top, panelTop: box.top, barBottom: bar ? bar.bottom : null, width: box.width, scrollWidth: document.scrollingElement.scrollWidth };
     });
     if (layout.width <= 0 || layout.top < 0 || layout.top > 200) throw new Error(`First panel too low at #${route}: ${JSON.stringify(layout)}`);
+    if (layout.barBottom !== null && layout.panelTop - layout.barBottom > 24) throw new Error(`Panel drifts below its view tabs at #${route}: ${JSON.stringify(layout)}`);
     await assertNoOverflow(`375x812 / #${route}`);
     mobileEvidence.routes.push({ route, ...layout });
     await page.screenshot({ path: path.join(evidence, `shell-${route.replaceAll('/', '-')}-375x812.png`), fullPage: true });
@@ -966,6 +973,9 @@ try {
     let diag = 'runs';
     let operations = 'routines';
     let knowledge = 'frictions';
+    let incidentsView = 'incidents';
+    let analytics = 'metrics';
+    let reliabilityView = 'pipeline';
     initRouter({
       getTab: () => tab, setTab: (value) => { tab = value; },
       getDiagSubtab: () => diag, setDiagSubtab: (value) => { diag = value; },
@@ -976,9 +986,12 @@ try {
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
       fitLogPanelToViewport: () => {},
-      getActiveAuditSubtab: () => 'events', setAuditSubtab: () => {}, applyAuditHashQuery: () => {},
-      syncAuditControls: () => {}, buildAuditHash: () => '#audit/events',
-      setActiveAuditSubtabFromButton: () => {},
+      getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
+      getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
+      getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
+      applyAuditHashQuery: () => {}, syncAuditControls: () => {},
+      buildAuditHash: () => '#diagnostics/incidents/events?status=non_success',
+      applyCodebaseHashQuery: () => {}, buildCodebaseHash: () => '#analytics/codebase',
     });
     initTabs();
   });

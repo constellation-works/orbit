@@ -190,8 +190,8 @@ export function setWorkspace(id) {
   for (const listener of workspaceListeners) listener();
 }
 
-// ORB-10872: workspace + time window are one dashboard scope. Scoreboard,
-// Audit, Reliability, and Managed Execution either honor this window or show
+// ORB-10872: workspace + time window are one dashboard scope. Events,
+// Metrics, Reliability, and Cost either honor this window or show
 // an equally prominent independent-scope label. Seeded from `?window=` or the
 // hash query so reload and shared links restore the same cutoff.
 export const DASHBOARD_WINDOWS = ["1h", "24h", "7d", "30d", "all"];

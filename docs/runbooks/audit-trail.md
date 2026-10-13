@@ -98,8 +98,9 @@ handling. Both scoreboard joins and `/api/audit/incidents` use this grouping.
 Tool-call aggregates use the command/subcommand/timestamp index added by the
 store migration, while retaining their existing host-global scope.
 
-Health › Cost does not rank agent families and does not open Audit from a
-metric cell. Incidents still open Audit Events through the family drill-down:
+Analytics › Cost does not rank agent families and does not open Events from a
+metric cell. Incidents still open Health › Incidents › Events (the audit event
+log, `#diagnostics/incidents/events`) through the family drill-down:
 `agent_family=<name>` applies the same family normalization as the scoreboard
 summary, including rows whose recorded role is a model label. The existing
 `role=<label>` Events filter still matches the exact stored role. A

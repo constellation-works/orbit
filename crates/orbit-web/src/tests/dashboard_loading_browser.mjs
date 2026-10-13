@@ -602,9 +602,10 @@ async function assertProtocolSkewFailure(page) {
   }
 }
 
-// Health › Cost keeps the managed-execution panel and its window selector.
-// #diagnostics/scoreboard rewrites in place to #diagnostics/cost and keeps the
-// window. The family leaderboard, narrative, agent cards and insights are gone.
+// Analytics › Cost keeps the managed-execution panel and its window selector,
+// and #analytics/cost restores its window. The retired Health routes
+// (#diagnostics/cost, #diagnostics/scoreboard) no longer open it. The family
+// leaderboard, narrative, agent cards and insights are gone.
 async function assertCostPage(page) {
   const orchestration = {
     since: '2026-10-12T00:00:00Z',
@@ -628,13 +629,12 @@ async function assertCostPage(page) {
   const painted = await page.evaluate(async (orchestration) => {
     const { getWindow } = await import('/js/common.js');
     const { renderScoreboard } = await import('/js/scoreboard.js');
-    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'diagnostics');
-    document.getElementById('diagnostics-main').style.display = 'none';
-    document.getElementById('diagnostics-cost-main').style.display = 'grid';
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'analytics');
+    document.getElementById('analytics-cost-main').style.display = 'grid';
     const selected = getWindow();
     renderScoreboard({ window: selected, agents: {}, orchestration });
     const host = document.getElementById('scoreboard-orchestration');
-    const subtab = document.querySelector('#diag-subtabs [data-subtab="cost"]');
+    const subtab = document.querySelector('#analytics-subtabs [data-subtab="cost"]');
     const windows = [...document.querySelectorAll('#scoreboard-window-selector .scoreboard-window-seg')].map(node => node.dataset.window);
     const removed = ['scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-body', 'scoreboard-insights', 'scoreboard-insights-panel']
       .filter(id => document.getElementById(id));
@@ -646,7 +646,7 @@ async function assertCostPage(page) {
       removed,
     };
   }, orchestration);
-  if (!painted.subtab.startsWith('Cost')) throw new Error(`Health subtab must read Cost: ${painted.subtab}`);
+  if (!painted.subtab.startsWith('Cost')) throw new Error(`Analytics subtab must read Cost: ${painted.subtab}`);
   if (painted.windows.join() !== '1h,24h,7d,30d,all') throw new Error(`Cost window selector missing windows: ${painted.windows}`);
   if (painted.removed.length) throw new Error(`Retired scoreboard nodes still in the page: ${painted.removed}`);
   if (!painted.text.includes('$1.2500') || !painted.text.includes('$1.5000') || !painted.text.includes('1.5K')) {
@@ -659,7 +659,7 @@ async function assertCostPage(page) {
   for (const width of [1280, 375]) {
     await page.setViewportSize({ width, height: 900 });
     const layout = await page.evaluate(() => {
-      const main = document.getElementById('diagnostics-cost-main');
+      const main = document.getElementById('analytics-cost-main');
       const host = document.getElementById('scoreboard-orchestration');
       const selector = document.getElementById('scoreboard-window-selector');
       const box = host.getBoundingClientRect();
@@ -675,34 +675,44 @@ async function assertCostPage(page) {
     if (!layout.text.includes('$1.2500')) throw new Error(`Cost dollars missing at ${width}px`);
     await page.screenshot({ path: path.join(evidence, `cost-${width}.png`), fullPage: true });
   }
-  const redirected = await page.evaluate(async () => {
+  const routed = await page.evaluate(async () => {
     const { setActiveTab } = await import('/js/router.js');
-    // refresh stays off: this fixture has already replaced fetch with a hang,
-    // and the assertions have to read the painted dollars before a hashchange
-    // refresh can clear them. replaceState for the legacy hash does not queue one.
-    setActiveTab('diagnostics/scoreboard?window=7d', { refresh: false });
-    const subtab = document.querySelector('#diag-subtabs [data-subtab="cost"]');
+    // Refresh and the hash write stay off: this fixture has already replaced
+    // fetch with a hang, and the assertions have to read the painted dollars
+    // before a hashchange refresh can clear them.
+    const opts = { refresh: false, updateHash: false };
+    const costShown = () => document.getElementById('analytics-cost-main').checkVisibility();
+    const retired = {};
+    for (const route of ['diagnostics/scoreboard?window=7d', 'diagnostics/cost?window=7d']) {
+      setActiveTab(route, opts);
+      retired[route] = { pane: document.querySelector('.tab-pane.active')?.dataset.tab, cost: costShown() };
+    }
+    setActiveTab('analytics/cost?window=7d', opts);
+    const subtab = document.querySelector('#analytics-subtabs [data-subtab="cost"]');
     const selected = document.querySelector('#scoreboard-window-selector [aria-selected="true"]');
     const removed = ['scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-body', 'scoreboard-insights', 'scoreboard-insights-panel']
       .filter(id => document.getElementById(id));
     return {
-      hash: location.hash,
+      retired,
+      pane: document.querySelector('.tab-pane.active')?.dataset.tab,
       active: subtab.classList.contains('active'),
       label: subtab.textContent.replace(/\s+/g, ' ').trim(),
       window: selected && selected.dataset.window,
-      shown: getComputedStyle(document.getElementById('diagnostics-cost-main')).display !== 'none',
+      shown: costShown(),
       text: document.getElementById('scoreboard-orchestration').textContent,
       removed,
-      scoreboardSubtab: Boolean(document.querySelector('#diag-subtabs [data-subtab="scoreboard"]')),
+      healthCost: Boolean(document.querySelector('#diag-subtabs [data-subtab="cost"], #diag-subtabs [data-subtab="scoreboard"]')),
     };
   });
-  if (redirected.hash !== '#diagnostics/cost?window=7d') throw new Error(`#diagnostics/scoreboard did not rewrite in place: ${redirected.hash}`);
-  if (!redirected.active || !redirected.label.startsWith('Cost') || redirected.scoreboardSubtab) {
-    throw new Error(`Cost subtab not selected after the old route: ${JSON.stringify(redirected)}`);
+  for (const [route, state] of Object.entries(routed.retired)) {
+    if (state.pane !== 'diagnostics' || state.cost) throw new Error(`retired #${route} must not open Cost: ${JSON.stringify(state)}`);
   }
-  if (redirected.window !== '7d' || !redirected.shown) throw new Error(`Cost window was not preserved: ${JSON.stringify(redirected)}`);
-  if (!redirected.text.includes('$1.2500') || redirected.removed.length) {
-    throw new Error(`Redirect disturbed the painted cost panel: ${JSON.stringify({ removed: redirected.removed, text: redirected.text.slice(0, 240) })}`);
+  if (routed.pane !== 'analytics' || !routed.active || !routed.label.startsWith('Cost') || routed.healthCost) {
+    throw new Error(`#analytics/cost did not select Analytics › Cost: ${JSON.stringify(routed)}`);
+  }
+  if (routed.window !== '7d' || !routed.shown) throw new Error(`Cost window was not restored: ${JSON.stringify(routed)}`);
+  if (!routed.text.includes('$1.2500') || routed.removed.length) {
+    throw new Error(`Routing disturbed the painted cost panel: ${JSON.stringify({ removed: routed.removed, text: routed.text.slice(0, 240) })}`);
   }
 }
 
@@ -992,7 +1002,7 @@ async function assertNarrowTableLayouts(page) {
   }
   await page.setViewportSize({ width: 375, height: 900 });
 
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit/events'));
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/events'));
   await refresh();
   await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
   if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Audit events must not scroll sideways at 375px');
@@ -1012,7 +1022,7 @@ async function assertNarrowTableLayouts(page) {
   if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Paged audit events must not scroll sideways at 375px');
   await assertVisible(['tr.audit-row .c-status', 'tr.audit-row .c-command', 'tr.audit-row .c-time'], '#audit-body', 'Paged audit events', 375);
 
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/errors'));
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/errors'));
   await refresh();
   await page.locator('#diag-body tbody tr').first().waitFor({ state: 'visible', timeout: 5000 });
   if (await scrolls('diag-body') || await pageOverflow()) throw new Error('Errors must not scroll sideways at 375px');
@@ -1146,7 +1156,7 @@ async function assertNarrowTableLayouts(page) {
   }
   await renderRunsFixture(false);
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit/events'));
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/events'));
   await refresh();
   await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
   const desktop = await page.evaluate(() => {
@@ -1194,7 +1204,7 @@ async function assertSkipLinkAndFocusRings(page) {
   });
   if (!focusedMain) throw new Error('Skip to content must move focus into the active pane main');
 
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/errors'));
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/errors'));
   const target = await page.evaluate(() => {
     const pane = document.querySelector('.tab-pane.active');
     const main = Array.from(pane.querySelectorAll('main')).find(node => !node.hidden && node.style.display !== 'none');
@@ -1408,7 +1418,7 @@ try {
     });
     await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling at 375px, unchanged tables at 1280px; Cost paints provider and derived dollars and normalized tokens for a fixed payload at 1280px and 375px, and #diagnostics/scoreboard rewrites to #diagnostics/cost keeping the window; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling at 375px, unchanged tables at 1280px; Cost paints provider and derived dollars and normalized tokens for a fixed payload at 1280px and 375px, #analytics/cost restores its window and the retired Health cost routes do not open it; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
   }
