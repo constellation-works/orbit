@@ -7,3 +7,4 @@ mod scope;
 mod supervisor;
 #[cfg(target_os = "linux")]
 mod usage;
+mod usage_tree;

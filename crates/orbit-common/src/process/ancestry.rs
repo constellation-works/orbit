@@ -113,3 +113,191 @@ fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
     let starttime = (info.pbi_start_tvsec << 20) | info.pbi_start_tvusec.min((1 << 20) - 1);
     Some((starttime, info.pbi_ppid))
 }
+
+/// One live process in a worker's tree, named so a reused pid is not the
+/// process sampled last time.
+///
+/// CPU time is this process's own user and system time. It does not include
+/// children it has waited for: adding those on top of the children's own
+/// samples would count the same work twice when a child exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessTreeProcess {
+    pub key: ProcessStartKey,
+    /// Own user plus system CPU time, in nanoseconds.
+    pub cpu_time_ns: u64,
+    /// Non-reclaimable physical footprint (`ri_phys_footprint`), in bytes.
+    /// Resident size counts file-backed and shared pages, which overstates
+    /// the tree the way `memory.current` does on Linux.
+    pub phys_footprint: u64,
+}
+
+/// The live process tree rooted at `root`, including `root`.
+///
+/// `None` when the tree cannot be read: the root itself is unreadable, a
+/// descendant listing is denied or truncated, or a process that is still
+/// listed cannot be measured. A descendant that exits during the walk is
+/// omitted. That is a snapshot, not an error. Callers that sum CPU across
+/// snapshots must tolerate processes appearing and disappearing.
+#[cfg(target_os = "macos")]
+pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
+    darwin_tree::snapshot(root)
+}
+
+#[cfg(target_os = "macos")]
+mod darwin_tree {
+    use std::collections::{HashSet, VecDeque};
+    use std::io::Error;
+    use std::mem::{MaybeUninit, size_of};
+
+    use super::{ProcessStartKey, ProcessTreeProcess};
+
+    enum ReadError {
+        /// The process is gone. A descendant may be skipped; the root may not.
+        Gone,
+        /// The kernel refused or truncated the read. The snapshot is unusable.
+        Unreadable,
+    }
+
+    pub(super) fn snapshot(root: u32) -> Option<Vec<ProcessTreeProcess>> {
+        let mut found = Vec::new();
+        let mut seen = HashSet::from([root]);
+        let mut queue = VecDeque::from([root]);
+        let mut root_pending = true;
+        while let Some(pid) = queue.pop_front() {
+            let process = match read_process(pid) {
+                Ok(process) => process,
+                Err(ReadError::Gone) if !root_pending => continue,
+                Err(ReadError::Gone | ReadError::Unreadable) => return None,
+            };
+            match child_pids(pid) {
+                Ok(children) => {
+                    for child in children {
+                        if seen.insert(child) {
+                            queue.push_back(child);
+                        }
+                    }
+                }
+                Err(ReadError::Gone) if !root_pending => {}
+                Err(ReadError::Gone | ReadError::Unreadable) => return None,
+            }
+            found.push(process);
+            root_pending = false;
+        }
+        Some(found)
+    }
+
+    fn read_process(pid: u32) -> Result<ProcessTreeProcess, ReadError> {
+        let (starttime, _parent) = read_start(pid)?;
+        let (cpu_time_ns, phys_footprint) = read_rusage(pid)?;
+        Ok(ProcessTreeProcess {
+            key: ProcessStartKey { pid, starttime },
+            cpu_time_ns,
+            phys_footprint,
+        })
+    }
+
+    fn read_start(pid: u32) -> Result<(u64, u32), ReadError> {
+        let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let expected =
+            i32::try_from(size_of::<libc::proc_bsdinfo>()).map_err(|_| ReadError::Unreadable)?;
+        clear_errno();
+        // Safety: `info` points to `expected` writable bytes and is read only
+        // after libproc reports that it filled the complete structure.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::pid_t,
+                libc::PROC_PIDTBSDINFO,
+                1,
+                info.as_mut_ptr().cast(),
+                expected,
+            )
+        };
+        if written != expected {
+            return Err(classify_errno());
+        }
+        // Safety: the full structure was written above.
+        let info = unsafe { info.assume_init() };
+        let starttime = (info.pbi_start_tvsec << 20) | info.pbi_start_tvusec.min((1 << 20) - 1);
+        Ok((starttime, info.pbi_ppid))
+    }
+
+    /// Own CPU time and physical footprint. `ri_child_*` is excluded: it
+    /// repeats CPU already sampled from children that have been waited for.
+    fn read_rusage(pid: u32) -> Result<(u64, u64), ReadError> {
+        let mut info = MaybeUninit::<libc::rusage_info_v4>::zeroed();
+        clear_errno();
+        // Safety: `info` is a writable `rusage_info_v4`. `proc_pid_rusage`
+        // takes `rusage_info_t *` (`void **` in the libc binding); passing
+        // the struct address is the libproc contract for this flavor.
+        let rc = unsafe {
+            libc::proc_pid_rusage(
+                pid as libc::c_int,
+                libc::RUSAGE_INFO_V4,
+                info.as_mut_ptr().cast(),
+            )
+        };
+        if rc != 0 {
+            return Err(classify_errno());
+        }
+        // Safety: a zero return writes the flavor's structure.
+        let info = unsafe { info.assume_init() };
+        Ok((
+            info.ri_user_time.saturating_add(info.ri_system_time),
+            info.ri_phys_footprint,
+        ))
+    }
+
+    /// Direct children of `ppid`. A full buffer is treated as truncated and
+    /// retried. `proc_listchildpids` reports a failure as a zero count and
+    /// leaves `errno` set, the same shape as a process with no children, so
+    /// `errno` is cleared before the call.
+    fn child_pids(ppid: u32) -> Result<Vec<u32>, ReadError> {
+        let mut slots = 32usize;
+        for _ in 0..6 {
+            let mut pids = vec![libc::pid_t::from(0); slots];
+            let bytes = i32::try_from(pids.len().saturating_mul(size_of::<libc::pid_t>()))
+                .map_err(|_| ReadError::Unreadable)?;
+            clear_errno();
+            // Safety: `pids` is writable for exactly `bytes` bytes.
+            let count = unsafe {
+                libc::proc_listchildpids(ppid as libc::pid_t, pids.as_mut_ptr().cast(), bytes)
+            };
+            if count < 0 {
+                return Err(classify_errno());
+            }
+            if count == 0 {
+                return if errno_raw() == 0 {
+                    Ok(Vec::new())
+                } else {
+                    Err(classify_errno())
+                };
+            }
+            let count = usize::try_from(count).map_err(|_| ReadError::Unreadable)?;
+            if count < pids.len() {
+                return Ok(pids[..count]
+                    .iter()
+                    .filter_map(|pid| u32::try_from(*pid).ok())
+                    .filter(|pid| *pid > 0)
+                    .collect());
+            }
+            slots = slots.saturating_mul(2);
+        }
+        Err(ReadError::Unreadable)
+    }
+
+    fn clear_errno() {
+        // Safety: `__error` is the calling thread's errno cell.
+        unsafe { *libc::__error() = 0 };
+    }
+
+    fn errno_raw() -> i32 {
+        Error::last_os_error().raw_os_error().unwrap_or(0)
+    }
+
+    fn classify_errno() -> ReadError {
+        match errno_raw() {
+            libc::ESRCH | libc::ENOENT => ReadError::Gone,
+            _ => ReadError::Unreadable,
+        }
+    }
+}

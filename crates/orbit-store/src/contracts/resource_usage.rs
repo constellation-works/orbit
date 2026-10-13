@@ -1,5 +1,5 @@
 //! Per-minute CPU and memory history for auto-concurrency profiles: each
-//! delivery run's worker scope, and the host as a whole. Beside it, each
+//! delivery run's worker, and the host as a whole. Beside it, each
 //! admission pass's forecast, to check against the host's measured minutes.
 //!
 //! CPU is in cores (CPU time over wall time) and memory in non-reclaimable
@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
-/// One minute of one run's worker scope.
+/// One minute of one run's worker.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResourceMinute {
     pub workspace_id: String,
@@ -32,7 +32,9 @@ pub struct RunResourceMinute {
     pub delivery_admitted_at: Option<DateTime<Utc>>,
     /// Mean cores used over the minute.
     pub cpu_cores: f64,
-    /// Maximum of `memory.current - file + shmem` seen in the minute.
+    /// Maximum non-reclaimable bytes seen in the minute. Linux reads
+    /// `memory.current - file + shmem`. macOS sums each process's
+    /// `ri_phys_footprint`.
     pub memory_bytes: u64,
     pub samples: u32,
 }
