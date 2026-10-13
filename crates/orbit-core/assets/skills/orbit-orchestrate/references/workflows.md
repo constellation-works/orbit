@@ -108,10 +108,9 @@ candidate onto the new base as uncommitted changes, then:
 
 | Outcome | When | Implementation step |
 |---|---|---|
-| `resumed_validated` | The failed step is `commit` or later, the candidate applies cleanly, and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
+| `resumed_carried` | A completed owner-local candidate failed at `commit` or later and applies cleanly. No required validation runs at resume time. | Skipped. The candidate goes straight to commit, base synchronization where applicable, final validation, review and delivery. |
 | `resumed_held` | The last run was held on named external evidence, that evidence arrived (`review_evidence_received` is the task's latest decision), and the held commit applies cleanly. This includes a claimed leaf's hold that the owner's own run resumes from the published held candidate. | Skipped, and validation does not run at resume time. The candidate goes to commit, validation and the fresh review that finds the evidence. When the hold named only evidence a host-evidence rule owed, the held review settles without a reviewer. |
-| `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths, the failing command and output, or the review findings. |
-| `resumed_unjudged` | The failed step is `commit` or later, and a required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
+| `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths or the review findings. |
 | `fresh` | No candidate was preserved, an operator discarded it, the task's description or acceptance criteria changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason and its `reason_code` are recorded. |
 
 Context selectors are preparation hints, not what the task means: a task
@@ -120,9 +119,11 @@ reads the current selectors.
 
 A candidate held for a red base resumes like any candidate from `commit` or
 later. That includes one the before-PR review held because its only failed
-check also fails on the pinned base. It is `resumed_validated` once the base
-passes, and a fresh review judges it. The implementer runs only if a required
-command now fails. A claimed leaf's resume always runs the implementer.
+check also fails on the pinned base. It is `resumed_carried` once the hold
+lifts. The final validation gate judges the committed, synchronized candidate
+and invokes existing recovery for a candidate failure; infrastructure refusals
+and baseline-red holds keep their distinct handling. A fresh review follows.
+A claimed leaf's resume always runs the implementer.
 
 A resumed held candidate on the hold's own base has the held tree, so the
 evidence matches it directly. On a moved base the review gate counts the
@@ -136,11 +137,10 @@ reviewed head for re-review.
 
 Whenever a candidate was found, the outcome, the source run, branch and SHA
 are written to the task's history as a `candidate_resume` event and returned
-in the step's output. Required validation runs twice on a candidate resumed as
-`resumed_validated`: once to decide the outcome, and again in the pipeline's
-`validate` step on the committed, synchronized head that is delivered. It does
-not run at resume time for an unfinished implementation; that candidate goes
-to the implementer first.
+in the step's output. Resume runs no required validation commands. The
+pipeline's `validate` step runs them on the committed, synchronized head that
+is delivered, including a `resumed_carried` candidate. No old candidate evidence
+waives this gate. An unfinished implementation goes to the implementer first.
 
 To throw a candidate away, run
 `orbit task update <task-id> --discard-candidate --status backlog`. This

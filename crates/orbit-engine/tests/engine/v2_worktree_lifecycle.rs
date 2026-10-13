@@ -1087,23 +1087,41 @@ fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
 // candidate_resume: a requeued task resumes its preserved candidate
 // ---------------------------------------------------------------------------
 
-/// A clean candidate that passes owner validation on the advanced base is
-/// delivered as is: no implementation step, and the run's own commit step
-/// commits exactly the candidate's change on the new base.
+/// A clean completed candidate is carried to the exact final gate without
+/// preliminary validation. Count native command executions and measure only
+/// the resume-to-final-gate path, excluding compilation and fixture setup.
+#[allow(clippy::print_stderr)]
 fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
     isolated(
         "a_validated_candidate_is_resumed_on_the_new_base_without_implementation",
         || {
             let preserved = PreservedCandidate::new("feature.txt", "feature\n");
             let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            preserved.host.set_required_commands(&[
-                "test -f feature.txt && read line < base.txt && test \"$line\" = v2",
-            ]);
+            let trace = preserved.fixture.root.path().join("gate-trace");
+            let probes = [
+                "test -f feature.txt",
+                "read line < base.txt && test \"$line\" = v2",
+                "git diff --check",
+                "git cat-file -e HEAD:base.txt",
+            ];
+            let commands = probes.iter().enumerate().map(|(index, probe)| {
+                format!(
+                    "{probe} && printf '{index} %s %s\\n' \"$(git rev-parse HEAD)\" \"$(git status --porcelain | wc -l | tr -d ' ')\" >> '{}'",
+                    trace.display().to_string().replace('\'', "'\\''")
+                )
+            }).collect::<Vec<_>>();
+            preserved
+                .host
+                .set_required_commands(&commands.iter().map(String::as_str).collect::<Vec<_>>());
             let setup = preserved.next_setup();
             assert_eq!(setup["base_sha"], base.as_str());
-
+            let start = Instant::now();
             let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            let resume_elapsed = start.elapsed();
+            let resume_calls = fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .lines()
+                .count();
             assert_eq!(resumed["implement"], false);
             assert_eq!(resumed["source_run_id"], FAILED_RUN);
             assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
@@ -1112,23 +1130,9 @@ fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
             assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
             assert_eq!(
                 git(&checkout.path, &["status", "--porcelain"]),
-                "?? feature.txt",
-                "the candidate is applied as uncommitted work"
+                "?? feature.txt"
             );
-            assert_resume_recorded(&preserved, "resumed_validated");
-
-            let committed = action(
-                &preserved.host,
-                "git_commit",
-                &json!({
-                    "job_run_id": NEXT_RUN,
-                    "scope": "all",
-                    "workspace_path": checkout.path,
-                    "base_ref": setup["base_ref"],
-                    "base_sha": setup["base_sha"],
-                }),
-            )
-            .expect("the run's commit step delivers the candidate");
+            let committed = preserved.commit(&setup);
             let head = committed["commit_sha"].as_str().unwrap();
             assert_eq!(
                 git(&checkout.path, &["rev-parse", &format!("{head}^")]),
@@ -1138,12 +1142,62 @@ fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
                 git(&checkout.path, &["show", &format!("{head}:feature.txt")]),
                 "feature"
             );
+
+            // The base moves after commit; validate the synchronized head,
+            // rather than the preserved source or the first commit.
+            let synchronized_base = commit_file(&preserved.fixture.repo, "synced.txt", "v3\n");
+            let common = json!({
+                "job_run_id": NEXT_RUN, "completed_task_ids": [RESUME_TASK],
+                "workspace_path": checkout.path, "base": BASE, "base_sync": "local",
+            });
+            let prepared = action(&preserved.host, "pr_prepare", &common).unwrap();
+            let mut sync_input = prepared.as_object().unwrap().clone();
+            sync_input.extend(common.as_object().unwrap().clone());
+            let synced = action(&preserved.host, "git_rebase", &Value::Object(sync_input)).unwrap();
+            assert_eq!(synced["base_sha"], synchronized_base);
+            let final_head = git(&checkout.path, &["rev-parse", "HEAD"]);
+            assert_ne!(final_head, head);
+            let gate_start = Instant::now();
+            let mut gate_input = setup.clone();
+            gate_input["base_sha"] = synced["base_sha"].clone();
+            let validated = preserved.validate(&gate_input).expect("final gate");
+            let gate_elapsed = gate_start.elapsed();
+            let trace = fs::read_to_string(&trace).unwrap();
+            let calls = trace.lines().count();
+            eprintln!(
+                "resume_gate_measurement {}",
+                json!({
+                    "outcome": resumed["outcome"], "commands": commands,
+                    "resume_command_calls": resume_calls, "final_command_calls": calls - resume_calls,
+                    "full_gate_passes": calls / probes.len(),
+                    "resume_ms": resume_elapsed.as_secs_f64() * 1000.0,
+                    "final_gate_ms": gate_elapsed.as_secs_f64() * 1000.0,
+                    "critical_path_ms": start.elapsed().as_secs_f64() * 1000.0,
+                    "preserved_source": preserved.candidate, "committed_head": head,
+                    "synchronized_base": synchronized_base, "tested_head": validated["tested_head"],
+                    "trace": trace,
+                })
+            );
+            // This is the regression assertion; before the fix the same
+            // native probes run four times here and four times at the gate.
+            assert_eq!(resume_calls, 0, "resume must not run a duplicate full gate");
+            assert_eq!(calls, probes.len(), "exactly one full gate");
+            for (index, line) in trace.lines().enumerate() {
+                assert_eq!(
+                    line,
+                    format!("{index} {final_head} 0"),
+                    "each gate command sees the clean synchronized head"
+                );
+            }
+            assert_eq!(validated["tested_head"], final_head);
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
 
 /// A candidate an Orbit upgrade held when it refused the reviewer's `orbit`
-/// is resumed by the task's next run, as validated work: the upgrade never
+/// is resumed by the task's next run, as carried work: the upgrade never
 /// judged it.
 fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
     isolated(
@@ -1157,10 +1211,10 @@ fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
             let setup = preserved.next_setup();
 
             let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
             assert_eq!(resumed["implement"], false, "{resumed}");
             assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
-            assert_resume_recorded(&preserved, "resumed_validated");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
@@ -1179,9 +1233,9 @@ fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
             let setup = preserved.next_setup();
 
             let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
             assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
-            assert_resume_recorded(&preserved, "resumed_validated");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
@@ -1228,8 +1282,8 @@ fn a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict() {
     );
 }
 
-/// A clean candidate that fails owner validation is handed to the
-/// implementer with the failing command and its output.
+/// A carried candidate is judged at the final gate; a candidate failure
+/// retains the failing command and output for existing recovery.
 fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output() {
     isolated(
         "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
@@ -1254,12 +1308,25 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
                 preserved.host.set_required_commands(&[command]);
                 let setup = preserved.next_setup();
                 let resumed = preserved.resume(&setup).expect("candidate_resume");
-                assert_eq!(resumed["outcome"], "resumed_repaired", "{case}: {resumed}");
-                assert_eq!(resumed["implement"], true);
-                assert_eq!(resumed["repair"]["trigger"], "validation");
-                assert_eq!(resumed["repair"]["command"], command);
-                assert_eq!(resumed["repair"]["exit_code"], 3);
-                assert_eq!(resumed["repair"]["baseline_reproduces"], false);
+                assert_eq!(resumed["outcome"], "resumed_carried", "{case}: {resumed}");
+                assert_eq!(resumed["implement"], false);
+                preserved.commit(&setup);
+                let error = preserved
+                    .validate(&setup)
+                    .expect_err("final gate rejects candidate");
+                let message = error.to_string();
+                assert!(
+                    !orbit_types::workflow::is_baseline_red_failure(None, Some(&message)),
+                    "{message}"
+                );
+                assert!(
+                    !orbit_types::workflow::is_validation_environment_failure(None, Some(&message)),
+                    "{message}"
+                );
+                let log = preserved.validation_log();
+                assert_eq!(log["command"], command);
+                assert_eq!(log["exit_code"], 3);
+                assert_eq!(log["baseline_reproduces"], false);
                 let expected = if case == "base-passes" {
                     "feature.txt is wrong"
                 } else if case == "unknown" {
@@ -1268,19 +1335,13 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
                     "suite::added"
                 };
                 assert!(
-                    resumed["repair"]["output"]
-                        .as_str()
-                        .unwrap()
-                        .contains(expected),
+                    log["output"].as_str().unwrap().contains(expected),
                     "{resumed}"
                 );
                 if case == "disjoint" || case == "shared-plus-new" {
-                    assert_eq!(
-                        resumed["repair"]["baseline"]["failures"],
-                        json!(["test suite::broken"])
-                    );
+                    assert_eq!(log["baseline"]["failures"], json!(["test suite::broken"]));
                     assert!(
-                        resumed["repair"]["failures"]
+                        log["failures"]
                             .as_array()
                             .unwrap()
                             .contains(&json!("test suite::added"))
@@ -1292,7 +1353,7 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
                     "feature\n",
                     "the implementer starts from the candidate"
                 );
-                assert_resume_recorded(&preserved, "resumed_repaired");
+                assert_resume_recorded(&preserved, "resumed_carried");
             }
         },
     );
@@ -1300,29 +1361,49 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
 
 /// A candidate whose required command fails on the base exactly as on the
 /// candidate is not handed to the implementer: no repair of the candidate
-/// can make it pass, so the run resumes it unjudged and the suite decides.
+/// can make it pass, so only the final gate produces the typed hold.
 fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer() {
     isolated(
         "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
         || {
-            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
-            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            preserved.host.set_required_commands(&[
-                "printf 'error: lint is red\\n  --> src/lib.rs:1:1\\n' >&2; exit 3",
-            ]);
-            let setup = preserved.next_setup();
-
-            let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_unjudged", "{resumed}");
-            assert_eq!(resumed["implement"], false, "{resumed}");
-            assert!(resumed["repair"].is_null(), "{resumed}");
-            let checkout = Checkout::from_setup(&setup);
-            assert_eq!(
-                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
-                "feature\n",
-                "the candidate is preserved"
-            );
-            assert_resume_recorded(&preserved, "resumed_unjudged");
+            for (kind, command) in [
+                (
+                    "baseline",
+                    "printf 'error: lint is red\\n  --> src/lib.rs:1:1\\n' >&2; exit 3",
+                ),
+                ("environment", "orbit-resume-fixture-missing-tool"),
+                ("signal", "kill -TERM $$"),
+            ] {
+                let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+                preserved.host.set_required_commands(&[command]);
+                let setup = preserved.next_setup();
+                let resumed = preserved.resume(&setup).expect("candidate_resume");
+                assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+                assert_eq!(resumed["implement"], false);
+                assert!(resumed["repair"].is_null());
+                preserved.commit(&setup);
+                let error = preserved.validate(&setup).expect_err("final gate refuses");
+                let message = error.to_string();
+                assert_eq!(
+                    orbit_types::workflow::is_baseline_red_failure(None, Some(&message)),
+                    kind == "baseline",
+                    "{kind}: {message}"
+                );
+                assert_eq!(
+                    orbit_types::workflow::is_validation_environment_failure(None, Some(&message)),
+                    kind != "baseline",
+                    "{kind}: {message}"
+                );
+                assert_eq!(
+                    git(
+                        &Checkout::from_setup(&setup).path,
+                        &["show", "HEAD:feature.txt"]
+                    ),
+                    "feature"
+                );
+                assert_resume_recorded(&preserved, "resumed_carried");
+            }
         },
     );
 }
@@ -1330,7 +1411,7 @@ fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implement
 /// A handoff whose failed step is the implementation, or any step before
 /// `commit`, is unfinished. Requeue applies that candidate and runs the
 /// implementer even when owner validation would pass, and when no command
-/// is configured. A failure at `commit` still resumes as validated.
+/// is configured. A failure at `commit` still resumes as carried.
 fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
     isolated(
         "an_implementation_failure_handoff_is_requeued_for_the_implementer",
@@ -1355,7 +1436,7 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
             );
             assert_resume_recorded(&preserved, "resumed_repaired");
 
-            // Empty required commands used to return `resumed_validated`
+            // Empty required commands used to accept unfinished work
             // without running anything. The nested implement step and the
             // steps before it share the boundary.
             preserved.host.set_required_commands(&[]);
@@ -1381,15 +1462,15 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
             let (_setup, committed) = preserved
                 .resume_failed_step("commit", "jrun-commit")
                 .expect("commit handoff");
-            assert_eq!(committed["outcome"], "resumed_validated", "{committed}");
+            assert_eq!(committed["outcome"], "resumed_carried", "{committed}");
             assert_eq!(committed["implement"], false);
-            assert_resume_recorded(&preserved, "resumed_validated");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
 
-/// [ORB-15548] Resume cannot validate a known-red candidate that still skips
-/// a host path or whose durable replay reports no executed tests.
+/// [ORB-15548] Carried candidates still owe host and replay coverage at the
+/// final gate, including known-red commands.
 fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
     isolated(
         "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
@@ -1436,23 +1517,31 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
                 }
                 let setup = preserved.next_setup();
                 let resumed = preserved.resume(&setup).unwrap();
-                assert_eq!(
-                    resumed["outcome"],
-                    if validated {
-                        "resumed_validated"
-                    } else {
-                        "resumed_unjudged"
-                    },
-                    "{case}: {resumed}"
-                );
-                if case == "replay-zero" {
-                    assert!(
-                        resumed["reason"]
-                            .as_str()
-                            .unwrap()
-                            .contains("replayed nothing"),
-                        "{resumed}"
+                assert_eq!(resumed["outcome"], "resumed_carried", "{case}: {resumed}");
+                assert_eq!(resumed["implement"], false);
+                preserved.commit(&setup);
+                let verdict = preserved.validate(&setup);
+                if validated {
+                    assert_eq!(
+                        verdict.unwrap()["decision"],
+                        "passed_with_known_red",
+                        "{case}"
                     );
+                } else {
+                    let error = verdict.expect_err("unexecuted coverage refuses");
+                    let message = error.to_string();
+                    if case == "replay-zero" {
+                        assert!(
+                            matches!(error, OrbitError::PolicyDenied(_)),
+                            "zero replay is refused"
+                        );
+                        assert!(message.contains("replayed nothing"), "{message}");
+                    } else {
+                        assert!(
+                            orbit_types::workflow::is_baseline_red_failure(None, Some(&message)),
+                            "{case}: incomplete coverage cannot be known red: {message}"
+                        );
+                    }
                 }
             }
         },
@@ -1513,7 +1602,7 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
             );
             let resumed = preserved.resume(&setup).expect("candidate_resume");
             assert_eq!(
-                resumed["outcome"], "resumed_validated",
+                resumed["outcome"], "resumed_carried",
                 "a discard from before the candidate's run does not apply: {resumed}"
             );
         },
@@ -1532,9 +1621,9 @@ fn a_selector_only_edit_keeps_the_preserved_candidate() {
         let setup = preserved.next_setup();
 
         let resumed = preserved.resume(&setup).expect("candidate_resume");
-        assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+        assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
         assert_eq!(resumed["implement"], false);
-        assert_resume_recorded(&preserved, "resumed_validated");
+        assert_resume_recorded(&preserved, "resumed_carried");
 
         preserved
             .host
@@ -2101,6 +2190,40 @@ impl PreservedCandidate {
                 },
             }),
         )
+    }
+
+    fn commit(&self, setup: &Value) -> Value {
+        action(
+            &self.host,
+            "git_commit",
+            &json!({
+                "job_run_id": NEXT_RUN, "scope": "all",
+                "workspace_path": setup["workspace_path"],
+                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+            }),
+        )
+        .expect("commit carried candidate")
+    }
+
+    fn validate(&self, setup: &Value) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_validate",
+            &json!({
+                "job_run_id": NEXT_RUN, "completed_task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+            }),
+        )
+    }
+
+    fn validation_log(&self) -> Value {
+        let artifacts = self.host.artifacts.lock().unwrap();
+        let log = artifacts[RESUME_TASK]
+            .iter()
+            .find(|artifact| artifact.path == format!("validation/{NEXT_RUN}/0.json"))
+            .expect("durable final validation evidence");
+        serde_json::from_slice(&log.content).unwrap()
     }
 
     fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {

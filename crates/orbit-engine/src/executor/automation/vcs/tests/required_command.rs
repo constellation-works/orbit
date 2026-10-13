@@ -190,12 +190,6 @@ fn assert_environment(run: &RequiredCommandRun, label: &str) {
         "{label}: recorded body is {} bytes",
         body.len()
     );
-    let diag_at = body.rfind(DIAGNOSTIC).expect("diagnostic");
-    assert!(
-        run.output.len() - diag_at <= 32 * 1024,
-        "{label}: candidate_resume reads the last 32 KiB, but the diagnostic is {} bytes from the end",
-        run.output.len() - diag_at
-    );
 }
 
 fn assert_stream_bounds(

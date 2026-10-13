@@ -3,10 +3,10 @@
 //! The shipped PR pipeline routes on `candidate_resume`'s decision
 //! [ORB-13985].
 //!
-//! The action's own decisions (squash-applying the candidate, validating it,
+//! The action's own decisions (squash-applying the candidate, carrying it,
 //! the spec and discard checks) are covered over a real repository in
 //! `v2_worktree_lifecycle`; here the shipped job graph runs with scripted
-//! stand-ins, so what is pinned is the routing: a validated candidate skips
+//! stand-ins, so what is pinned is the routing: a carried candidate skips
 //! implementation and delivers, a repair hands the implementer its trigger,
 //! and both claimed leaves hand the candidate their claim carries to it.
 //!
@@ -18,35 +18,82 @@ use crate::review_fixes::{
     Revalidation, ScriptedHost, Settlement, position, run_shipped_job, run_shipped_pipeline,
 };
 
-/// A resumed candidate that validated runs no implementation step; the
+/// A carried candidate runs no implementation step; the
 /// pipeline commits, validates, reviews and delivers what is in the checkout.
 fn a_validated_candidate_delivers_without_an_implementation_step() {
-    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes).resuming(resumed(
-        "resumed_validated",
-        false,
-        Value::Null,
-    ));
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
-    let actions = host.actions();
-    assert!(
-        host.inputs("agent_implement").is_empty(),
-        "no implementation step: {actions:?}"
-    );
-    let resume = position(&actions, "candidate_resume");
-    assert_eq!(
-        actions[resume + 1],
-        "git_commit",
-        "the resumed candidate goes straight to delivery: {actions:?}"
-    );
-    for step in ["candidate_validate", "git_push", "pr_open", "pr_complete"] {
-        position(&actions, step);
+    for verdict in [
+        Revalidation::Passes,
+        Revalidation::CandidateFailsOnce,
+        Revalidation::CandidateEnvironment,
+        Revalidation::CandidateBaselineRed,
+    ] {
+        let host = ScriptedHost::new(Settlement::Accept, verdict).resuming(resumed(
+            "resumed_carried",
+            false,
+            Value::Null,
+        ));
+        let result = run_shipped_pipeline(&host);
+        let safe_refusal = matches!(
+            verdict,
+            Revalidation::CandidateEnvironment | Revalidation::CandidateBaselineRed
+        );
+        assert_eq!(
+            matches!(&result, Ok(outcome) if outcome.success),
+            !safe_refusal,
+            "{result:?}"
+        );
+        let actions = host.actions();
+        assert!(
+            host.inputs("agent_implement").is_empty(),
+            "no initial implementation: {actions:?}"
+        );
+        let resume = position(&actions, "candidate_resume");
+        assert_eq!(actions[resume + 1], "git_commit");
+        let commit = position(&actions, "git_commit");
+        let sync = position(&actions, "git_rebase");
+        let gate = position(&actions, "candidate_validate");
+        assert!(
+            commit < sync && sync < gate,
+            "final gate follows commit and sync: {actions:?}"
+        );
+        let repair = verdict == Revalidation::CandidateFailsOnce;
+        assert_eq!(
+            host.inputs("candidate_validate").len(),
+            if repair { 2 } else { 1 },
+            "{actions:?}"
+        );
+        assert_eq!(
+            host.inputs("step_failure_recovery").len(),
+            usize::from(repair),
+            "only candidate failures invoke repair: {actions:?}"
+        );
+        if safe_refusal {
+            assert!(
+                host.inputs("final_recovery").is_empty(),
+                "no agent can repair infrastructure or a red base"
+            );
+            assert!(host.inputs("git_push").is_empty());
+            assert!(host.inputs("pr_open").is_empty());
+            let handoff = host.inputs("pr_failure_handoff");
+            assert_eq!(handoff.len(), 1);
+            assert_eq!(handoff[0]["failed_step_id"], "validate");
+        } else {
+            assert_eq!(
+                host.inputs("candidate_validate")[0]["base_sha"],
+                host.inputs("git_rebase")[0]["base_sha"]
+            );
+            if repair {
+                assert_eq!(
+                    host.inputs("pr_open")[0]["reviewed_head_sha"],
+                    "candidate-repaired"
+                );
+            }
+            for step in ["git_push", "pr_open", "pr_complete"] {
+                position(&actions, step);
+            }
+            assert!(host.inputs("pr_failure_handoff").is_empty());
+        }
     }
-    assert!(host.inputs("pr_failure_handoff").is_empty());
 }
 
 /// A candidate that needs repair runs the implementation step, which gets

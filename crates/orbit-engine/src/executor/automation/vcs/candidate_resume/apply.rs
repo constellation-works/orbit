@@ -7,8 +7,6 @@ use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
-use super::super::baseline::{compare_with_base, run_validation_command};
-use super::super::deferred_sandbox::{deferred_replays, with_replays};
 use super::super::git::{
     git_command_success, git_output, git_run, git_success, timeout_recovery_error,
 };
@@ -109,11 +107,11 @@ pub(super) fn apply(
     Ok(Applied::Clean)
 }
 
-/// Apply `candidate` and judge it. `claimed` is a candidate a claim's leaf
-/// committed, resumed by a claimed leaf or by the owner's own run
+/// Apply `candidate` and decide whether it needs the implementer. `claimed`
+/// is a candidate a claim's leaf committed, resumed by a claimed leaf or by
+/// the owner's own run
 /// [ORB-14603].
-pub(super) fn resume<H: RuntimeHost + ?Sized>(
-    host: &H,
+pub(super) fn resume(
     task_id: &str,
     candidate: &Candidate,
     workspace_path: &Path,
@@ -182,9 +180,8 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
     if candidate.held {
         return Ok(Outcome::Held);
     }
-    // A clean apply of work that never reached `commit` is not an
-    // implementation. Owner validation, including an empty command list,
-    // must not promote it to `resumed_validated` and skip the implementer.
+    // A clean apply of work that never reached `commit` is unfinished and
+    // must not skip the implementer, regardless of validation commands.
     if !implementation_completed(&candidate.failed_step_id) {
         return Ok(Outcome::Repair(json!({
             "trigger": "implementation",
@@ -229,50 +226,10 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
             ),
         })));
     }
-    let replays = deferred_replays(host, &[task_id.to_string()])?;
-    for command in with_replays(host.required_validation_commands(), &replays) {
-        let run = run_validation_command(host, workspace_path, &command, None)?;
-        if let Some(failure) = run.coverage_failure(base_sha, replays.contains(&run.command)) {
-            return Ok(Outcome::Unjudged(failure.to_string()));
-        }
-        if run.passed {
-            continue;
-        }
-        if run.missing_tool.is_some() {
-            return Ok(Outcome::Unjudged(format!(
-                "required validation '{}' could not run: a tool is missing from the validation \
-                 environment",
-                run.command
-            )));
-        }
-        let check = compare_with_base(host, workspace_path, base_sha, &command, run.selection());
-        // [ORB-15375] Failing tests the base fails too are not the
-        // candidate's: the delivery's own validation records them and
-        // proceeds, as this check does.
-        if check.known_red(&run).is_some() {
-            continue;
-        }
-        // [ORB-14258] A base that fails the same way leaves nothing for the
-        // implementer to repair; the delivery's own validation holds the
-        // task again, from the shared base result.
-        if check.reproduces(&run) {
-            return Ok(Outcome::Unjudged(format!(
-                "required validation '{}' fails on base {base_sha} exactly as on the candidate",
-                run.command
-            )));
-        }
-        return Ok(Outcome::Repair(json!({
-            "trigger": "validation",
-            "command": run.command,
-            "exit_code": run.exit_code,
-            "timed_out": run.timed_out,
-            "output": tail(&run.output),
-            "failures": run.failures,
-            "baseline": check.record(None),
-            "baseline_reproduces": false,
-        })));
-    }
-    Ok(Outcome::Validated)
+    // A completed owner-local candidate is carried without judging it here.
+    // The ordinary delivery gate runs on its committed, synchronized head;
+    // that gate owns candidate repair, environment failures and red-base holds.
+    Ok(Outcome::Carried)
 }
 
 /// [ORB-15314] `repair` with the stopped review's record for the
@@ -353,12 +310,11 @@ pub(super) fn record<H: RuntimeHost + ?Sized>(
 ) -> Result<(), OrbitError> {
     let detail = match outcome {
         Outcome::Fresh(reason) => format!("; reason_code={}; {}", reason.code, reason.detail),
-        Outcome::Unjudged(reason) => format!("; {reason}"),
         Outcome::Repair(repair) => format!(
             "; repair trigger: {}",
             repair["trigger"].as_str().unwrap_or("unknown")
         ),
-        Outcome::Validated | Outcome::Held => String::new(),
+        Outcome::Carried | Outcome::Held => String::new(),
     };
     let claim = candidate.claim.as_ref().map_or_else(String::new, |claim| {
         format!("claim={}, machine={}, ", claim.claim_id, claim.machine_id)
@@ -385,9 +341,8 @@ pub(super) fn record<H: RuntimeHost + ?Sized>(
 pub(super) fn outcome_name(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Fresh(_) => "fresh",
-        Outcome::Validated => "resumed_validated",
+        Outcome::Carried => "resumed_carried",
         Outcome::Held => "resumed_held",
-        Outcome::Unjudged(_) => "resumed_unjudged",
         Outcome::Repair(_) => "resumed_repaired",
     }
 }
@@ -395,9 +350,8 @@ pub(super) fn outcome_name(outcome: &Outcome) -> &'static str {
 pub(super) fn output(outcome: &Outcome, candidate: Option<&Candidate>, base_sha: &str) -> Value {
     let (reason, reason_code, repair) = match outcome {
         Outcome::Fresh(reason) => (Some(reason.detail.as_str()), Some(reason.code), Value::Null),
-        Outcome::Unjudged(reason) => (Some(reason.as_str()), None, Value::Null),
         Outcome::Repair(repair) => (None, None, repair.clone()),
-        Outcome::Validated | Outcome::Held => (None, None, Value::Null),
+        Outcome::Carried | Outcome::Held => (None, None, Value::Null),
     };
     json!({
         "phase": "candidate_resume",
