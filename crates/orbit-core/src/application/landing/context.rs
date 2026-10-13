@@ -43,6 +43,8 @@ impl OrbitRuntime {
             unresolved_merge_intent: claim.unresolved_merge_intent,
             workspace_path: self.paths().repo_root.clone(),
             owed_hosted_checks,
+            // [ORB-15956] A repair claim has spent the one automatic repair.
+            automatic_repair_spent: claim.claim.repair.is_some(),
         })
     }
 

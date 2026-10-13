@@ -1,5 +1,7 @@
 //! The settlement a terminal leaf implies, and the release evidence the owner
 //! carries back to its task.
+use std::path::Path;
+
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery, ClaimMutation,
@@ -41,6 +43,11 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// `diagnostic` is the `(code, message)` the terminalizing caller knows before
 /// its diagnostic step is durable; `state` is the leaf's pipeline state.
 ///
+/// [ORB-15956] A red base holds the task only while it is still red:
+/// `base_no_longer_red` says why a leaf's recorded red base is not, and the
+/// release then keeps the candidate without the hold, so the task's next
+/// claim resumes it on the current base instead of waiting.
+///
 /// [ORB-13907] The leaf's recorded final recovery decision rides on a failure
 /// settlement for the owner to apply — a follower never writes its owner's
 /// task — unless it was `resume`, whose rerun then failed on its own.
@@ -55,6 +62,7 @@ pub(crate) fn leaf_failure_settlement(
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
     state: Option<&PipelineState>,
+    base_no_longer_red: &dyn Fn(&BaselineRedHold) -> Option<String>,
 ) -> ClaimMutation {
     if matches!(
         record.phase,
@@ -88,19 +96,27 @@ pub(crate) fn leaf_failure_settlement(
         // [ORB-14258] A required command the base fails exactly as the
         // candidate does releases with the typed hold, which the owner
         // records so its admission waits for the base to move.
-        let hold = (failure.class == ClaimFailureClass::BaselineRed)
+        let mut hold = (failure.class == ClaimFailureClass::BaselineRed)
             .then(|| baseline_red(run, diagnostic))
             .flatten();
+        // [ORB-15956] Only a base that is still red holds the task.
+        let green = hold.as_ref().and_then(|red| {
+            base_no_longer_red(red).map(|why| base_green_release(record, run, red, &why, &failure))
+        });
+        if green.is_some() {
+            hold = None;
+        }
         // [ORB-14634] A leaf the forge kept refusing held its claim for its
         // push's retry window; the release says so and names the head.
         let forge = (failure.class == ClaimFailureClass::Transient
             && run.state == JobRunState::Held)
             .then(|| forge_hold(run, diagnostic, state))
             .flatten();
-        let mut evidence = match (&hold, &forge) {
-            (Some(hold), _) => baseline_red_release(record, run, hold, &failure),
-            (None, Some(forge)) => forge_hold_release(record, run, forge, &failure),
-            (None, None) => release_evidence(record, &release_reason(run, &failure)),
+        let mut evidence = match (&hold, &forge, green) {
+            (Some(hold), _, _) => baseline_red_release(record, run, hold, &failure),
+            (None, _, Some(green)) => green,
+            (None, Some(forge), None) => forge_hold_release(record, run, forge, &failure),
+            (None, None, None) => release_evidence(record, &release_reason(run, &failure)),
         };
         evidence.baseline_red = hold;
         evidence.forge_hold = forge;
@@ -413,6 +429,49 @@ fn baseline_red_release(
             "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
              in the backlog, held until {base_ref} moves to a base where the command passes; no \
              pull request was opened."
+        )),
+        ..Default::default()
+    }
+}
+
+/// [ORB-15956] Why `hold`'s base is no longer red in `repo`, from a result
+/// already recorded for its base ref's current tip. Never runs the command:
+/// a settlement must not wait on a build, and a moved tip nobody checked
+/// keeps the hold, which the owner's hold refresh checks without a leaf.
+pub(crate) fn recorded_base_no_longer_red(repo: &Path, hold: &BaselineRedHold) -> Option<String> {
+    match orbit_engine::recorded_baseline_hold_status(repo, hold)? {
+        orbit_engine::BaselineHoldStatus::Lifted(why) => Some(why),
+        orbit_engine::BaselineHoldStatus::Holding(_) => None,
+    }
+}
+
+/// [ORB-15956] The release of a leaf whose required command failed on a base
+/// that is red no longer: the task returns to the backlog with no hold and
+/// keeps its candidate, which its next claim resumes on the current base.
+fn base_green_release(
+    record: &LocalPullAdmission,
+    run: &orbit_types::workflow::JobRun,
+    hold: &BaselineRedHold,
+    why: &str,
+    failure: &ClaimFailure,
+) -> ClaimEvidence {
+    let drain = &record.request.run_context.run_id;
+    let machine = &record.destination.execution_machine_id;
+    let why = format!(
+        "leaf {} ended on a `{}` failure: required validation `{}` was red on base {} exactly \
+         as on its candidate, but that base is red no longer ({why}){}",
+        run.run_id,
+        failure.class.as_str(),
+        hold.command,
+        hold.base_sha,
+        candidate_note(failure)
+    );
+    ClaimEvidence {
+        summary: Some(format!("released by follower drain {drain}: {why}")),
+        comment: Some(format!(
+            "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
+             in the backlog with no baseline hold; its next claim resumes the kept candidate on \
+             the current base."
         )),
         ..Default::default()
     }

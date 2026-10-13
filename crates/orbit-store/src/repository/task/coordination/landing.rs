@@ -208,7 +208,9 @@ impl TaskCommitBoundary {
     /// with its authorization intact; a repair is a new validated handoff.
     ///
     /// A `repairable` stop — the candidate conflicts with, or is stale
-    /// against, its base — makes that new handoff automatic [ORB-14261]. The
+    /// against, its base [ORB-14261], or its pull request fails a hosted
+    /// check the candidate caused [ORB-15956] — makes that new handoff
+    /// automatic. The
     /// handoff's authority is revoked so nothing lands it, and the outcome
     /// tells the caller what becomes of the claim: an original claim waits in
     /// `repair_pending` with its task back `in-progress` for one repair leaf;
@@ -254,7 +256,7 @@ impl TaskCommitBoundary {
                 self.revoke_handoff_authority(
                     auth,
                     &format!(
-                        "landing stopped on a conflicting or stale base; an automatic repair \
+                        "landing stopped on a repairable failure; an automatic repair \
                          replaces this handoff: {reason}"
                     ),
                     params,
@@ -270,7 +272,7 @@ impl TaskCommitBoundary {
             Some(first) => {
                 self.revoke_handoff_authority(
                     auth,
-                    &format!("the automatic repair's landing stopped on its base again: {reason}"),
+                    &format!("the automatic repair's landing stopped again: {reason}"),
                     params,
                     effects,
                 )?;
@@ -306,8 +308,8 @@ fn repair_exhausted_comment(
     reason: &str,
 ) -> String {
     format!(
-        "Automatic repair exhausted: the repaired handoff's landing stopped on its base \
-         again, so the task is blocked for an operator.\n\n\
+        "Automatic repair exhausted: the repaired handoff's landing stopped again, so the \
+         task is blocked for an operator.\n\n\
          First attempt (claim {}, handoff {}): {}\nStopped: {}\n\n\
          Repair attempt (claim {repair_claim_id}, handoff {}): {}\nStopped: {reason}",
         first.repairs_claim_id,

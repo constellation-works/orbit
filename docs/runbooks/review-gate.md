@@ -192,8 +192,11 @@ The owner enforces what it is owed in two places:
   as `<workflow> / <job>`. A CheckRun `SUCCESS` or a StatusContext `SUCCESS`
   is that success. A completed `SKIPPED` or `NEUTRAL` conclusion is not: the
   owner keeps waiting, the same as when a check is absent or still running,
-  within `max_wait_seconds`, and stops the landing when one failed, whatever
-  branch protection requires. Branch protection may still treat a skipped or
+  within `max_wait_seconds`. A failed check is classified first: one
+  inherited from the base gets one branch update, a transient one gets one
+  rerun, and one the candidate caused gets the claim's one automatic repair
+  ([distributed drain runbook](distributed-drain.md)). Past that budget the
+  landing stops, whatever branch protection requires. Branch protection may still treat a skipped or
   neutral required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 

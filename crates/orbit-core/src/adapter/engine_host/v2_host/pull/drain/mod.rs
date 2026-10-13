@@ -11,6 +11,7 @@ use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, JobRunStoreBackend, LocalPullAdmission,
     PullDestination,
 };
+use orbit_types::workflow::BaselineRedHold;
 
 use crate::application::job::pipeline::WorkerLaunchError;
 
@@ -22,7 +23,9 @@ pub(crate) use breaker::{
 };
 #[cfg(test)]
 pub(crate) use failure::release_settlement;
-pub(crate) use failure::{leaf_failure_settlement, operator_cancel_release};
+pub(crate) use failure::{
+    leaf_failure_settlement, operator_cancel_release, recorded_base_no_longer_red,
+};
 
 /// Trusted owner transport, supplied by runtime composition. Implementations
 /// must check current claim/run/phase on bind and settlement; replaying a receipt
@@ -53,6 +56,13 @@ pub(crate) trait PullLauncher {
     /// Also used after a confirmed pre-spawn launch failure. A leaf that
     /// has started is refused, so a release cannot permit concurrent work.
     fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError>;
+    /// [ORB-15956] Why a red base a terminal leaf recorded is no longer red
+    /// on this host, from results already recorded for its base's current
+    /// tip; `None` while it is still red or nothing says otherwise.
+    fn base_no_longer_red(&self, hold: &BaselineRedHold) -> Option<String> {
+        let _ = hold;
+        None
+    }
 }
 
 /// How far a settle-only pass may carry an admission [ORB-13663].

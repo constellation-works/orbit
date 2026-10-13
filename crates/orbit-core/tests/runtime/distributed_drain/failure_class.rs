@@ -9,9 +9,9 @@ use orbit_core::application::distributed::PullCrewWindow;
 use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
-    BaselineRedHold, ClaimFailureClass, CrewExclusion, CrewExclusionSource,
-    FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold, PROVIDER_FAILURE_HOLD_EVENT,
-    ProviderFailureClass, ProviderFailureHold,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, CrewExclusion,
+    CrewExclusionSource, FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold,
+    PROVIDER_FAILURE_HOLD_EVENT, ProviderFailureClass, ProviderFailureHold,
 };
 
 use super::*;
@@ -606,6 +606,83 @@ fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
     );
     assert_eq!(sol_exclusion(&pair, &drain), None);
     assert_eq!(window(&pair, &drain).host_suppressed, None);
+}
+
+/// [ORB-15956] A leaf whose base was red when its gate ran, but whose base
+/// has since passed the same command, releases without a baseline hold and
+/// keeps its candidate: the task's next claim resumes it on the green base
+/// instead of waiting on a hold that no longer applies.
+#[test]
+fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
+    if !isolated(
+        module_path!(),
+        "a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold",
+    ) {
+        return;
+    }
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let repo = &pair.follower_repo;
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@exit 2\n").unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "red base"]);
+    let red = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n").unwrap();
+    git(repo, &["commit", "-q", "-am", "fix lint"]);
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: red.clone(),
+        command: "make ci-lint".into(),
+        run_id: String::new(),
+        selection: None,
+        failures: Default::default(),
+    };
+    // The host has already checked the moved base, as its hold refresh does;
+    // settlement only reads that recorded result.
+    assert!(matches!(
+        orbit_engine::baseline_hold_status(&pair.follower, repo, &hold),
+        orbit_engine::BaselineHoldStatus::Lifted(_)
+    ));
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    leaf_completed(&pair, &leaf, prepared());
+    pair.leaf_fails_with(
+        &leaf,
+        &hold.text(&format!(
+            "required validation 'make ci-lint' fails on base {red} exactly as on the candidate"
+        )),
+    );
+
+    let pass = settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
+    let release = &settlement_of(&pair, &leaf)["Release"];
+    assert!(
+        release["baseline_red"].is_null(),
+        "a green base holds nothing: {release}"
+    );
+    let candidate = &release["failure"]["candidate"];
+    assert_eq!(candidate["head_sha"], HEAD, "{release}");
+    let owner_task = pair.owner_task(&task);
+    assert!(
+        !owner_task["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["event"] == BASELINE_RED_HOLD_EVENT),
+        "{owner_task:#}"
+    );
+
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    let resumed = pair
+        .admission(&next)
+        .receipt
+        .and_then(|receipt| receipt.task)
+        .and_then(|task| task.resume_candidate)
+        .expect("the claim carries the kept candidate");
+    assert_eq!(resumed.head_sha, HEAD);
 }
 
 /// [ORB-14617] A claimed leaf whose delivery push the forge kept refusing
