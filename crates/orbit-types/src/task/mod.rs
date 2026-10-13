@@ -15,9 +15,6 @@ mod show_fields;
 mod work_class;
 pub use error::TaskError;
 
-#[cfg(test)]
-mod tests;
-
 pub use context_creation::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,
     ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, context_files_sha256,

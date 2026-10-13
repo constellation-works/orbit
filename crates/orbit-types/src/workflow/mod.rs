@@ -21,9 +21,6 @@ pub use error::{
     ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
 };
 
-#[cfg(test)]
-mod tests;
-
 pub use activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, ActivityToolDenyPolicy, ActivityToolPolicyMode, ActivityV2,
     ActivityV2Spec, AgentLoopSpec, BackoffStrategy, BranchOutcome, CODEX_LEAST_RESTRICTIVE_SANDBOX,

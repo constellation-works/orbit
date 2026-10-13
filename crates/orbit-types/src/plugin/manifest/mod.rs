@@ -11,9 +11,6 @@ mod model;
 mod validate;
 mod web;
 
-#[cfg(test)]
-mod tests;
-
 pub use cli_flags::{
     derive_plugin_cli_flag, plugin_root_in, validate_plugin_cli_flags,
     validate_plugin_cli_positionals,

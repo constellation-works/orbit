@@ -117,7 +117,3 @@ pub const CLAIMED_OWNER_TOOLS: [&str; 5] = [
 pub fn is_claimed_owner_tool(tool: &str) -> bool {
     CLAIMED_OWNER_TOOLS.contains(&tool)
 }
-
-#[cfg(test)]
-#[path = "tests/invocation.rs"]
-mod tests;

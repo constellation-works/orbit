@@ -94,6 +94,15 @@ This nests the test module as a *child* of the source module. Children can read 
 
 The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. MCP proxy/discovery tests live beside their implementations under `orbit-mcp/src/remote/tests/`; Registry's crate-level tests live under `orbit-registry/src/tests/`, including the workspace-registry persistence tests in `tests/workspace_registry.rs`. Each test file accesses its sibling source through the narrowest deliberate visibility.
 
+## Public contract tests in orbit-types
+
+The audit's plugin, task, tool and workflow cases use the crate's exported API
+from `crates/orbit-types/tests/contracts/main.rs`, grouped into surface modules
+under that one binary. Workspace publication cases use the existing
+`tests/workspace.rs` binary. These public helper checks need no sibling unit
+module; the emptied source test declarations and their scaffolding are removed.
+The later review gate-note unit admission retains its existing sibling layout.
+
 ## Migration recipe
 
 For each source file with an inline `#[cfg(test)] mod tests { ... }`:

@@ -6,9 +6,6 @@ mod failure;
 mod pipeline;
 mod recovery;
 
-#[cfg(test)]
-mod tests;
-
 pub use drain::{
     CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
     DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask,
