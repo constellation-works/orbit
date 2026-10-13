@@ -150,8 +150,10 @@ Over MCP: `orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update
 kill-switch. Adding `expected_enabled` (the observed state) makes it a checked,
 atomic toggle that is refused when the definition no longer matches; that form
 needs operator authority and an explicit `workspace` and accepts no other
-edits. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` stay
-CLI-only.
+edits. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not
+on MCP; use `orbit auto-task` or `orbit tool run orbit.auto_task.<verb>`.
+`delete` and `reset` need operator authority on every surface: a
+non-interactive caller sets `ORBIT_OPERATOR=1`, which is audited.
 
 ### Deleting a definition
 
@@ -184,7 +186,7 @@ reset before it stays applied, recorded as its own audited reset.
   stays, so reseeds never overwrite it.
 
 A user-authored definition records no opt-out: delete simply removes it.
-`delete` and `restore` are CLI-only; over MCP, disable a definition instead.
+`delete` and `restore` are not on MCP; over MCP, disable a definition instead.
 
 Required tools in a template extend an allowlist activity's baseline. In a
 deny-list activity they cannot override `tool_disallow_list`. The implementing

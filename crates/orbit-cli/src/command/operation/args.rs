@@ -20,10 +20,12 @@
 //! fidelity is what lets a hand-written command move to a registry without
 //! moving its shipped argv surface.
 
+use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::operation::{
-    CliArgKind, CliBinding, OperationSpec, OperationVerb, ParamSpec, ParamType, alternatives,
+    CliArgKind, CliBinding, EnumValue, OperationSpec, OperationVerb, ParamSpec, ParamType,
+    alternatives,
 };
 use orbit_core::OrbitError;
 use serde_json::{Map, Value};
@@ -36,11 +38,13 @@ pub(crate) struct Invocation<V: 'static> {
     pub input: Map<String, Value>,
 }
 
-impl<V: 'static> Invocation<V> {
-    /// The audit target id: the positional record id, when the verb takes one.
+impl<V: OperationVerb> Invocation<V> {
+    /// The audit target id: the noun's target parameter, when the verb takes
+    /// it.
     pub fn target_id(&self) -> Option<&str> {
-        let param = self.spec.cli_positional()?;
-        self.input.get(param.name).and_then(Value::as_str)
+        self.input
+            .get(V::noun().audit_target_param)
+            .and_then(Value::as_str)
     }
 
     /// The audit `subcommand` label, derived from the CLI path.
@@ -152,23 +156,56 @@ fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
 
 /// Build one clap `Arg` from a parameter spec.
 fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
-    let arg = Arg::new(param.name)
+    let mut arg = Arg::new(param.name)
         .help(binding.help.resolve())
-        .value_name(param.cli_value_name())
         .required(param.required);
-
-    match binding.kind {
-        CliArgKind::Positional => arg,
-        CliArgKind::Flag { long, delimiter } => {
-            let arg = arg.long(long);
-            match param.param_type {
-                ParamType::String => arg,
-                ParamType::StringList => arg.action(ArgAction::Append).value_delimiter(delimiter),
-                ParamType::Integer => arg.value_parser(clap::value_parser!(usize)),
-                ParamType::Boolean => arg.value_parser(clap::value_parser!(bool)),
-            }
+    if let Some(default) = param.default {
+        arg = arg.default_value(default);
+    }
+    let mut delimiter = None;
+    if let CliArgKind::Flag {
+        long,
+        delimiter: flag_delimiter,
+        aliases,
+        visible_aliases,
+        value_name: _,
+    } = binding.kind
+    {
+        delimiter = flag_delimiter;
+        arg = arg
+            .long(long)
+            .aliases(aliases.iter().copied())
+            .visible_aliases(visible_aliases.iter().copied());
+    }
+    match param.param_type {
+        // A presence flag takes no value, so it has no value name.
+        ParamType::Switch => return arg.action(ArgAction::SetTrue),
+        ParamType::String | ParamType::Object => {}
+        ParamType::StringList => arg = arg.action(ArgAction::Append).value_delimiter(delimiter),
+        ParamType::Integer => arg = arg.value_parser(clap::value_parser!(usize)),
+        ParamType::Boolean => arg = arg.value_parser(clap::value_parser!(bool)),
+        ParamType::Enum(values) => {
+            arg = arg.value_parser(PossibleValuesParser::new(values.iter().map(possible_value)))
         }
     }
+    arg.value_name(param.cli_value_name())
+}
+
+fn possible_value(value: &EnumValue) -> PossibleValue {
+    let possible = PossibleValue::new(value.name).aliases(value.aliases.iter().copied());
+    match value.help {
+        Some(help) => possible.help(help),
+        None => possible,
+    }
+}
+
+/// The advertised name of the enum value `raw` spells, which may be an alias.
+fn canonical_enum_value(values: &[EnumValue], raw: &str) -> String {
+    values
+        .iter()
+        .find(|value| value.name == raw || value.aliases.contains(&raw))
+        .map_or(raw, |value| value.name)
+        .to_string()
 }
 
 /// Project parsed args into the verb's tool input.
@@ -219,6 +256,30 @@ fn input_from_matches<V: 'static>(
             ParamType::Boolean => {
                 if let Some(value) = matches.get_one::<bool>(param.name) {
                     input.insert(param.name.to_string(), Value::Bool(*value));
+                }
+            }
+            ParamType::Switch => {
+                if matches.get_flag(param.name) {
+                    input.insert(param.name.to_string(), Value::Bool(true));
+                }
+            }
+            ParamType::Enum(values) => {
+                if let Some(value) = matches.get_one::<String>(param.name) {
+                    input.insert(
+                        param.name.to_string(),
+                        Value::String(canonical_enum_value(values, value)),
+                    );
+                }
+            }
+            // A JSON argument. Text that does not parse is passed as a string
+            // for the tool entry's type check to refuse.
+            ParamType::Object => {
+                if let Some(value) = matches.get_one::<String>(param.name) {
+                    input.insert(
+                        param.name.to_string(),
+                        serde_json::from_str(value)
+                            .unwrap_or_else(|_| Value::String(value.clone())),
+                    );
                 }
             }
         }

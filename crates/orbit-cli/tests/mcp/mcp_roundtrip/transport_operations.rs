@@ -84,7 +84,10 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         json!({"workspace":selector,"name":"stdio-chore","force":true}),
     );
     drop(client);
+    // The CLI delete is governed `operator`, so the refusal below is the
+    // open-mint one rather than a capability denial.
     let refused = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .env("ORBIT_OPERATOR", "1")
         .args(["auto-task", "delete", "stdio-chore"])
         .output()
         .unwrap();
@@ -95,12 +98,9 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         "open-mint deletion refusal preserves definition"
     );
     orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
-            "auto-task",
-            "delete",
-            "stdio-chore",
-            "--force",
-        ]),
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(["auto-task", "delete", "stdio-chore", "--force"]),
     );
     assert!(!definition.exists());
     let mut client = workspace.serve_with_args(&["--operator"]);

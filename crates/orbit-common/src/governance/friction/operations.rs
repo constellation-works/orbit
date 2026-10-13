@@ -56,6 +56,7 @@ pub const FRICTION: NounSpec<FrictionVerb> = NounSpec {
     tool_prefix: "orbit.friction",
     cli_about: "Report, list, and triage friction records",
     audit_target_type: "friction",
+    audit_target_param: "id",
     cli_groups: &[],
     operations: FRICTION_OPERATIONS,
 };
@@ -80,6 +81,7 @@ const ADD: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
             redact: Redaction::FreeText,
             mcp_description: Some(BODY_HELP),
             cli: Some(CliBinding {
@@ -93,6 +95,7 @@ const ADD: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::FreeText,
             mcp_description: Some(ADD_TITLE_HELP),
             cli: Some(CliBinding {
@@ -106,12 +109,16 @@ const ADD: FrictionOperation = FrictionOperation {
             param_type: ParamType::StringList,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(Description::Computed(add_tags_description)),
             cli: Some(CliBinding {
                 kind: CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: None,
                 },
                 help: Description::Static(
                     "Friction taxonomy tag; repeat or comma-separate for multiple tags",
@@ -124,6 +131,7 @@ const ADD: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(DURING_TASK_HELP),
             cli: Some(CliBinding {
@@ -137,6 +145,7 @@ const ADD: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(Description::Static(
                 "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
@@ -186,6 +195,7 @@ const LIST: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(Description::Static(
                 "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
@@ -258,6 +268,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
@@ -272,12 +283,16 @@ const UPDATE: FrictionOperation = FrictionOperation {
             param_type: ParamType::StringList,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(Description::Computed(update_tags_description)),
             cli: Some(CliBinding {
                 kind: CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: None,
                 },
                 help: Description::Static(
                     "Optional replacement taxonomy tag; repeat or comma-separate for multiple tags",
@@ -290,6 +305,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::FreeText,
             mcp_description: Some(UPDATE_BODY_HELP),
             cli: Some(CliBinding {
@@ -303,6 +319,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: false,
             preserve_empty: true,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(REHOME_TO_HELP),
             cli: Some(CliBinding {
@@ -316,6 +333,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             param_type: ParamType::Boolean,
             required: false,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(MOVE_HELP),
             cli: Some(CliBinding {
@@ -329,6 +347,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: false,
             preserve_empty: true,
+            default: None,
             redact: Redaction::FreeText,
             mcp_description: Some(UPDATE_TITLE_HELP),
             cli: Some(CliBinding {
@@ -370,6 +389,7 @@ const REHOME: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
@@ -383,6 +403,7 @@ const REHOME: FrictionOperation = FrictionOperation {
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
             redact: Redaction::None,
             mcp_description: Some(TO_WORKSPACE_HELP),
             cli: Some(CliBinding {
@@ -432,6 +453,7 @@ const BARE_ID_PARAM: ParamSpec = ParamSpec {
     param_type: ParamType::String,
     required: true,
     preserve_empty: false,
+    default: None,
     redact: Redaction::None,
     mcp_description: Some(Description::Static("friction ID")),
     cli: Some(CliBinding {
@@ -448,6 +470,7 @@ const fn text_param(name: &'static str, description: &'static str) -> ParamSpec 
         param_type: ParamType::String,
         required: false,
         preserve_empty: false,
+        default: None,
         redact: Redaction::None,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
@@ -465,6 +488,7 @@ const fn count_param(name: &'static str, description: &'static str) -> ParamSpec
         param_type: ParamType::Integer,
         required: false,
         preserve_empty: false,
+        default: None,
         redact: Redaction::None,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
@@ -475,10 +499,7 @@ const fn count_param(name: &'static str, description: &'static str) -> ParamSpec
 }
 
 const fn flag(long: &'static str) -> CliArgKind {
-    CliArgKind::Flag {
-        long,
-        delimiter: None,
-    }
+    CliArgKind::flag(long)
 }
 
 fn add_title_description() -> String {

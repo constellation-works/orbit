@@ -1,5 +1,5 @@
 pub mod agent;
-pub mod auto_task;
+mod auto_task;
 pub mod command;
 mod domain_control;
 pub mod drain;

@@ -71,11 +71,9 @@ pub(super) fn execute(
         OrbitBuiltinAction::AgentInvoke => {
             super::agent_tools::invoke(runtime, session_context, input, agent, model)
         }
-        OrbitBuiltinAction::AutoTaskAdd => super::auto_task_tools::add(runtime, input),
-        OrbitBuiltinAction::AutoTaskList => super::auto_task_tools::list(runtime, input),
-        OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
-        OrbitBuiltinAction::AutoTaskShow => super::auto_task_tools::show(runtime, input),
-        OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
+        OrbitBuiltinAction::AutoTask(verb) => {
+            super::auto_task_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::DesktopAutomation => {
             super::desktop::automation::control(runtime, input, submission_trigger(session_context))
         }

@@ -649,8 +649,6 @@ fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
         .map(|schema| schema.name)
         .collect();
     for folded in [
-        "orbit.auto_task.toggle",
-        "orbit.auto_task.delete",
         "orbit.workflow.run.workers",
         "orbit.workflow.run.delivery",
         "orbit.crew.list",
@@ -663,7 +661,12 @@ fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
         .into_iter()
         .map(|definition| definition.schema.name)
         .collect();
-    for cli_only in ["orbit.friction.list", "orbit.friction.rehome"] {
+    for cli_only in [
+        "orbit.friction.list",
+        "orbit.friction.rehome",
+        "orbit.auto_task.toggle",
+        "orbit.auto_task.delete",
+    ] {
         assert!(!advertised.contains(cli_only), "{cli_only} is CLI-only");
     }
 

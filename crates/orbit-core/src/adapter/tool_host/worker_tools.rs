@@ -1,4 +1,5 @@
 //! Generic coordination writes translated into owner claim transactions.
+use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
@@ -34,8 +35,15 @@ pub(crate) fn execute(
             | OrbitBuiltinAction::TaskReviewReset
             | OrbitBuiltinAction::TaskLocksRelease
             | OrbitBuiltinAction::TaskLocksReserve
-            | OrbitBuiltinAction::AutoTaskAdd
-            | OrbitBuiltinAction::AutoTaskUpdate
+            | OrbitBuiltinAction::AutoTask(
+                AutoTaskVerb::Add
+                    | AutoTaskVerb::Update
+                    | AutoTaskVerb::Toggle
+                    | AutoTaskVerb::Delete
+                    | AutoTaskVerb::Restore
+                    | AutoTaskVerb::Recover
+                    | AutoTaskVerb::Reset
+            )
             | OrbitBuiltinAction::Friction(_)
     ) {
         return Ok(None);
@@ -252,10 +260,21 @@ pub(crate) fn execute(
         | OrbitBuiltinAction::TaskLocks => return Ok(None),
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
-        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
-            binding.validate_arguments(input)?;
-            return Ok(None);
-        }
+        OrbitBuiltinAction::AutoTask(verb) => match verb {
+            AutoTaskVerb::Add | AutoTaskVerb::Update | AutoTaskVerb::Toggle => {
+                binding.validate_arguments(input)?;
+                return Ok(None);
+            }
+            AutoTaskVerb::List | AutoTaskVerb::Show | AutoTaskVerb::Mint => return Ok(None),
+            AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
+        },
         // [ORB-14260] A claimed worker files follow-up work as ordinary
         // creation, but only work spawned from its own claimed task, and only
         // while the owner still holds that claim as active. [ORB-14792] A

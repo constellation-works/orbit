@@ -1,0 +1,42 @@
+Preview or apply the audited recovery for a delivery consumer stalled by a settings change (retains all coverage debt)
+
+Usage: orbit auto-task recover [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Definition name
+
+Options:
+      --adopt-settings
+          Adopt the definition's current settings, retaining every pending, unresolved and accepted fact. Refused when the repository, branch, owner or coverage class changed, or while an action is executing
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --reissue-action
+          Reissue the settled action that closed without accepted evidence, as a new task over its existing frozen obligations. The closed task is left exactly as it settled
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --replay-history
+          Prove and reconcile a content-preserving branch rebase. Without `--reason` this only previews the mapping and added obligations
+
+      --reason <REASON>
+          Operator explanation, retained in the recovery audit record. Required for settings adoption, action reissue, or history-replay apply
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')

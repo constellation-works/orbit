@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
 use orbit_common::security::redaction::{
@@ -109,9 +110,15 @@ pub(super) fn sanitize_tool_input(
                 ParamType::StringList => {
                     sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
                 }
-                ParamType::String | ParamType::Integer | ParamType::Boolean => {
+                ParamType::String
+                | ParamType::Integer
+                | ParamType::Boolean
+                | ParamType::Switch
+                | ParamType::Enum(_) => {
                     sanitize_string_field(&mut object, field, field, mode, &mut report)?
                 }
+                // An object's free text is the action policy's `nested_objects`.
+                ParamType::Object => {}
             }
         }
     }
@@ -236,11 +243,20 @@ const TASK_ADD_NESTED: &[NestedArrayPolicy] = &[
     },
 ];
 
-const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[NestedObjectPolicy {
-    object_key: "template",
-    free_text_fields: &["title", "description"],
-    free_text_arrays: &["acceptance_criteria"],
-}];
+/// A template replacement and a field-scoped template edit carry the same
+/// free-text fields.
+const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[
+    NestedObjectPolicy {
+        object_key: "template",
+        free_text_fields: &["title", "description"],
+        free_text_arrays: &["acceptance_criteria"],
+    },
+    NestedObjectPolicy {
+        object_key: "template_patch",
+        free_text_fields: &["title", "description"],
+        free_text_arrays: &["acceptance_criteria"],
+    },
+];
 
 /// Every builtin action must make an explicit redaction decision here.
 ///
@@ -300,19 +316,24 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
         },
-        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => ActionPolicy {
-            declared: &[],
-            free_text_fields: &["description"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: AUTO_TASK_TEMPLATE,
+        OrbitBuiltinAction::AutoTask(verb) => match verb {
+            AutoTaskVerb::Add | AutoTaskVerb::Update => ActionPolicy {
+                declared: verb.spec().params,
+                nested_objects: AUTO_TASK_TEMPLATE,
+                ..NO_REDACTION
+            },
+            // Delete, recover and reset reasons are operator audit notes kept
+            // verbatim; the other verbs persist only structural values.
+            AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => NO_REDACTION,
         },
-        OrbitBuiltinAction::AutoTaskList
-        | OrbitBuiltinAction::AutoTaskMint
-        | OrbitBuiltinAction::AutoTaskShow
-        | OrbitBuiltinAction::DesktopRead
+        OrbitBuiltinAction::DesktopRead
         | OrbitBuiltinAction::DesktopDrain
         | OrbitBuiltinAction::DesktopAutomation
         | OrbitBuiltinAction::DesktopTaskSnapshot
@@ -365,6 +386,11 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             .spec()
             .params()
             .any(|param| param.redact != Redaction::None),
+        OrbitBuiltinAction::AutoTask(verb) => {
+            !policy_for_action(OrbitBuiltinAction::AutoTask(verb))
+                .nested_objects
+                .is_empty()
+        }
         action => matches!(
             action,
             OrbitBuiltinAction::TaskAdd
@@ -372,8 +398,6 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
                 | OrbitBuiltinAction::TaskReject
                 | OrbitBuiltinAction::TaskReconcileReview
                 | OrbitBuiltinAction::TaskReviewReset
-                | OrbitBuiltinAction::AutoTaskAdd
-                | OrbitBuiltinAction::AutoTaskUpdate
         ),
     }
 }
@@ -698,13 +722,23 @@ fn artifact_target<'a>(
             artifact_id: response_string(response, "id")?,
             task_id: None,
         }),
-        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
-            Ok(ArtifactTarget {
+        OrbitBuiltinAction::AutoTask(verb) => match verb {
+            AutoTaskVerb::Add | AutoTaskVerb::Update => Ok(ArtifactTarget {
                 artifact_type: "auto_task",
                 artifact_id: response_string(response, "name")?,
                 task_id: None,
-            })
-        }
+            }),
+            AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
         _ => Err(OrbitError::Execution(format!(
             "unsupported redaction audit action: {action:?}"
         ))),
@@ -725,8 +759,7 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
         OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
         OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
-        OrbitBuiltinAction::AutoTaskAdd => "orbit.auto_task.add",
-        OrbitBuiltinAction::AutoTaskUpdate => "orbit.auto_task.update",
+        OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
         _ => "orbit.unknown",
     }
 }

@@ -64,6 +64,47 @@ pub enum ParamType {
     Integer,
     /// A boolean; on the CLI an explicit `--flag true|false` value.
     Boolean,
+    /// A boolean that is a presence flag on the CLI: `--flag` sends `true`,
+    /// and omitting it sends nothing.
+    Switch,
+    /// One of a fixed set of string values. The CLI offers them as possible
+    /// values; the wire carries the string. The tool entry checks only that a
+    /// string arrived: membership is a content rule the handler owns.
+    Enum(&'static [EnumValue]),
+    /// A JSON object, for structured input such as a schedule.
+    Object,
+}
+
+/// One allowed value of a [`ParamType::Enum`] parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumValue {
+    /// The value as the CLI advertises and sends it.
+    pub name: &'static str,
+    /// Per-value `--help` text. A value list where any value has help is
+    /// rendered one value per line.
+    pub help: Option<&'static str>,
+    /// Other spellings the CLI accepts for this value, hidden from `--help`.
+    pub aliases: &'static [&'static str],
+}
+
+impl EnumValue {
+    /// A value with no help text and no aliases.
+    pub const fn plain(name: &'static str) -> Self {
+        Self {
+            name,
+            help: None,
+            aliases: &[],
+        }
+    }
+
+    /// A value with per-value help text.
+    pub const fn helped(name: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            help: Some(help),
+            aliases: &[],
+        }
+    }
 }
 
 impl ParamType {
@@ -73,7 +114,11 @@ impl ParamType {
             ParamType::String => "string",
             ParamType::StringList => "string_list",
             ParamType::Integer => "integer",
-            ParamType::Boolean => "boolean",
+            ParamType::Boolean | ParamType::Switch => "boolean",
+            // Allowed values stay in the parameter's description, so a
+            // migrated enum is wire-identical to the string it replaced.
+            ParamType::Enum(_) => "string",
+            ParamType::Object => "object",
         }
     }
 }
@@ -115,7 +160,27 @@ pub enum CliArgKind {
         /// When set, one occurrence may carry several delimiter-separated
         /// values (`--tag a,b`). Only meaningful for [`ParamType::StringList`].
         delimiter: Option<char>,
+        /// Other flag spellings accepted and hidden from `--help`.
+        aliases: &'static [&'static str],
+        /// Other flag spellings accepted and listed by `--help`.
+        visible_aliases: &'static [&'static str],
+        /// The `<VALUE_NAME>` `--help` shows, when it is not the parameter name
+        /// in SCREAMING_SNAKE.
+        value_name: Option<&'static str>,
     },
+}
+
+impl CliArgKind {
+    /// A `--<long>` flag with no aliases, delimiter or value-name override.
+    pub const fn flag(long: &'static str) -> Self {
+        CliArgKind::Flag {
+            long,
+            delimiter: None,
+            aliases: &[],
+            visible_aliases: &[],
+            value_name: None,
+        }
+    }
 }
 
 /// A parameter's command-line binding: how it is spelled and how it is helped.
@@ -159,12 +224,22 @@ pub struct ParamSpec {
     /// optional [`ParamType::String`] parameters when true; otherwise it omits
     /// them. Required strings and other parameter types are unaffected.
     pub preserve_empty: bool,
+    /// The value the CLI sends when the flag is omitted, shown by `--help` as
+    /// `[default: …]`. The MCP schema states a default in the description,
+    /// and the tool entry inserts none: the handler's own default applies to
+    /// a call that omits the field.
+    pub default: Option<&'static str>,
     /// How the tool host redacts this parameter before it is persisted.
     pub redact: Redaction,
     /// MCP tool-schema description. `None` keeps the parameter off the MCP
     /// schema entirely.
     pub mcp_description: Option<Description>,
     /// Command-line binding. `None` keeps the parameter off the CLI entirely.
+    ///
+    /// A parameter with a binding and no MCP description is *CLI-only*: the
+    /// noun's CLI surface table consumes it while shaping the request (several
+    /// flags composing one structured field, or a client-side filter), and it
+    /// is not a wire field, so the tool entry treats it as undeclared.
     pub cli: Option<CliBinding>,
 }
 
@@ -174,7 +249,19 @@ impl ParamSpec {
     /// Matches what `#[derive(Args)]` produces for a field of the same name, so
     /// migrating a hand-written clap struct to a spec does not move help text.
     pub fn cli_value_name(&self) -> String {
-        self.name.to_ascii_uppercase()
+        match self.cli.map(|binding| binding.kind) {
+            Some(CliArgKind::Flag {
+                value_name: Some(value_name),
+                ..
+            }) => value_name.to_string(),
+            _ => self.name.to_ascii_uppercase(),
+        }
+    }
+
+    /// Whether this parameter exists only on the CLI and never reaches the
+    /// tool; see [`Self::cli`].
+    pub fn is_cli_only(&self) -> bool {
+        self.mcp_description.is_none() && self.cli.is_some()
     }
 }
 
@@ -264,6 +351,11 @@ impl<V: 'static> OperationSpec<V> {
         self.params.iter().flat_map(|group| group.iter())
     }
 
+    /// Parameters the tool accepts: every parameter except the CLI-only ones.
+    pub fn wire_params(&self) -> impl Iterator<Item = &'static ParamSpec> {
+        self.params().filter(|param| !param.is_cli_only())
+    }
+
     /// Parameters that MCP advertises, in declaration order.
     pub fn mcp_params(&self) -> impl Iterator<Item = (&'static ParamSpec, Description)> {
         self.params().filter_map(|param| {
@@ -302,7 +394,7 @@ impl<V: 'static> OperationSpec<V> {
                 .iter()
                 .any(|retired| retired.name == field)
             && !self
-                .params()
+                .wire_params()
                 .any(|param| param.name == field || param.aliases.contains(&field))
     }
 
@@ -345,7 +437,7 @@ impl<V: 'static> OperationSpec<V> {
             }
         };
 
-        for param in self.params() {
+        for param in self.wire_params() {
             for alias in param.aliases {
                 let Some(value) = object.remove(*alias) else {
                     continue;
@@ -376,7 +468,7 @@ impl<V: 'static> OperationSpec<V> {
             .cloned()
             .collect();
 
-        for param in self.params() {
+        for param in self.wire_params() {
             match object.get(param.name) {
                 None => {}
                 Some(Value::Null) => {
@@ -387,7 +479,7 @@ impl<V: 'static> OperationSpec<V> {
         }
 
         let input = Value::Object(object);
-        if let Some(missing) = self.params().find(|param| {
+        if let Some(missing) = self.wire_params().find(|param| {
             param.required
                 && !TOOL_INPUT_IDENTITY_KEYS.contains(&param.name)
                 && input.get(param.name).is_none()
@@ -445,7 +537,9 @@ fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> 
             non_negative_integer(value).is_some(),
             "a non-negative integer",
         ),
-        ParamType::Boolean => (value.is_boolean(), "a boolean"),
+        ParamType::Boolean | ParamType::Switch => (value.is_boolean(), "a boolean"),
+        ParamType::Enum(_) => (value.is_string(), "a string"),
+        ParamType::Object => (value.is_object(), "an object"),
     };
     if valid {
         return Ok(());
@@ -564,6 +658,9 @@ pub struct NounSpec<V: 'static> {
     pub cli_about: &'static str,
     /// The audit `target_type` the noun's CLI rows carry.
     pub audit_target_type: &'static str,
+    /// The parameter whose value is the audit `target_id`, in every verb that
+    /// declares it (`id`, `name`).
+    pub audit_target_param: &'static str,
     /// Intermediate CLI subcommands, in `--help` order.
     pub cli_groups: &'static [CliGroup],
     /// Every operation, in `--help` order.

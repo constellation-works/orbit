@@ -1,9 +1,8 @@
+use orbit_common::governance::auto_task::AUTO_TASK;
 use orbit_common::governance::friction::FRICTION;
 use orbit_types::tool::McpToolScope;
 
-use super::{
-    agent, auto_task, command, drain, operation, pipeline, search, task, workflow, workspace_claim,
-};
+use super::{agent, command, drain, operation, pipeline, search, task, workflow, workspace_claim};
 use crate::ToolRegistry;
 
 pub fn register(registry: &mut ToolRegistry) {
@@ -17,23 +16,9 @@ pub fn register(registry: &mut ToolRegistry) {
     );
     // Managed workers can ask the owning host to edit its live definitions.
     // The child receives no raw write grant for the registered checkout.
-    registry.register_mcp(
-        auto_task::add::OrbitAutoTaskAddTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        auto_task::list::OrbitAutoTaskListTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        auto_task::mint::OrbitAutoTaskMintTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_inactive(auto_task::show::OrbitAutoTaskShowTool);
-    registry.register_mcp(
-        auto_task::update::OrbitAutoTaskUpdateTool,
-        McpToolScope::WorkspaceRequired,
-    );
+    // Auto-task schemas, MCP exposure and execution kinds come from the shared
+    // operation registry, like friction's below.
+    operation::register_noun(registry, &AUTO_TASK);
     // Deterministic owner/follower operations remain active for runtime and
     // operator diagnostics, but have no public MCP schemas. The internal
     // transport selects their existing guarded handlers explicitly.
