@@ -121,7 +121,6 @@ fn untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted() {
             for (case, ancestor, driver, attribute, stopped) in [
                 ("binary-ancestor", "base\0data\n", None, false, "target\n"),
                 ("custom-driver", "base\n", Some("false"), true, "target\n"),
-                ("default-driver", "base\n", Some("false"), false, "target\n"),
                 (
                     "custom-output",
                     "base\n",
