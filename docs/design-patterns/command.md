@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-10-09
+last_validated: 2026-10-12
 ---
 # Command Pattern
 
@@ -10,27 +10,30 @@ In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/tool.rs`
 ```rust
 pub trait Tool: Send + Sync {
     fn schema(&self) -> ToolSchema;
+    fn input_schema(&self) -> Option<Value> { None }
+    fn execution_kind(&self) -> ToolExecutionKind { ToolExecutionKind::Mutating }
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError>;
 }
 ```
 
-The registry at `crates/orbit-tools/src/registry.rs:37` stores `Arc<dyn Tool>` keyed by `ToolSchema::name`. Adding a tool means: writing a struct, `impl Tool`, registering in `builtin::register_builtins`. The dispatcher never changes.
+`ToolRegistry::register_entry` in `crates/orbit-tools/src/registry.rs` stores `Arc<dyn Tool>` keyed by `ToolSchema::name`. Adding a tool means: writing a struct, `impl Tool`, registering in `builtin::register_builtins`. The dispatcher never changes.
 
 ## Destructive CLI confirmation
 
-Destructive CLI commands never prompt or read stdin. An irreversible single action exposes
-`--confirm` and refuses before mutation when it is absent. A migration or bulk
+Destructive CLI commands never prompt or read stdin. New irreversible single actions expose
+`--confirm` and refuse before mutation when it is absent. A migration or bulk
 cleanup command is non-destructive by default (report/dry-run) and uses
 `--confirm` to apply. Existing spellings may remain as compatibility aliases
-(`--yes` for worktree GC), but new commands
-must not introduce another confirmation spelling. Reversible mutations should
+(`--yes` for worktree and temporary-file GC); plugin removal keeps its
+existing `--yes` flag. New commands must not introduce another confirmation
+spelling. Reversible mutations should
 instead document and test their recovery command.
 
 Two codebase-specific shapes carry non-obvious lessons; everything else is straightforward `impl Tool`.
 
 ## Reference: host-action dispatcher (`OrbitPipelineInvokeTool`)
 
-The most common shape in the `orbit.*` namespace. The struct declares the schema; execution delegates to an `OrbitToolHost` via an action enum. From `crates/orbit-tools/src/builtin/orbit/pipeline/invoke.rs:7`:
+The most common shape in the `orbit.*` namespace. The struct declares the schema; execution delegates to an `OrbitToolHost` via an action enum. From `crates/orbit-tools/src/builtin/orbit/pipeline/invoke.rs`:
 
 ```rust
 pub struct OrbitPipelineInvokeTool;
@@ -44,7 +47,7 @@ impl Tool for OrbitPipelineInvokeTool {
 }
 ```
 
-`execute_host_action` (`crates/orbit-tools/src/builtin/orbit/dispatch.rs:33`) resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
+`execute_host_action` in `crates/orbit-tools/src/builtin/orbit/dispatch.rs` resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
 
 Patterns to copy:
 
