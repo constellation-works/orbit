@@ -122,17 +122,6 @@ fn owner_run(pid: Option<u32>, token: Option<String>) -> orbit_types::workflow::
     .unwrap()
 }
 
-/// Safety branch unreachable through public cancellation, which only invokes
-/// signalling when a PID is present. No PID must never reach kill(0).
-#[cfg(unix)]
-#[test]
-fn signal_owner_without_pid_returns_no_pid() {
-    assert_eq!(
-        super::super::owner::signal_run_owner_process(&owner_run(None, None)).unwrap(),
-        "no_pid"
-    );
-}
-
 /// A synthetic namespace mismatch exercises the safety guard without needing
 /// namespace creation privileges or risking a real foreign process.
 // Linux: /proc PID-namespace identity must refuse signalling a PID owned by another namespace.

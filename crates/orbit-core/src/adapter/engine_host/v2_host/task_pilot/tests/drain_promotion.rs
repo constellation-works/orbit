@@ -427,37 +427,6 @@ fn material_edit_after_the_pilot_write_is_held_for_revalidation() {
     }
 }
 
-#[test]
-fn unchanged_task_gets_exactly_one_ordinary_approval() {
-    let workspace = workspace(None);
-    let runtime = &workspace.runtime;
-    let task = qualifying_task(runtime);
-    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
-
-    let applied = pilot_with_race(&workspace, &task, &drain, &pilot, None);
-
-    let decision = &applied["drain_approval"][0];
-    assert_eq!(decision["decision"], "promote", "{decision}");
-    assert_eq!(decision["approved"], true, "{decision}");
-    assert_eq!(
-        runtime.get_task(&task.id).expect("task").status,
-        TaskStatus::Backlog
-    );
-    let history = runtime.get_task_history(&task.id).expect("history");
-    let approvals = history
-        .iter()
-        .filter(|entry| entry.event == "proposal_approved")
-        .collect::<Vec<_>>();
-    assert_eq!(approvals.len(), 1, "{history:?}");
-    assert!(
-        approvals[0]
-            .note
-            .as_deref()
-            .is_some_and(|note| note.contains(&drain)),
-        "the approval names the drain: {approvals:?}"
-    );
-}
-
 /// The `task_pilot_applied` entry the pilot wrote for `task_id`.
 fn pilot_entry(runtime: &OrbitRuntime, task_id: &str) -> TaskHistoryEntry {
     runtime

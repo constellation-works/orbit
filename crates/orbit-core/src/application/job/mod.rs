@@ -49,8 +49,6 @@ pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
     SubmissionKind, SubmissionNotices,
 };
-#[cfg(test)]
-pub(crate) use run::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
     ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopOutcome,

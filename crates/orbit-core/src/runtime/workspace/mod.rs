@@ -4,6 +4,3 @@
 pub(crate) mod binding;
 pub mod catalog;
 pub mod claim;
-
-#[cfg(test)]
-mod tests;

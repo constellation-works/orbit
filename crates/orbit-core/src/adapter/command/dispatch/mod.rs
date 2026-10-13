@@ -21,8 +21,6 @@ pub use audit::{
 #[cfg(unix)]
 pub(crate) use brokered::RunDispatch;
 pub(crate) use callback::legacy_callback_identity_enabled;
-#[cfg(test)]
-pub(crate) use callback::override_activity_tools_for_test;
 pub use callback::refuse_plugin_child_cli_command;
 #[cfg(unix)]
 pub use claimed_owner::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
@@ -32,11 +30,6 @@ pub use execute::{
     ToolDispatchOutcome, ToolEntryPoint, execute_global_in_process_tool_dispatch,
     mark_tool_audit_recorded, take_tool_audit_recorded,
 };
-
-/// The environment variable a plugin backend's child carries: the plugin
-/// namespace. Informational; identity is the host-issued callback session.
-#[cfg(test)]
-pub(crate) use orbit_tools::plugin::ORBIT_PLUGIN_ENV;
 
 #[cfg(test)]
 mod tests;
