@@ -125,8 +125,23 @@ impl OrbitRuntime {
     /// Return the number of canonical task bundles that are present on disk
     /// but absent from the generated registry index.
     pub fn unindexed_task_bundle_count(&self) -> Result<usize, OrbitError> {
-        let workspace_id = self.resolve_migration_workspace(None)?;
-        let registry = self.open_task_registry()?;
+        if !self.coordination_task_reads_visible() {
+            return Ok(0);
+        }
+        // An unselected explicit data root has no workspace config. Match
+        // the task backend's unbound partition without creating a binding.
+        let workspace_id = if self.global_root() == self.paths().orbit_dir
+            && self.workspace_runtime_binding().is_none()
+        {
+            orbit_store::maintenance::task_registry::read_workspace_config_optional(
+                &self.paths().orbit_dir,
+            )?
+            .map(|config| config.workspace_id)
+            .unwrap_or_else(|| crate::runtime::UNBOUND_DATA_DIR_PARTITION_ID.to_string())
+        } else {
+            self.resolve_migration_workspace(None)?
+        };
+        let registry = TaskRegistryStore::open_read_only(&task_registry_path(&self.global_root()))?;
         let indexed = registry
             .tasks_for_workspace(&workspace_id)?
             .into_iter()

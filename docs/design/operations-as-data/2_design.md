@@ -377,8 +377,10 @@ workspace selector goes to the host its task-ID prefix names, for the
 federated MCP and the CLI host preflight in `host_route.rs`), and
 `ID_RESOLVED_WORKSPACE_TOOLS` in the CLI's MCP server (the call binds the
 workspace that owns the ID, for MCP, `orbit tool run` and now `task_operation`).
-`NOT_ID_ROUTED_TOOLS` records why a task-ID tool such as `orbit.task.lint`
-keeps selector behaviour. See
+`NOT_ID_ROUTED_TOOLS` records why a required-ID tool such as
+`orbit.friction.show` keeps selector behaviour. `lint` accepts an optional ID
+for its workspace sweep and stays outside the required-ID tables; both forms
+keep the selected workspace. See
 [ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](./4_decisions.md#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec).
 
 Redaction derives from the parameters' `redact` class (§2.1), not from the

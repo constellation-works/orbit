@@ -531,9 +531,11 @@ differences:
   accepts `external_ref` and `has_ref`, and applies `priority` outside the
   bounded view, which it previously ignored. An empty `list` page reports
   `unindexed_bundle_count`, which the CLI turns into its existing reindex
-  error. The CLI `show` resolves relation targets through the bounded status
-  index MCP uses, so a cross-workspace reference gets the same status label on
-  both.
+  error. Counting missing bundles remains observational, including an
+  unselected explicit data root without a workspace config; replica reads
+  keep owner task bundles hidden. The CLI `show` resolves relation targets
+  through the bounded status index MCP uses, so a cross-workspace reference
+  gets the same status label on both.
 - **Field selection.** CLI `show --fields delivery` now returns the delivery
   observation, as the tool always did. A blank `--fields ''` is dropped, which
   shows the full record, instead of being refused; an empty selector over MCP
@@ -600,11 +602,14 @@ that owns it. Under
 that points at a spec field. But two tool-name lists already hold it for
 every task-ID tool, migrated or not: `ID_ROUTED_TASK_TOOLS` (host prefix
 routing: `show`, `update`, `reject`, `delete`, `artifact get`/`put`, the
-review tools) with `NOT_ID_ROUTED_TOOLS` giving the reason a tool such as
-`orbit.task.lint` does not route, and `ID_RESOLVED_WORKSPACE_TOOLS` (owner
-workspace binding: `show` and `artifact get`). The federated MCP, the MCP
+review tools) with `NOT_ID_ROUTED_TOOLS` giving the reason a required-ID tool
+such as `orbit.friction.show` does not route, and `ID_RESOLVED_WORKSPACE_TOOLS`
+(owner workspace binding: `show` and `artifact get`). The federated MCP, the MCP
 server, `orbit tool run` and the CLI host preflight read them by tool name.
 Phase 3a migrated only `show` of those tools.
+`lint` now accepts an optional ID for its workspace sweep, so it no longer
+belongs in the required-ID exclusion table. It keeps the selected workspace
+on both its single-task and sweep paths.
 
 ### Decision
 
