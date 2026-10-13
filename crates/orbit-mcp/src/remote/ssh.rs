@@ -6,7 +6,7 @@ use std::process::Command;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text_volatile, create_private_dir_all};
-use orbit_common::fs::path::global_orbit_dir;
+use orbit_common::fs::path::ssh_socket_dir;
 
 /// Build a non-PTY transport, leaving the remote command and stdio to callers.
 ///
@@ -21,8 +21,7 @@ use orbit_common::fs::path::global_orbit_dir;
 /// defaults, including the relative `%C` fallback, override an explicit
 /// opt-out. `~` has expanded from `HOME` for as long as `Include` has existed.
 pub(crate) fn ssh_command(target: &str) -> Result<Command, OrbitError> {
-    let state = global_orbit_dir()?;
-    let sockets = state.join("ssh");
+    let sockets = ssh_socket_dir()?;
     prepare_socket_dir(&sockets).map_err(|error| {
         OrbitError::Io(format!(
             "prepare SSH socket directory '{}': {error}",
