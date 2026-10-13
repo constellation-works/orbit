@@ -93,7 +93,7 @@ pub fn execute_job_with_resume(
         host,
         input: base_input.clone(),
         pipeline: Arc::new(Mutex::new(pipeline_steps_from_raw(pipeline))),
-        resumed_diagnostics: Arc::new(seed_diagnostics_from_resume(job, resume)),
+        resumed_diagnostics: Arc::new(Mutex::new(seed_diagnostics_from_resume(job, resume))),
         recovery_activity,
         failure_activity,
         final_recovery_activity,
@@ -321,6 +321,9 @@ fn seed_pipeline_from_resume(
 
 /// Carry only conflict diagnostics for incomplete steps, without turning
 /// their persisted output into a usable success checkpoint.
+///
+/// This is the seed. A conflict observed later replaces that step's entry
+/// through `record_conflict_diagnostics`; final recovery does not.
 fn seed_diagnostics_from_resume(
     job: &JobV2,
     resume: Option<&PipelineState>,

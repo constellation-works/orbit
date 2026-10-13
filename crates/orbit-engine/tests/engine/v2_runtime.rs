@@ -947,6 +947,9 @@ fn assert_empty_join_resume(
     );
 }
 
+/// Ordinary resume keeps the seeded conflict, and step recovery replaces it
+/// with the newer one. Final-recovery invalidation is covered by
+/// `final_recovery_resume_checkpoints_the_latest_conflict_diagnostics`.
 #[test]
 fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint() {
     use orbit_common::{ConflictedFile, RecoverableVcsConflict};

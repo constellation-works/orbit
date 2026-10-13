@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_agent::loop_engine::InMemorySink;
-use orbit_common::OrbitError;
+use orbit_common::{ConflictedFile, OrbitError, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
@@ -37,11 +37,16 @@ enum Reply {
     Fail,
     Permanent,
     Diagnostic(String),
+    Conflict(RecoverableVcsConflict),
 }
 
 struct RecoveryHost {
     replies: Mutex<HashMap<String, VecDeque<Reply>>>,
     calls: Mutex<Vec<(String, Value)>>,
+    /// Success checkpoints, in call order: `(step_id, output)`.
+    checkpoints: Mutex<Vec<(String, Value)>>,
+    /// Diagnostic checkpoints, in call order: `(step_id, output)`.
+    diagnostics: Mutex<Vec<(String, Value)>>,
     admission: FinalRecoveryAdmission,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     applications: Mutex<Vec<FinalRecoveryApplication>>,
@@ -62,6 +67,8 @@ impl RecoveryHost {
                     .collect(),
             ),
             calls: Mutex::new(Vec::new()),
+            checkpoints: Mutex::new(Vec::new()),
+            diagnostics: Mutex::new(Vec::new()),
             admission: FinalRecoveryAdmission::Admitted,
             admissions: Mutex::new(Vec::new()),
             applications: Mutex::new(Vec::new()),
@@ -141,6 +148,9 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
             Some(Reply::Permanent) => Err(DispatchError::CliInvocationPermanent(format!(
                 "{action}: sandbox unavailable"
             ))),
+            Some(Reply::Conflict(conflict)) => {
+                Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
+            }
             None if action == "setup" => Ok(json!({
                 "workspace_path": self.workspace_path,
                 "base_ref": "main",
@@ -148,6 +158,34 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
             })),
             None => Ok(json!({ "action": action })),
         }
+    }
+
+    fn checkpoint_step(
+        &self,
+        _: &str,
+        _: u32,
+        step_id: &str,
+        output: &Value,
+        _: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<(), DispatchError> {
+        self.checkpoints
+            .lock()
+            .unwrap()
+            .push((step_id.to_string(), output.clone()));
+        Ok(())
+    }
+
+    fn checkpoint_step_diagnostic(
+        &self,
+        _: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.diagnostics
+            .lock()
+            .unwrap()
+            .push((step_id.to_string(), output.clone()));
+        Ok(())
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
@@ -1171,4 +1209,210 @@ fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
     assert_eq!(attempts[1]["phase"], "post_recovery");
     assert_eq!(attempts[1]["outcome"], "success");
     assert_eq!(attempts[1]["output"], json!({"repaired": true}));
+}
+
+fn conflict(paths: &[&str], resolvable: bool) -> RecoverableVcsConflict {
+    RecoverableVcsConflict {
+        operation: "git_rebase".into(),
+        original_base_sha: "original".into(),
+        target_base_sha: "target".into(),
+        conflicting_paths: paths.iter().map(|path| (*path).to_string()).collect(),
+        conflicting_files: paths
+            .iter()
+            .map(|path| ConflictedFile {
+                path: (*path).to_string(),
+                deterministically_resolvable: resolvable,
+            })
+            .collect(),
+        diagnostic: "stopped rebase".into(),
+    }
+}
+
+fn conflict_resume_job() -> JobV2 {
+    let step = |id: &str| {
+        json!({
+            "id": id,
+            "spec": {"type": "deterministic", "action": id, "config": {}},
+        })
+    };
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": {"name": "conflict_diagnostic_resume"},
+        "spec": {
+            "state": "enabled",
+            "kind": "workflow",
+            "steps": [
+                step("setup"),
+                step("sync_base"),
+                step("deliver"),
+            ],
+        },
+    });
+    let mut job = load_job_asset(&asset.to_string())
+        .expect("fixture job loads")
+        .spec;
+    job.final_recovery_activity = Some("decide".to_string());
+    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) = &mut job.steps[2].body
+    else {
+        panic!("deliver is a target step");
+    };
+    // The next step renders the success output. `failed_only` from the
+    // incomplete checkpoint must not be visible through that template.
+    target.default_input = Some(json!({"rendered": "{{ steps.sync_base.output }}"}));
+    job
+}
+
+fn old_conflict_resume() -> PipelineState {
+    let setup = json!({
+        "workspace_path": "/worktrees/run",
+        "base_ref": "main",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+    });
+    let mut state = PipelineState::new(
+        RUN_ID.into(),
+        "conflict_diagnostic_resume".into(),
+        json!({ "task_ids": ["T-1"] }),
+    );
+    state.record_step(0, JobRunState::Success, Some(setup.clone()), None);
+    state.record_pipeline_output("setup", setup);
+    state.record_pipeline_output(
+        "sync_base",
+        json!({
+            "conflicting_paths": ["old.rs"],
+            "conflicting_files": [{
+                "path": "old.rs",
+                "deterministically_resolvable": false,
+            }],
+            "failed_only": "discard me",
+        }),
+    );
+    state
+}
+
+/// [ORB-15889] Final recovery clears the pipeline entry a newer conflict
+/// recorded. The success checkpoint must keep that newer evidence, including
+/// an explicit empty list, and must not restore the resumed `old.rs` paths.
+///
+/// Ordinary resume and step recovery are the controls in
+/// `incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint`:
+/// that test also shows a diagnostic-only checkpoint does not skip `sync_base`
+/// or expose `failed_only` to a template before the step runs. This one shows
+/// the same exclusion after final-recovery invalidation, on the output the
+/// next step renders.
+#[test]
+fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
+    enum Latest {
+        Newer(RecoverableVcsConflict),
+        Seeded,
+    }
+
+    let resume = old_conflict_resume();
+    let job = conflict_resume_job();
+    for (name, latest) in [
+        ("newer conflict", Latest::Newer(conflict(&["new.rs"], true))),
+        ("explicit empty lists", Latest::Newer(conflict(&[], false))),
+        ("no newer conflict", Latest::Seeded),
+    ] {
+        let (first, paths, files) = match &latest {
+            Latest::Newer(conflict) => (
+                Reply::Conflict(conflict.clone()),
+                serde_json::to_value(&conflict.conflicting_paths).expect("paths"),
+                serde_json::to_value(&conflict.conflicting_files).expect("files"),
+            ),
+            Latest::Seeded => (
+                Reply::Fail,
+                json!(["old.rs"]),
+                json!([{
+                    "path": "old.rs",
+                    "deterministically_resolvable": false,
+                }]),
+            ),
+        };
+        let host = RecoveryHost::new([
+            (
+                "sync_base",
+                vec![first, Reply::Ok(json!({"rebased": true}))],
+            ),
+            (
+                "decide",
+                vec![Reply::Ok(json!({
+                    "decision": "resume",
+                    "step_id": "sync_base",
+                    "rationale": "resolved the stopped rebase",
+                }))],
+            ),
+            ("deliver", vec![Reply::Ok(json!({"delivered": true}))]),
+        ]);
+        let observed = run(&job, &host, Some(&resume));
+        let outcome = observed
+            .result
+            .unwrap_or_else(|error| panic!("{name}: resumed run completes, got {error}"));
+        assert!(outcome.success, "{name}: the rerun from sync_base delivers");
+        assert_eq!(
+            host.actions(),
+            ["sync_base", "decide", "sync_base", "deliver"],
+            "{name}: an incomplete sync_base executes, final recovery resumes it, and diagnostics do not skip it"
+        );
+        assert_eq!(observed.attempts, [attempt("resume", Some("resume"))]);
+        let expected = json!({
+            "rebased": true,
+            "conflicting_paths": paths.clone(),
+            "conflicting_files": files.clone(),
+        });
+        let output = &outcome.pipeline["sync_base"];
+        assert!(
+            output.get("conflicting_paths").is_some() && output.get("conflicting_files").is_some(),
+            "{name}: both diagnostic keys stay present: {output}"
+        );
+        assert_eq!(output, &expected, "{name}");
+        assert!(
+            output.get("failed_only").is_none(),
+            "{name}: unrelated failed output stays out of the success checkpoint"
+        );
+        if matches!(latest, Latest::Newer(_)) {
+            assert_ne!(
+                output["conflicting_paths"],
+                json!(["old.rs"]),
+                "{name}: final recovery must not restore the resumed conflict"
+            );
+        }
+        let checkpoints = host.checkpoints.lock().unwrap();
+        let synced: Vec<_> = checkpoints
+            .iter()
+            .filter(|(step_id, _)| step_id == "sync_base")
+            .map(|(_, output)| output)
+            .collect();
+        assert_eq!(
+            synced,
+            vec![&expected],
+            "{name}: the success checkpoint is the output final recovery left in place"
+        );
+        drop(checkpoints);
+        let diagnostics = host.diagnostics.lock().unwrap();
+        match &latest {
+            Latest::Newer(_) => {
+                assert_eq!(diagnostics.len(), 1, "{name}");
+                assert_eq!(diagnostics[0].0, "sync_base");
+                assert_eq!(diagnostics[0].1["conflicting_paths"], paths, "{name}");
+                assert_eq!(diagnostics[0].1["conflicting_files"], files, "{name}");
+            }
+            Latest::Seeded => assert!(
+                diagnostics.is_empty(),
+                "{name}: no new conflict means no replacement diagnostic"
+            ),
+        }
+        drop(diagnostics);
+        let deliver_inputs = host.inputs("deliver");
+        let rendered = &deliver_inputs[0]["rendered"];
+        assert_eq!(
+            rendered, &expected,
+            "{name}: the next step's template sees the success output"
+        );
+        assert!(
+            rendered.get("failed_only").is_none(),
+            "{name}: the next step's template does not see the failed field"
+        );
+    }
 }

@@ -141,23 +141,23 @@ pub(super) fn run_target(
     } else {
         (success, message)
     };
+    // Latest allowlisted diagnostics live only in `resumed_diagnostics`. A
+    // conflict in this execution already replaced both keys there, including
+    // an explicit empty list. Final recovery clears the pipeline entry, so
+    // reading it here would restore the seed from the incomplete checkpoint.
+    // A success output that already carries a key keeps it; a missing key is
+    // filled from the map. Other failed fields never enter this map.
     if let Some(output) = dispatch.output.as_object_mut() {
-        if let Some(diagnostics) = ctx.resumed_diagnostics.get(&step.id) {
+        let diagnostics = ctx
+            .resumed_diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(diagnostics) = diagnostics.get(&step.id) {
             for key in CONFLICT_DIAGNOSTIC_KEYS {
                 if let Some(value) = diagnostics.get(key) {
                     output
                         .entry(key.to_string())
                         .or_insert_with(|| value.clone());
-                }
-            }
-        }
-        // A conflict encountered in this execution replaces the resumed
-        // diagnostics, including an empty list after a newer conflict.
-        let prior = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(prior_output) = prior.get(&step.id).and_then(|step| step.get("output")) {
-            for key in CONFLICT_DIAGNOSTIC_KEYS {
-                if let Some(diagnostics) = prior_output.get(key) {
-                    output.insert(key.to_string(), diagnostics.clone());
                 }
             }
         }
@@ -218,6 +218,9 @@ fn dispatch_once(
             "conflicting_files": conflict.conflicting_files,
         });
         record_pipeline(ctx, &step.id, diagnostic.clone());
+        // Both keys, including empty lists. The pipeline copy above is what
+        // final recovery forgets; this map is what the success checkpoint reads.
+        record_conflict_diagnostics(ctx, &step.id, &diagnostic);
         if let Err(error) = ctx
             .host
             .checkpoint_step_diagnostic(&ctx.run_id, &step.id, &diagnostic)
