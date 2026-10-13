@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -575,6 +574,9 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
     use orbit_engine::activity_job::cli_runner::run_auth_probe;
     use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
+    if !ps_available("v2_cli_sandbox::auth_probe_refused_registration_ends_the_grandchild") {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let grandchild = Grandchild(root.join("grandchild.pid"));
@@ -611,6 +613,9 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
 fn dispatch_registration_failure_ends_the_provider_group() {
     use orbit_engine::activity_job::cli_runner::run_cli_backend;
 
+    if !ps_available("v2_cli_sandbox::dispatch_registration_failure_ends_the_provider_group") {
+        return;
+    }
     for panic_on_registration in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -700,7 +705,7 @@ impl Grandchild {
             .parse()
             .unwrap();
         assert!(
-            !process_is_running(leader),
+            !process_is_running(leader).expect("inspect provider leader after cleanup"),
             "provider leader survived registration failure"
         );
         assert_eq!(
@@ -711,7 +716,8 @@ impl Grandchild {
         let text = fs::read_to_string(&self.0).expect("the provider publishes its grandchild");
         let pid: u32 = text.trim().parse().expect("grandchild pid");
         assert!(
-            wait_until(Duration::from_secs(5), || !process_is_running(pid)),
+            wait_until(Duration::from_secs(5), || !process_is_running(pid)
+                .expect("inspect grandchild after cleanup")),
             "grandchild {pid} outlived the refused worker registration"
         );
     }
@@ -733,7 +739,9 @@ impl Drop for Grandchild {
         else {
             return;
         };
-        if process_is_running(pid) {
+        // A denied inspection is not evidence of death. Keep cleanup armed
+        // if the sandbox starts denying ps after the pre-spawn probe.
+        if process_is_running(pid).unwrap_or(true) {
             // SAFETY: the pid was published by this test's own provider, and
             // signalling it only ends the sleep that provider started.
             unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
@@ -743,17 +751,36 @@ impl Drop for Grandchild {
 
 /// A zombie has ended but still answers `kill(pid, 0)` until its parent reaps
 /// it, so `ps` decides whether the process still runs.
-fn process_is_running(pid: u32) -> bool {
-    let Ok(output) = Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-    else {
-        return true;
+fn process_is_running(pid: u32) -> Result<bool, String> {
+    let output = match orbit_common::test_env::ps_stat(pid) {
+        orbit_common::test_env::PsRun::Ran(output) => output,
+        orbit_common::test_env::PsRun::Denied(reason) => return Err(reason),
     };
-    output.status.success()
-        && !String::from_utf8_lossy(&output.stdout)
-            .trim_start()
-            .starts_with('Z')
+    assert!(
+        output.status.success()
+            || (output.status.code() == Some(1)
+                && output.stdout.is_empty()
+                && output.stderr.is_empty()),
+        "ps failed: {output:?}"
+    );
+    let state = String::from_utf8_lossy(&output.stdout);
+    let state = state.trim();
+    Ok(!state.is_empty() && !state.starts_with('Z'))
+}
+
+/// Probe before spawning fixtures: only an exec denial defers their native
+/// assertions, and the claim host must replay them with ps available.
+fn ps_available(test: &str) -> bool {
+    match process_is_running(std::process::id()) {
+        Ok(running) => {
+            assert!(running, "ps must see this live test process");
+            true
+        }
+        Err(reason) => {
+            orbit_common::test_env::report_ps_denied(test, &reason);
+            false
+        }
+    }
 }
 
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
