@@ -184,6 +184,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
 assert sys.argv[1] == "--"
 os.execvp(sys.argv[2], sys.argv[2:])
 ''')
+        self.write_executable(self.root / "scripts/check-ci-macos.sh", '''#!/usr/bin/env bash
+printf '["check-ci-macos"]\\n' >> "$GUARD_TEST_LOG"
+exit "${GUARD_TEST_MACOS_EXIT:-0}"
+''')
         self.git("init", "--initial-branch=agent-main")
         self.git("add", ".")
         self.git("commit", "-m", "fixture baseline")
@@ -231,6 +235,46 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result = self.gate(GUARD_TEST_EXIT="17")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(all(call[0] == "metadata" for call in self.calls()))
+
+    def macos_checks(self):
+        return sum(1 for call in self.calls() if call == ["check-ci-macos"])
+
+    def test_a_crate_test_file_change_runs_the_macos_workflow_check_before_any_test(self):
+        (self.root / "crates/orbit-core/tests").mkdir(parents=True)
+        (self.root / "crates/orbit-core/tests/fixture.rs").write_text("// new test\n")
+        result = self.gate(GUARD_TEST_MACOS_EXIT="7")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(self.macos_checks(), 1)
+        self.assertFalse(any("--no-fail-fast" in call for call in self.calls()),
+                         "a failing macOS workflow check must stop the gate before tests run")
+
+    def test_a_moved_test_file_runs_the_macos_workflow_check_and_then_the_tests(self):
+        # The shape of ORB-15852: a test file leaves src/**/tests and lands in a tests/ binary.
+        (self.root / "crates/orbit-tools/src/plugin/tests").mkdir(parents=True)
+        (self.root / "crates/orbit-tools/src/plugin/tests/backend.rs").write_text("// moved\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "add a test file")
+        (self.root / "crates/orbit-tools/tests/tools").mkdir(parents=True)
+        self.git("mv", "crates/orbit-tools/src/plugin/tests/backend.rs", "crates/orbit-tools/tests/tools/backend.rs")
+        result = self.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.macos_checks(), 1)
+        self.assertTrue(any("--no-fail-fast" in call for call in self.calls()))
+
+    def test_a_workflow_edit_is_checked_even_when_no_crate_is_selected(self):
+        (self.root / ".github/workflows").mkdir(parents=True)
+        (self.root / ".github/workflows/ci-macos.yml").write_text("name: macOS Platform\n")
+        self.assertEqual(self.selected(), [])
+        result = self.gate(GUARD_TEST_MACOS_EXIT="7")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(self.macos_checks(), 1)
+
+    def test_diffs_that_touch_no_test_file_or_the_workflow_skip_the_macos_workflow_check(self):
+        self.touch_core()
+        (self.root / "docs/guide.md").write_text("Changed docs\n")
+        result = self.gate(GUARD_TEST_MACOS_EXIT="7")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.macos_checks(), 0)
 
     def test_untracked_and_deleted_crate_paths_are_selected(self):
         (self.root / "crates/orbit-core/src/new.rs").write_text("// new\n")

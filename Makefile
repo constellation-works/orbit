@@ -54,7 +54,7 @@ help:
 	@echo "  make tree         Print dependency tree"
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
 	@echo "  make ci-fast      Format, repository guardrails, and the MSRV check; runs no Rust tests"
-	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents (CI_TEST_BASE=<commit> pins the base)"
+	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents; also checks ci-macos.yml when tests or the workflow change (CI_TEST_BASE=<commit> pins the base)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"

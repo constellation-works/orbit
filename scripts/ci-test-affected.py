@@ -96,6 +96,23 @@ FILE_READERS = (
     (Path("server.json"), ("orbit-cli",)),
 )
 
+# ci-macos.yml names test paths and filters that a moved or deleted test leaves
+# stale. Only check-ci-macos.sh reads them, so the gate runs it whenever a
+# crate test file changes or the workflow itself does.
+MACOS_WORKFLOW = ".github/workflows/ci-macos.yml"
+MACOS_CHECK = ROOT / "scripts/check-ci-macos.sh"
+
+
+def touches_macos_workflow(paths):
+    """Whether a changed path is the macOS workflow or a file under a tests directory of a crate."""
+    for raw_path in paths:
+        parts = Path(raw_path).parts
+        if raw_path == MACOS_WORKFLOW:
+            return True
+        if len(parts) >= 3 and parts[0] == "crates" and "tests" in parts[1:-1]:
+            return True
+    return False
+
 
 def affected_packages(metadata, paths):
     members = set(metadata["workspace_members"])
@@ -639,6 +656,41 @@ def run_observed(command, environment):
                 pipe.close()
 
 
+def build_budget_command():
+    return shlex.split(os.environ.get("BUILD_BUDGET", str(ROOT / "scripts/build-budget.py")))
+
+
+def test_process_environment():
+    environment = dict(os.environ)
+    # A test that runs this script must not report into the outer run's summary.
+    environment.pop(SUMMARY_ENV, None)
+    environment.pop(SELECTION_ENV, None)
+    # A claimed executor exports the worker-binding marker so the Orbit commands
+    # its agent runs refuse to start without the binding recorded for them. A
+    # test process has no binding: inherited, the marker makes every in-process
+    # fixture that opens a runtime fail closed. Tests of the refusal set it.
+    environment.pop("ORBIT_WORKER_CONTEXT_REQUIRED", None)
+    temporary_root = Path(tempfile.gettempdir()).resolve()
+    if temporary_root.is_relative_to(ROOT) and temporary_root != ROOT:
+        # Non-Git fixtures must not discover the enclosing managed checkout.
+        # Keep any caller-supplied boundaries and the sandbox permissions.
+        environment["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(filter(None, (
+            environment.get("GIT_CEILING_DIRECTORIES"), str(temporary_root))))
+    return environment
+
+
+def run_macos_workflow_check():
+    """Run check-ci-macos.sh under build admission; it lists the tests ci-macos.yml names and runs none."""
+    print(f"ci-test-affected: a test file or {MACOS_WORKFLOW} changed; running scripts/check-ci-macos.sh",
+          file=sys.stderr, flush=True)
+    status = subprocess.run([*build_budget_command(), "--", str(MACOS_CHECK)], cwd=ROOT,
+                            env=test_process_environment()).returncode
+    if status:
+        print(f"ci-test-affected: fix the stale path or filter in {MACOS_WORKFLOW} named above",
+              file=sys.stderr, flush=True)
+    return status
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -656,11 +708,13 @@ def main():
         cwd=ROOT,
     ))
     failing_tests = None
+    changed = None
     if given:
         packages, failing_tests = given_selection(metadata, given)
         print(f"ci-test-affected: running the selection {SELECTION_ENV} names", file=sys.stderr, flush=True)
     else:
-        packages = affected_packages(metadata, changed_paths(base))
+        changed = changed_paths(base)
+        packages = affected_packages(metadata, changed)
         print(f"ci-test-affected: base={base}", file=sys.stderr, flush=True)
     # Cargo rejects --lib for a bin-only selection, even with --bins/--tests.
     library_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
@@ -687,6 +741,12 @@ def main():
         run_target_flags = target_flags_for(run_packages)
         filters, libtest_filters = ["-E", filterset, "--test-threads", "1", "--retries", "0"], ["--", "--exact", *names, "--test-threads", "1"]
         doc_packages = []
+    # Checked before the empty-selection return, so a workflow-only change still runs it.
+    # A replayed selection carries no diff, so the candidate run that named it decided.
+    if changed is not None and not arguments.list and touches_macos_workflow(changed):
+        macos_status = run_macos_workflow_check()
+        if macos_status:
+            return macos_status
     if not packages:
         print("ci-test-affected: no affected workspace crates; no Rust tests to run", file=sys.stderr)
         write_summary(summary, selection, 0, base, 0, timings=(0, 0, []))
@@ -701,22 +761,8 @@ def main():
         print(f"ci-test-affected: replaying {len(failing_tests)} failing test(s) in {', '.join(run_packages)}",
               file=sys.stderr, flush=True)
     package_flags = [argument for name in run_packages for argument in ("-p", name)]
-    test_environment = dict(os.environ)
-    # A test that runs this script must not report into the outer run's summary.
-    test_environment.pop(SUMMARY_ENV, None)
-    test_environment.pop(SELECTION_ENV, None)
-    # A claimed executor exports the worker-binding marker so the Orbit commands
-    # its agent runs refuse to start without the binding recorded for them. A
-    # test process has no binding: inherited, the marker makes every in-process
-    # fixture that opens a runtime fail closed. Tests of the refusal set it.
-    test_environment.pop("ORBIT_WORKER_CONTEXT_REQUIRED", None)
-    temporary_root = Path(tempfile.gettempdir()).resolve()
-    if temporary_root.is_relative_to(ROOT) and temporary_root != ROOT:
-        # Non-Git fixtures must not discover the enclosing managed checkout.
-        # Keep any caller-supplied boundaries and the sandbox permissions.
-        test_environment["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(filter(None, (
-            test_environment.get("GIT_CEILING_DIRECTORIES"), str(temporary_root))))
-    budget = shlex.split(os.environ.get("BUILD_BUDGET", str(ROOT / "scripts/build-budget.py")))
+    test_environment = test_process_environment()
+    budget = build_budget_command()
     nextest = subprocess.run([*cargo, "nextest", "--version"], cwd=ROOT,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # One timings object across the test command and the doctest command.
