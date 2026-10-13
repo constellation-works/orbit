@@ -203,6 +203,18 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                                "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *arguments],
                               cwd=self.root, env=self.env, text=True, capture_output=True, check=True)
 
+    def baseline_test_file(self, path, content):
+        """Put a tracked test file on the comparison base before the candidate change."""
+        self.git("checkout", "agent-main")
+        test_file = self.root / path
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(content)
+        self.git("add", path)
+        self.git("commit", "-m", "add a baseline test file")
+        self.base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("checkout", "-B", "candidate")
+        return test_file
+
     def gate(self, *arguments, **environment):
         return subprocess.run(["python3", str(self.root / "scripts/ci-test-affected.py"), *arguments],
                               cwd=self.root, env=dict(self.env, **environment), text=True, capture_output=True)
@@ -250,16 +262,34 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
 
     def test_a_moved_test_file_runs_the_macos_workflow_check_and_then_the_tests(self):
         # The shape of ORB-15852: a test file leaves src/**/tests and lands in a tests/ binary.
-        (self.root / "crates/orbit-tools/src/plugin/tests").mkdir(parents=True)
-        (self.root / "crates/orbit-tools/src/plugin/tests/backend.rs").write_text("// moved\n")
-        self.git("add", ".")
-        self.git("commit", "-m", "add a test file")
+        self.baseline_test_file("crates/orbit-tools/src/plugin/tests/backend.rs", "// moved\n")
         (self.root / "crates/orbit-tools/tests/tools").mkdir(parents=True)
         self.git("mv", "crates/orbit-tools/src/plugin/tests/backend.rs", "crates/orbit-tools/tests/tools/backend.rs")
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.macos_checks(), 1)
         self.assertTrue(any("--no-fail-fast" in call for call in self.calls()))
+
+    def test_a_deleted_crate_test_file_runs_the_macos_workflow_check(self):
+        test_file = self.baseline_test_file("crates/orbit-tools/src/plugin/tests/backend.rs", "// removed\n")
+        test_file.unlink()
+
+        result = self.gate(GUARD_TEST_MACOS_EXIT="7")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(self.macos_checks(), 1)
+        self.assertFalse(any("--no-fail-fast" in call for call in self.calls()),
+                         "a deleted test must be checked before any remaining tests run")
+
+    def test_a_rename_out_of_a_crate_tests_directory_runs_the_macos_workflow_check(self):
+        self.baseline_test_file("crates/orbit-tools/src/plugin/tests/backend.rs", "// moved out\n")
+        self.git("mv", "crates/orbit-tools/src/plugin/tests/backend.rs",
+                 "crates/orbit-tools/src/plugin/backend.rs")
+
+        result = self.gate(GUARD_TEST_MACOS_EXIT="7")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(self.macos_checks(), 1)
+        self.assertFalse(any("--no-fail-fast" in call for call in self.calls()),
+                         "a renamed test must be checked before any remaining tests run")
 
     def test_a_workflow_edit_is_checked_even_when_no_crate_is_selected(self):
         (self.root / ".github/workflows").mkdir(parents=True)
