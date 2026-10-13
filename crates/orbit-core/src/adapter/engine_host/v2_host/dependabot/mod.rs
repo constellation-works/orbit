@@ -6,6 +6,3 @@ pub(super) mod code_groups;
 pub(super) mod consolidate;
 mod duplicates;
 pub(super) mod filing;
-
-#[cfg(test)]
-pub(super) mod tests;

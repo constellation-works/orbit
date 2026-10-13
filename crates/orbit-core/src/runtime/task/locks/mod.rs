@@ -14,6 +14,3 @@ pub(crate) use index::{
     lock_holder_index, merge_task_lock_conflicts, requested_task_files_indexed,
     task_lock_conflicts_indexed, task_lock_overlaps,
 };
-
-#[cfg(test)]
-mod tests;

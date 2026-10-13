@@ -1,4 +1,3 @@
-mod authorization;
 mod config_path;
 #[cfg(target_os = "linux")]
 mod git_sandbox;

@@ -1,26 +1,4 @@
-//! Admitted unit tests: platform-kernel disk reads and combinatorial pure CPU
-//! window selection with injected ticks/time/waits. No load generation.
-use super::super::platform::disk_percent;
-use std::path::Path;
-
-#[test]
-fn missing_descendant_reports_its_existing_ancestor_filesystem() {
-    let existing = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let missing = existing.join("no-such-dir-for-disk-probe/nested");
-    assert!(disk_percent(existing).is_some());
-    assert!(
-        disk_percent(&missing).is_some(),
-        "a worktrees directory that does not exist yet must use its nearest existing ancestor"
-    );
-}
-
-#[test]
-fn relative_path_is_refused_instead_of_resolved_against_the_working_directory() {
-    assert!(
-        disk_percent(Path::new("crates/orbit-core")).is_none(),
-        "a relative probe path must be refused, never resolved against the working directory"
-    );
-}
+//! Admitted CPU counter/time/wait matrices. Public disk observations live in runtime integration tests.
 
 fn ticks(millis: i64, counters: [u32; 4]) -> super::super::platform::CpuTickSample {
     super::super::platform::CpuTickSample {

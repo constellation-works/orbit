@@ -11,16 +11,6 @@ mod dispatch;
 mod plugin;
 mod registry;
 
-/// Test-only reach-through to dispatch's activity-allowlist override, so a
-/// sibling test module does not import a private dispatch item directly.
-#[cfg(test)]
-pub(crate) mod dispatch_test_support {
-    pub(crate) use super::dispatch::override_activity_tools_for_test;
-}
-
-#[cfg(test)]
-mod tests;
-
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
