@@ -7358,7 +7358,21 @@ esac
 fn isolated(test: &str, body: impl FnOnce(&Path)) {
     if std::env::var_os(CHILD_ENV).is_some() {
         let sandbox = PathBuf::from(std::env::var_os(SANDBOX_ENV).expect("sandbox path"));
-        orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(&sandbox));
+        // Container-only wrappers do no fixture work themselves. Give each
+        // leaf row its own tool, home and sandbox-root counter files below.
+        let container = matches!(
+            test,
+            "validation_environment_contracts"
+                | "empty_validation_and_handoff_contracts"
+                | "failure_handoff_contracts"
+                | "implementation_handoff_contracts"
+                | "pr_body_and_promotion_contracts"
+        );
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test) || container {
+            orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(&sandbox));
+        } else {
+            in_fresh_row(&sandbox, body);
+        }
         return;
     }
     let sandbox = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
@@ -7418,6 +7432,46 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// The bounded child runs exactly one libtest thread. Change its environment
+/// only between completed rows, and restore it and cwd on return or unwind.
+fn in_fresh_row(parent: &Path, body: impl FnOnce(&Path)) {
+    struct RestoreCwd(PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).expect("restore family cwd");
+        }
+    }
+    let row = tempfile::tempdir_in(parent).unwrap();
+    let home = row.path().join("home");
+    let bin = row.path().join("bin");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&bin).unwrap();
+    fs::write(home.join(".gitconfig"), git_fixture::FILE_ONLY_CONFIG).unwrap();
+    let gh = bin.join("gh");
+    fs::write(&gh, FAKE_GH.replace("__SANDBOX__", path_str(row.path()))).unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut path = vec![bin];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(path).unwrap();
+    let xdg = home.join(".config");
+    let _env = test_env::scoped([
+        (SANDBOX_ENV, Some(path_str(row.path()))),
+        ("HOME", Some(path_str(&home))),
+        ("XDG_CONFIG_HOME", Some(path_str(&xdg))),
+        ("PATH", Some(path.to_str().expect("fixture PATH"))),
+        // The capture-stop row deliberately lowers this process-global
+        // ceiling. Restore it before a truncated-but-bounded output row runs.
+        ("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", None),
+    ]);
+    let _cwd = RestoreCwd(std::env::current_dir().unwrap());
+    std::env::set_current_dir(row.path()).unwrap();
+    // TMPDIR stays at the parent-owned child root: a cached immutable Git
+    // seed must outlive the row. Each scenario still owns separate TempDirs.
+    orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(row.path()));
 }
 
 fn validation_environment_contracts() {
