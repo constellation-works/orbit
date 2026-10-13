@@ -405,7 +405,6 @@ fn attempt(outcome: &str, decision: Option<&str>) -> (String, Option<String>) {
     (outcome.to_string(), decision.map(str::to_string))
 }
 
-#[test]
 fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     // The decision arrives the way an agent activity reports it: its own keys
     // listed in `response_result_fields`, beside Orbit's invocation metadata.
@@ -461,7 +460,6 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     }
 }
 
-#[test]
 fn resume_context_is_opaque_when_the_target_inherits_job_input() {
     let refusal = "The record contains an unresolved {{ input.missing }} template";
     let rationale = "Keep {{ input.missing }} literal while repairing the record";
@@ -496,7 +494,6 @@ fn resume_context_is_opaque_when_the_target_inherits_job_input() {
     );
 }
 
-#[test]
 fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
     use orbit_types::workflow::FinalRecoveryResume;
 
@@ -599,7 +596,6 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
 /// [ORB-12467] A provider refuses an oversized turn before the agent starts,
 /// so the resumed step gets the bounded refusal final recovery read. The
 /// context names the admitted step even when the decision's id is padded.
-#[test]
 fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id() {
     let refusal = format!("probe refused: {}", "x".repeat(512 * 1024));
     let host = RecoveryHost::new([
@@ -638,7 +634,6 @@ fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id()
     );
 }
 
-#[test]
 fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
     let summary = "y".repeat(256 * 1024);
     let host = RecoveryHost::new([
@@ -686,7 +681,6 @@ fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
     assert!(serde_json::to_string(refused).unwrap().len() <= 64 * 1024);
 }
 
-#[test]
 fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -714,7 +708,6 @@ fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
     assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
 }
 
-#[test]
 fn an_escalation_still_runs_the_failure_handoff() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let run = run(&pipeline(false), &host, None);
@@ -733,7 +726,6 @@ fn an_escalation_still_runs_the_failure_handoff() {
     assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
 }
 
-#[test]
 fn an_error_that_skips_step_recovery_still_reaches_final_recovery() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Permanent]),
@@ -754,7 +746,6 @@ fn an_error_that_skips_step_recovery_still_reaches_final_recovery() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail, Reply::Fail]),
@@ -785,7 +776,6 @@ fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
     assert_eq!(input["log_tail"], "this run's failure log");
 }
 
-#[test]
 fn final_recovery_runs_at_most_once_per_run() {
     // The rerun after `resume` fails again: the hook does not run twice, and
     // the run falls through to its failure handoff.
@@ -834,7 +824,6 @@ fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> Pipe
     state
 }
 
-#[test]
 fn a_run_resumed_after_a_final_recovery_resume_never_runs_it_again() {
     let state = resumed_after(
         FinalRecoveryDecision::Resume {
@@ -853,7 +842,6 @@ fn a_run_resumed_after_a_final_recovery_resume_never_runs_it_again() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
     // The source run recorded `archive` and crashed before recording what
     // applying it did. The resumed run fails again; it neither dispatches nor
@@ -881,7 +869,6 @@ fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
     assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
 }
 
-#[test]
 fn a_provider_authentication_failure_skips_final_recovery() {
     let host = RecoveryHost::new([
         (
@@ -923,7 +910,6 @@ fn a_provider_authentication_failure_skips_final_recovery() {
     );
 }
 
-#[test]
 fn an_empty_crew_pool_skips_final_recovery() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])])
         .with_empty_pool();
@@ -936,7 +922,6 @@ fn an_empty_crew_pool_skips_final_recovery() {
     assert_eq!(run.attempts, [attempt("skipped", None)]);
 }
 
-#[test]
 fn a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail, Reply::Ok(json!({"built": true}))]),
@@ -977,7 +962,6 @@ fn a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade
     assert!(update.append_comments[0].message.contains(detail));
 }
 
-#[test]
 fn a_resume_to_an_earlier_step_keeps_the_named_target() {
     let host = RecoveryHost::new([
         (
@@ -1000,7 +984,6 @@ fn a_resume_to_an_earlier_step_keeps_the_named_target() {
     assert!(host.updates.lock().unwrap().is_empty());
 }
 
-#[test]
 fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
     for target in ["setup", "no_such_step"] {
         let host = RecoveryHost::new([
@@ -1027,7 +1010,6 @@ fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
     }
 }
 
-#[test]
 fn a_malformed_decision_is_escalated() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -1043,7 +1025,6 @@ fn a_malformed_decision_is_escalated() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     let host = RecoveryHost::new([("setup", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let run = run(&pipeline(false), &host, None);
@@ -1054,7 +1035,6 @@ fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn failed_recovery_dispatch_is_injected_before_final_recovery() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -1079,7 +1059,6 @@ fn failed_recovery_dispatch_is_injected_before_final_recovery() {
     assert_eq!(input["log_tail"], "this run's failure log");
 }
 
-#[test]
 fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
     let oversized = format!("start:{}:end", "界".repeat(100_000));
     let mut host = RecoveryHost::new([
@@ -1155,7 +1134,6 @@ fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
     assert!(!log.contains("foreign-log"));
 }
 
-#[test]
 fn final_recovery_escalates_instead_of_dropping_records_that_cannot_fit() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let events = (0..500)
@@ -1190,7 +1168,6 @@ fn final_recovery_escalates_instead_of_dropping_records_that_cannot_fit() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
     let host = RecoveryHost::new([
         (
@@ -1301,7 +1278,6 @@ fn old_conflict_resume() -> PipelineState {
 /// or expose `failed_only` to a template before the step runs. This one shows
 /// the same exclusion after final-recovery invalidation, on the output the
 /// next step renders.
-#[test]
 fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
     enum Latest {
         Newer(RecoverableVcsConflict),
@@ -1415,4 +1391,136 @@ fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
             "{name}: the next step's template does not see the failed field"
         );
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_resume_reruns_from_the_named_step_and_the_run_completes",
+                a_resume_reruns_from_the_named_step_and_the_run_completes,
+            ),
+            (
+                "resume_context_is_opaque_when_the_target_inherits_job_input",
+                resume_context_is_opaque_when_the_target_inherits_job_input,
+            ),
+            (
+                "a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart",
+                a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart,
+            ),
+            (
+                "an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id",
+                an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id,
+            ),
+            (
+                "an_oversized_refused_output_reaches_the_resumed_implementer_bounded",
+                an_oversized_refused_output_reaches_the_resumed_implementer_bounded,
+            ),
+            (
+                "a_settling_decision_ends_the_run_without_the_failure_handoff",
+                a_settling_decision_ends_the_run_without_the_failure_handoff,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_escalation_still_runs_the_failure_handoff",
+                an_escalation_still_runs_the_failure_handoff,
+            ),
+            (
+                "an_error_that_skips_step_recovery_still_reaches_final_recovery",
+                an_error_that_skips_step_recovery_still_reaches_final_recovery,
+            ),
+            (
+                "step_recovery_runs_first_and_final_recovery_only_once_it_is_spent",
+                step_recovery_runs_first_and_final_recovery_only_once_it_is_spent,
+            ),
+            (
+                "final_recovery_runs_at_most_once_per_run",
+                final_recovery_runs_at_most_once_per_run,
+            ),
+            (
+                "a_run_resumed_after_a_final_recovery_resume_never_runs_it_again",
+                a_run_resumed_after_a_final_recovery_resume_never_runs_it_again,
+            ),
+            (
+                "a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision",
+                a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_provider_authentication_failure_skips_final_recovery",
+                a_provider_authentication_failure_skips_final_recovery,
+            ),
+            (
+                "an_empty_crew_pool_skips_final_recovery",
+                an_empty_crew_pool_skips_final_recovery,
+            ),
+            (
+                "a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade",
+                a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade,
+            ),
+            (
+                "a_resume_to_an_earlier_step_keeps_the_named_target",
+                a_resume_to_an_earlier_step_keeps_the_named_target,
+            ),
+            (
+                "a_resume_to_an_admission_or_nonexistent_step_is_escalated",
+                a_resume_to_an_admission_or_nonexistent_step_is_escalated,
+            ),
+            (
+                "a_malformed_decision_is_escalated",
+                a_malformed_decision_is_escalated,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_4() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_failure_before_the_worktree_exists_skips_final_recovery",
+                a_failure_before_the_worktree_exists_skips_final_recovery,
+            ),
+            (
+                "failed_recovery_dispatch_is_injected_before_final_recovery",
+                failed_recovery_dispatch_is_injected_before_final_recovery,
+            ),
+            (
+                "final_recovery_injects_only_its_runs_bounded_evidence_in_order",
+                final_recovery_injects_only_its_runs_bounded_evidence_in_order,
+            ),
+            (
+                "final_recovery_escalates_instead_of_dropping_records_that_cannot_fit",
+                final_recovery_escalates_instead_of_dropping_records_that_cannot_fit,
+            ),
+            (
+                "final_recovery_keeps_post_recovery_output_when_a_later_step_fails",
+                final_recovery_keeps_post_recovery_output_when_a_later_step_fails,
+            ),
+            (
+                "final_recovery_resume_checkpoints_the_latest_conflict_diagnostics",
+                final_recovery_resume_checkpoints_the_latest_conflict_diagnostics,
+            ),
+        ]);
+    });
 }

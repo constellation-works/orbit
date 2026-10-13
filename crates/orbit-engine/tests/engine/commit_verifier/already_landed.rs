@@ -88,7 +88,6 @@ fn claimed_action(
     (host, result)
 }
 
-#[test]
 fn claimed_commit_accepts_required_checks_with_controls_and_diagnostics() {
     let temp = tempdir().unwrap();
     init_git_repo(temp.path());
@@ -115,7 +114,6 @@ fn claimed_commit_accepts_required_checks_with_controls_and_diagnostics() {
     }
 }
 
-#[test]
 fn claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence() {
     type Mutation = fn(&mut Value, &mut Vec<(&'static str, Value)>);
     let cases: &[(&str, Mutation)] = &[
@@ -200,4 +198,21 @@ fn claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence() {
         );
         assert_eq!(git_head(temp.path()), head);
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn claimed_evidence_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "claimed_evidence_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "claimed_commit_accepts_required_checks_with_controls_and_diagnostics",
+                claimed_commit_accepts_required_checks_with_controls_and_diagnostics,
+            ),
+            (
+                "claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence",
+                claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence,
+            ),
+        ]);
+    });
 }

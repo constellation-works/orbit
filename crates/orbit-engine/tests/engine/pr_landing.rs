@@ -312,145 +312,144 @@ fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin() {
 /// The pull-ref wait is fail-closed: anything but the known previous head with
 /// the task branch at the candidate, inside the bound, refuses and leaves the
 /// task in review without a merge request.
-#[test]
-fn previous_published_head_pull_ref_lag_refuses_unverified_or_persistent_refs() {
-    isolated(
-        "previous_published_head_pull_ref_lag_refuses_unverified_or_persistent_refs",
-        |sandbox| {
-            for case in [
-                "pull_ref_third",
-                "pull_ref_third_after_old",
-                "branch_missing",
-                "branch_at_previous",
-                "previous_unknown",
-                "previous_empty",
-                "previous_is_candidate",
-                "persistent",
-                "persistent_after_metadata",
-                "time_cap",
-                "review_mismatch",
-                "ls_remote_fails",
-            ] {
-                let fx = Fixture::new(sandbox);
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                action(
-                    &host,
-                    "pr_open",
-                    &fx.open_input(&fx.candidate, &fx.base_sha),
-                )
-                .unwrap();
-                host.set_status(TASK_ID, TaskStatus::Review);
-                let mut input = fx.republished_completion_input(&host);
-                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
-                let remote_git_dir = fx.forge.join("remote.git");
-                let mut metadata = vec![fx.candidate.clone()];
-                let mut pull_ref = vec![fx.candidate.clone()];
-                let (expected_reads, error_code) = match case {
-                    "pull_ref_third" => {
-                        pull_ref = vec![fx.base_sha.clone()];
-                        (1, "delivery_evidence_stale")
-                    }
-                    "pull_ref_third_after_old" => {
-                        pull_ref.push(fx.base_sha.clone());
-                        metadata.push(fx.candidate.clone());
-                        (2, "delivery_evidence_stale")
-                    }
-                    "branch_missing" => {
-                        git(
-                            &fx.repo,
-                            &[
-                                "--git-dir",
-                                path_str(&remote_git_dir),
-                                "update-ref",
-                                "-d",
-                                &format!("refs/heads/{BRANCH}"),
-                            ],
-                        );
-                        (1, "delivery_evidence_stale")
-                    }
-                    "branch_at_previous" => {
-                        git(
-                            &fx.repo,
-                            &[
-                                "--git-dir",
-                                path_str(&remote_git_dir),
-                                "update-ref",
-                                &format!("refs/heads/{BRANCH}"),
-                                &fx.candidate,
-                            ],
-                        );
-                        (1, "delivery_evidence_stale")
-                    }
-                    "previous_unknown" => {
-                        input
-                            .as_object_mut()
-                            .unwrap()
-                            .remove("previous_published_head_sha");
-                        (1, "delivery_evidence_stale")
-                    }
-                    "previous_empty" => {
-                        input["previous_published_head_sha"] = json!("");
-                        (1, "delivery_evidence_stale")
-                    }
-                    "previous_is_candidate" => {
-                        input["previous_published_head_sha"] = json!(candidate);
-                        (1, "delivery_evidence_stale")
-                    }
-                    "persistent" => {
-                        input["max_wait_seconds"] = json!(240);
-                        (4, "delivery_evidence_stale")
-                    }
-                    "persistent_after_metadata" => {
-                        input["max_wait_seconds"] = json!(240);
-                        metadata.push(candidate.clone());
-                        (4, "delivery_evidence_stale")
-                    }
-                    "time_cap" => {
-                        input["max_wait_seconds"] = json!(8);
-                        (2, "delivery_evidence_stale")
-                    }
-                    "review_mismatch" => {
-                        metadata = vec![candidate.clone()];
-                        input["reviewed_head_sha"] = json!(fx.candidate);
-                        (1, "review_gate_stale")
-                    }
-                    "ls_remote_fails" => {
-                        git(
-                            &fx.repo,
-                            &[
-                                "remote",
-                                "set-url",
-                                "origin",
-                                "/nonexistent/orbit-remote.git",
-                            ],
-                        );
-                        (1, "delivery_evidence_stale")
-                    }
-                    _ => unreachable!(),
-                };
-                fx.script_heads(
-                    &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
-                    Some(&fx.candidate),
-                );
-                fs::write(fx.forge.join("remote-heads"), pull_ref.join("\n") + "\n").unwrap();
-                let before = fx.status_reads();
+fn pull_ref_refusal_rows(test: &str, selected: &[&str]) {
+    isolated(test, |sandbox| {
+        for case in [
+            "pull_ref_third",
+            "pull_ref_third_after_old",
+            "branch_missing",
+            "branch_at_previous",
+            "previous_unknown",
+            "previous_empty",
+            "previous_is_candidate",
+            "persistent",
+            "persistent_after_metadata",
+            "time_cap",
+            "review_mismatch",
+            "ls_remote_fails",
+        ]
+        .into_iter()
+        .filter(|case| selected.contains(case))
+        {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .unwrap();
+            host.set_status(TASK_ID, TaskStatus::Review);
+            let mut input = fx.republished_completion_input(&host);
+            let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+            let remote_git_dir = fx.forge.join("remote.git");
+            let mut metadata = vec![fx.candidate.clone()];
+            let mut pull_ref = vec![fx.candidate.clone()];
+            let (expected_reads, error_code) = match case {
+                "pull_ref_third" => {
+                    pull_ref = vec![fx.base_sha.clone()];
+                    (1, "delivery_evidence_stale")
+                }
+                "pull_ref_third_after_old" => {
+                    pull_ref.push(fx.base_sha.clone());
+                    metadata.push(fx.candidate.clone());
+                    (2, "delivery_evidence_stale")
+                }
+                "branch_missing" => {
+                    git(
+                        &fx.repo,
+                        &[
+                            "--git-dir",
+                            path_str(&remote_git_dir),
+                            "update-ref",
+                            "-d",
+                            &format!("refs/heads/{BRANCH}"),
+                        ],
+                    );
+                    (1, "delivery_evidence_stale")
+                }
+                "branch_at_previous" => {
+                    git(
+                        &fx.repo,
+                        &[
+                            "--git-dir",
+                            path_str(&remote_git_dir),
+                            "update-ref",
+                            &format!("refs/heads/{BRANCH}"),
+                            &fx.candidate,
+                        ],
+                    );
+                    (1, "delivery_evidence_stale")
+                }
+                "previous_unknown" => {
+                    input
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("previous_published_head_sha");
+                    (1, "delivery_evidence_stale")
+                }
+                "previous_empty" => {
+                    input["previous_published_head_sha"] = json!("");
+                    (1, "delivery_evidence_stale")
+                }
+                "previous_is_candidate" => {
+                    input["previous_published_head_sha"] = json!(candidate);
+                    (1, "delivery_evidence_stale")
+                }
+                "persistent" => {
+                    input["max_wait_seconds"] = json!(240);
+                    (4, "delivery_evidence_stale")
+                }
+                "persistent_after_metadata" => {
+                    input["max_wait_seconds"] = json!(240);
+                    metadata.push(candidate.clone());
+                    (4, "delivery_evidence_stale")
+                }
+                "time_cap" => {
+                    input["max_wait_seconds"] = json!(8);
+                    (2, "delivery_evidence_stale")
+                }
+                "review_mismatch" => {
+                    metadata = vec![candidate.clone()];
+                    input["reviewed_head_sha"] = json!(fx.candidate);
+                    (1, "review_gate_stale")
+                }
+                "ls_remote_fails" => {
+                    git(
+                        &fx.repo,
+                        &[
+                            "remote",
+                            "set-url",
+                            "origin",
+                            "/nonexistent/orbit-remote.git",
+                        ],
+                    );
+                    (1, "delivery_evidence_stale")
+                }
+                _ => unreachable!(),
+            };
+            fx.script_heads(
+                &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
+                Some(&fx.candidate),
+            );
+            fs::write(fx.forge.join("remote-heads"), pull_ref.join("\n") + "\n").unwrap();
+            let before = fx.status_reads();
 
-                let error = action(&host, "pr_complete", &input)
-                    .expect_err("an unverified pull ref cannot authorize delivery");
+            let error = action(&host, "pr_complete", &input)
+                .expect_err("an unverified pull ref cannot authorize delivery");
 
-                assert!(error.to_string().contains(error_code), "{case}: {error}");
-                assert_eq!(
-                    fx.status_reads() - before,
-                    expected_reads,
-                    "{case}: bounded reads"
-                );
-                assert!(fx.merge_requests().is_empty(), "{case}: no merge request");
-                assert!(host.landings().is_empty(), "{case}: no review landing");
-                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
-                assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
-            }
-        },
-    );
+            assert!(error.to_string().contains(error_code), "{case}: {error}");
+            assert_eq!(
+                fx.status_reads() - before,
+                expected_reads,
+                "{case}: bounded reads"
+            );
+            assert!(fx.merge_requests().is_empty(), "{case}: no merge request");
+            assert!(host.landings().is_empty(), "{case}: no review landing");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+            assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
+        }
+    });
 }
 
 /// An in-run conflict repair retains the head it replaces even without an
@@ -1768,7 +1767,6 @@ fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
 /// Promotion records the published PR's page with its number, so the task
 /// links the pull request a reviewer must read. A provider URL that is not an
 /// https page is dropped rather than failing the promotion.
-#[test]
 fn pr_promote_records_the_pull_request_page_with_its_number() {
     isolated(
         "pr_promote_records_the_pull_request_page_with_its_number",
@@ -1913,7 +1911,6 @@ fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
 /// [ORB-13989] The settled review's "Review fixes" section is published with
 /// the PR it explains: appended to a body the run supplied, and to the body
 /// Orbit generates when none was supplied.
-#[test]
 fn pr_open_appends_the_review_fixes_section_to_the_published_body() {
     isolated(
         "pr_open_appends_the_review_fixes_section_to_the_published_body",
@@ -2144,7 +2141,6 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
 /// A missing validation tool is refused with the full searched PATH,
 /// both in the action error and the durable command log [ORB-13963], even
 /// when the resolved PATH differs from the launcher or exceeds 1024 bytes.
-#[test]
 fn missing_required_validation_tool_reports_its_search_path() {
     isolated(
         "missing_required_validation_tool_reports_its_search_path",
@@ -2185,7 +2181,6 @@ const PROFILE_TOOL: &str = "orbit-profile-lint-13987";
 /// A drain launched from a minimal PATH still validates with the owner's
 /// login-shell toolchain, and the log records that the login shell decided
 /// PATH [ORB-13987].
-#[test]
 fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain() {
     isolated(
         "validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain",
@@ -2229,7 +2224,6 @@ fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain() {
 /// Without the login shell's PATH the same tool is missing. That failure is
 /// the environment's, not the candidate's: the typed marker carries the PATH
 /// and the tool, the log classifies it, and nothing is published.
-#[test]
 fn a_missing_validation_tool_is_an_environment_failure() {
     isolated(
         "a_missing_validation_tool_is_an_environment_failure",
@@ -3451,7 +3445,6 @@ fn run_shipped_implementation(
 /// An implementer blocker arrives before commit, so the worktree may be dirty.
 /// The handoff blocks the task with the kind, leaves the uncommitted file and
 /// the head where they are, and opens no `[BLOCKED]` PR.
-#[test]
 fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr() {
     isolated(
         "an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr",
@@ -3520,7 +3513,6 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr() {
 /// handoff commits what the agent left, so the next run can resume it, but
 /// pushes nothing, opens no `[BLOCKED]` PR and leaves the status alone: run
 /// finalization holds the task in the backlog for another crew.
-#[test]
 fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
     isolated(
         "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write",
@@ -3589,7 +3581,6 @@ fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
 /// left is committed and carried to its durable ref, no PR is opened, the
 /// task is not blocked, and `candidate_resume` resumes the decision. Run
 /// finalization returns the task to the backlog.
-#[test]
 fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
     isolated(
         "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task",
@@ -3652,7 +3643,6 @@ fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
 /// mid-validation. Nothing judged its candidate: the handoff commits what it
 /// left, carries it to its durable ref and opens no PR. The cancellation, not
 /// the handoff, returns the task to the backlog.
-#[test]
 fn a_child_its_parent_stopped_waiting_for_holds_its_candidate() {
     isolated(
         "a_child_its_parent_stopped_waiting_for_holds_its_candidate",
@@ -4232,268 +4222,262 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
 /// [ORB-15548] Shared failed tests do not waive unexecuted host coverage.
 /// Both delivery paths retain complete-output notices even when the bounded
 /// log drops them, and check declared replay counts before known-red admission.
-#[test]
-fn known_red_failures_cannot_waive_host_notices_or_replay_coverage() {
-    isolated(
-        "known_red_failures_cannot_waive_host_notices_or_replay_coverage",
-        |sandbox| {
-            let base = ["suite::broken", "suite::flaky"];
-            let cases = [
-                (
-                    "bubblewrap",
-                    Some(bwrap_notice()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "seatbelt",
-                    Some(seatbelt_notice()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "deferred",
-                    Some("DEFERRED: sandbox fixture did not run".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "skip",
-                    Some("SKIP: sandbox fixture did not run".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "skipping-colon",
-                    Some("skipping: sandbox fixture".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "skipping-space",
-                    Some("skipping sandbox fixture".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "raw-refusal",
-                    Some("bwrap: No permissions to create new namespace".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "dropped-deferral",
-                    Some(bwrap_notice()),
-                    true,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "dropped-skip",
-                    Some("SKIP: sandbox fixture did not run".to_string()),
-                    true,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "replay-with-notice",
-                    Some(bwrap_notice()),
-                    false,
-                    true,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                ("replay-zero-tests", None, false, true, Some(0), None),
-                ("replay-missing-count", None, false, true, None, None),
-                ("replay-missing-tool", None, false, true, None, None),
-                ("replay-executed", None, false, true, Some(3), None),
-            ];
-            for (case, notice, dropped, replay, tests_run, reason) in cases {
-                let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
-                let padding = if dropped {
-                    "padding line that names no failure\n".repeat(8 * 1024)
-                } else {
-                    String::new()
-                };
-                // Alternate complete stdout and stderr, including notices in
-                // the dropped middle, without depending on sandbox availability.
-                let stream = if case == "skip" || dropped {
-                    ""
-                } else {
-                    " >&2"
-                };
-                let notice_script = if dropped {
-                    "cat failing.txt\n".to_string()
-                } else {
-                    notice.as_ref().map_or_else(String::new, |notice| {
-                        format!("printf '%s\\n' '{notice}'{stream}\n")
-                    })
-                };
-                if dropped {
-                    fx.commit(
-                        "failing.txt",
-                        &format!("{padding}{}\n{padding}", notice.as_ref().unwrap()),
-                    );
-                }
-                let gate = Gate::new(sandbox);
+fn known_red_coverage_rows(test: &str, selected: &[&str]) {
+    isolated(test, |sandbox| {
+        let base = ["suite::broken", "suite::flaky"];
+        let cases = [
+            (
+                "bubblewrap",
+                Some(bwrap_notice()),
+                false,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "seatbelt",
+                Some(seatbelt_notice()),
+                false,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "deferred",
+                Some("DEFERRED: sandbox fixture did not run".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "skip",
+                Some("SKIP: sandbox fixture did not run".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "skipping-colon",
+                Some("skipping: sandbox fixture".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "skipping-space",
+                Some("skipping sandbox fixture".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "raw-refusal",
+                Some("bwrap: No permissions to create new namespace".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "dropped-deferral",
+                Some(bwrap_notice()),
+                true,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "dropped-skip",
+                Some("SKIP: sandbox fixture did not run".to_string()),
+                true,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "replay-with-notice",
+                Some(bwrap_notice()),
+                false,
+                true,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            ("replay-zero-tests", None, false, true, Some(0), None),
+            ("replay-missing-count", None, false, true, None, None),
+            ("replay-missing-tool", None, false, true, None, None),
+            ("replay-executed", None, false, true, Some(3), None),
+        ];
+        for (case, notice, dropped, replay, tests_run, reason) in
+            cases.into_iter().filter(|row| selected.contains(&row.0))
+        {
+            let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
+            let padding = if dropped {
+                "padding line that names no failure\n".repeat(8 * 1024)
+            } else {
+                String::new()
+            };
+            // Alternate complete stdout and stderr, including notices in
+            // the dropped middle, without depending on sandbox availability.
+            let stream = if case == "skip" || dropped {
+                ""
+            } else {
+                " >&2"
+            };
+            let notice_script = if dropped {
+                "cat failing.txt\n".to_string()
+            } else {
+                notice.as_ref().map_or_else(String::new, |notice| {
+                    format!("printf '%s\\n' '{notice}'{stream}\n")
+                })
+            };
+            if dropped {
+                fx.commit(
+                    "failing.txt",
+                    &format!("{padding}{}\n{padding}", notice.as_ref().unwrap()),
+                );
+            }
+            let gate = Gate::new(sandbox);
+            gate.set(&format!(
+                "{notice_script}{}\n{}\nexit 2",
+                nextest_failures(&base)
+                    .lines()
+                    .map(|line| format!("echo '{line}'\n"))
+                    .collect::<String>(),
+                tests_run.map_or_else(String::new, reported_tests),
+            ));
+            if case == "replay-missing-tool" {
                 gate.set(&format!(
-                    "{notice_script}{}\n{}\nexit 2",
-                    nextest_failures(&base)
-                        .lines()
-                        .map(|line| format!("echo '{line}'\n"))
-                        .collect::<String>(),
-                    tests_run.map_or_else(String::new, reported_tests),
+                    "'{}'",
+                    sandbox.join("missing-required-tool").display()
                 ));
+            }
+            let command = gate.command();
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[&command]);
+            let record = deferral(&fx, &command);
+            if replay {
+                host.attach_task_validation_log(
+                    TASK_ID,
+                    RUN_ID,
+                    DEFERRED_SANDBOX_ARTIFACT,
+                    serde_json::to_vec(&json!({
+                        "schema_version": 1,
+                        "run_id": RUN_ID,
+                        "deferred": record,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            let outcome = action(&host, "candidate_validate", &fx.validate_input());
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(
+                log["exit_code"],
                 if case == "replay-missing-tool" {
-                    gate.set(&format!(
-                        "'{}'",
-                        sandbox.join("missing-required-tool").display()
-                    ));
-                }
-                let command = gate.command();
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                host.require_commands(&[&command]);
-                let record = deferral(&fx, &command);
-                if replay {
-                    host.attach_task_validation_log(
-                        TASK_ID,
-                        RUN_ID,
-                        DEFERRED_SANDBOX_ARTIFACT,
-                        serde_json::to_vec(&json!({
-                            "schema_version": 1,
-                            "run_id": RUN_ID,
-                            "deferred": record,
-                        }))
-                        .unwrap(),
-                    )
-                    .unwrap();
-                }
-                let outcome = action(&host, "candidate_validate", &fx.validate_input());
-                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                    127
+                } else {
+                    2
+                },
+                "{case}"
+            );
+            assert_eq!(log["deferred_sandbox_replay"], replay, "{case}");
+            let mut claim_input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            if replay {
+                claim_input["implementation"] = json!({ "deferred_sandbox_validation": record });
+            }
+            let claim = action(&host, "claim_validate", &claim_input);
+            if notice.is_none() && tests_run == Some(3) {
                 assert_eq!(
-                    log["exit_code"],
-                    if case == "replay-missing-tool" {
-                        127
-                    } else {
-                        2
-                    },
+                    outcome.unwrap()["decision"],
+                    "passed_with_known_red",
                     "{case}"
                 );
-                assert_eq!(log["deferred_sandbox_replay"], replay, "{case}");
-                let mut claim_input = json!({
-                    "workspace_path": fx.repo,
-                    "base_sync": "local",
-                    "base_sha": fx.base_sha,
-                });
-                if replay {
-                    claim_input["implementation"] =
-                        json!({ "deferred_sandbox_validation": record });
-                }
-                let claim = action(&host, "claim_validate", &claim_input);
-                if notice.is_none() && tests_run == Some(3) {
-                    assert_eq!(
-                        outcome.unwrap()["decision"],
-                        "passed_with_known_red",
-                        "{case}"
-                    );
-                    assert_eq!(
-                        claim.unwrap()["decision"],
-                        "passed_with_known_red",
-                        "{case}"
-                    );
-                    continue;
-                }
-                let failure = outcome
-                    .expect_err(&format!("{case}: unresolved coverage is refused"))
-                    .to_string();
-                let claim_failure = claim
-                    .expect_err(&format!("{case}: claimed coverage is refused"))
-                    .to_string();
-                if let Some(reason) = reason {
-                    assert!(
-                        is_baseline_red_failure(None, Some(&failure)),
-                        "{case}: {failure}"
-                    );
-                    assert!(
-                        is_baseline_red_failure(None, Some(&claim_failure)),
-                        "{case}: {claim_failure}"
-                    );
-                    assert_eq!(log["host_output_refusal"]["reason"], reason, "{case}");
-                    assert_eq!(
-                        log["host_output_refusal"]["detail"],
-                        notice.as_deref().unwrap(),
-                        "{case}"
-                    );
-                    let claim_log: Value = serde_json::from_slice(
+                assert_eq!(
+                    claim.unwrap()["decision"],
+                    "passed_with_known_red",
+                    "{case}"
+                );
+                continue;
+            }
+            let failure = outcome
+                .expect_err(&format!("{case}: unresolved coverage is refused"))
+                .to_string();
+            let claim_failure = claim
+                .expect_err(&format!("{case}: claimed coverage is refused"))
+                .to_string();
+            if let Some(reason) = reason {
+                assert!(
+                    is_baseline_red_failure(None, Some(&failure)),
+                    "{case}: {failure}"
+                );
+                assert!(
+                    is_baseline_red_failure(None, Some(&claim_failure)),
+                    "{case}: {claim_failure}"
+                );
+                assert_eq!(log["host_output_refusal"]["reason"], reason, "{case}");
+                assert_eq!(
+                    log["host_output_refusal"]["detail"],
+                    notice.as_deref().unwrap(),
+                    "{case}"
+                );
+                let claim_log: Value = serde_json::from_slice(
                         &host.claim_log_contents.lock().unwrap()
                             ["validation/claim-landing/0.failed.json"],
                     )
                     .unwrap();
-                    assert_eq!(
-                        claim_log["host_output_refusal"], log["host_output_refusal"],
-                        "{case}"
-                    );
-                    if dropped {
-                        let captured = log["output"].as_str().unwrap();
-                        assert!(
-                            captured.contains("truncated")
-                                && !captured.contains(notice.as_deref().unwrap()),
-                            "{case}: the retained refusal comes from the dropped middle"
-                        );
-                    }
-                } else if case == "replay-missing-tool" {
+                assert_eq!(
+                    claim_log["host_output_refusal"], log["host_output_refusal"],
+                    "{case}"
+                );
+                if dropped {
+                    let captured = log["output"].as_str().unwrap();
                     assert!(
-                        orbit_types::workflow::is_validation_environment_failure(
-                            None,
-                            Some(&failure)
-                        ),
-                        "{case}: {failure}"
-                    );
-                    assert!(
-                        orbit_types::workflow::is_validation_environment_failure(
-                            None,
-                            Some(&claim_failure)
-                        ),
-                        "{case}: {claim_failure}"
-                    );
-                    assert_eq!(log["failure_kind"], "environment", "{case}");
-                } else {
-                    assert!(failure.contains("replayed nothing"), "{case}: {failure}");
-                    assert!(
-                        claim_failure.contains("replayed nothing"),
-                        "{case}: {claim_failure}"
+                        captured.contains("truncated")
+                            && !captured.contains(notice.as_deref().unwrap()),
+                        "{case}: the retained refusal comes from the dropped middle"
                     );
                 }
-                assert!(log["known_red"].is_null(), "{case}: no known-red admission");
+            } else if case == "replay-missing-tool" {
                 assert!(
-                    host.history(TASK_ID)
-                        .iter()
-                        .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
-                    "{case}: no known-red history"
+                    orbit_types::workflow::is_validation_environment_failure(None, Some(&failure)),
+                    "{case}: {failure}"
                 );
                 assert!(
-                    host.handoffs.lock().unwrap().is_empty(),
-                    "{case}: no publication"
+                    orbit_types::workflow::is_validation_environment_failure(
+                        None,
+                        Some(&claim_failure)
+                    ),
+                    "{case}: {claim_failure}"
+                );
+                assert_eq!(log["failure_kind"], "environment", "{case}");
+            } else {
+                assert!(failure.contains("replayed nothing"), "{case}: {failure}");
+                assert!(
+                    claim_failure.contains("replayed nothing"),
+                    "{case}: {claim_failure}"
                 );
             }
-        },
-    );
+            assert!(log["known_red"].is_null(), "{case}: no known-red admission");
+            assert!(
+                host.history(TASK_ID)
+                    .iter()
+                    .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
+                "{case}: no known-red history"
+            );
+            assert!(
+                host.handoffs.lock().unwrap().is_empty(),
+                "{case}: no publication"
+            );
+        }
+    });
 }
 
 /// [ORB-15427] A claimed leaf applies the owner's known-red rule. A
@@ -4506,10 +4490,9 @@ fn known_red_failures_cannot_waive_host_notices_or_replay_coverage() {
 /// it reruns the base, confirms the report. A candidate failing a test the
 /// base does not requires candidate repair, and the owner's check refuses
 /// the same report if a leaf made it anyway.
-#[test]
-fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks() {
+fn claimed_known_red_rows(test: &str, selected: &[&str]) {
     isolated(
-        "a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks",
+        test,
         |sandbox| {
             let named = |tests: &[&str]| {
                 tests
@@ -4519,7 +4502,9 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                     .into_iter()
                     .collect::<Vec<_>>()
             };
-            for &(case, base, candidate_tests, known_red) in KNOWN_RED_CASES {
+            for &(case, base, candidate_tests, known_red) in
+                KNOWN_RED_CASES.iter().filter(|row| selected.contains(&row.0))
+            {
                 let fx = Fixture::with_red_tests(sandbox, base, candidate_tests);
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 host.require_commands(&[RED_TESTS]);
@@ -5366,7 +5351,6 @@ fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
 /// Without `workflow.required_validation_commands` the step changes nothing:
 /// no command runs, no evidence is attached, and even a checkout that would be
 /// refused is passed through as today.
-#[test]
 fn required_validation_without_commands_is_a_no_op() {
     isolated(
         "required_validation_without_commands_is_a_no_op",
@@ -5389,7 +5373,6 @@ fn required_validation_without_commands_is_a_no_op() {
 /// hands off: `claim_validate` pins the candidate and records the no-op, and
 /// `claim_handoff` records a handoff with no validation logs whose summary
 /// does not claim a check passed.
-#[test]
 fn claimed_validation_without_commands_is_a_recorded_no_op() {
     isolated(
         "claimed_validation_without_commands_is_a_recorded_no_op",
@@ -5441,7 +5424,6 @@ fn claimed_validation_without_commands_is_a_recorded_no_op() {
 /// for the exact candidate, and a leaf without it reports `not_required`
 /// rather than inventing a review. Evidence for another head is refused
 /// before anything is recorded [ORB-13895].
-#[test]
 fn claimed_handoff_carries_before_pr_evidence_only_for_its_candidate() {
     isolated(
         "claimed_handoff_carries_before_pr_evidence_only_for_its_candidate",
@@ -5497,7 +5479,6 @@ fn claimed_handoff_carries_before_pr_evidence_only_for_its_candidate() {
 
 /// The same leaf on an owner that does require a command still refuses a
 /// handoff that carries none of its logs.
-#[test]
 fn claimed_handoff_without_logs_is_refused_when_commands_are_required() {
     isolated(
         "claimed_handoff_without_logs_is_refused_when_commands_are_required",
@@ -5528,7 +5509,6 @@ fn claimed_handoff_without_logs_is_refused_when_commands_are_required() {
 /// every review attempt the run admitted, so none stays open, and keeps the
 /// published PR and the task in review. A bundle's handoff, which refuses to
 /// reconcile more than one task, still closes its attempts first.
-#[test]
 fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
     isolated(
         "a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle",
@@ -5702,7 +5682,6 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
     );
 }
 
-#[test]
 fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
     isolated(
         "a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking",
@@ -5728,7 +5707,6 @@ fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
     );
 }
 
-#[test]
 fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
     isolated(
         "an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks",
@@ -5803,7 +5781,6 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
 /// ORB-14651: a requeued evidence-held task is admitted again by a later run.
 /// Admission refuses for the still-missing evidence before it reserves an
 /// attempt, so the handoff must keep the hold rather than escalate.
-#[test]
 fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
     isolated(
         "an_admission_refusal_for_held_evidence_stays_held_not_escalated",
@@ -6206,6 +6183,28 @@ struct Fixture {
 impl Fixture {
     /// A fresh repository and forge, made the active forge for `gh`.
     fn new(sandbox: &Path) -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(|| Self::fresh(sandbox));
+            let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+            git_fixture::copy_template(seed._root.path(), root.path());
+            let repo = root.path().join("repo").canonicalize().unwrap();
+            let forge = root.path().join("forge");
+            fs::write(sandbox.join("active-forge"), path_str(&forge)).unwrap();
+            Self {
+                _root: root,
+                repo,
+                forge,
+                base_sha: seed.base_sha.clone(),
+                candidate: seed.candidate.clone(),
+            }
+        })
+    }
+
+    fn fresh(sandbox: &Path) -> Self {
         let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
         let forge = root.path().join("forge");
         let remote = forge.join("remote.git");
@@ -7484,9 +7483,9 @@ esac
 /// Run `body` in a copy of this test binary whose `PATH` starts with the
 /// substitute `gh`, and fail if it fails or outlives [`CHILD_DEADLINE`].
 fn isolated(test: &str, body: impl FnOnce(&Path)) {
-    if std::env::var(CHILD_ENV).as_deref() == Ok(test) {
+    if std::env::var_os(CHILD_ENV).is_some() {
         let sandbox = PathBuf::from(std::env::var_os(SANDBOX_ENV).expect("sandbox path"));
-        body(&sandbox);
+        orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(&sandbox));
         return;
     }
     let sandbox = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
@@ -7545,5 +7544,197 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
         "{test} failed in its isolated child ({}):\n{stdout}\n{}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validation_environment_contracts() {
+    isolated("validation_environment_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "missing_required_validation_tool_reports_its_search_path",
+                missing_required_validation_tool_reports_its_search_path,
+            ),
+            (
+                "validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain",
+                validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain,
+            ),
+            (
+                "a_missing_validation_tool_is_an_environment_failure",
+                a_missing_validation_tool_is_an_environment_failure,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn empty_validation_and_handoff_contracts() {
+    isolated("empty_validation_and_handoff_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "required_validation_without_commands_is_a_no_op",
+                required_validation_without_commands_is_a_no_op,
+            ),
+            (
+                "claimed_validation_without_commands_is_a_recorded_no_op",
+                claimed_validation_without_commands_is_a_recorded_no_op,
+            ),
+            (
+                "claimed_handoff_carries_before_pr_evidence_only_for_its_candidate",
+                claimed_handoff_carries_before_pr_evidence_only_for_its_candidate,
+            ),
+            (
+                "claimed_handoff_without_logs_is_refused_when_commands_are_required",
+                claimed_handoff_without_logs_is_refused_when_commands_are_required,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn failure_handoff_contracts() {
+    isolated("failure_handoff_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle",
+                a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle,
+            ),
+            (
+                "a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking",
+                a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking,
+            ),
+            (
+                "an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks",
+                an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks,
+            ),
+            (
+                "an_admission_refusal_for_held_evidence_stays_held_not_escalated",
+                an_admission_refusal_for_held_evidence_stays_held_not_escalated,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn implementation_handoff_contracts() {
+    isolated("implementation_handoff_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr",
+                an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr,
+            ),
+            (
+                "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write",
+                a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write,
+            ),
+            (
+                "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task",
+                an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task,
+            ),
+            (
+                "a_child_its_parent_stopped_waiting_for_holds_its_candidate",
+                a_child_its_parent_stopped_waiting_for_holds_its_candidate,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn pr_body_and_promotion_contracts() {
+    isolated("pr_body_and_promotion_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "pr_promote_records_the_pull_request_page_with_its_number",
+                pr_promote_records_the_pull_request_page_with_its_number,
+            ),
+            (
+                "pr_open_appends_the_review_fixes_section_to_the_published_body",
+                pr_open_appends_the_review_fixes_section_to_the_published_body,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn known_red_sandbox_notices() {
+    known_red_coverage_rows(
+        "known_red_sandbox_notices",
+        &[
+            "bubblewrap",
+            "seatbelt",
+            "deferred",
+            "skip",
+            "skipping-colon",
+        ],
+    );
+}
+
+#[test]
+fn known_red_dropped_notices() {
+    known_red_coverage_rows(
+        "known_red_dropped_notices",
+        &[
+            "skipping-space",
+            "raw-refusal",
+            "dropped-deferral",
+            "dropped-skip",
+        ],
+    );
+}
+
+#[test]
+fn known_red_replay_coverage() {
+    known_red_coverage_rows(
+        "known_red_replay_coverage",
+        &[
+            "replay-with-notice",
+            "replay-zero-tests",
+            "replay-missing-count",
+            "replay-missing-tool",
+            "replay-executed",
+        ],
+    );
+}
+
+#[test]
+fn pull_ref_identity_refusals() {
+    pull_ref_refusal_rows(
+        "pull_ref_identity_refusals",
+        &[
+            "pull_ref_third",
+            "pull_ref_third_after_old",
+            "branch_missing",
+            "branch_at_previous",
+            "previous_unknown",
+            "previous_empty",
+        ],
+    );
+}
+
+#[test]
+fn pull_ref_wait_and_review_refusals() {
+    pull_ref_refusal_rows(
+        "pull_ref_wait_and_review_refusals",
+        &[
+            "previous_is_candidate",
+            "persistent",
+            "persistent_after_metadata",
+            "time_cap",
+            "review_mismatch",
+            "ls_remote_fails",
+        ],
+    );
+}
+
+#[test]
+fn claimed_known_red_equal_and_subset() {
+    claimed_known_red_rows("claimed_known_red_equal_and_subset", &["equal", "subset"]);
+}
+
+#[test]
+fn claimed_known_red_superset_and_disjoint() {
+    claimed_known_red_rows(
+        "claimed_known_red_superset_and_disjoint",
+        &["shared-plus-new", "disjoint-six-vs-one", "candidate-unknown", "base-unknown", "both-unknown"],
     );
 }

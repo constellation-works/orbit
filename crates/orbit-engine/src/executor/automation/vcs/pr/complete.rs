@@ -64,8 +64,8 @@
 //! SHA. At most [`BASE_MODIFIED_MERGE_ATTEMPTS`] requests are made, within the
 //! unchanged wait budget.
 
+use super::super::retry_wait::sleep;
 use std::path::Path;
-use std::thread::sleep;
 use std::time::Duration;
 
 use orbit_common::OrbitError;

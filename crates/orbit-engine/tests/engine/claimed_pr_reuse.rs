@@ -44,7 +44,6 @@ const PRIOR_PR: &str = "41";
 /// under a lease on it, and `pr_open` reuses #41 rather than opening another.
 /// The earlier claim's retained worktree keeps its checkout and commits on a
 /// branch renamed aside.
-#[test]
 fn a_resumed_published_candidate_republishes_through_its_open_pull_request() {
     isolated(
         "a_resumed_published_candidate_republishes_through_its_open_pull_request",
@@ -98,7 +97,6 @@ fn a_resumed_published_candidate_republishes_through_its_open_pull_request() {
 /// holds a commit that was never published, which is never moved. The leaf
 /// publishes on its own branch, and `pr_open` closes #41 with a comment
 /// naming the pull request that replaced it.
-#[test]
 fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
     isolated(
         "an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one",
@@ -158,7 +156,6 @@ fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
 /// advanced remote and `git_rebase` reports a fresh rewrite checkpoint that
 /// names it, which the ordinary push would accept. The adopted lease is on
 /// the published head, so the push refuses and the newer commit stays.
-#[test]
 fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
     isolated(
         "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
@@ -190,7 +187,6 @@ fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
 
 /// A branch deleted on the remote since the published head is not recreated
 /// by the resumed candidate.
-#[test]
 fn a_deleted_adopted_branch_is_not_recreated() {
     isolated("a_deleted_adopted_branch_is_not_recreated", |sandbox| {
         let fx = Fixture::new(sandbox);
@@ -217,7 +213,6 @@ fn a_deleted_adopted_branch_is_not_recreated() {
 
 /// A remote still at the published head is replaced under the lease on it
 /// even when the base moved, and a retried push finds its own head published.
-#[test]
 fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
     isolated(
         "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
@@ -246,7 +241,6 @@ fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
 
 /// A remote still at the published head fast-forwards under the lease on it,
 /// and a retried push finds the candidate published.
-#[test]
 fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
     isolated(
         "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
@@ -271,7 +265,6 @@ fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
 /// The adopted branch is deleted after the engine observed it, before its
 /// fast-forward push starts. The lease refuses the push, and the branch stays
 /// deleted.
-#[test]
 fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation() {
     isolated(
         "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
@@ -296,7 +289,6 @@ fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation(
 /// The adopted branch is rewound to an ancestor of the local candidate after
 /// the engine observed it, before its fast-forward push starts. The lease
 /// refuses the push, and the rewound head survives.
-#[test]
 fn a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation() {
     isolated(
         "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
@@ -323,6 +315,7 @@ enum Change {
 }
 
 struct Fixture {
+    _root: tempfile::TempDir,
     forge: PathBuf,
     repo: PathBuf,
     /// The earlier claim's retained worktree.
@@ -337,12 +330,13 @@ struct Fixture {
 
 impl Fixture {
     fn new(sandbox: &Path) -> Self {
-        let forge = sandbox.join("forge");
+        let root = tempfile::tempdir_in(sandbox).unwrap();
+        let forge = root.path().join("forge");
         let remote = forge.join("remote.git");
-        let repo = sandbox.join("repo");
+        let repo = root.path().join("repo");
         fs::create_dir_all(forge.join("prs")).unwrap();
         fs::create_dir_all(&repo).unwrap();
-        git(sandbox, &["init", "-q", "--bare", path_str(&remote)]);
+        git(root.path(), &["init", "-q", "--bare", path_str(&remote)]);
         git_fixture::init(&repo);
         let repo = repo.canonicalize().unwrap();
         git(&repo, &["remote", "add", "origin", path_str(&remote)]);
@@ -358,7 +352,7 @@ impl Fixture {
         git(&repo, &["push", "-q", "origin", BASE]);
 
         // The earlier claim: its candidate, pushed, with #41 open on it.
-        let earlier = sandbox.join("earlier");
+        let earlier = root.path().join("earlier");
         git(
             &repo,
             &[
@@ -391,7 +385,7 @@ impl Fixture {
         git(&repo, &["push", "-q", "origin", BASE]);
         let base_sha = git(&repo, &["rev-parse", BASE]);
 
-        let claim = sandbox.join("claim");
+        let claim = root.path().join("claim");
         git(
             &repo,
             &["worktree", "add", "-q", "-b", OURS, path_str(&claim), BASE],
@@ -404,10 +398,8 @@ impl Fixture {
         fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
 
         // The real Git is found before the substitute shadows it on `PATH`.
-        let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .find_map(|dir| fs::canonicalize(dir.join("git")).ok())
-            .expect("git on PATH");
-        let change_file = sandbox.join("push-change");
+        let real_git = PathBuf::from(std::env::var_os("ORBIT_CLAIMED_PR_REUSE_REAL_GIT").unwrap());
+        let change_file = root.path().join("push-change");
         let git_shim = sandbox.join("bin").join("git");
         fs::write(
             &git_shim,
@@ -420,6 +412,7 @@ impl Fixture {
         .unwrap();
         fs::set_permissions(&git_shim, fs::Permissions::from_mode(0o755)).unwrap();
         Self {
+            _root: root,
             forge,
             repo,
             earlier,
@@ -784,7 +777,7 @@ exec "$git" "$@"
 /// Run `body` in a copy of this test binary whose `PATH` starts with the
 /// substitute `gh`, with disposable `$HOME` and no inherited authority.
 fn isolated(test: &str, body: impl FnOnce(&Path)) {
-    if std::env::var(CHILD_ENV).as_deref() == Ok(test) {
+    if std::env::var_os(CHILD_ENV).is_some() {
         let sandbox = PathBuf::from(std::env::var_os(SANDBOX_ENV).expect("sandbox path"));
         body(&sandbox);
         return;
@@ -800,6 +793,9 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
     path.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .find_map(|dir| fs::canonicalize(dir.join("git")).ok())
+        .expect("git on PATH");
     let qualified = format!(
         "{}::{test}",
         module_path!().split_once("::").expect("test module").1
@@ -818,6 +814,7 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
     command
         .args([&qualified, "--exact", "--nocapture", "--test-threads=1"])
         .current_dir(sandbox.path())
+        .env("ORBIT_CLAIMED_PR_REUSE_REAL_GIT", real_git)
         .env(CHILD_ENV, test)
         .env(SANDBOX_ENV, sandbox.path())
         .env("PATH", std::env::join_paths(path).unwrap())
@@ -828,4 +825,54 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
         .env("GIT_TERMINAL_PROMPT", "0");
     let output = test_env::run_child_test(&mut command, &qualified, sandbox.path());
     test_env::assert_child_test_passed(&qualified, output.status, output.stdout, output.stderr);
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn published_lease_contracts_1() {
+    isolated("published_lease_contracts_1", |_| {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_resumed_published_candidate_republishes_through_its_open_pull_request",
+                a_resumed_published_candidate_republishes_through_its_open_pull_request,
+            ),
+            (
+                "an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one",
+                an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one,
+            ),
+            (
+                "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
+                an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase,
+            ),
+            (
+                "a_deleted_adopted_branch_is_not_recreated",
+                a_deleted_adopted_branch_is_not_recreated,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn published_lease_contracts_2() {
+    isolated("published_lease_contracts_2", |_| {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
+                an_unmoved_adopted_branch_is_replaced_after_a_base_rebase,
+            ),
+            (
+                "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
+                an_unmoved_adopted_branch_fast_forwards_under_its_published_lease,
+            ),
+            (
+                "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
+                a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation,
+            ),
+            (
+                "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
+                a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation,
+            ),
+        ]);
+    });
 }

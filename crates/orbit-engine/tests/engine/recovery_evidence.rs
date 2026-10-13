@@ -201,7 +201,6 @@ fn run(host: &Host, events: Vec<V2AuditEventKind>) -> (Value, Value) {
     (schema, attempt)
 }
 
-#[test]
 fn both_recovery_dispatches_inject_bounded_chronological_run_evidence() {
     for activity in ACTIVITIES {
         let host = Host {
@@ -246,7 +245,6 @@ fn both_recovery_dispatches_inject_bounded_chronological_run_evidence() {
     }
 }
 
-#[test]
 fn both_recovery_dispatches_distinguish_missing_logs_from_unreadable_or_oversized_evidence() {
     for activity in ACTIVITIES {
         for case in ["missing", "unreadable", "oversized"] {
@@ -290,7 +288,6 @@ fn both_recovery_dispatches_distinguish_missing_logs_from_unreadable_or_oversize
     }
 }
 
-#[test]
 fn conflict_recovery_hands_over_only_managed_sync_validation() {
     for case in [
         "no-validator",
@@ -568,4 +565,16 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             "{case}: {input}"
         );
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_evidence_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "recovery_evidence_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            ("both_recovery_dispatches_inject_bounded_chronological_run_evidence", both_recovery_dispatches_inject_bounded_chronological_run_evidence),
+            ("both_recovery_dispatches_distinguish_missing_logs_from_unreadable_or_oversized_evidence", both_recovery_dispatches_distinguish_missing_logs_from_unreadable_or_oversized_evidence),
+            ("conflict_recovery_hands_over_only_managed_sync_validation", conflict_recovery_hands_over_only_managed_sync_validation),
+        ]);
+    });
 }

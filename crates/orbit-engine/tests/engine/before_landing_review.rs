@@ -35,7 +35,6 @@ enum Outcome {
 /// An approving review: the PR is open and promoted before the reviewer
 /// starts, the pre-push gate does not apply, and completion merges exactly
 /// the published head the review settled.
-#[test]
 fn an_approved_before_landing_review_lands_the_head_it_settled() {
     let host = Host::new(Outcome::Approve, false);
     let result = run(&host, "done");
@@ -88,7 +87,6 @@ fn an_approved_before_landing_review_lands_the_head_it_settled() {
 /// A reviewer that commits a fix: that commit is revalidated against the
 /// implementation head, pushed to the PR branch under a lease on the
 /// published head, and is the head completion merges.
-#[test]
 fn a_before_landing_reviewer_fix_is_validated_pushed_under_a_lease_and_lands() {
     let host = Host::new(Outcome::Fix, false);
     let result = run(&host, "done");
@@ -136,7 +134,6 @@ fn a_before_landing_reviewer_fix_is_validated_pushed_under_a_lease_and_lands() {
 /// nothing is merged and `landing_push` does not run, and the failed step is a
 /// completion-stage one, whose failure handoff keeps the PR open and the
 /// task in review.
-#[test]
 fn a_rejected_incomplete_or_timed_out_before_landing_review_never_merges() {
     for (outcome, failed_action, reason) in [
         (
@@ -189,7 +186,6 @@ fn a_rejected_incomplete_or_timed_out_before_landing_review_never_merges() {
 
 /// A review-only run reviews the PR before handing it off, and completion
 /// does not run.
-#[test]
 fn a_review_only_run_still_reviews_the_open_pr() {
     let host = Host::new(Outcome::Approve, false);
     let result = run(&host, "review");
@@ -206,7 +202,6 @@ fn a_review_only_run_still_reviews_the_open_pr() {
 /// A DIRTY completion after a before-landing review rebases the reviewed
 /// head for a re-review instead of merging it as rebased, unreviewed
 /// content; the rebased head is reviewed, republished and merged.
-#[test]
 fn a_dirty_rebase_after_a_before_landing_review_routes_through_re_review() {
     let host = Host::new(Outcome::Approve, true);
     let result = run(&host, "done");
@@ -590,7 +585,6 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
 /// published head, `pin_validation` pins that revalidation, and the handoff
 /// carries the settled verdict as before-landing evidence. Without a fix the
 /// pre-publication validation is carried through unchanged.
-#[test]
 fn a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled() {
     for fix in [true, false] {
         let host = LeafHost {
@@ -836,4 +830,46 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
     ) -> Result<Option<u64>, OrbitError> {
         Ok(None)
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn landing_review_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "landing_review_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_approved_before_landing_review_lands_the_head_it_settled",
+                an_approved_before_landing_review_lands_the_head_it_settled,
+            ),
+            (
+                "a_before_landing_reviewer_fix_is_validated_pushed_under_a_lease_and_lands",
+                a_before_landing_reviewer_fix_is_validated_pushed_under_a_lease_and_lands,
+            ),
+            (
+                "a_rejected_incomplete_or_timed_out_before_landing_review_never_merges",
+                a_rejected_incomplete_or_timed_out_before_landing_review_never_merges,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn landing_review_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "landing_review_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_review_only_run_still_reviews_the_open_pr",
+                a_review_only_run_still_reviews_the_open_pr,
+            ),
+            (
+                "a_dirty_rebase_after_a_before_landing_review_routes_through_re_review",
+                a_dirty_rebase_after_a_before_landing_review_routes_through_re_review,
+            ),
+            (
+                "a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled",
+                a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled,
+            ),
+        ]);
+    });
 }

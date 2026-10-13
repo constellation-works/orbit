@@ -39,7 +39,6 @@ use orbit_types::workflow::activity_job::{
     validate_job_retired_sessions,
 };
 
-#[test]
 fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_a_catalog_loads_new_activities()?;
     scenario_b_target_ref_resolves()?;
@@ -53,7 +52,6 @@ fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
 /// [ORB-13890] A shipped job whose `when:` reads a skippable step's output
 /// is refused by `validate_job` at dispatch, failing every run of it; the
 /// asset smoke only parses, so validate each shipped job as execution does.
-#[test]
 fn every_shipped_job_resolves_and_passes_execution_validation()
 -> Result<(), Box<dyn std::error::Error>> {
     let catalog = load_reference_catalog()?;
@@ -75,7 +73,6 @@ fn every_shipped_job_resolves_and_passes_execution_validation()
 
 /// Conditions cannot read an output whose producer can be skipped independently
 /// of the reader, including fan-in aliases and inherited guards.
-#[test]
 fn validate_job_checks_output_producer_guards() {
     let flag = "{{ input.flag }} == true";
     let alias_reader = || validation_target("reader", Some("{{ steps.results.output }} != []"));
@@ -219,7 +216,6 @@ fn validate_job_checks_output_producer_guards() {
 
 /// Step IDs remain unique across the entire tree, independently of guards or
 /// output aliases, so a later declaration cannot erase an earlier guard chain.
-#[test]
 fn validate_job_rejects_duplicate_step_ids_across_nested_bodies() {
     let duplicate = || validation_target("duplicate", None);
     for (case, steps) in [
@@ -283,7 +279,6 @@ fn validate_job_rejects_duplicate_step_ids_across_nested_bodies() {
 
 /// Quorums must require a success and remain achievable for a static parallel
 /// branch list; fan-out cardinality is resolved from items only at runtime.
-#[test]
 fn validate_job_checks_quorum_bounds() {
     let parallel = |n, branch_count| {
         validation_step(
@@ -714,4 +709,32 @@ fn count_target_refs(job: &JobV2) -> usize {
         }
     }
     job.steps.iter().map(count_step).sum()
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn catalog_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "catalog_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            ("name_resolution_regressions", || {
+                name_resolution_regressions().unwrap()
+            }),
+            (
+                "every_shipped_job_resolves_and_passes_execution_validation",
+                || every_shipped_job_resolves_and_passes_execution_validation().unwrap(),
+            ),
+            (
+                "validate_job_checks_output_producer_guards",
+                validate_job_checks_output_producer_guards,
+            ),
+            (
+                "validate_job_rejects_duplicate_step_ids_across_nested_bodies",
+                validate_job_rejects_duplicate_step_ids_across_nested_bodies,
+            ),
+            (
+                "validate_job_checks_quorum_bounds",
+                validate_job_checks_quorum_bounds,
+            ),
+        ]);
+    });
 }

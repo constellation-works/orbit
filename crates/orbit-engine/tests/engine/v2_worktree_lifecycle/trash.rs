@@ -11,7 +11,6 @@ fn reaped_deleter_pid() -> u32 {
     pid
 }
 
-#[test]
 fn gc_preserves_registered_dirty_trash_worktrees_in_dry_and_live_sweeps() {
     isolated_in(
         module_path!(),
@@ -90,7 +89,6 @@ fn gc_preserves_registered_dirty_trash_worktrees_in_dry_and_live_sweeps() {
 
 /// Fail-closed recovery checks are exercised through the collector, without
 /// relying on permission bits (which do not refuse reads when tests run as root).
-#[test]
 fn gc_preserves_recoverable_or_unverifiable_trash_git_links() {
     isolated_in(
         module_path!(),
@@ -185,4 +183,21 @@ fn gc_preserves_recoverable_or_unverifiable_trash_git_links() {
             }
         },
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn trash_contracts_1() {
+    isolated_in(module_path!(), "trash_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "gc_preserves_registered_dirty_trash_worktrees_in_dry_and_live_sweeps",
+                gc_preserves_registered_dirty_trash_worktrees_in_dry_and_live_sweeps,
+            ),
+            (
+                "gc_preserves_recoverable_or_unverifiable_trash_git_links",
+                gc_preserves_recoverable_or_unverifiable_trash_git_links,
+            ),
+        ]);
+    });
 }

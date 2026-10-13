@@ -80,7 +80,6 @@ struct GcRun {
     expected_task: &'static str,
 }
 
-#[test]
 fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
     isolated(
         "worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones",
@@ -222,7 +221,6 @@ fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
 /// task answer; a missing owner route and an owner transport failure are told
 /// apart and each carries its reason; a directory Git does not list as a
 /// worktree is kept with its remedy.
-#[test]
 fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() {
     isolated(
         "replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest",
@@ -342,7 +340,6 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
 
 /// One failed owner route must not suppress lookups to another owner in the
 /// same worktree GC sweep.
-#[test]
 fn replica_worktree_gc_fences_unreachable_owners_by_route() {
     isolated(
         "replica_worktree_gc_fences_unreachable_owners_by_route",
@@ -426,7 +423,6 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
 /// string must not abort the sweep. A scoped call still classifies the run
 /// it names, and an unscoped call classifies every other worktree while the
 /// bad runs show up as failed report entries.
-#[test]
 fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
     isolated(
         "worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty",
@@ -514,7 +510,6 @@ fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
 /// leading `-` are refused before any checkout exists. A slash stays in the
 /// branch ref and becomes one directory component, including when
 /// `ORBIT_WORKTREE_ROOT` relocates the root. GC still matches that checkout.
-#[test]
 fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
     isolated(
         "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
@@ -641,7 +636,6 @@ fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------
 
-#[test]
 fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
     isolated(
         "worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched",
@@ -703,7 +697,6 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
 /// A registered checkout whose admin `HEAD` is corrupt (a crash mid-commit)
 /// cannot report its status, so setup cannot tell dirty from clean. The edits
 /// in it are unrecoverable once the checkout is force-removed.
-#[test]
 fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits() {
     isolated(
         "worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits",
@@ -755,7 +748,6 @@ fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits(
 /// `origin/main` and `main` name one local landing branch. Setup's pre-check
 /// and `merge_batch_worktree_into_base` both inspect the linked checkout that
 /// holds it, including when the primary checkout is a different dirty tree.
-#[test]
 fn local_landing_precheck_uses_the_normalized_base_checkout() {
     isolated(
         "local_landing_precheck_uses_the_normalized_base_checkout",
@@ -871,7 +863,6 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
 // Local delivery: operator-owned untracked files in the landing checkout
 // ---------------------------------------------------------------------------
 
-#[test]
 fn local_landing_preserves_unrelated_untracked_files() {
     isolated("local_landing_preserves_unrelated_untracked_files", || {
         for linked in [false, true] {
@@ -941,7 +932,6 @@ fn local_landing_preserves_unrelated_untracked_files() {
     });
 }
 
-#[test]
 fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
     isolated(
         "local_landing_names_only_untracked_paths_conflicting_with_the_candidate",
@@ -1016,7 +1006,6 @@ fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
     );
 }
 
-#[test]
 fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
     isolated(
         "local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge",
@@ -1101,7 +1090,6 @@ fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
 /// A clean candidate that passes owner validation on the advanced base is
 /// delivered as is: no implementation step, and the run's own commit step
 /// commits exactly the candidate's change on the new base.
-#[test]
 fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
     isolated(
         "a_validated_candidate_is_resumed_on_the_new_base_without_implementation",
@@ -1157,7 +1145,6 @@ fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
 /// A candidate an Orbit upgrade held when it refused the reviewer's `orbit`
 /// is resumed by the task's next run, as validated work: the upgrade never
 /// judged it.
-#[test]
 fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
     isolated(
         "a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run",
@@ -1180,7 +1167,6 @@ fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
 
 /// A candidate held when its parent stopped waiting for the run [ORB-15643]
 /// is resumed by the task's requeued run: the cancel judged nothing.
-#[test]
 fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
     isolated(
         "a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run",
@@ -1203,7 +1189,6 @@ fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
 /// A candidate that conflicts with the advanced base is handed to the
 /// implementer as uncommitted work with the conflict markers and paths;
 /// validation does not run on a conflicted tree.
-#[test]
 fn a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict() {
     isolated(
         "a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict",
@@ -1245,7 +1230,6 @@ fn a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict() {
 
 /// A clean candidate that fails owner validation is handed to the
 /// implementer with the failing command and its output.
-#[test]
 fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output() {
     isolated(
         "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
@@ -1317,7 +1301,6 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
 /// A candidate whose required command fails on the base exactly as on the
 /// candidate is not handed to the implementer: no repair of the candidate
 /// can make it pass, so the run resumes it unjudged and the suite decides.
-#[test]
 fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer() {
     isolated(
         "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
@@ -1348,7 +1331,6 @@ fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implement
 /// `commit`, is unfinished. Requeue applies that candidate and runs the
 /// implementer even when owner validation would pass, and when no command
 /// is configured. A failure at `commit` still resumes as validated.
-#[test]
 fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
     isolated(
         "an_implementation_failure_handoff_is_requeued_for_the_implementer",
@@ -1408,7 +1390,6 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
 
 /// [ORB-15548] Resume cannot validate a known-red candidate that still skips
 /// a host path or whose durable replay reports no executed tests.
-#[test]
 fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
     isolated(
         "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
@@ -1481,7 +1462,6 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
 /// A spec change since the candidate's run, or an operator discard recorded
 /// since that run began, forces a fresh implementation with the reason, and
 /// leaves the checkout untouched. A discard older than the run does not.
-#[test]
 fn a_changed_spec_or_an_operator_discard_implements_fresh() {
     isolated(
         "a_changed_spec_or_an_operator_discard_implements_fresh",
@@ -1543,7 +1523,6 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
 /// [ORB-14450] Selectors are preparation hints, not what the task means: a
 /// task-pilot or operator edit to them after a failure preserved the
 /// candidate keeps it, while a description or criteria edit still does not.
-#[test]
 fn a_selector_only_edit_keeps_the_preserved_candidate() {
     isolated("a_selector_only_edit_keeps_the_preserved_candidate", || {
         let preserved = PreservedCandidate::new("feature.txt", "feature\n");
@@ -1576,7 +1555,6 @@ fn a_selector_only_edit_keeps_the_preserved_candidate() {
 /// commit the hold names: no implementer, and no owner validation here — the
 /// pipeline's own validation and the fresh review judge it. A selector edit
 /// since the hold does not retire it.
-#[test]
 fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
     isolated(
         "an_evidence_receipt_resumes_the_held_candidate_without_the_implementer",
@@ -1613,7 +1591,6 @@ fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
 /// with a typed reason and an untouched checkout: its commit is missing, an
 /// operator discarded it, the description changed, or the receipt is not
 /// the task's latest decision.
-#[test]
 fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason() {
     isolated(
         "a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason",
@@ -1676,7 +1653,6 @@ fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason
 /// base for the implementer to continue, never validated here and never
 /// written to a task history that lives on the owner. Without one, or when
 /// its changes conflict with the base, the usual outcomes apply.
-#[test]
 fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
     isolated(
         "a_claimed_leaf_continues_the_candidate_its_owner_kept",
@@ -1764,7 +1740,6 @@ fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
 /// handoff on its run; the owner's next run of the task continues the
 /// candidate kept from that leaf's claim, naming the claim and machine in the
 /// task's history. A candidate kept from some other run is not resurrected.
-#[test]
 fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
     isolated(
         "a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept",
@@ -1830,7 +1805,6 @@ fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
 /// stopped landing preserved onto its fresh base. The implementer always gets
 /// it: a conflict to resolve against what the base gained, or a clean apply to
 /// confirm on the moved base. Neither reads nor writes the owner's task.
-#[test]
 fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
     isolated(
         "a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer",
@@ -2187,7 +2161,6 @@ fn discard_entry(at: chrono::DateTime<Utc>) -> TaskHistoryEntry {
 // pr_prepare + git_rebase
 // ---------------------------------------------------------------------------
 
-#[test]
 fn git_rebase_decision_follows_the_checkout_state() {
     isolated("git_rebase_decision_follows_the_checkout_state", || {
         // A candidate that does not overlap the advanced base is rebased.
@@ -2332,7 +2305,6 @@ fn git_rebase_decision_follows_the_checkout_state() {
     });
 }
 
-#[test]
 fn git_rebase_rename_delete_conflicts_remain_for_recovery() {
     isolated(
         "git_rebase_rename_delete_conflicts_remain_for_recovery",
@@ -2405,7 +2377,6 @@ fn git_rebase_rename_delete_conflicts_remain_for_recovery() {
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     isolated(
         "conflict_recovery_leaf_completes_only_its_checkpointed_rebase",
@@ -2495,7 +2466,6 @@ fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
 /// completes as a new host-reserved attempt instead of colliding with A. The
 /// retry then delivers B's exact evidence and nothing older.
 #[cfg(unix)]
-#[test]
 fn a_resumed_run_recovers_the_same_step_again_as_a_new_attempt() {
     isolated(
         "a_resumed_run_recovers_the_same_step_again_as_a_new_attempt",
@@ -2679,7 +2649,6 @@ fn stopped_conflict(prepared: &PreparedRebase) -> Value {
 /// removed original), continues the rebase, and widens the task's selectors
 /// with recovery provenance. Scratch under `.orbit/tmp/` is never staged.
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_commits_companion_edits_with_the_resolution() {
     isolated(
         "conflict_recovery_commits_companion_edits_with_the_resolution",
@@ -2748,7 +2717,6 @@ fn conflict_recovery_commits_companion_edits_with_the_resolution() {
 /// recovery round resolves it and certifies the whole rewrite, which the
 /// retry then delivers.
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase() {
     isolated(
         "conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase",
@@ -2860,7 +2828,6 @@ fn conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase() {
 /// continuation with the rebase left stopped and nothing widened. Staging
 /// stays host-owned: a provider that stages its own companion is refused.
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits() {
     isolated(
         "conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits",
@@ -2919,7 +2886,6 @@ fn conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits()
 /// gitignored output are never attributed. The reviewer's changes widen at
 /// review settlement instead.
 #[cfg(unix)]
-#[test]
 fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
     isolated(
         "agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits",
@@ -2975,7 +2941,6 @@ fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
 /// trees keep the bytes the provider left. Disjoint source dirt is enough:
 /// overlap with the candidate is not what makes the edit fatal.
 #[cfg(unix)]
-#[test]
 fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     isolated(
         "provider_primary_source_edit_fails_closed_and_preserves_both_checkouts",
@@ -3057,7 +3022,6 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
 /// User Git presentation settings must not hide a second edit to tracked WIP
 /// or change the fingerprints and patches needed to detect and recover it.
 #[cfg(unix)]
-#[test]
 fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
     isolated(
         "user_git_diff_config_preserves_dirty_fingerprints_and_recovery",
@@ -3190,7 +3154,6 @@ fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
 /// Record-store dirt on a path the run also changed is still drift. The
 /// `.orbit/` prefix alone must not excuse an intersection with the candidate.
 #[cfg(unix)]
-#[test]
 fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
     isolated(
         "stationary_record_store_dirt_overlapping_the_run_fails_closed",
@@ -3243,7 +3206,6 @@ fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
 /// primary and does not fail the provider. The provider itself only edits
 /// the assigned checkout.
 #[cfg(unix)]
-#[test]
 fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
     isolated(
         "stationary_record_store_dirt_disjoint_from_the_run_stays_benign",
@@ -3322,7 +3284,6 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
 /// untracked files change neither HEAD nor the index mtime, so no cache key can
 /// notice them.
 #[cfg(unix)]
-#[test]
 fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
     isolated(
         "primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift",
@@ -3372,7 +3333,6 @@ fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
 /// ordinary attributed edit, and a real boundary failure still writes recovery
 /// that includes the directory.
 #[cfg(unix)]
-#[test]
 fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
     isolated(
         "untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree",
@@ -3588,7 +3548,6 @@ fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
 /// content, and the recovery store stays bounded: old attempts are pruned,
 /// the newest never is.
 #[cfg(unix)]
-#[test]
 fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts() {
     isolated(
         "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
@@ -3809,6 +3768,20 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(Self::fresh);
+            let root = TempDir::new().unwrap();
+            super::git_fixture::copy_template(seed.root.path(), root.path());
+            let repo = canonical(&root.path().join("repo"));
+            Self { root, repo }
+        })
+    }
+
+    fn fresh() -> Self {
         let root = TempDir::new().unwrap();
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
@@ -4920,4 +4893,262 @@ impl Drop for ReapOnDrop {
         }
         let _ = self.0.wait();
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_1() {
+    isolated("worktree_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones",
+                worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones,
+            ),
+            (
+                "replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest",
+                replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest,
+            ),
+            (
+                "replica_worktree_gc_fences_unreachable_owners_by_route",
+                replica_worktree_gc_fences_unreachable_owners_by_route,
+            ),
+            (
+                "worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty",
+                worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty,
+            ),
+            (
+                "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
+                worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_2() {
+    isolated("worktree_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched",
+                worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
+            ),
+            (
+                "worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits",
+                worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,
+            ),
+            (
+                "local_landing_precheck_uses_the_normalized_base_checkout",
+                local_landing_precheck_uses_the_normalized_base_checkout,
+            ),
+            (
+                "local_landing_preserves_unrelated_untracked_files",
+                local_landing_preserves_unrelated_untracked_files,
+            ),
+            (
+                "local_landing_names_only_untracked_paths_conflicting_with_the_candidate",
+                local_landing_names_only_untracked_paths_conflicting_with_the_candidate,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_3() {
+    isolated("worktree_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge",
+                local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge,
+            ),
+            (
+                "a_validated_candidate_is_resumed_on_the_new_base_without_implementation",
+                a_validated_candidate_is_resumed_on_the_new_base_without_implementation,
+            ),
+            (
+                "a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run",
+                a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run,
+            ),
+            (
+                "a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run",
+                a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run,
+            ),
+            (
+                "a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict",
+                a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_4() {
+    isolated("worktree_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
+                a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output,
+            ),
+            (
+                "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
+                a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer,
+            ),
+            (
+                "an_implementation_failure_handoff_is_requeued_for_the_implementer",
+                an_implementation_failure_handoff_is_requeued_for_the_implementer,
+            ),
+            (
+                "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
+                resumed_known_red_candidates_must_complete_host_and_replay_coverage,
+            ),
+            (
+                "a_changed_spec_or_an_operator_discard_implements_fresh",
+                a_changed_spec_or_an_operator_discard_implements_fresh,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_5() {
+    isolated("worktree_contracts_5", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_selector_only_edit_keeps_the_preserved_candidate",
+                a_selector_only_edit_keeps_the_preserved_candidate,
+            ),
+            (
+                "an_evidence_receipt_resumes_the_held_candidate_without_the_implementer",
+                an_evidence_receipt_resumes_the_held_candidate_without_the_implementer,
+            ),
+            (
+                "a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason",
+                a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason,
+            ),
+            (
+                "a_claimed_leaf_continues_the_candidate_its_owner_kept",
+                a_claimed_leaf_continues_the_candidate_its_owner_kept,
+            ),
+            (
+                "a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept",
+                a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_6() {
+    isolated("worktree_contracts_6", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer",
+                a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer,
+            ),
+            (
+                "git_rebase_decision_follows_the_checkout_state",
+                git_rebase_decision_follows_the_checkout_state,
+            ),
+            (
+                "git_rebase_rename_delete_conflicts_remain_for_recovery",
+                git_rebase_rename_delete_conflicts_remain_for_recovery,
+            ),
+            #[cfg(unix)]
+            (
+                "conflict_recovery_leaf_completes_only_its_checkpointed_rebase",
+                conflict_recovery_leaf_completes_only_its_checkpointed_rebase,
+            ),
+            #[cfg(unix)]
+            (
+                "a_resumed_run_recovers_the_same_step_again_as_a_new_attempt",
+                a_resumed_run_recovers_the_same_step_again_as_a_new_attempt,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_7() {
+    isolated("worktree_contracts_7", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "conflict_recovery_commits_companion_edits_with_the_resolution",
+                conflict_recovery_commits_companion_edits_with_the_resolution,
+            ),
+            #[cfg(unix)]
+            (
+                "conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase",
+                conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase,
+            ),
+            #[cfg(unix)]
+            (
+                "conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits",
+                conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits,
+            ),
+            #[cfg(unix)]
+            (
+                "agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits",
+                agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits,
+            ),
+            #[cfg(unix)]
+            (
+                "provider_primary_source_edit_fails_closed_and_preserves_both_checkouts",
+                provider_primary_source_edit_fails_closed_and_preserves_both_checkouts,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_8() {
+    isolated("worktree_contracts_8", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "user_git_diff_config_preserves_dirty_fingerprints_and_recovery",
+                user_git_diff_config_preserves_dirty_fingerprints_and_recovery,
+            ),
+            #[cfg(unix)]
+            (
+                "stationary_record_store_dirt_overlapping_the_run_fails_closed",
+                stationary_record_store_dirt_overlapping_the_run_fails_closed,
+            ),
+            #[cfg(unix)]
+            (
+                "stationary_record_store_dirt_disjoint_from_the_run_stays_benign",
+                stationary_record_store_dirt_disjoint_from_the_run_stays_benign,
+            ),
+            #[cfg(unix)]
+            (
+                "primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift",
+                primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift,
+            ),
+            #[cfg(unix)]
+            (
+                "untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree",
+                untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_9() {
+    isolated("worktree_contracts_9", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
+                repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts,
+            ),
+        ]);
+    });
 }
