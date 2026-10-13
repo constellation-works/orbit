@@ -5,7 +5,7 @@
 //! `<global_root>/state/plugin-secrets/` from it, for reads and writes. On
 //! Linux Bubblewrap binds a read-only sentinel directory over each tree; on
 //! macOS the agent profile denies both trees. Agent plugin calls reach the
-//! backend through the run's broker instead, which runs on the host. Linux
+//! backend through the run's broker instead, which runs on the host. Sandboxed
 //! agent launches also mask SSH control sockets resolved from the caller's
 //! home, independently of the configured plugin root.
 //!
@@ -114,13 +114,13 @@ pub fn prepare_plugin_mask(global_root: &Path) -> Result<PreparedPluginMask, Orb
 
 /// Prepare the shared hidden trees for an agent launch.
 ///
-/// Linux also hides SSH control sockets: read-only mounts do not prevent
+/// Also hide SSH control sockets: read-only mounts do not prevent
 /// connections to a same-user master. Keep this separate from plugin mask
 /// detection so an SSH-only mask cannot imply brokered plugin access.
 #[cfg(unix)]
 pub(crate) fn prepare_agent_mask(global_root: &Path) -> Result<PreparedPluginMask, OrbitError> {
     let prepared = prepare_plugin_mask(global_root)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let mut prepared = prepared;
         let sockets = orbit_common::fs::path::ssh_socket_dir()?;
@@ -138,7 +138,7 @@ pub(crate) fn prepare_agent_mask(global_root: &Path) -> Result<PreparedPluginMas
         prepared.trees.push(create_owned_dir(&root, relative)?);
         Ok(prepared)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Ok(prepared)
 }
 

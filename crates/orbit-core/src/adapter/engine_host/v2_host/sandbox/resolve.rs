@@ -299,7 +299,7 @@ fn sandbox_unavailable_message(provider: &str, kind: ExecutorSandboxKind, host_o
 
 /// Hide plugin state and the plugin secret store (design
 /// `docs/design/plugins/2_agent_call_broker.md` §6) and the clock credentials
-/// file from the sandboxed process. Linux also hides authenticated SSH control
+/// file from the sandboxed process. Also hide authenticated SSH control
 /// sockets under the invoking user's home, independent of the runtime root.
 ///
 /// Every sandboxed launch gets the mask, whether or not its run's broker then

@@ -734,7 +734,8 @@ pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAcc
     }
 }
 
-/// Deny every read and write beneath `subpaths` in a compiled profile.
+/// Deny every read, write and outbound Unix socket connection beneath
+/// `subpaths` in a compiled profile.
 ///
 /// Appended after everything else the profile allows, so under SBPL's
 /// last-match-wins the denial is final: no earlier `modify` grant, runtime
@@ -745,7 +746,8 @@ pub fn append_macos_subpath_mask(profile: &mut String, subpaths: &[PathBuf]) {
     for path in subpaths {
         let physical = crate::physical_with_missing_tail(path);
         profile.push_str(&format!(
-            "(deny file-read* file-write* (subpath \"{}\"))\n",
+            "(deny file-read* file-write* (subpath \"{0}\"))\n\
+             (deny network-outbound (remote unix-socket (subpath \"{0}\")))\n",
             super::sbpl_filter::sbpl_escape(&physical.display().to_string())
         ));
     }

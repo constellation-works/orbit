@@ -579,7 +579,11 @@ impl Fixture {
                 compile_macos_sandbox_profile(&case.profile, provider).expect("compile SBPL");
             match case.kind {
                 CaseKind::Agent | CaseKind::ProviderPair(_) => {
-                    append_macos_subpath_mask(&mut text, &self.mask_targets());
+                    let mut targets = self.mask_targets();
+                    // Render the macOS policy on every host, regardless of the
+                    // platform running this portable compiler golden.
+                    targets.push(self.home.join(".orbit/ssh"));
+                    append_macos_subpath_mask(&mut text, &targets);
                     append_macos_file_mask(&mut text, &self.mask_files());
                 }
                 CaseKind::PluginBackend => {
