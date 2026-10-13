@@ -2,12 +2,12 @@
 type: design
 summary: "Spec: Sandboxed Exec Contract"
 tags: ["policy-sandbox"]
-last_validated: 2026-10-08
+last_validated: 2026-10-12
 ---
 
 # Spec: Sandboxed Exec Contract
 
-`orbit-exec::run_process` is the common validated-spawn primitive. Platform sandbox wrappers can instead create a child and pass it to `supervise_child`, which shares the supervision implementation; a wrapper that does work after the spawn passes its spawn closure to `spawn_supervised_cancellable` so signals are intercepted before the child exists. This spec names the invariants and failure modes those paths must preserve.
+`orbit-exec::run_process` is the common validated-spawn primitive. Platform sandbox wrappers can instead create a child and pass it to `supervise_child`, which shares the supervision implementation; a wrapper that does work after the spawn passes its spawn closure to `spawn_supervised_cancellable` so signals are intercepted before the child exists. `run_process` uses `SupervisedChild::spawn_guarded` to keep that signal protection across its own spawn and supervision. This spec names the invariants and failure modes those paths must preserve.
 
 The ORB-11514 / ORB-11546 Linux read-boundary investigation below is historical. ORB-13689 removed the extra activity-scoped `proc.spawn` Landlock and argument-level read checks; that child now inherits its enclosing CLI worker sandbox. The investigation remains evidence about the retained Landlock primitive and possible future read boundaries, not the current `proc.spawn` contract.
 
@@ -28,13 +28,13 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 ## Supervision Invariants
 
 - **Cleanup ownership.** From successful spawn through streaming stdout relay setup and supervision, a cleanup guard owns the child. Relay allocation, pipe setup, signal-handler setup and wait errors kill the child's process group and reap the direct child before returning; dropping a bare `Child` would do neither.
-- **Background drains.** `wait_with_optional_timeout` spawns reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
-- **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`. A broken pipe (the child closed stdin, or the writer was stopped by the drain bound) is not a failure: the child's exit status and stderr stand.
+- **Background drains.** `SupervisedChild::supervise` starts reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
+- **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write triggers the supervisor's owned-child cleanup, which kills the process group and reaps the child before returning `OrbitError::Execution(<message>)`. A broken pipe (the child closed stdin, or the writer was stopped by the drain bound) is not a failure: the child's exit status and stderr stand.
 - **Poll interval.** The wait loop polls with `WAIT_POLL_INTERVAL = 100ms` (or the remaining deadline, whichever is smaller). The interval is global and not per-request configurable.
 - **Signal handler installation (Unix).** A `SignalHandlerGuard` refcounts process-wide SIGINT and SIGTERM handlers for the duration of the wait loop. The first live waiter installs the handlers and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal so the previous disposition still runs (tokio shutdown, or SIG_DFL terminate). `SIG_IGN` is not re-raised. SIG_DFL additionally writes `process interrupted by signal SIG…` to the process stderr before `raise`. The install mutex is not held across the wait or across `raise`, so concurrent supervised waits overlap. Each waiter registers its child's pgid in a lock-free table; the handler `killpg`s every registered group, records a pending forward, and bumps a generation counter that waiters poll.
-- **Timeout escalation.** When the deadline expires, `terminate_process_group(child, SIGTERM, poll_interval)` is called. If the group does not exit within `TERMINATION_GRACE_PERIOD = 5 seconds`, `kill_process_group` (SIGKILL) is invoked plus a direct `child.kill()`/`child.wait()`.
+- **Timeout escalation.** When the deadline expires, the supervisor requests SIGTERM through `OwnedChild::terminate_with_signal`. If the group does not exit within `TERMINATION_GRACE_PERIOD = 5 seconds`, it sends SIGKILL to the group and reaps the direct child.
 - **Parent-signal escalation.** When the parent receives SIGINT or SIGTERM during the wait, the same termination path runs with the received signal. The result reports `exit_code = Some(128 + signal)` and `success = false`.
-- **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends before the pipe workers settle.
+- **Clean-exit reaping.** When the child exits, the wait loop calls `OwnedChild::kill_and_reap()` to kill its remaining process group and reap the leader before the pipe workers settle.
 - **Bounded drain (Unix).** Killing the group closes every pipe end its members hold, but a descendant that left the group (`setsid`, `setpgid`) can keep stdout, stderr, or stdin open indefinitely. However the child ended — exit, timeout, cancellation, capture limit, or parent signal — the supervisor waits at most `DRAIN_BUDGET = 1 second` for the stdout/stderr readers and the stdin writer to finish, then stops them and joins them, so the call returns within that budget of the child ending. A stopped reader still reads what the pipe buffers at that moment, so output written before the stop is retained; later output is discarded, unwritten stdin is abandoned, and the supervisor closes its pipe ends before returning. The workers wait with `poll(2)` on their own non-blocking pipe end plus a socket-pair stop signal; no descriptor is closed from another thread. A stopped drain appends `process pipes were still held open outside its process group; …` to stderr. `run_process_streaming_stdout` hands its consumer a relay the stdout reader forwards into and closes within the same bound, so the consumer reaches EOF. Other platforms keep blocking workers and have no bound.
 - **Stderr annotation.** Timeouts append `process timed out` to stderr; parent-signal interruption appends `process interrupted by signal SIG<NAME>`; a stopped drain appends its note after those. The annotations are added before the result is constructed, not by the caller.
 - **Exit code reporting.** `ExecutionResult::exit_code` is `Some(code)` for clean exits, `Some(128 + signal)` for parent-signal exits, and `None` for timeouts.
@@ -52,7 +52,7 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 
 ## Result Shape
 
-`ExecutionResult { success, stdout, stderr, exit_code, duration_ms, output }`:
+`ExecutionResult { success, timed_out, stdout, stderr, exit_code, duration_ms, output }`:
 
 - `success` reflects the child's exit status (clean exit with zero status). Timeouts and parent-signal exits report `success = false`.
 - `stdout` and `stderr` are `String::from_utf8_lossy` conversions of the captured bytes. Non-UTF-8 output is preserved as replacement characters.
