@@ -262,6 +262,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev);
 }
 .operation-running-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.operation-running-head .operation-task-link { flex-shrink: 0; white-space: nowrap; }
 .operation-running-head strong { overflow-wrap: anywhere; }
 .operation-running-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--fg-dim); font-size: 10.5px; }
 .operation-running-task-title { min-width: 0; overflow: hidden; color: var(--fg-dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
