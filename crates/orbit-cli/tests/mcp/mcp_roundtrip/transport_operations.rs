@@ -823,6 +823,169 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
         json!({"title":"Refusal proof","description":"Disposable boundary","complexity":"low","model":"codex"}),
     );
     let id = task["id"].as_str().unwrap();
+    let target = client.call_tool_ok("orbit_task_add", json!({"title":"Relation target","description":"Disposable target","complexity":"low","model":"codex"}));
+    let relation = json!({"type":"related_to","target":target["id"]});
+    // Exercise each culprit shape independently so the baseline records both
+    // regressions through the same public boundary used after the repair.
+    let mut rejected = Vec::new();
+    let mut singleton_id = Value::Null;
+    for (tool, arguments) in [
+        (
+            "orbit_task_add",
+            json!({"title":"Singleton","description":"Compatibility control","complexity":"low","model":"codex","relations":relation}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"id":id,"model":"codex","relations":relation}),
+        ),
+        (
+            "orbit_task_add",
+            json!({"title":"Boolean","description":"Compatibility control","complexity":"low","model":"codex","allow_missing_context":"false"}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"id":id,"model":"codex","allow_missing_context":"false"}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"id":id,"model":"codex","allow_drop_system_tags":"false"}),
+        ),
+    ] {
+        let result = client.call_tool(tool, arguments.clone());
+        if result["isError"] != false {
+            rejected.push(format!("{tool} {arguments}: {result}"));
+        } else if tool == "orbit_task_add" && arguments.get("relations").is_some() {
+            assert_eq!(result["structuredContent"]["relations"], json!([relation]));
+            singleton_id = result["structuredContent"]["id"].clone();
+        }
+    }
+    assert!(
+        rejected.is_empty(),
+        "accepted task-write shapes rejected:\n{}",
+        rejected.join("\n")
+    );
+
+    let array_added = client.call_tool_ok("orbit_task_add", json!({"title":"Array control","description":"Equivalent relation list","complexity":"low","model":"codex","relations":[relation]}));
+    drop(client);
+    client = workspace.serve();
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":singleton_id}))["relations"],
+        json!([relation])
+    );
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":array_added["id"]}))["relations"],
+        json!([relation])
+    );
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":id}))["relations"],
+        json!([relation])
+    );
+
+    // Boolean spellings drive actual selector authorization and tag retention,
+    // rather than merely producing a successful response.
+    for (index, (flag, enabled)) in [
+        (json!(true), true),
+        (json!(false), false),
+        (json!("true"), true),
+        (json!("false"), false),
+        (json!(" TrUe "), true),
+        (json!(" FaLsE "), false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let context = if enabled {
+            json!([format!("file:future-{index}.rs")])
+        } else {
+            json!([])
+        };
+        let added = client.call_tool_ok(
+            "orbit_task_add",
+            json!({
+                "title":"Boolean control","description":"Disposable compatibility control",
+                "complexity":"low","model":"codex","relations":relation,
+                "context_files":context,"allow_missing_context":flag,
+                "tags":["ci-failure:compatibility","docs"]
+            }),
+        );
+        let added_id = added["id"].as_str().unwrap();
+        // Re-sending a missing selector without the flag proves creation intent
+        // was durably recorded by the add, not only accepted at parse time.
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({"id":added_id,"model":"codex","context_files":context}),
+        );
+        let replacement = if enabled {
+            json!([format!("file:replacement-{index}.rs")])
+        } else {
+            json!([])
+        };
+        let tags = if enabled {
+            json!(["docs"])
+        } else {
+            json!(["ci-failure:compatibility", "docs"])
+        };
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({
+                "id":added_id,"model":"codex","relations":relation,
+                "context_files":replacement,"allow_missing_context":flag,
+                "tags":tags,"allow_drop_system_tags":flag
+            }),
+        );
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({"id":added_id,"model":"codex","context_files":replacement}),
+        );
+        drop(client);
+        client = workspace.serve();
+        let persisted = client.call_tool_ok("orbit_task_show", json!({"id":added_id}));
+        assert_eq!(persisted["relations"], json!([relation]));
+        assert_eq!(persisted["context_files"], replacement);
+        assert_eq!(persisted["tags"], tags);
+        if !enabled {
+            for arguments in [
+                json!({"id":added_id,"model":"codex","title":"Never stored","context_files":["file:unauthorized.rs"],"allow_missing_context":flag}),
+                json!({"id":added_id,"model":"codex","title":"Never stored","tags":["docs"],"allow_drop_system_tags":flag}),
+            ] {
+                client.call_tool_err("orbit_task_update", arguments);
+            }
+            let unchanged = client.call_tool_ok("orbit_task_show", json!({"id":added_id}));
+            assert_eq!(unchanged["title"], "Boolean control");
+            assert_eq!(unchanged["context_files"], replacement);
+            assert_eq!(unchanged["tags"], tags);
+        }
+    }
+    // An array replaces the same singleton list; null preserves it, while []
+    // clears it. Null policy fields also leave selector and tag state intact.
+    let other = client.call_tool_ok("orbit_task_add", json!({"title":"Other target","description":"Disposable target","complexity":"low","model":"codex"}));
+    let replacement = json!([{"type":"related_to","target":other["id"]}]);
+    client.call_tool_ok("orbit_task_update", json!({"id":id,"model":"codex","relations":replacement,"tags":["ci-failure:compatibility"],"context_files":["file:future-null.rs"],"allow_missing_context":true}));
+    let before_null = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    client.call_tool_ok("orbit_task_update", json!({"id":id,"model":"codex","relations":null,"title":null,"tags":null,"context_files":null,"allow_missing_context":null,"allow_drop_system_tags":null}));
+    drop(client);
+    client = workspace.serve();
+    let after_null = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    for field in ["relations", "title", "tags", "context_files", "crew"] {
+        assert_eq!(
+            after_null[field], before_null[field],
+            "null changed {field}"
+        );
+    }
+    assert_eq!(after_null["relations"], replacement);
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id":id,"model":"codex","relations":[]}),
+    );
+    drop(client);
+    client = workspace.serve();
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":id}))["relations"],
+        json!([])
+    );
+    std::fs::write(workspace.work.join("anchor.rs"), "").unwrap();
+    let before_refusals = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    let count_before = client.call_tool_ok("orbit_task_list", json!({}))["total"].clone();
     let add =
         json!({"title":"Refused","description":"Never stored","complexity":"low","model":"codex"});
     let update = json!({"id":id,"title":"Never stored","model":"codex"});
@@ -912,10 +1075,57 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
             "{tool} {field}: {refused}"
         );
     }
-    let shown = client.call_tool_ok("orbit_task_show", json!({"id":id,"fields":["title"]}));
+    for (tool, base, fields) in [
+        ("orbit_task_add", &add, &["allow_missing_context"][..]),
+        (
+            "orbit_task_update",
+            &update,
+            &["allow_missing_context", "allow_drop_system_tags"][..],
+        ),
+    ] {
+        for field in fields {
+            for value in [json!("yes"), json!(""), json!(1), json!({}), json!([])] {
+                let mut arguments = base.clone();
+                arguments[*field] = value;
+                assert_eq!(
+                    client.call_tool_err(tool, arguments)["code"],
+                    "invalid_input"
+                );
+            }
+        }
+        for (field, value) in [
+            ("relations", json!("related_to")),
+            ("relations", json!(true)),
+            ("relations", json!({"type":"related_to"})),
+            ("context_files", json!({"file":"future.rs"})),
+            ("context_files", json!(["file:../outside.rs"])),
+            ("context_files", json!(["dir:anchor.rs"])),
+        ] {
+            let mut arguments = base.clone();
+            arguments[field] = value;
+            assert_eq!(
+                client.call_tool_err(tool, arguments)["code"],
+                "invalid_input"
+            );
+        }
+    }
+    drop(client);
+    client = workspace.serve();
+    let after_refusals = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    for field in ["relations", "context_files", "tags", "crew"] {
+        assert_eq!(
+            after_refusals[field], before_refusals[field],
+            "refusal changed {field}"
+        );
+    }
     assert_eq!(
-        shown["value"], "Refusal proof",
-        "a refused update wrote: {shown}"
+        client.call_tool_ok("orbit_task_list", json!({}))["total"],
+        count_before,
+        "a refused add persisted a task"
+    );
+    assert_eq!(
+        after_refusals["title"], "Refusal proof",
+        "a refused update wrote: {after_refusals}"
     );
 }
 

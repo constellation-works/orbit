@@ -53,6 +53,33 @@ impl GuardedModes for TaskVerb {
         }
     }
 
+    fn normalize_input(self, input: &mut Value) {
+        let boolean_fields: &[&str] = match self {
+            TaskVerb::Add => &["allow_missing_context"],
+            TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags"],
+            TaskVerb::Show | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => return,
+        };
+        let Some(object) = input.as_object_mut() else {
+            return;
+        };
+        // These ordinary write fields had permissive domain parsers before
+        // the migration. Leave null, malformed values and every other field
+        // unchanged for the existing spec and domain checks.
+        if let Some(value @ Value::Object(_)) = object.get_mut("relations") {
+            *value = Value::Array(vec![value.take()]);
+        }
+        for field in boolean_fields {
+            if let Some(value @ Value::String(_)) = object.get_mut(*field) {
+                let normalized = value.as_str().map(str::trim);
+                if normalized.is_some_and(|raw| raw.eq_ignore_ascii_case("true")) {
+                    *value = Value::Bool(true);
+                } else if normalized.is_some_and(|raw| raw.eq_ignore_ascii_case("false")) {
+                    *value = Value::Bool(false);
+                }
+            }
+        }
+    }
+
     fn guarded_mode(
         self,
         ctx: &ToolContext,
