@@ -26,7 +26,6 @@ fn plant_invoke_provider(fixture: &Fixture, body: &str) {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-#[test]
 fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
     let fixture = Fixture::init();
     plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
@@ -98,7 +97,6 @@ fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
     }
 }
 
-#[test]
 fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
     let fixture = Fixture::init();
     plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
@@ -214,7 +212,6 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
     }
 }
 
-#[test]
 fn agent_timeout_admission_and_engine_use_the_same_ceiling() {
     let fixture = Fixture::init();
     plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
@@ -315,13 +312,7 @@ fn agent_timeout_admission_and_engine_use_the_same_ceiling() {
     assert_eq!(before, after, "invalid bounds must not submit a run");
 }
 
-#[test]
 fn agent_submissions_report_saturation_and_their_queue_position() {
-    if !isolated_run_observation(
-        "run_observation::agent_invoke::agent_submissions_report_saturation_and_their_queue_position",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let limit = operator_json(
         &fixture,
@@ -362,7 +353,6 @@ fn agent_submissions_report_saturation_and_their_queue_position() {
     }
 }
 
-#[test]
 fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
@@ -510,7 +500,6 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
 }
 
 #[cfg(unix)]
-#[test]
 fn run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early() {
     let fixture = Fixture::init();
     // Keep the captured stderr larger than a pipe buffer so `head` closes its
@@ -570,4 +559,53 @@ fn run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early() {
         1,
         "the reader must receive one byte before closing: {output:?}"
     );
+}
+
+#[test]
+fn agent_invocation_contracts_0() {
+    if !isolated_run_observation("run_observation::agent_invoke::agent_invocation_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "agent_wait_redacts_sensitive_warning_content_in_progress_and_output",
+            agent_wait_redacts_sensitive_warning_content_in_progress_and_output as fn(),
+        ),
+        (
+            "agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations",
+            agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations as fn(),
+        ),
+        (
+            "agent_timeout_admission_and_engine_use_the_same_ceiling",
+            agent_timeout_admission_and_engine_use_the_same_ceiling as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn agent_invocation_contracts_1() {
+    if !isolated_run_observation("run_observation::agent_invoke::agent_invocation_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "agent_submissions_report_saturation_and_their_queue_position",
+            agent_submissions_report_saturation_and_their_queue_position as fn(),
+        ),
+        (
+            "run_logs_follow_emits_live_output_once_and_stops_at_terminal",
+            run_logs_follow_emits_live_output_once_and_stops_at_terminal as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early",
+            run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

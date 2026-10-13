@@ -55,7 +55,6 @@ struct Workspace {
     orbit_dir: PathBuf,
 }
 
-#[test]
 fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout() {
     let temp = tempdir().unwrap();
     let home = temp.path().join("home");
@@ -168,7 +167,6 @@ fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_
     );
 }
 
-#[test]
 fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -606,7 +604,6 @@ fn command(cwd: &Path, home: &Path) -> assert_cmd::Command {
     command
 }
 
-#[test]
 fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree() {
     let temp = tempdir().unwrap();
     let home = temp.path().join("home");
@@ -719,4 +716,16 @@ fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree(
         run_json(&repo_a, &home, &["task", "show", &task_a, "--json"])["status"],
         "archived"
     );
+}
+
+#[test]
+fn worktree_gc_contracts() {
+    for (name, check) in [
+        ("reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout", reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout as fn()),
+        ("routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree", routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree as fn()),
+        ("direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree", direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree as fn()),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

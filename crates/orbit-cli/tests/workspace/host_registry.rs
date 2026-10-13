@@ -17,7 +17,6 @@ use serde_json::{Value, json};
 use crate::git_repo;
 use crate::host_fleet::{Fleet, host_row};
 
-#[test]
 fn tilde_root_host_list_matches_the_absolute_root_with_a_registered_remote() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
@@ -52,7 +51,6 @@ fn tilde_root_host_list_matches_the_absolute_root_with_a_registered_remote() {
     }
 }
 
-#[test]
 fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
@@ -140,7 +138,6 @@ fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched
     );
 }
 
-#[test]
 fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
@@ -339,7 +336,6 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
     assert_eq!(code, "host_is_local");
 }
 
-#[test]
 fn doctor_never_reports_a_match_for_a_host_that_omits_its_version_and_protocol() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
@@ -401,7 +397,6 @@ fn doctor_never_reports_a_match_for_a_host_that_omits_its_version_and_protocol()
     );
 }
 
-#[test]
 fn doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
@@ -448,7 +443,6 @@ fn doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning(
     );
 }
 
-#[test]
 fn legacy_removal_never_probes_the_removed_host_and_requires_retained_hosts() {
     for force in [false, true] {
         let fleet = Fleet::new();
@@ -501,7 +495,6 @@ fn legacy_removal_never_probes_the_removed_host_and_requires_retained_hosts() {
     }
 }
 
-#[test]
 fn legacy_destinations_migrate_on_first_mutation_and_both_files_are_refused() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
@@ -614,7 +607,6 @@ fn legacy_destinations_migrate_on_first_mutation_and_both_files_are_refused() {
     }
 }
 
-#[test]
 fn legacy_rows_whose_machine_name_and_ssh_alias_collide_migrate_to_unique_names() {
     // Three remotes report the same `machine.name`. One is reached through an
     // SSH alias equal to this machine's own name, so its fallback collides with
@@ -673,5 +665,55 @@ fn legacy_rows_whose_machine_name_and_ssh_alias_collide_migrate_to_unique_names(
                 install.machine_id
             );
         }
+    }
+}
+
+#[test]
+fn host_registry_contracts_0() {
+    for (name, check) in [
+        (
+            "tilde_root_host_list_matches_the_absolute_root_with_a_registered_remote",
+            tilde_root_host_list_matches_the_absolute_root_with_a_registered_remote as fn(),
+        ),
+        (
+            "host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched",
+            host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched as fn(),
+        ),
+        (
+            "host_list_show_rename_and_remove_report_live_state_and_dependents",
+            host_list_show_rename_and_remove_report_live_state_and_dependents as fn(),
+        ),
+        (
+            "doctor_never_reports_a_match_for_a_host_that_omits_its_version_and_protocol",
+            doctor_never_reports_a_match_for_a_host_that_omits_its_version_and_protocol as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn host_registry_contracts_1() {
+    for (name, check) in [
+        (
+            "doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning",
+            doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning as fn(),
+        ),
+        (
+            "legacy_removal_never_probes_the_removed_host_and_requires_retained_hosts",
+            legacy_removal_never_probes_the_removed_host_and_requires_retained_hosts as fn(),
+        ),
+        (
+            "legacy_destinations_migrate_on_first_mutation_and_both_files_are_refused",
+            legacy_destinations_migrate_on_first_mutation_and_both_files_are_refused as fn(),
+        ),
+        (
+            "legacy_rows_whose_machine_name_and_ssh_alias_collide_migrate_to_unique_names",
+            legacy_rows_whose_machine_name_and_ssh_alias_collide_migrate_to_unique_names as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

@@ -29,13 +29,7 @@ fn seed_running_drains(fixture: &Fixture, ceiling: u32) {
     }
 }
 
-#[test]
 fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
-    if !isolated_run_observation(
-        "run_observation::build_budget::readiness_and_doctor_warn_for_local_and_pull_drain_capacity",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     ship_admission_wrapper(&fixture.work);
     let budget = fixture.home.join(".orbit/cache/build-budget");
@@ -118,13 +112,7 @@ fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
     }
 }
 
-#[test]
 fn readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper() {
-    if !isolated_run_observation(
-        "run_observation::build_budget::readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper",
-    ) {
-        return;
-    }
     // Without the wrapper, builds never wait for a slot, so the default two
     // slots govern none of them and a concurrency of four is not a mismatch.
     let fixture = Fixture::init();
@@ -166,13 +154,7 @@ fn readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper
 
 // Symbolic links are created with a Unix-only API.
 #[cfg(unix)]
-#[test]
 fn readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout() {
-    if !isolated_run_observation(
-        "run_observation::build_budget::readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout",
-    ) {
-        return;
-    }
     // A link into another directory is not a wrapper the checkout ships. Swapping
     // it for a regular file shows the same drains do warn, so the silence comes
     // from the containment check rather than from drains being missed.
@@ -198,13 +180,7 @@ fn readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout() 
     assert_eq!(warnings.len(), 2, "{snapshot}");
 }
 
-#[test]
 fn invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor() {
-    if !isolated_run_observation(
-        "run_observation::build_budget::invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let output = fixture
         .orbit()
@@ -264,13 +240,7 @@ fn invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor() {
     );
 }
 
-#[test]
 fn leaf_show_retains_failed_attempt_and_live_wait_statistics() {
-    if !isolated_run_observation(
-        "run_observation::build_budget::leaf_show_retains_failed_attempt_and_live_wait_statistics",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let workspace = fixture.workspace_id();
     let run = "jrun-budget-leaf";
@@ -312,5 +282,38 @@ fn leaf_show_retains_failed_attempt_and_live_wait_statistics() {
     let text = String::from_utf8_lossy(&output.stdout);
     for value in ["count 2", "total 5.500s", "longest 3.500s"] {
         assert!(text.contains(value), "leaf wait diagnostics: {text}");
+    }
+}
+
+#[test]
+fn build_capacity_contracts() {
+    if !isolated_run_observation("run_observation::build_budget::build_capacity_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "readiness_and_doctor_warn_for_local_and_pull_drain_capacity",
+            readiness_and_doctor_warn_for_local_and_pull_drain_capacity as fn(),
+        ),
+        (
+            "readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper",
+            readiness_and_doctor_stay_silent_for_a_checkout_outside_the_admission_wrapper as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout",
+            readiness_stays_silent_when_the_wrapper_link_resolves_outside_the_checkout as fn(),
+        ),
+        (
+            "invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor",
+            invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor as fn(),
+        ),
+        (
+            "leaf_show_retains_failed_attempt_and_live_wait_statistics",
+            leaf_show_retains_failed_attempt_and_live_wait_statistics as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

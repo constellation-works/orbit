@@ -301,11 +301,7 @@ fn forge(root: &std::path::Path, merged: bool) {
     }
 }
 
-#[test]
 fn completion_resume_restores_review_and_completes_merged_pr() {
-    if !isolated("completion_resume_restores_review_and_completes_merged_pr") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), false);
     let fx = Delivery::new();
@@ -369,11 +365,7 @@ fn completion_resume_restores_review_and_completes_merged_pr() {
 
 /// Resumed workers use the original checkpoint batch for delivery. Their
 /// failure or orphan reconciliation must still block every readmitted task.
-#[test]
 fn resumed_terminal_runs_block_readmitted_tasks() {
-    if !isolated("resumed_terminal_runs_block_readmitted_tasks") {
-        return;
-    }
     for case in ["failed", "interrupted", "superseded"] {
         let fx = Delivery::new();
         fx.skip_promotion();
@@ -544,11 +536,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
     }
 }
 
-#[test]
 fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
-    if !isolated("completion_resume_cannot_invent_review_or_reverse_withdrawal") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), true);
     for case in [
@@ -797,11 +785,7 @@ fn latest_resume_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
 /// Promotion remains reused when a later non-completion step fails or the
 /// scan exhausts the job. Neither skipped promotion nor an operator block
 /// grants restoration authority.
-#[test]
 fn resume_preserves_promotion_across_non_completion_tails() {
-    if !isolated("resume_preserves_promotion_across_non_completion_tails") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), false);
     for case in [
@@ -929,11 +913,7 @@ fn resume_preserves_promotion_across_non_completion_tails() {
 /// naming a run outside the lineage, or a note that does not name a run, stays
 /// blocked. After promotion, the handoff restores review instead of readmitting
 /// implementation.
-#[test]
 fn resume_readmits_lineage_failure_handoff_blocks() {
-    if !isolated("resume_readmits_lineage_failure_handoff_blocks") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), false);
 
@@ -998,4 +978,48 @@ fn resume_readmits_lineage_failure_handoff_blocks() {
     assert_eq!(restored.event, "resume_review_restored");
     assert_eq!(restored.from_status, Some(TaskStatus::Blocked));
     assert_eq!(restored.to_status, Some(TaskStatus::Review));
+}
+
+#[test]
+fn resume_lifecycle_contracts_0() {
+    if !isolated("resume_lifecycle_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "completion_resume_restores_review_and_completes_merged_pr",
+            completion_resume_restores_review_and_completes_merged_pr as fn(),
+        ),
+        (
+            "resumed_terminal_runs_block_readmitted_tasks",
+            resumed_terminal_runs_block_readmitted_tasks as fn(),
+        ),
+        (
+            "completion_resume_cannot_invent_review_or_reverse_withdrawal",
+            completion_resume_cannot_invent_review_or_reverse_withdrawal as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn resume_lifecycle_contracts_1() {
+    if !isolated("resume_lifecycle_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "resume_preserves_promotion_across_non_completion_tails",
+            resume_preserves_promotion_across_non_completion_tails as fn(),
+        ),
+        (
+            "resume_readmits_lineage_failure_handoff_blocks",
+            resume_readmits_lineage_failure_handoff_blocks as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

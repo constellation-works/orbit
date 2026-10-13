@@ -10,7 +10,6 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
-#[test]
 fn ship_sweep_selects_explicit_environment_and_default_registries() {
     let fixture = tempdir().expect("fixture tempdir");
     let home = fixture.path().join("home");
@@ -118,7 +117,6 @@ fn ship_sweep_selects_explicit_environment_and_default_registries() {
     );
 }
 
-#[test]
 fn ship_sweep_preserves_unchanged_registry_modification_time() {
     let fixture = tempdir().expect("fixture tempdir");
     let home = fixture.path().join("home");
@@ -218,7 +216,6 @@ fn ship_sweep_preserves_unchanged_registry_modification_time() {
     );
 }
 
-#[test]
 fn ship_sweep_dry_run_does_not_persist_invalid_status_flip_for_missing_checkout() {
     let fixture = tempdir().expect("fixture tempdir");
     let home = fixture.path().join("home");
@@ -389,4 +386,25 @@ fn orbit(cwd: &Path, home: &Path, root_env: Option<&Path>, args: &[&str]) -> Vec
         .get_output()
         .stdout
         .clone()
+}
+
+#[test]
+fn ship_sweep_contracts() {
+    for (name, check) in [
+        (
+            "ship_sweep_selects_explicit_environment_and_default_registries",
+            ship_sweep_selects_explicit_environment_and_default_registries as fn(),
+        ),
+        (
+            "ship_sweep_preserves_unchanged_registry_modification_time",
+            ship_sweep_preserves_unchanged_registry_modification_time as fn(),
+        ),
+        (
+            "ship_sweep_dry_run_does_not_persist_invalid_status_flip_for_missing_checkout",
+            ship_sweep_dry_run_does_not_persist_invalid_status_flip_for_missing_checkout as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

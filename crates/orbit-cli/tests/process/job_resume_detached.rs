@@ -207,7 +207,6 @@ mod unix {
 
     /// `orbit web serve` is launched by this same CLI main. Both CLI workflow
     /// entry points must mark the binary before the shared worker spawn path.
-    #[test]
     fn ship_and_auto_cli_commands_launch_workers() {
         let fixture = Fixture::new();
         fixture.write_pipeline_job("task_auto_pipeline");
@@ -237,7 +236,6 @@ mod unix {
 
     /// [ORB-14117] Only the owner approves work, so a replica pull drain
     /// refuses `--approve-proposed` before anything is submitted.
-    #[test]
     fn auto_refuses_approve_proposed_with_pull() {
         let fixture = Fixture::new();
         let output = fixture
@@ -270,7 +268,6 @@ mod unix {
     /// [ORB-14174] `--allow-crew` restricts a pull drain: an undefined crew is
     /// refused by name before anything is submitted, and a defined one is
     /// accepted alongside `--pull` and reaches the replica check.
-    #[test]
     fn auto_pull_validates_its_crew_restriction_before_submitting() {
         let fixture = Fixture::new();
         let pull = |crews: &str| {
@@ -312,7 +309,6 @@ mod unix {
 
     /// [ORB-13987] `orbit run auto` still starts a drain whose required
     /// validation cannot use the login shell, and says so at submission.
-    #[test]
     fn auto_warns_when_required_validation_cannot_use_the_login_shell() {
         let fixture = Fixture::new();
         fixture.write_pipeline_job("workspace_auto_pipeline");
@@ -354,7 +350,6 @@ mod unix {
 
     /// ORB-13854: a real gate must explicitly release its reservation before
     /// reporting a failed child, rather than relying on terminal-run cleanup.
-    #[test]
     fn gate_releases_reservation_after_child_failure_or_success() {
         let fixture = Fixture::new();
         fs::write(fixture.repo.join("reserved.rs"), "fixture\n").expect("context file");
@@ -473,7 +468,6 @@ spec:
     /// earlier step was skipped by `when:`. The audit trail numbers only
     /// steps that started, so its `step_index` runs one behind the YAML
     /// position checkpoints are keyed by once a step is skipped.
-    #[test]
     fn run_show_step_output_survives_an_earlier_when_skipped_step() {
         let fixture = Fixture::new();
         fs::write(
@@ -539,7 +533,6 @@ spec:
         assert_ne!(first, third);
     }
 
-    #[test]
     fn resume_returns_while_detached_worker_continues_after_cli_exit() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
@@ -565,7 +558,6 @@ spec:
         fixture.poll_run(run_id, "success", Duration::from_secs(20));
     }
 
-    #[test]
     fn resume_wait_joins_detached_run_and_reports_success() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
@@ -603,7 +595,6 @@ spec:
         );
     }
 
-    #[test]
     fn resume_wait_exits_nonzero_for_a_failed_detached_run() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
@@ -629,5 +620,68 @@ spec:
         let run_id = waited["run_id"].as_str().expect("resumed run id");
         let shown = fixture.json(&["run", "show", run_id, "--json"]);
         assert_eq!(shown["run"]["state"], "failed");
+    }
+
+    #[test]
+    fn worker_command_contracts_0() {
+        for (name, check) in [
+            (
+                "ship_and_auto_cli_commands_launch_workers",
+                ship_and_auto_cli_commands_launch_workers as fn(),
+            ),
+            (
+                "auto_refuses_approve_proposed_with_pull",
+                auto_refuses_approve_proposed_with_pull as fn(),
+            ),
+            (
+                "auto_pull_validates_its_crew_restriction_before_submitting",
+                auto_pull_validates_its_crew_restriction_before_submitting as fn(),
+            ),
+        ] {
+            tracing::info!(case = name, "CLI contract row");
+            check();
+        }
+    }
+
+    #[test]
+    fn worker_command_contracts_1() {
+        for (name, check) in [
+            (
+                "auto_warns_when_required_validation_cannot_use_the_login_shell",
+                auto_warns_when_required_validation_cannot_use_the_login_shell as fn(),
+            ),
+            (
+                "gate_releases_reservation_after_child_failure_or_success",
+                gate_releases_reservation_after_child_failure_or_success as fn(),
+            ),
+            (
+                "run_show_step_output_survives_an_earlier_when_skipped_step",
+                run_show_step_output_survives_an_earlier_when_skipped_step as fn(),
+            ),
+        ] {
+            tracing::info!(case = name, "CLI contract row");
+            check();
+        }
+    }
+
+    #[test]
+    fn worker_command_contracts_2() {
+        for (name, check) in [
+            (
+                "resume_returns_while_detached_worker_continues_after_cli_exit",
+                resume_returns_while_detached_worker_continues_after_cli_exit as fn(),
+            ),
+            (
+                "resume_wait_joins_detached_run_and_reports_success",
+                resume_wait_joins_detached_run_and_reports_success as fn(),
+            ),
+            (
+                "resume_wait_exits_nonzero_for_a_failed_detached_run",
+                resume_wait_exits_nonzero_for_a_failed_detached_run as fn(),
+            ),
+        ] {
+            tracing::info!(case = name, "CLI contract row");
+            check();
+        }
     }
 }

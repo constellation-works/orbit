@@ -6,13 +6,7 @@ use serde_json::Value;
 
 use super::{FAILED, Fixture, isolated_run_observation};
 
-#[test]
 fn wait_expiry_reports_active_state_without_timing_out_the_run() {
-    if !isolated_run_observation(
-        "run_observation::wait::wait_expiry_reports_active_state_without_timing_out_the_run",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
     fs::create_dir_all(&jobs).unwrap();
@@ -100,13 +94,7 @@ fn wait_expiry_reports_active_state_without_timing_out_the_run() {
     }
 }
 
-#[test]
 fn invalid_wait_deadline_does_not_submit_work() {
-    if !isolated_run_observation(
-        "run_observation::wait::invalid_wait_deadline_does_not_submit_work",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     // Runtime open may reconcile the fixture's pre-seeded stale runs. Finish
     // that normal repair before comparing invalid submissions for mutations.
@@ -139,4 +127,24 @@ fn invalid_wait_deadline_does_not_submit_work() {
         before,
         "invalid wait options must not submit any runs"
     );
+}
+
+#[test]
+fn wait_contracts() {
+    if !isolated_run_observation("run_observation::wait::wait_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "wait_expiry_reports_active_state_without_timing_out_the_run",
+            wait_expiry_reports_active_state_without_timing_out_the_run as fn(),
+        ),
+        (
+            "invalid_wait_deadline_does_not_submit_work",
+            invalid_wait_deadline_does_not_submit_work as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }
