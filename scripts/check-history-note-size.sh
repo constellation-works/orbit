@@ -8,7 +8,7 @@ set -euo pipefail
 # entries holding 16.6% of all history bytes in the workspace, one of them
 # 85 KB. Every reader of that task pays for the blob: Daniel scanning history,
 # memory distillation, triage, and every agent whose task context is built from
-# the same note (`v2_host/task_context.rs`).
+# the same note (`engine_host/actions/task_context.rs`).
 #
 # The fix is a single cap in `orbit-engine`'s `context::outcome`, which keeps the
 # head of the message and points at `orbit run show <run_id> --json` for the

@@ -16,10 +16,10 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_config;
 use crate::application::job::seed_default_jobs;
 use crate::application::review::{install_review_admission, review_gate_admit};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::application::test_support::runtime_with_workspace_config;
 
 /// Workspace config with a before-PR reviewer crew distinct from the
 /// implementer; tests append further `[review]` keys.

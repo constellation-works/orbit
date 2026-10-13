@@ -1259,7 +1259,7 @@ Rejected alternative: enforce uniqueness at the store layer as a constraint on n
 ## Dispatch admission separates unmet dependencies from unsatisfiable ones
 
 **Recorded:** 2026-08-02 22:25:12.480309Z · [ORB-10593]
-**Paths:** `crates/orbit-types/src/task/model/task.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs`
+**Paths:** `crates/orbit-types/src/task/model/task.rs`, `crates/orbit-core/src/adapter/engine_host/actions/dispatch.rs`
 
 ### Context
 
@@ -1325,7 +1325,7 @@ Rejected alternatives: probing the base branch's own PR through GitHub (couples 
 ## Typed deterministic action declaration spans core and engine
 
 **Recorded:** 2026-08-09 06:46:48.177638Z · [ORB-10630]
-**Paths:** `crates/orbit-types/src/workflow/activity_job/mod.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs`, `crates/orbit-engine/src/executor/automation/mod.rs`
+**Paths:** `crates/orbit-types/src/workflow/activity_job/mod.rs`, `crates/orbit-core/src/adapter/engine_host/actions/dispatch.rs`, `crates/orbit-engine/src/executor/automation/mod.rs`
 
 ### Context
 Deterministic action names had independent core advertisement, core forwarding, engine constants, and engine dispatch lists. The resulting skew shipped asset actions that were not invocable.
@@ -1595,7 +1595,7 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 ## A backstop recovers tasks blocked outside pipelines
 
 **Recorded:** 2026-10-04 · [ORB-13898] · amended [ORB-14685]
-**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/adapter/engine_host/actions/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
 
 ### Context
 
@@ -1692,7 +1692,7 @@ A QA auto-task tagged `no-diff-expected` finished its sweep, returned a full acc
 
 **Recorded:** 2026-10-11 · [ORB-15643]
 **Amends:** the `timeout` contract of `invoke_and_wait` in [2_design.md](./2_design.md) §4, for callers that pass `on_timeout: cancel_child`
-**Paths:** `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/invoke.rs`, `crates/orbit-core/src/application/job/run/child_timeout.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/preserve.rs`, `crates/orbit-core/assets/jobs/task_gate_pipeline.yaml`, `crates/orbit-core/assets/jobs/task_auto_pipeline.yaml`
+**Paths:** `crates/orbit-core/src/adapter/engine_host/actions/pipeline_actions/invoke.rs`, `crates/orbit-core/src/application/job/run/child_timeout.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/preserve.rs`, `crates/orbit-core/assets/jobs/task_gate_pipeline.yaml`, `crates/orbit-core/assets/jobs/task_auto_pipeline.yaml`
 
 ### Context
 

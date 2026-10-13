@@ -31,7 +31,10 @@ pub mod review;
 pub mod routines;
 pub(crate) mod search;
 pub mod skill;
+pub(crate) mod sweep_filing;
 pub mod task;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod workflow;
 pub mod workspace_sync;
 

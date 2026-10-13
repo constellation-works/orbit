@@ -80,7 +80,7 @@ The wrapper constructs a deterministic Bubblewrap argv with these properties:
 3. Canonicalize every host path before it becomes a mount argument. Reject missing positive
    mount roots unless the root is an Orbit-owned state directory that Orbit creates before spawn.
    Handle missing deny roots as described below. Preserve the active-worktree and narrow
-   inherited-Orbit write allowances already appended by the v2 host.
+   inherited-Orbit write allowances already appended by the engine host.
 4. Apply existing exact-path and subtree `denyModify` roots as later read-only mounts so they
    override a broader writable parent. Expand non-subtree deny globs over the pre-spawn filesystem
    snapshot and mount every existing match read-only. Record that snapshot-bound enforcement in

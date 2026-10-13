@@ -5,7 +5,7 @@ summary: "Design: a per-run host broker runs plugin backends for sandboxed agent
 owner: claude
 status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
 last_updated: 2026-10-08
@@ -93,7 +93,7 @@ to be spawned from outside the agent sandbox.
 The in-sandbox path has two more defects today, even before any deny is added. Neither agent
 profile grants writes to `state/plugins/` or `state/plugin-secrets/`
 (`append_linux_runtime_write_roots` and `append_orbit_child_runtime_write_roots` in
-`crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/`). So an agent-initiated call
+`crates/orbit-core/src/adapter/engine_host/actions/sandbox/`). So an agent-initiated call
 cannot:
 
 - create a missing `{{plugin_state}}` or write to it, even when the backend holds an `fs.write`
@@ -583,7 +583,7 @@ witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
   `/private/var` rule the plugin profile uses) after every allow, so the deny is the last
   match.
 
-**As implemented.** The v2 host prepares the mask for every OS-sandboxed launch, a sandboxed
+**As implemented.** The engine host prepares the mask for every OS-sandboxed launch, a sandboxed
 `local_shell` step included, and carries it on the resolved sandbox beside, not inside, the
 agent's filesystem profile, so the §5 profile intersection is unchanged. Preparation creates
 each directory component without following links and refuses a link, a non-directory or a

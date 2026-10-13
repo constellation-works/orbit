@@ -6,7 +6,7 @@ paths:
   - "install.sh"
   - "crates/orbit-cli/src/command/init/**"
   - "crates/orbit-exec/src/**"
-  - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/**"
+  - "crates/orbit-core/src/adapter/engine_host/actions/tests/**"
   - "crates/orbit-cmd/src/update/bundled_bwrap.rs"
   - "scripts/build-bundled-bwrap.sh"
 related_features: [policy-sandbox, executors]

@@ -647,11 +647,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         } else {
             ExecutorSandboxKind::MacosSandboxExec
         };
-        crate::adapter::engine_host::v2_host::test_support::seed_executor(
-            &runtime,
-            "claude",
-            Some(kind),
-        );
+        crate::application::test_support::seed_executor(&runtime, "claude", Some(kind));
         let sandbox = runtime
             .resolve_executor_sandbox("claude", None, Some(&prepared.checkout))
             .expect("resolve recovery sandbox")
@@ -1033,8 +1029,8 @@ fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
 
     use orbit_types::workflow::ExecutorSandboxKind;
 
-    use crate::adapter::engine_host::v2_host::test_support::seed_executor;
     use crate::application::task::BACKSTOP_DECISIONS;
+    use crate::application::test_support::seed_executor;
     use crate::bootstrap::init::{InitOptions, init_workspace_at_root};
 
     if !enter_isolated_child(
