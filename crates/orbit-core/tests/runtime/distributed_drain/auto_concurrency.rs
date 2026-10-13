@@ -3,12 +3,14 @@
 //! Under `enforce` each request names the work the follower's load forecast
 //! has room for, no request goes out when nothing fits, and a claim is
 //! reserved on the follower. Shadow mode records the list and requests as
-//! with `off`, and `off` sends no list.
+//! with `off`, and `off` sends no list. While the follower's forecast holds
+//! no running delivery or reservation, every kind of work fits.
 //!
 //! The follower reads a fake `/proc` with 15 CPUs and 32 GiB, three quarters
 //! of which admission may use, and has one `change`/`low` profile using 12
 //! GiB. That profile prices every other kind of work too, as the heaviest on
-//! the host.
+//! the host. Another workspace's delivery, running past its profile with
+//! nothing measured, keeps the forecast from being idle without adding to it.
 
 use super::*;
 use chrono::Duration as ChronoDuration;
@@ -23,6 +25,11 @@ const GIB: u64 = 1024 * 1024 * 1024;
 
 /// A pair whose follower runs `mode`, with the profile and fake `/proc` above.
 fn forecasting(mode: &str) -> (Pair, PathBuf) {
+    forecasting_using(mode, 12 * GIB)
+}
+
+/// [`forecasting`] with a profile using `bytes`.
+fn forecasting_using(mode: &str, bytes: u64) -> (Pair, PathBuf) {
     let mut pair = Pair::with_follower_global(
         1,
         &format!(
@@ -36,7 +43,7 @@ fn forecasting(mode: &str) -> (Pair, PathBuf) {
         .follower
         .clone()
         .with_host_load_proc_root(proc_root.clone());
-    finished_delivery(&pair.follower, 12 * GIB);
+    finished_delivery(&pair.follower, bytes);
     (pair, proc_root)
 }
 
@@ -87,6 +94,37 @@ fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
             })
             .unwrap();
     }
+}
+
+/// A delivery of another workspace on the follower's host, admitted ten
+/// minutes ago and still running: past its borrowed three-minute profile,
+/// with nothing measured, it adds no load, but the forecast is not idle.
+/// Returns the store that ends it.
+fn neighbour_delivery(follower: &OrbitRuntime) -> (Arc<dyn JobRunStoreBackend>, String) {
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        follower.sqlite_store().unwrap(),
+        "ws-neighbour".to_string(),
+    );
+    let run = jobs
+        .insert_job_run(
+            "task_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({
+                "task_ids": ["NB-1"],
+                "resource_class": {
+                    "task_id": "NB-1",
+                    "work_class": "change",
+                    "complexity": "low",
+                    "admitted_at": Utc::now() - ChronoDuration::minutes(10),
+                },
+            })),
+            None,
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    (jobs, run.run_id)
 }
 
 /// A host of 15 idle CPUs with `used` of its 32 GiB in use.
@@ -149,6 +187,7 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
         return;
     }
     let (pair, proc_root) = forecasting("enforce");
+    neighbour_delivery(&pair.follower);
     // 16 GiB in use plus 12 is over the 24 GiB admission may reach.
     host_using(&proc_root, 16 * GIB);
     let drain = pair.run_drain();
@@ -223,6 +262,7 @@ fn shadow_and_off_followers_request_without_a_list() {
     }
     for mode in ["shadow", "off"] {
         let (pair, proc_root) = forecasting(mode);
+        neighbour_delivery(&pair.follower);
         host_using(&proc_root, 16 * GIB);
         let drain = pair.run_drain();
 
@@ -240,4 +280,53 @@ fn shadow_and_off_followers_request_without_a_list() {
             assert!(reservations(&pair.follower).is_empty());
         }
     }
+}
+
+/// Work whose profile alone is over the 24 GiB admission may reach is unfit
+/// while another delivery runs on the host, and admissible once the
+/// follower's forecast holds no running delivery or reservation, so the host
+/// is not kept from it for good.
+#[test]
+fn an_enforcing_follower_admits_work_too_big_to_fit_only_on_an_idle_host() {
+    if !isolated(
+        module_path!(),
+        "an_enforcing_follower_admits_work_too_big_to_fit_only_on_an_idle_host",
+    ) {
+        return;
+    }
+    let (pair, proc_root) = forecasting_using("enforce", 25 * GIB);
+    let (neighbour_jobs, neighbour) = neighbour_delivery(&pair.follower);
+    host_using(&proc_root, 4 * GIB);
+    let drain = pair.run_drain();
+
+    let pass = pair.pass(&drain);
+
+    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+    let fit = admission_fit(&pair, &drain).expect("the fit is recorded");
+    assert!(fit.admissible.is_empty(), "{fit:?}");
+    let unfit = fit
+        .unfit
+        .iter()
+        .find(|unfit| unfit.work == "change/low")
+        .expect("change/low is unfit");
+    assert_eq!(unfit.reason, "memory 91% at +0m", "{fit:?}");
+
+    neighbour_jobs
+        .finalize_job_run(&neighbour, JobRunState::Success, Utc::now(), Some(0))
+        .unwrap();
+    let pass = pair.pass(&drain);
+
+    let pulls = pair.wire.calls("orbit.task.pull");
+    assert_eq!(pulls.len(), 1, "{pass}");
+    assert!(
+        pulls[0]["admissible"]["keys"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"work_class": "change", "complexity": "low"})),
+        "{}",
+        pulls[0]
+    );
+    let fit = admission_fit(&pair, &drain).unwrap();
+    assert!(fit.admissible.iter().any(|work| work == "change/low"));
+    assert!(fit.unfit.is_empty(), "{fit:?}");
 }

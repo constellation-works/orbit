@@ -11,9 +11,16 @@
 //!   so one pass can admit several that account for each other. One that
 //!   does not is recorded with the minute and resource that failed, and the
 //!   walk goes on to smaller work.
+//! - **Idle host.** While the forecast holds no running delivery or
+//!   reservation, and the pass has admitted nothing, a candidate that does
+//!   not fit is admitted anyway, even one whose profile alone exceeds a
+//!   threshold: nothing would make room by finishing. Its admission records
+//!   the miss.
 //! - **Starvation guard.** The first candidate gap fit judges in a pass is
 //!   the head. Once it has failed for longer than `head_max_wait_minutes`,
 //!   over consecutive passes, nothing behind it is admitted until it fits.
+//!   It waits only on running deliveries and reservations, which end: once
+//!   they have, the idle-host rule admits it.
 //! - **No profiles.** On a host without profiles every lookup finds none
 //!   and every candidate fits, so admission is what it is without gap fit.
 //!   A host whose size cannot be read admits the same way.
@@ -184,32 +191,36 @@ impl<'a> GapFit<'a> {
             });
             return false;
         }
-        let miss = match (&self.gap, found.profile.as_deref()) {
-            (Some(gap), Some(profile)) => gap.fit(profile).err(),
-            _ => None,
+        let verdict = match (&self.gap, found.profile.as_deref()) {
+            (Some(gap), Some(profile)) => gap.fit(profile),
+            _ => Ok(None),
         };
         let is_head = !self.head_judged;
         self.head_judged = true;
-        if let Some(miss) = miss {
-            if is_head {
-                self.head = Some(self.head_wait.head(&task.id));
+        let idle_host = match verdict {
+            Ok(idle_host) => idle_host,
+            Err(miss) => {
+                if is_head {
+                    self.head = Some(self.head_wait.head(&task.id));
+                }
+                self.skipped.push(GapFitSkip {
+                    task_id: task.id.clone(),
+                    profile_source,
+                    resource: Some(miss.resource.as_str().to_string()),
+                    minute: Some(miss.minute),
+                    percent: Some(miss.percent),
+                    detail: miss.describe(),
+                });
+                return false;
             }
-            self.skipped.push(GapFitSkip {
-                task_id: task.id.clone(),
-                profile_source,
-                resource: Some(miss.resource.as_str().to_string()),
-                minute: Some(miss.minute),
-                percent: Some(miss.percent),
-                detail: miss.describe(),
-            });
-            return false;
-        }
-        if let (Some(gap), Some(profile)) = (self.gap.as_mut(), found.profile.as_deref()) {
-            gap.add(profile);
+        };
+        if let Some(gap) = self.gap.as_mut() {
+            gap.add(found.profile.as_deref());
         }
         self.admitted.push(GapFitAdmission {
             task_id: task.id.clone(),
             profile_source,
+            idle_host: idle_host.map(|admission| admission.describe()),
         });
         self.reservations.push(AdmissionReservationRequest {
             task_id: task.id.clone(),

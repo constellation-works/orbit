@@ -503,6 +503,13 @@ pub struct GapFitAdmission {
     /// `without_complexity`, `base_class`, `heaviest_of_class`,
     /// `heaviest_on_host`, or `none` on a host without profiles.
     pub profile_source: String,
+    /// Set when it did not fit but the forecast held no running delivery or
+    /// reservation, so it was admitted anyway: where it first exceeded its
+    /// threshold, and whether its profile did so on its own or only with the
+    /// host baseline, e.g. `cpu 125% at +3m on its own; admitted on an idle
+    /// host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_host: Option<String>,
 }
 
 /// A candidate gap fit kept out of the pass.

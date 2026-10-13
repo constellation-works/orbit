@@ -83,8 +83,13 @@ impl Fixture {
     }
 
     /// One finished `change` delivery of `complexity`, admitted days ago and
-    /// lasting a minute per sample.
+    /// lasting a minute per sample, at 1 GiB a minute.
     fn finished_delivery(&self, complexity: &str, cpu: &[f64]) {
+        self.finished_delivery_using(complexity, cpu, GIB);
+    }
+
+    /// [`Self::finished_delivery`] using `memory` bytes a minute.
+    fn finished_delivery_using(&self, complexity: &str, cpu: &[f64], memory: u64) {
         let index = self.next.get();
         self.next.set(index + 1);
         let task = format!("ORB-done-{index}");
@@ -128,7 +133,7 @@ impl Fixture {
                     resumed: false,
                     delivery_admitted_at: Some(admitted),
                     cpu_cores: *cores,
-                    memory_bytes: GIB,
+                    memory_bytes: memory,
                     samples: 12,
                 })
                 .unwrap();
@@ -154,6 +159,27 @@ impl Fixture {
             })
             .unwrap()
             .id
+    }
+
+    /// The delivery of `task` ran and ended, so its reservation leaves the
+    /// forecast.
+    fn delivered(&self, task: &str) {
+        let run = running_run(
+            &self.runtime,
+            "task_auto_pipeline",
+            json!({"task_ids": [task]}),
+        );
+        self.ended(&run);
+    }
+
+    /// `run` ends.
+    fn ended(&self, run: &str) {
+        orbit_store::compose::workspace_job_run_store(
+            self.runtime.sqlite_store().unwrap(),
+            self.workspace_id(),
+        )
+        .finalize_job_run(run, JobRunState::Success, Utc::now(), Some(0))
+        .unwrap();
     }
 
     /// A `hard` delivery of a new task, admitted two minutes ago and still
@@ -681,4 +707,172 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
         .map(|offset| (offset.offset_minutes, offset.unmeasured))
         .collect();
     assert_eq!(unmeasured, vec![(5, 2), (10, 2), (20, 0), (30, 0)]);
+}
+
+/// A candidate that cannot fit under the thresholds beside running work is
+/// refused while that work runs, with the minute and resource, and admitted
+/// once the host holds no running delivery or reservation, with the miss it
+/// was admitted over: CPU above 8 cores on its own, memory above 24 GiB on
+/// its own, and memory that fits on its own but not over the 2 GiB the host
+/// already uses.
+#[test]
+fn a_candidate_that_cannot_fit_beside_running_work_is_admitted_on_an_idle_host() {
+    if !isolated(
+        "dispatch_admission::gap_fit::a_candidate_that_cannot_fit_beside_running_work_is_admitted_on_an_idle_host",
+    ) {
+        return;
+    }
+    let cases: [(&[f64], u64, &str, &str); 3] = [
+        (
+            &[1.0, 9.0, 1.0],
+            GIB,
+            "cpu 90% at +1m",
+            "cpu 90% at +1m on its own; admitted on an idle host",
+        ),
+        (
+            &[1.0, 1.0, 1.0],
+            25 * GIB,
+            "memory 162% at +0m",
+            "memory 78% at +0m on its own; admitted on an idle host",
+        ),
+        (
+            &[1.0, 1.0, 1.0],
+            23 * GIB,
+            "memory 150% at +0m",
+            "memory 78% at +0m with the host baseline; admitted on an idle host",
+        ),
+    ];
+    for (cpu, memory, refused, admitted_over) in cases {
+        let fixture = Fixture::new("enforce", "");
+        // The running `hard` delivery borrows this profile too, as the
+        // heaviest of its class: one core and `memory` at +0m.
+        fixture.finished_delivery_using("medium", cpu, memory);
+        let running = fixture.running_hard_delivery();
+        let big = fixture.task("big", TaskPriority::High, TaskComplexity::Medium);
+        let drain = fixture.drain();
+
+        let busy = classify(&fixture.runtime, &drain, 4);
+        assert_eq!(admitted(&busy), Vec::<String>::new(), "{busy:#}");
+        let record = recorded(&fixture.runtime, &drain, &busy);
+        let [skip] = record.skipped.as_slice() else {
+            panic!("{record:#?}");
+        };
+        assert_eq!(skip.task_id, big);
+        assert_eq!(skip.detail, refused, "{record:#?}");
+        assert!(skip.resource.is_some() && skip.minute.is_some());
+
+        fixture.ended(&running);
+        let idle = classify(&fixture.runtime, &drain, 4);
+        assert_eq!(admitted(&idle), vec![big.clone()], "{idle:#}");
+        let record = recorded(&fixture.runtime, &drain, &idle);
+        let [admission] = record.admitted.as_slice() else {
+            panic!("{record:#?}");
+        };
+        assert_eq!(admission.idle_host.as_deref(), Some(admitted_over));
+        assert!(record.head.is_none(), "{record:#?}");
+        assert_eq!(fixture.reserved(&fixture.runtime), vec![big]);
+    }
+}
+
+/// A head too big to fit beside running work, once protected, holds a
+/// smaller candidate that fits while that work runs. On the first pass after
+/// the host goes idle the head is admitted and the guard lifts; the smaller
+/// candidate is then judged against the head's reservation, not held behind
+/// it.
+#[test]
+fn a_protected_head_too_big_for_a_busy_host_is_admitted_once_the_host_is_idle() {
+    if !isolated(
+        "dispatch_admission::gap_fit::a_protected_head_too_big_for_a_busy_host_is_admitted_once_the_host_is_idle",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("enforce", "head_max_wait_minutes = 0\n");
+    fixture.finished_delivery("hard", &[1.0, 9.0, 1.0]);
+    fixture.finished_delivery("low", &[0.5, 0.5]);
+    let running = fixture.running_hard_delivery();
+    let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Hard);
+    let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    let first = classify(&fixture.runtime, &drain, 2);
+    assert_eq!(admitted(&first), vec![light.clone()], "{first:#}");
+    let head = recorded(&fixture.runtime, &drain, &first).head.unwrap();
+    assert_eq!(head.task_id, heavy);
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let second = classify(&fixture.runtime, &drain, 2);
+    assert_eq!(admitted(&second), Vec::<String>::new(), "{second:#}");
+    let record = recorded(&fixture.runtime, &drain, &second);
+    assert!(record.head.as_ref().unwrap().protected, "{record:#?}");
+    let held = record
+        .skipped
+        .iter()
+        .find(|skip| skip.task_id == light)
+        .expect("the light task is held");
+    assert!(held.resource.is_none(), "{held:#?}");
+
+    // The light delivery the first pass admitted runs and ends, and so does
+    // the running `hard` one: nothing is left to make room by finishing.
+    fixture.delivered(&light);
+    fixture.ended(&running);
+    let third = classify(&fixture.runtime, &drain, 2);
+    assert_eq!(admitted(&third), vec![heavy.clone()], "{third:#}");
+    let record = recorded(&fixture.runtime, &drain, &third);
+    assert!(record.head.is_none(), "the guard lifts: {record:#?}");
+    assert!(record.admitted[0].idle_host.is_some(), "{record:#?}");
+    let refused = record
+        .skipped
+        .iter()
+        .find(|skip| skip.task_id == light)
+        .expect("the light task is judged");
+    assert_eq!(refused.detail, "cpu 95% at +1m", "{record:#?}");
+}
+
+/// The idle-host rule admits one candidate per idle forecast: in one pass the
+/// first of two candidates too big for the thresholds is admitted and the
+/// second is judged against it. `shadow` admits what `off` admits, records
+/// the same decisions and reserves nothing.
+#[test]
+fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
+    if !isolated(
+        "dispatch_admission::gap_fit::an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new("off", "");
+    fixture.finished_delivery("hard", &[1.0, 9.0, 1.0]);
+    let first = fixture.task("first", TaskPriority::High, TaskComplexity::Hard);
+    let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Hard);
+    let drain = fixture.drain();
+
+    let off = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&off), vec![first.clone(), second.clone()]);
+
+    let shadow_runtime = fixture.with_mode("shadow", "");
+    let shadow = classify(&shadow_runtime, &drain, 4);
+    assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
+    let shadow_record = recorded(&shadow_runtime, &drain, &shadow);
+    assert!(fixture.reserved(&shadow_runtime).is_empty());
+
+    let enforce_runtime = fixture.with_mode("enforce", "");
+    let enforce = classify(&enforce_runtime, &drain, 4);
+    assert_eq!(admitted(&enforce), vec![first.clone()], "{enforce:#}");
+    let enforce_record = recorded(&enforce_runtime, &drain, &enforce);
+    assert_eq!(fixture.reserved(&enforce_runtime), vec![first.clone()]);
+
+    for record in [shadow_record, enforce_record] {
+        let [admission] = record.admitted.as_slice() else {
+            panic!("{record:#?}");
+        };
+        assert_eq!(admission.task_id, first);
+        assert_eq!(
+            admission.idle_host.as_deref(),
+            Some("cpu 90% at +1m on its own; admitted on an idle host")
+        );
+        let [skip] = record.skipped.as_slice() else {
+            panic!("{record:#?}");
+        };
+        assert_eq!(skip.task_id, second);
+        assert_eq!(skip.detail, "cpu 180% at +1m");
+    }
 }

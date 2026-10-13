@@ -9,6 +9,11 @@
 //!   host. A template it has never run here is not listed, so under
 //!   `enforce` it stays for another executor until this host has run it.
 //!
+//! Each kind is judged by the local drain's rule, [`ForecastGap::fit`]: while
+//! the forecast holds no running delivery or reservation every kind fits, even
+//! one whose profile alone exceeds a threshold, so no kind is kept from an
+//! idle host for good.
+//!
 //! Under `machine.auto_concurrency.mode = "enforce"` the request carries the
 //! list and the owner admits only a task inside it. When nothing fits, the
 //! drain requests nothing. In shadow mode the list is recorded on the drain
@@ -28,7 +33,7 @@ use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, PullAdmissionFit, PullUnfitWor
 
 use crate::OrbitRuntime;
 use crate::runtime::host_resource::forecast::{
-    AdmissionLimits, AdmissionReservationRequest, ForecastDecision, HostLoadForecast, gap_fit,
+    AdmissionReservationRequest, ForecastDecision, ForecastGap, HostLoadForecast,
 };
 use crate::runtime::host_resource::profile::{BaseClass, ProfileLookup};
 
@@ -79,14 +84,9 @@ impl OrbitRuntime {
         };
         let workspace = self.workspace_id()?;
         self.admit_against_forecast(|forecast| {
-            let outcome = forecast.host.as_ref().and_then(|host| {
-                let limits = AdmissionLimits::of(
-                    host,
-                    settings.admit_cpu_percent,
-                    settings.admit_memory_percent,
-                );
-                work_fit(forecast, &workspace, &limits, enforce, &settings.mode)
-            });
+            let outcome = forecast
+                .gap(settings.admit_cpu_percent, settings.admit_memory_percent)
+                .and_then(|gap| work_fit(forecast, &gap, &workspace, enforce, &settings.mode));
             Ok(ForecastDecision {
                 outcome,
                 admitted: Vec::new(),
@@ -129,12 +129,13 @@ impl OrbitRuntime {
     }
 }
 
-/// Fit every kind of work of `workspace` against `forecast`. `None` when the
-/// host has no profiles: nothing can be priced.
+/// Fit every kind of work of `workspace` into `gap`, the room under
+/// `forecast`, each kind on its own. `None` when the host has no profiles:
+/// nothing can be priced.
 fn work_fit(
     forecast: &HostLoadForecast,
+    gap: &ForecastGap,
     workspace: &str,
-    limits: &AdmissionLimits,
     enforce: bool,
     mode: &str,
 ) -> Option<PullWorkFit> {
@@ -149,16 +150,16 @@ fn work_fit(
         let verdict = profiles
             .lookup(&lookup)
             .profile
-            .map_or(Ok(()), |profile| gap_fit(forecast, &profile, limits));
+            .map_or(Ok(None), |profile| gap.fit(&profile));
         match verdict {
-            Ok(()) => {
+            Ok(_) => {
                 admissible.push(work);
                 true
             }
-            Err(overload) => {
+            Err(miss) => {
                 unfit.push(PullUnfitWork {
                     work,
-                    reason: overload.to_string(),
+                    reason: miss.describe(),
                 });
                 false
             }

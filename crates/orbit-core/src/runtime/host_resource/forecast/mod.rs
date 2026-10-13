@@ -25,10 +25,14 @@
 //! database shows what another just admitted. Profiles come from the
 //! profile cache.
 //!
-//! [`HostLoadForecast::gap`] is the room a local drain's gap fit admits
-//! into: a candidate joins its pass only if, at every minute of its horizon,
-//! the forecast plus its profile stays under `admit_cpu_percent` of the
-//! host's cores and `admit_memory_percent` of its memory.
+//! [`HostLoadForecast::gap`] is the room gap fit admits into, for a local
+//! drain's candidates and a pull drain's kinds of work alike: a candidate
+//! fits only if, at every minute of its horizon, the forecast plus its
+//! profile stays under `admit_cpu_percent` of the host's cores and
+//! `admit_memory_percent` of its memory. While the forecast holds no running
+//! delivery or reservation, one that does not fit is admitted anyway: nothing
+//! on the host would make room by finishing, and the throttle is the
+//! backstop.
 //! [`HostLoadForecast::accuracy_points`] is what the pass records of it, to
 //! check against the host's measured minutes.
 
@@ -45,8 +49,7 @@ mod host_load;
 mod record;
 
 pub(crate) use build::build_forecast;
-pub(crate) use fit::{AdmissionLimits, gap_fit};
-pub use fit::{ForecastGap, GapMiss, GapResource};
+pub use fit::{ForecastGap, GapMiss, GapResource, IdleHostAdmission};
 pub(crate) use host_load::HostLoadProbe;
 pub use record::{ACCURACY_OFFSETS, ForecastPoints};
 
