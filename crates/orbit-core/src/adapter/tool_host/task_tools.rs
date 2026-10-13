@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::governance::operation::OperationInput;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, required_string,
 };
@@ -56,10 +57,14 @@ pub(super) fn reject(
 /// resolve all belong to the store, so this handler adds no second access
 /// rule of its own — a caller can only ever reach an artifact through the task
 /// that owns it.
-pub(super) fn artifact_get(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
+pub(super) fn artifact_get(
+    runtime: &OrbitRuntime,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
     let listing_hint = "list available artifacts with orbit.task.show and field: \"artifacts\"";
-    let path = required_string(&input, &["path", "artifact_path", "artifactPath"], "path")
+    let path = input
+        .required_string("path")
         .map_err(|error| OrbitError::InvalidInput(format!("{error}; {listing_hint}")))?;
     if path == "." {
         return Err(OrbitError::InvalidInput(format!(

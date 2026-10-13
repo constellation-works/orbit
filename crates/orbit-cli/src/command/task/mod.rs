@@ -19,6 +19,7 @@ pub(crate) mod review_reset;
 mod show;
 pub(crate) mod support;
 
+pub(crate) use command::TaskInvocation;
 pub use command::{TaskCommand, TaskSubcommand};
 pub use publication::TaskPublicationSubcommand;
 

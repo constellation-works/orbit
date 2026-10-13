@@ -59,6 +59,8 @@ use crate::protocol::tool_input::{
 pub enum ParamType {
     /// A single string value.
     String,
+    /// A path string, preserved byte-for-byte by the CLI argument projection.
+    Path,
     /// A string, or an array of strings; comma-separated strings are accepted.
     StringList,
     /// A non-negative integer.
@@ -120,7 +122,7 @@ impl ParamType {
     /// The `ToolParam::param_type` token for this parameter type.
     pub fn as_tool_param_type(self) -> &'static str {
         match self {
-            ParamType::String => "string",
+            ParamType::String | ParamType::Path => "string",
             ParamType::StringList | ParamType::EnumList(_) => "string_list",
             ParamType::Integer => "integer",
             ParamType::UnsignedInteger => "u64",
@@ -212,6 +214,15 @@ pub struct CliBinding {
     pub required: bool,
 }
 
+/// A relationship between two CLI argument names.
+#[derive(Debug, Clone, Copy)]
+pub enum CliConstraint {
+    /// The arguments may not be supplied together.
+    ConflictsWith(&'static str, &'static str),
+    /// The first argument is required unless the second is supplied.
+    RequiredUnlessPresent(&'static str, &'static str),
+}
+
 /// A verb's `--help` beyond its summary and its parameters' help.
 #[derive(Debug, Clone, Copy)]
 pub struct CliHelp {
@@ -224,6 +235,8 @@ pub struct CliHelp {
     /// declaration order the MCP schema follows. Empty keeps declaration
     /// order; otherwise it names every CLI-bound parameter once.
     pub flag_order: &'static [&'static str],
+    /// Argument relationships enforced by the CLI parser.
+    pub constraints: &'static [CliConstraint],
 }
 
 impl CliHelp {
@@ -232,6 +245,7 @@ impl CliHelp {
         long_about: None,
         after_help: None,
         flag_order: &[],
+        constraints: &[],
     };
 }
 
@@ -675,7 +689,7 @@ pub fn alternatives(labels: impl IntoIterator<Item = String>) -> String {
 fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> {
     let name = param.name;
     let (valid, expected) = match param.param_type {
-        ParamType::String => (value.is_string(), "a string"),
+        ParamType::String | ParamType::Path => (value.is_string(), "a string"),
         ParamType::StringList | ParamType::EnumList(_) => match value {
             Value::Array(items) if !items.iter().all(Value::is_string) => {
                 return Err(OrbitError::InvalidInput(format!(
@@ -790,8 +804,8 @@ impl OperationInput {
 
 /// An intermediate CLI subcommand that groups verbs (`task artifact`).
 ///
-/// Declared for nouns whose verbs nest; the CLI adapter builds groups once the
-/// first such noun migrates. Friction declares none.
+/// The CLI adapter builds one intermediate group for two-segment paths,
+/// including its help and inherited CLI-only options. Friction declares none.
 #[derive(Debug, Clone, Copy)]
 pub struct CliGroup {
     /// The group's subcommand name, matching the first `cli_path` segment of
@@ -799,6 +813,8 @@ pub struct CliGroup {
     pub name: &'static str,
     /// `--help` summary for the group.
     pub cli_about: &'static str,
+    /// CLI-only global arguments inherited by this group's verbs.
+    pub params: &'static [ParamSpec],
 }
 
 /// Registration of a noun's tools that have no MCP scope.

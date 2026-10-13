@@ -22,8 +22,8 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Map, Value, json};
 
 use super::run::RunSubcommand;
+use super::task::TaskInvocation;
 use super::task::TaskSubcommand;
-use super::task::artifact::TaskArtifactSubcommand;
 use super::tool::ToolSubcommand;
 use super::{Cli, CommandOut, Commands, Payload};
 
@@ -151,10 +151,9 @@ fn requested_host(command: &Commands) -> Option<String> {
     let host = match command {
         Commands::Task(task) => match &task.command {
             // A registry-derived verb takes `--host` as a CLI-only parameter.
-            TaskSubcommand::Operation(invocation) => {
+            TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
                 invocation.input.get("host").and_then(Value::as_str)
             }
-            TaskSubcommand::Artifact(command) => command.routing.host.as_deref(),
             TaskSubcommand::ReviewReset(args) => args.routing.host.as_deref(),
             TaskSubcommand::ReconcileReview(command) => command.routing.host.as_deref(),
             _ => None,
@@ -182,16 +181,14 @@ fn explicit_root(cli: &Cli) -> bool {
 fn routed_command_id(command: &TaskSubcommand) -> Option<&str> {
     match command {
         // A registry-derived verb routes by id when its tool does.
-        TaskSubcommand::Operation(invocation)
-            if invocation.spec.verb == TaskVerb::Update
-                || is_id_routed_tool(invocation.spec.tool_name) =>
+        TaskSubcommand::Operation(TaskInvocation::Registry(invocation))
+            if matches!(
+                invocation.spec.verb,
+                TaskVerb::Update | TaskVerb::ArtifactPut
+            ) || is_id_routed_tool(invocation.spec.tool_name) =>
         {
             invocation.target_id()
         }
-        TaskSubcommand::Artifact(artifact) => Some(match &artifact.command {
-            TaskArtifactSubcommand::Put(args) => &args.id,
-            TaskArtifactSubcommand::Get(args) => &args.id,
-        }),
         TaskSubcommand::ReviewReset(args) => Some(&args.id),
         TaskSubcommand::ReconcileReview(command) => Some(command.command.task_id()),
         _ => None,
@@ -341,7 +338,10 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
 
 fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
     Ok(match command {
-        TaskSubcommand::Operation(invocation) => match invocation.spec.verb {
+        TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => match invocation
+            .spec
+            .verb
+        {
             TaskVerb::Show => {
                 let id = invocation.target_id().unwrap_or_default();
                 let fields = invocation
@@ -371,29 +371,21 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 input: super::task::operation::remote_update_input(&invocation.input, &holder.ssh)?,
                 render: Render::TaskWrite { verb: "Updated" },
             },
-            TaskVerb::Add | TaskVerb::List | TaskVerb::Eligible | TaskVerb::Lint => {
-                return Err(not_routable());
-            }
-        },
-        TaskSubcommand::Artifact(artifact) => match &artifact.command {
-            TaskArtifactSubcommand::Put(args) => {
-                let mut input = json!({
-                    "id": args.id,
-                    "source_path": args.source_path,
-                });
-                if let Some(path) = &args.artifact_path {
-                    input["path"] = json!(path);
+            TaskVerb::ArtifactPut => {
+                let mut input = invocation.input.clone();
+                input.shift_remove("host");
+                let model = input
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                if let (_, Some(model)) = super::task::mutation_identity(model) {
+                    input.insert("model".into(), json!(model));
                 }
-                if let (_, Some(model)) = super::task::mutation_identity(args.model.clone()) {
-                    input["model"] = json!(model);
-                }
-                // The bytes cross, never the path: the source is read here,
-                // confined to the current directory.
                 let cwd = std::env::current_dir()?;
                 RoutedCall {
-                    name: "orbit.task.artifact.put".into(),
+                    name: invocation.spec.tool_name.into(),
                     input: orbit_cmd::prepare_remote_task_artifact_put(
-                        input,
+                        Value::Object(input),
                         Some(&cwd),
                         Some(&cwd),
                     )?,
@@ -402,13 +394,26 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                     },
                 }
             }
-            TaskArtifactSubcommand::Get(args) => RoutedCall {
-                name: "orbit.task.artifact.get".into(),
-                input: json!({ "id": args.id, "path": args.path }),
+            TaskVerb::ArtifactGet => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: json!({ "id": invocation.input.get("id"), "path": invocation.input.get("path") }),
                 render: Render::ArtifactGet {
-                    out: args.out.clone(),
+                    out: invocation
+                        .input
+                        .get("out")
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from),
                 },
             },
+            TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::Add
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Lint => {
+                return Err(not_routable());
+            }
         },
         TaskSubcommand::ReviewReset(args) => RoutedCall {
             name: "orbit.task.review_reset".into(),

@@ -310,7 +310,29 @@ pub(super) fn task_operation(
         TaskVerb::Lint if invocation.input.get("restore_pruned") != Some(&Value::Bool(true)) => {
             operation.runtime_need = RuntimeNeed::ReadOnly;
         }
-        TaskVerb::Add
+        TaskVerb::ArtifactGet => {
+            operation.runtime_need = RuntimeNeed::TaskOwner {
+                task_id: invocation.target_id().unwrap_or_default().to_string(),
+            };
+        }
+        TaskVerb::LocksList | TaskVerb::LocksReserve => {
+            if let Some(meta) = &mut operation.audit_meta {
+                meta.target_type = None;
+                meta.target_id = None;
+            }
+        }
+        TaskVerb::LocksRelease => {
+            if let Some(meta) = &mut operation.audit_meta {
+                meta.target_type = Some("reservation".into());
+                meta.target_id = invocation
+                    .input
+                    .get("reservation_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+            }
+        }
+        TaskVerb::ArtifactPut
+        | TaskVerb::Add
         | TaskVerb::Update
         | TaskVerb::Lint
         | TaskVerb::List

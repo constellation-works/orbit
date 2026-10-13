@@ -16,6 +16,7 @@ name = "orbit"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 colored = "2"

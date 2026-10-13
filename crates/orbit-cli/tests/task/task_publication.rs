@@ -86,7 +86,10 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
         "Second published task",
         "second durable body",
     );
-    let attachment = temp.path().join("operator-note.txt");
+    // Artifact put confines its source file to the workspace checkout.
+    let scratch = source_repo.join(".orbit").join("tmp");
+    fs::create_dir_all(&scratch).expect("workspace scratch");
+    let attachment = scratch.join("operator-note.txt");
     fs::write(&attachment, "operator-only attachment\n").expect("attachment");
     orbit(
         &source_repo,

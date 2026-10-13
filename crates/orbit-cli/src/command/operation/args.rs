@@ -26,8 +26,8 @@ use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::operation::{
-    CliArgKind, CliBinding, EnumValue, OperationSpec, OperationVerb, ParamSpec, ParamType,
-    alternatives,
+    CliArgKind, CliBinding, CliConstraint, EnumValue, OperationSpec, OperationVerb, ParamSpec,
+    ParamType, alternatives,
 };
 use orbit_core::OrbitError;
 use serde_json::{Map, Value};
@@ -84,10 +84,31 @@ impl<V: OperationVerb> Invocation<V> {
 
 impl<V: OperationVerb> Subcommand for Invocation<V> {
     fn augment_subcommands(cmd: Command) -> Command {
-        V::noun()
+        let noun = V::noun();
+        let cmd = noun
             .operations
             .iter()
-            .fold(cmd, |cmd, spec| cmd.subcommand(subcommand_for(spec)))
+            .filter(|spec| spec.cli_path.len() == 1)
+            .fold(cmd, |cmd, spec| cmd.subcommand(subcommand_for(spec)));
+        noun.cli_groups.iter().fold(cmd, |cmd, group| {
+            let mut child = Command::new(group.name)
+                .about(group.cli_about)
+                .subcommand_required(true)
+                .arg_required_else_help(true);
+            for param in group.params {
+                if let Some(binding) = param.cli {
+                    child = child.arg(arg_for(param, binding).global(true));
+                }
+            }
+            for spec in noun
+                .operations
+                .iter()
+                .filter(|spec| spec.cli_path.len() == 2 && spec.cli_path[0] == group.name)
+            {
+                child = child.subcommand(subcommand_for(spec));
+            }
+            cmd.subcommand(child)
+        })
     }
 
     fn augment_subcommands_for_update(cmd: Command) -> Command {
@@ -95,29 +116,46 @@ impl<V: OperationVerb> Subcommand for Invocation<V> {
     }
 
     fn has_subcommand(name: &str) -> bool {
-        find_by_subcommand::<V>(name).is_some()
+        find_by_subcommand::<V>(&[name]).is_some()
+            || V::noun().cli_groups.iter().any(|group| group.name == name)
     }
 }
 
 impl<V: OperationVerb> FromArgMatches for Invocation<V> {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
         let noun = V::noun().cli_name;
-        let Some((name, sub_matches)) = matches.subcommand() else {
+        let Some((name, mut sub_matches)) = matches.subcommand() else {
             return Err(clap::Error::raw(
                 ErrorKind::MissingSubcommand,
                 format!("a {noun} subcommand is required\n"),
             ));
         };
-        let Some(spec) = find_by_subcommand::<V>(name) else {
+        let mut path = vec![name];
+        let group = V::noun().cli_groups.iter().find(|group| group.name == name);
+        if group.is_some() {
+            let Some((verb, leaf)) = sub_matches.subcommand() else {
+                return Err(clap::Error::raw(
+                    ErrorKind::MissingSubcommand,
+                    format!("a {name} subcommand is required\n"),
+                ));
+            };
+            path.push(verb);
+            sub_matches = leaf;
+        }
+        let Some(spec) = find_by_subcommand::<V>(&path) else {
             return Err(clap::Error::raw(
                 ErrorKind::InvalidSubcommand,
                 format!("unrecognized {noun} subcommand `{name}`\n"),
             ));
         };
-        Ok(Invocation {
-            input: input_from_matches(spec, sub_matches),
-            spec,
-        })
+        let mut input = input_from_matches(spec, sub_matches);
+        if let Some(group) = group {
+            input.extend(input_from_params(
+                group.params.iter().filter(|param| param.cli.is_some()),
+                sub_matches,
+            ));
+        }
+        Ok(Invocation { input, spec })
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
@@ -127,11 +165,11 @@ impl<V: OperationVerb> FromArgMatches for Invocation<V> {
 }
 
 /// The operation whose CLI subcommand is `name`.
-fn find_by_subcommand<V: OperationVerb>(name: &str) -> Option<&'static OperationSpec<V>> {
+fn find_by_subcommand<V: OperationVerb>(path: &[&str]) -> Option<&'static OperationSpec<V>> {
     V::noun()
         .operations
         .iter()
-        .find(|spec| spec.cli_path == [name])
+        .find(|spec| spec.cli_path == path)
 }
 
 /// Build one verb's clap subcommand from its spec.
@@ -139,17 +177,10 @@ fn find_by_subcommand<V: OperationVerb>(name: &str) -> Option<&'static Operation
 /// Arg construction order is the spec's parameter order. Global output
 /// options are added to the assembled tree by the CLI entry point.
 ///
-/// Every path is one segment until a noun declares
-/// [`NounSpec::cli_groups`](orbit_common::governance::operation::NounSpec::cli_groups);
-/// the group adapter lands with that noun.
+/// The leaf name comes from `cli_path`; its parent is built from `cli_groups`.
 fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
-    debug_assert_eq!(
-        spec.cli_path.len(),
-        1,
-        "{} declares a nested CLI path, which needs the CLI group adapter",
-        spec.tool_name
-    );
-    let mut cmd = Command::new(spec.cli_path.join("-")).about(spec.cli_about);
+    let mut cmd =
+        Command::new(spec.cli_path.last().copied().unwrap_or_default()).about(spec.cli_about);
     if let Some(long_about) = spec.cli_help.long_about {
         cmd = cmd.long_about(long_about);
     }
@@ -158,6 +189,16 @@ fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
     }
     for (param, binding) in spec.cli_params_in_help_order() {
         cmd = cmd.arg(arg_for(param, binding));
+    }
+    for constraint in spec.cli_help.constraints {
+        cmd = match *constraint {
+            CliConstraint::ConflictsWith(arg, other) => {
+                cmd.mut_arg(arg, |arg| arg.conflicts_with(other))
+            }
+            CliConstraint::RequiredUnlessPresent(arg, other) => {
+                cmd.mut_arg(arg, |arg| arg.required_unless_present(other))
+            }
+        };
     }
     cmd
 }
@@ -194,7 +235,7 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
     match param.param_type {
         // A presence flag takes no value, so it has no value name.
         ParamType::Switch => return arg.action(ArgAction::SetTrue),
-        ParamType::String | ParamType::Object | ParamType::Array => {}
+        ParamType::String | ParamType::Path | ParamType::Object | ParamType::Array => {}
         ParamType::StringList => arg = arg.action(ArgAction::Append).value_delimiter(delimiter),
         ParamType::Integer => arg = arg.value_parser(clap::value_parser!(usize)),
         ParamType::UnsignedInteger => arg = arg.value_parser(clap::value_parser!(u64)),
@@ -240,9 +281,21 @@ fn input_from_matches<V: 'static>(
     spec: &'static OperationSpec<V>,
     matches: &ArgMatches,
 ) -> Map<String, Value> {
+    input_from_params(spec.cli_params().map(|(param, _)| param), matches)
+}
+
+fn input_from_params<'a>(
+    params: impl Iterator<Item = &'a ParamSpec>,
+    matches: &ArgMatches,
+) -> Map<String, Value> {
     let mut input = Map::new();
-    for (param, _binding) in spec.cli_params() {
+    for param in params {
         match param.param_type {
+            ParamType::Path => {
+                if let Some(value) = matches.get_one::<String>(param.name) {
+                    input.insert(param.name.to_string(), Value::String(value.clone()));
+                }
+            }
             ParamType::String => {
                 let Some(value) = matches.get_one::<String>(param.name) else {
                     continue;

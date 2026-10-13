@@ -1,13 +1,12 @@
-use clap::{Args, Subcommand};
+use crate::command::locks::LocksContentionArgs;
+use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::task::{TASK, TASK_HOST_HELP, TaskVerb};
 use orbit_core::OrbitRuntime;
 
 use super::super::operation_args::Invocation;
-use crate::command::locks::LocksCommand;
 use crate::command::{CommandOut, Execute};
 
 use super::archive::TaskArchiveArgs;
-use super::artifact::TaskArtifactCommand;
 use super::export::TaskExportArgs;
 use super::flow::TaskFlowArgs;
 use super::import::TaskImportArgs;
@@ -92,18 +91,14 @@ impl Execute for TaskCommand {
 
 #[derive(Subcommand)]
 pub enum TaskSubcommand {
-    // `add`, `update`, `list`, `eligible`, `show` and `lint`, derived from
+    // Task reads, writes, artifacts and locks, derived from
     // the task operation registry.
     #[command(flatten)]
-    Operation(Invocation<TaskVerb>),
+    Operation(TaskInvocation),
     /// Archive a task
     Archive(TaskArchiveArgs),
-    /// Manage task artifact files
-    Artifact(TaskArtifactCommand),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),
-    /// Inspect, reserve, and release task file locks
-    Locks(LocksCommand),
     /// Reset a review lineage budget with an audited operator reason
     ReviewReset(TaskReviewResetArgs),
     /// Validate and independently review the already-merged head of a
@@ -126,10 +121,8 @@ impl Execute for TaskSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
             TaskSubcommand::Archive(args) => args.execute(runtime),
-            TaskSubcommand::Operation(invocation) => super::operation::execute(invocation, runtime),
-            TaskSubcommand::Artifact(cmd) => cmd.execute(runtime),
+            TaskSubcommand::Operation(invocation) => invocation.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
-            TaskSubcommand::Locks(cmd) => cmd.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
             TaskSubcommand::ReviewReset(args) => args.execute(runtime),
             TaskSubcommand::ReconcileReview(command) => command.execute(runtime),
@@ -137,6 +130,62 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),
             TaskSubcommand::Reindex(args) => args.execute(runtime),
+        }
+    }
+}
+
+/// Migrated operations plus the existing contention command, which has no tool.
+pub enum TaskInvocation {
+    Registry(Invocation<TaskVerb>),
+    Contention(LocksContentionArgs),
+}
+
+impl Subcommand for TaskInvocation {
+    fn augment_subcommands(cmd: Command) -> Command {
+        Invocation::<TaskVerb>::augment_subcommands(cmd).mut_subcommand("locks", |cmd| {
+            let mut cmd = cmd;
+            for (index, spec) in TASK
+                .operations
+                .iter()
+                .filter(|spec| spec.cli_path.first() == Some(&"locks"))
+                .enumerate()
+            {
+                let order = if index == 0 { 0 } else { index + 1 };
+                cmd = cmd.mut_subcommand(spec.cli_path[1], |cmd| cmd.display_order(order));
+            }
+            cmd.subcommand(
+                LocksContentionArgs::augment_args(Command::new("contention")).display_order(1),
+            )
+        })
+    }
+    fn augment_subcommands_for_update(cmd: Command) -> Command {
+        Self::augment_subcommands(cmd)
+    }
+    fn has_subcommand(name: &str) -> bool {
+        Invocation::<TaskVerb>::has_subcommand(name)
+    }
+}
+
+impl FromArgMatches for TaskInvocation {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        if let Some(("locks", group)) = matches.subcommand()
+            && let Some(("contention", leaf)) = group.subcommand()
+        {
+            return LocksContentionArgs::from_arg_matches(leaf).map(Self::Contention);
+        }
+        Invocation::from_arg_matches(matches).map(Self::Registry)
+    }
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl Execute for TaskInvocation {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        match self {
+            Self::Registry(invocation) => super::operation::execute(invocation, runtime),
+            Self::Contention(args) => args.execute(runtime),
         }
     }
 }

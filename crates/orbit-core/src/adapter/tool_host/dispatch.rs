@@ -135,29 +135,7 @@ pub(super) fn execute(
             persisted_task_id = written;
             Ok(response)
         }
-        OrbitBuiltinAction::TaskArtifactPut => {
-            let written = super::task_write_tools::artifact_put(
-                runtime,
-                ToolCaller {
-                    session_context,
-                    agent,
-                    model,
-                    reservation_owner,
-                },
-                &input,
-            )?;
-            persisted_task_id = Some(written.persisted_id);
-            Ok(written.response)
-        }
-        OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
-        OrbitBuiltinAction::TaskLocks => crate::runtime::task::locks::list(runtime),
-        OrbitBuiltinAction::TaskLocksRelease => {
-            crate::runtime::task::locks::release(runtime, input, agent, model)
-        }
-        OrbitBuiltinAction::TaskLocksReserve => {
-            crate::runtime::task::locks::reserve(runtime, input, agent, model, reservation_owner)
-        }
         OrbitBuiltinAction::TaskReject => {
             let written = super::task_tools::reject(runtime, input, agent, model)?;
             persisted_task_id = Some(written.persisted_id);
