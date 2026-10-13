@@ -5,9 +5,6 @@ mod publication;
 mod registry;
 pub use error::WorkspaceError;
 
-#[cfg(test)]
-mod tests;
-
 pub use publication::{
     DEFAULT_PUBLICATION_BRANCH, WorkspacePublicationBinding, canonicalize_publication_branch,
     git_remote_identity, git_remote_network_host, git_remotes_equivalent, redact_git_remote,

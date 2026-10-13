@@ -169,6 +169,30 @@ provider controls use exported `apply_antigravity_print_timeout` in
 [`provider_limit.rs`](../../crates/orbit-agent/tests/provider_limit.rs). These
 cases do not earn unit admission because the public boundary costs the same.
 
+## Public types contract boundary
+
+`orbit-types`' plugin, task, tool and workflow cases live in
+[`tests/contracts/main.rs`](../../crates/orbit-types/tests/contracts/main.rs),
+with modules for each surface in one integration binary. Publication cases
+join the existing
+[`tests/workspace.rs`](../../crates/orbit-types/tests/workspace.rs) binary.
+The admission audit's 40 moved cases use the same inputs and assertions through
+exported helpers and types, including the vendored provider-resolution fixture;
+none needs a provider process or production visibility change.
+
+The two retired filesystem cases are covered by `orbit-policy`'s
+`tests::matrix::precedence_matrix` (later exclusion and allowed sibling) and
+`tests::matrix::newline_segment_request_matrix` (single-star grant followed by
+recursive deny, newline/ordinary siblings and positive recursive newline grants).
+The retired `only_a_won_start_grants_execution_authority` case merely enumerated
+`JobRunStartOutcome::owns_execution`, a getter excluded by this strategy.
+`orbit-store`'s `allocation_admission::removed_job_run_ids_are_never_reallocated`
+asserts a real store Start owns execution through its `finish` helper; it is
+not an exact duplicate of all three getter variants.
+
+The later `workflow/review/tests/gate_note.rs` admission was outside this audit
+slice and remains in its sibling unit location and baseline.
+
 ## Retiring a unit test
 
 You may delete a unit test when one of these holds:

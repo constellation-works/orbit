@@ -17,9 +17,6 @@ mod record;
 mod template;
 mod version;
 
-#[cfg(test)]
-mod tests;
-
 pub use build::{
     BUILD_DIR_TEMPLATE, DEFAULT_PLUGIN_BUILD_TIMEOUT_MS, PLUGIN_BUILD_CONSENT_FLAG,
     PLUGIN_BUILD_DIGEST_DOMAIN, PLUGIN_BUILD_PROFILE_LINUX, PLUGIN_BUILD_PROFILE_MACOS,
