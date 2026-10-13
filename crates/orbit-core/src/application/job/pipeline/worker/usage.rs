@@ -84,6 +84,7 @@ enum ResourceSource {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Scope(WorkerScopeCgroup),
     /// macOS process tree, presented as a monotonic counter.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Tree(TreeSampler),
 }
 
@@ -154,6 +155,7 @@ impl RunResourceSampler {
 
     /// A sampler that reads the process tree `read` returns. The same minute
     /// rows as [`Self::new`]. `read` returning `None` skips that sample.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn from_process_tree(
         store: Arc<dyn ResourceUsageStoreBackend>,
         read: impl FnMut() -> Option<Vec<orbit_common::process::ancestry::ProcessTreeProcess>>
