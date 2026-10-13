@@ -1,5 +1,5 @@
-//! Admitted unit tests: platform-kernel `/proc` parsing for the per-minute
-//! host history, against fixture files.
+//! Admitted unit tests: platform-kernel host utilization and memory for the
+//! per-minute history and forecast, using proc fixtures and native Mach calls.
 
 use std::path::Path;
 
@@ -85,6 +85,36 @@ fn host_usage_is_tick_utilization_in_cores_and_unavailable_memory() {
     }
     assert_eq!(before.cpu_delta(after), None, "proc counters reset");
     assert_eq!(after.cpu_delta(after), None, "stalled is unknown");
+
+    // Admission uses the native reader, not a missing `/proc` on macOS.
+    // Keep real successful and failed Mach calls in this admitted kernel
+    // matrix, without a load generator or job fixture.
+    #[cfg(target_os = "macos")]
+    {
+        use super::super::forecast::HostLoadProbe;
+        use super::super::platform::{host_cpu_ticks, host_memory_bytes};
+
+        assert!(host_cpu_ticks(libc::MACH_PORT_NULL as libc::mach_port_t).is_none());
+        assert!(host_memory_bytes(libc::MACH_PORT_NULL as libc::mach_port_t).is_none());
+        let reading = read_host_usage(Path::new("/proc")).expect("native host read");
+        assert!(reading.cpu_count > 0);
+        assert!(reading.memory_total_bytes > 0);
+        assert!(reading.memory_used_bytes <= reading.memory_total_bytes);
+        let probe = HostLoadProbe::default();
+        probe.prepare();
+        let load = probe.measure().expect("native forecast host load");
+        let cores = load
+            .cpu_cores
+            .expect("ticks advance beyond XNU cache window");
+        assert!(cores.is_finite() && (0.0..=f64::from(load.cpu_count)).contains(&cores));
+        assert_eq!(load.cpu_count, reading.cpu_count);
+        assert_eq!(load.memory_total_bytes, reading.memory_total_bytes);
+        assert!(load.memory_bytes <= load.memory_total_bytes);
+        println!(
+            "native host: cpu_cores={cores}, cpu_count={}, memory_used_bytes={}, memory_total_bytes={}",
+            load.cpu_count, load.memory_bytes, load.memory_total_bytes
+        );
+    }
 }
 
 /// An unreadable or malformed source is unknown, never zero use.
@@ -111,35 +141,4 @@ fn malformed_proc_files_read_as_unknown() {
             "{stat:?} / {meminfo:?}"
         );
     }
-}
-
-/// Admission uses the native reader, not a missing `/proc` on macOS. This
-/// kernel-boundary regression also exercises failed Mach calls, with no load
-/// generator and no job fixture.
-#[cfg(target_os = "macos")]
-#[test]
-fn native_host_load_has_online_cores_memory_and_unknown_failed_calls() {
-    use super::super::forecast::HostLoadProbe;
-    use super::super::platform::{host_cpu_ticks, host_memory_bytes};
-
-    assert!(host_cpu_ticks(libc::MACH_PORT_NULL as libc::mach_port_t).is_none());
-    assert!(host_memory_bytes(libc::MACH_PORT_NULL as libc::mach_port_t).is_none());
-    let reading = read_host_usage(Path::new("/proc")).expect("native host read");
-    assert!(reading.cpu_count > 0);
-    assert!(reading.memory_total_bytes > 0);
-    assert!(reading.memory_used_bytes <= reading.memory_total_bytes);
-    let probe = HostLoadProbe::default();
-    probe.prepare();
-    let load = probe.measure().expect("native forecast host load");
-    let cores = load
-        .cpu_cores
-        .expect("ticks advance beyond XNU cache window");
-    assert!(cores.is_finite() && (0.0..=f64::from(load.cpu_count)).contains(&cores));
-    assert_eq!(load.cpu_count, reading.cpu_count);
-    assert_eq!(load.memory_total_bytes, reading.memory_total_bytes);
-    assert!(load.memory_bytes <= load.memory_total_bytes);
-    println!(
-        "native host: cpu_cores={cores}, cpu_count={}, memory_used_bytes={}, memory_total_bytes={}",
-        load.cpu_count, load.memory_bytes, load.memory_total_bytes
-    );
 }

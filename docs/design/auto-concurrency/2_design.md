@@ -730,15 +730,18 @@ For operational verification after the candidate is installed through the
 normal delivery process, retain public `orbit run profiles --json`,
 `orbit run show <pull-drain> --no-reconcile --json`, and
 `orbit run profiles --accuracy --json` output from the native Mac workspace.
-With usable calibrated profiles and the existing shadow configuration, an
-ordinary real pull request should record `pull_admission_fit` and forecast
-points; keep existing ceilings and policy. Let real delivery workers sample
+With eligible profiles carrying recognized CPU accounting provenance and
+the existing shadow configuration, an ordinary real pull request should
+record `pull_admission_fit` and forecast points; keep existing ceilings and
+policy. Let real delivery workers sample
 through complete host minutes and the earliest recorded offset (+5 minutes),
 then retain a fresh accuracy report with measured pairs. A unit/fixture pass,
 a worker-only measurement, or forecasts with no paired host minutes does not
-satisfy this operational verification. Profiles captured before the separate
-Mac process CPU-unit repair need calibration before interpreting accuracy;
-this host-reader change does not correct or relabel historical profiles.
+satisfy this operational verification. New native Mac worker minutes carry
+`macos-mach-ns-v1` provenance from the process CPU-unit repair. Historical
+unmarked Mac minutes remain stored but their deliveries are excluded from
+profiles; this host-reader change does not rescale, backfill or relabel them.
+Linux eligibility and raw history retention remain unchanged.
 
 ### 8.1 The accuracy report
 
