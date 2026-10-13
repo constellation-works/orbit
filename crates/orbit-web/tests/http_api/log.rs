@@ -902,3 +902,59 @@ fn diagnostics_errors_report_the_stderr_blob_cap_as_the_coverage_start() {
         },
     );
 }
+
+/// Source input discovers the cap, just as the route-wide guard discovers paths.
+/// All assertions exercise real stream ownership; changing the cap is not policy drift.
+#[test]
+fn log_stream_gate_caps_concurrent_acquisitions() {
+    isolated("log::log_stream_gate_caps_concurrent_acquisitions", || {
+        let fixture = Fixture::new();
+        let server = fixture.server(false);
+        let source = include_str!("../../src/api/log.rs");
+        let cap: usize = source
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("const LOG_STREAM_MAX_CONCURRENT: usize = ")
+                    .and_then(|value| value.trim_end_matches(';').parse().ok())
+            })
+            .expect("stream concurrency safety fixture must discover the configured cap");
+        let open = || server.get("/api/log/stream?from=0");
+        let mut streams = (0..cap)
+            .map(|_| {
+                let response = open();
+                assert_eq!(response.status(), 200, "a permit must admit a stream");
+                response
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            open().status(),
+            503,
+            "an acquisition beyond the cap must be refused"
+        );
+        drop(streams.pop());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let wait_open = || {
+            loop {
+                let response = open();
+                if response.status() == 200 {
+                    return response;
+                }
+                assert_eq!(response.status(), 503);
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "disconnect must release its permit"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        };
+        streams.push(wait_open());
+        assert_eq!(
+            open().status(),
+            503,
+            "reacquiring the released permit fills the cap again"
+        );
+        drop(streams);
+        let streams = (0..cap).map(|_| wait_open()).collect::<Vec<_>>();
+        drop(streams);
+    });
+}

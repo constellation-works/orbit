@@ -3,7 +3,6 @@ use super::test_support::{body_json, enter_isolated_child};
 use crate::state::DashboardState;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use axum::response::Response;
 use orbit_common::governance::authorization::{DASHBOARD_CLOCK_SERVICE, OPERATOR_OVERRIDE_ENV};
 use orbit_core::application::routines::ClockStatus;
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -12,28 +11,6 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
-
-pub(super) async fn request_cancel(
-    runtime: OrbitRuntime,
-    run_id: &str,
-    origin: Option<&str>,
-    host: Option<&str>,
-) -> Response {
-    let mut builder = Request::builder()
-        .method(Method::POST)
-        .uri(format!("/runs/{run_id}/cancel"));
-    if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
-    }
-    if let Some(host) = host {
-        builder = builder.header(header::HOST, host);
-    }
-    router()
-        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
-        .oneshot(builder.body(Body::empty()).expect("request"))
-        .await
-        .expect("response")
-}
 
 #[tokio::test]
 async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown() {

@@ -1,8 +1,6 @@
 //! Shared helpers for the retained API security and interleaving tests.
 use axum::body::to_bytes;
 use axum::response::Response;
-use chrono::Utc;
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde_json::Value;
 
 const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_WEB_FIXTURE_CHILD";
@@ -72,54 +70,6 @@ pub(super) async fn body_json(response: Response) -> Value {
         .await
         .expect("read response body");
     serde_json::from_slice(&bytes).expect("json response")
-}
-
-pub(super) fn seed_run(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    job_id: &str,
-    state: JobRunState,
-) -> JobRun {
-    let now = Utc::now();
-    let run = JobRun {
-        executed_on: None,
-        run_id: run_id.to_string(),
-        job_id: job_id.to_string(),
-        attempt: 1,
-        state,
-        scheduled_at: now,
-        started_at: matches!(
-            state,
-            JobRunState::Running
-                | JobRunState::Success
-                | JobRunState::Failed
-                | JobRunState::Timeout
-                | JobRunState::Cancelled
-        )
-        .then_some(now),
-        finished_at: state.is_terminal().then_some(now),
-        duration_ms: state.is_terminal().then_some(0),
-        created_at: now,
-        pid: None,
-        pid_start_time: None,
-        input: None,
-        retry_source_run_id: None,
-        knowledge_metrics: None,
-        resolved_crew: None,
-        crew_model: None,
-        steps: Vec::new(),
-    };
-    write_seeded_run(runtime, &run);
-    run
-}
-
-fn write_seeded_run(runtime: &OrbitRuntime, run: &JobRun) {
-    let workspace_id = runtime.workspace_id().expect("workspace id");
-    runtime
-        .sqlite_store()
-        .expect("sqlite store")
-        .upsert_job_run_for_workspace(&workspace_id, run, None)
-        .expect("insert job run");
 }
 
 pub(super) fn write_lines(path: &std::path::Path, lines: &[String]) {
