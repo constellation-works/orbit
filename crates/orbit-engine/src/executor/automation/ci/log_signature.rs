@@ -161,7 +161,10 @@ pub fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::CargoStatus
             } else if lowered.contains("##[error]") {
                 LineKind::ErrorAnnotated
-            } else if is_runner_bookkeeping(lowered) || lowered.contains("##[group]") {
+            } else if is_runner_bookkeeping(lowered)
+                || is_successful_ci_test_route_summary(lowered)
+                || lowered.contains("##[group]")
+            {
                 LineKind::Bookkeeping
             } else if is_concrete_diagnostic(&payload, lowered, after_failures_header) {
                 LineKind::ConcreteDiagnostic
@@ -327,6 +330,22 @@ pub fn is_run_command_payload(payload: &str) -> bool {
 
 fn is_runner_bookkeeping(lowered: &str) -> bool {
     lowered.starts_with("head is now at") || lowered.starts_with("syncing repository")
+}
+
+/// `check-ci-macos` prints this successful routing summary after a filtered
+/// test selector matches. A test name can contain any error marker word, but
+/// the exact summary shape is status output rather than a diagnostic.
+fn is_successful_ci_test_route_summary(lowered: &str) -> bool {
+    let Some(summary) = lowered.strip_prefix("check-ci-macos: ") else {
+        return false;
+    };
+    let Some((_, matched)) = summary.rsplit_once(" matched ") else {
+        return false;
+    };
+    let Some(count) = matched.strip_suffix(" tests") else {
+        return false;
+    };
+    !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Unanchored marker hit that is an actual diagnostic, not a passing test or

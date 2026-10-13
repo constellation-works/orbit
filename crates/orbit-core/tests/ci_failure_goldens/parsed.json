@@ -123,6 +123,26 @@
         }
       ],
       "skipped_keys": []
+    },
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "b344de826260cca8",
+          "signature": "error: unused import: `compare_with_base`",
+          "step_fallback": false,
+          "excerpt": "2026-10-13T22:17:37.4638325Z ##[group]Run ./scripts/ci-guardrails.sh\n2026-10-13T22:17:37.4638624Z ./scripts/ci-guardrails.sh\n2026-10-13T22:17:37.4692334Z shell: /usr/bin/bash -e {0}\n2026-10-13T22:20:03.7135360Z check-ci-macos: orbit-common process::tests::identity is Darwin-only; listed by the macOS job\n2026-10-13T22:20:03.7137364Z check-ci-macos: orbit-core a_fetch_phase_is_refused_on_macos is Darwin-only; listed by the macOS job\n2026-10-13T22:20:03.7139240Z check-ci-macos: workflow paths and filtered tests passed\n2026-10-13T22:20:24.5153992Z error: unused import: `compare_with_base`\n2026-10-13T22:20:24.5154519Z   --> crates/orbit-engine/src/executor/automation/vcs/baseline/mod.rs:79:38\n2026-10-13T22:20:24.5154874Z    |\n2026-10-13T22:20:24.5155308Z 79 |     compare_claimed_with_base_until, compare_with_base, compare_with_base_until, hold_failures,\n2026-10-13T22:20:24.5155834Z    |                                      ^^^^^^^^^^^^^^^^^\n2026-10-13T22:20:24.5156131Z    |\n2026-10-13T22:20:24.5160501Z    = note: `-D unused-imports` implied by `-D warnings`\n2026-10-13T22:20:24.5160985Z    = help: to override `-D warnings` add `#[allow(unused_imports)]`\n2026-10-13T22:20:24.5161215Z \n2026-10-13T22:20:27.9071527Z ##[error]Process completed with exit code 101.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    },
+    {
+      "filed_count": 0,
+      "tasks": [],
+      "skipped_keys": [
+        "b344de826260cca8"
+      ]
     }
   ],
   "distinct_rust_panics_with_the_same_passing_preamble_keep_distinct_keys": [
