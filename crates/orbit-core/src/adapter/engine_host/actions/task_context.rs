@@ -94,7 +94,8 @@ pub(crate) fn task_context_for_agent_input(
         input,
         &runtime.paths().repo_root,
     );
-    if let Some(commands) = final_validation_commands(runtime, input)
+    if !task.tags.iter().any(|tag| tag == "no-diff-expected")
+        && let Some(commands) = final_validation_commands(runtime, input)
         && let Some(map) = context.as_object_mut()
     {
         map.insert("final_validation_commands".to_string(), commands.into());
@@ -105,7 +106,9 @@ pub(crate) fn task_context_for_agent_input(
 /// The required commands this invocation's pipeline runs itself on the final
 /// candidate, for an implementer that need not run them first. Only a
 /// delivery pipeline whose deterministic final validation follows the
-/// implementer sets `final_validation` on its input.
+/// implementer or managed pre-publication conflict recovery sets
+/// `final_validation` on its input. Absorbed synchronization validates at
+/// the host rebase boundary before no-diff settlement.
 fn final_validation_commands(runtime: &OrbitRuntime, input: &Value) -> Option<Vec<String>> {
     if input.get("final_validation").and_then(Value::as_bool) != Some(true) {
         return None;

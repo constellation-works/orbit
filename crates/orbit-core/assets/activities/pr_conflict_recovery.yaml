@@ -41,6 +41,10 @@ spec:
         type: string
       failed_step_input:
         type: object
+      # Only managed sync_base recovery carries the existing final-validation
+      # handoff. The envelope lists usable captured commands on the task.
+      final_validation:
+        type: boolean
       step_recovery_attempts:
         type: array
         items:
@@ -213,7 +217,15 @@ spec:
        under `.orbit/tmp/`; it is never staged.
     4. Confirm every supplied conflict file is fully repaired (no conflict
        markers). Run focused tests for the
-       crates or modules that own the resolved paths. Then run the
+       crates or modules that own the resolved paths. When the envelope's
+       `task.final_validation_commands` is present, leave only those full
+       commands to Orbit's host-owned final candidate validation after it
+       continues the rebase and follows the current base. If the base absorbs
+       the candidate, the host runs them before no-diff settlement instead.
+       Record those commands as `not_run` (host final validation) in `gates`;
+       focused resolution checks and any required command omitted from that
+       captured list remain yours. Without that list (including an empty
+       capture, a standalone/unknown route, or later completion recovery), run the
        workspace's required validation commands (`required_validation_commands`
        in a supplied manifest or `workflow.required_validation_commands`),
        following the workspace's own AGENTS.md, as advisory checks:

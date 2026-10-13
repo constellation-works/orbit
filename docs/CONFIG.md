@@ -340,6 +340,13 @@ Codex runs each tool command through the user's shell as a login shell (`zsh -lc
 
 - Commands run sequentially in list order, and the first failing command fails the step, so put cheap gates before long test suites ([rollout](DEVELOPMENT.md#required-validation-commands)).
 - These pipelines and the claimed leaves set `final_validation` on their implementer's input, and its envelope lists the commands this validation will run as `task.final_validation_commands`: this host's list, or the owner's list a claim captured. The implementer leaves those to the pipeline for a diff and still runs focused checks and every workspace check the list omits. A clean no-op or already-landed handoff skips this validation, so its implementer still runs every required command. The field is absent for an empty list, for a claim whose admission captured no owner gates (it validates against this replica's copy, which the owner may refuse), and outside these pipelines, such as a manual or direct run; the implementer then runs every check itself.
+- The PR pipelines also pass that handoff to conflict recovery at `sync_base`.
+  Recovery keeps focused resolution checks and commands outside the captured
+  list. The host validates after the final rebase continuation and base chase;
+  if the base absorbs the candidate, `git_rebase` runs and attaches those
+  commands before no-diff settlement instead. Standalone and later completion
+  recovery keep their advisory validation. A new head invalidates old evidence
+  normally; this handoff adds no validation cache.
 - A failure goes to step recovery, except a [missing tool](#missing-tools-block-the-task) or a failure the base shares ([held](#a-red-base-is-held-not-blocked) until the command passes on a new base tip). [Network-inconclusive](#network-flakes-are-rerun) failures are rerun first.
 - Distributed handoffs must carry exact-candidate validation matching the owner's list. A before-PR claim also freezes the list in the owner's review contract at admission; a later owner change refuses the handoff rather than replacing the snapshot.
 - A `no-diff-expected` task with a clean tree runs none of these commands, as the owner's pipelines skip `validate` for the tag. A claimed one hands off a `NoDiff` skip with no validation logs; the owner accepts it only while its own copy of the task keeps the tag. A clean tree that proves itself with `no-diff.json` or `already-landed.json`, and a tagged task that produces a diff, still validate.

@@ -104,6 +104,15 @@ required_validation_commands = ["make ci-fast", "make ci-lint", "make goldens", 
 
 For tasks that deliver a diff, candidate validation runs them once, in that order, on the final candidate after base synchronization, and before-PR review requires a passing record of each. Tasks tagged `no-diff-expected` do not run this list. A managed implementer finds the list in its envelope's `task.final_validation_commands` and leaves those commands to that validation ([required validation](CONFIG.md#required-validation)); it still runs focused checks and any gate the list omits, so a shorter list moves no gate out of the delivery.
 
+Managed PR conflict recovery at `sync_base` uses that same captured list:
+it runs focused resolution checks and leaves those full commands to the
+host after the rebase continuation and any base chase. If the base absorbs
+the candidate, `git_rebase` runs the commands on that final clean head and
+attaches their logs before no-diff settlement, which bypasses the ordinary
+validation step. Standalone recovery, later completion recovery and claims
+without captured owner gates keep their advisory checks. A later rewrite
+still requires validation of the new head; earlier evidence cannot cover it.
+
 Roll a list change out from the operator's shell, never from an agent: deploy the Orbit build that reads it, edit the owner's `.orbit/config.toml` (copy it to each follower replica too, which `orbit doctor`'s `pull-gates` row compares), then start a new drain. A claim already admitted keeps the list its admission captured, which is never rewritten; a fresh admission picks up the new list.
 
 ### Validation failure diagnostics

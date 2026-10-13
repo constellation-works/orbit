@@ -61,6 +61,19 @@ pub(super) fn bind_recovery_context(
         input["repo_root"] = workspace;
     }
     input["run_id"] = Value::String(ctx.run_id.clone());
+    // Only pre-publication synchronization has the managed continuation:
+    // validate follows it, and an absorbed candidate validates at git_rebase's
+    // host boundary instead. Completion and custom/standalone routes keep
+    // their advisory checks. The envelope projects the captured command list.
+    if step.id == "sync_base"
+        && step_activity_name(step) == "git_rebase"
+        && failed_input
+            .get("final_validation")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        input["final_validation"] = Value::Bool(true);
+    }
     input["failed_step_input"] = bounded_recovery_input(&ctx.run_id, failed_input);
     Ok(())
 }

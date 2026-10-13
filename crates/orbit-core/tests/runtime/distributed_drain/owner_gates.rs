@@ -131,6 +131,17 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
         json!(["make owner-check"]),
         "an owner's implementer leaves its own configured commands to `candidate_validate`"
     );
+    let no_diff = leaf.pair.wire.owner.run_tool("orbit.task.add", json!({
+        "title": "Read-only envelope fixture", "description": "Inspect without a candidate change.",
+        "acceptance_criteria": ["Inspection recorded"], "type": "chore", "tags": ["no-diff-expected"],
+        "complexity": "low", "model": "codex",
+        "workspace": leaf.pair.wire.owner.paths().repo_root,
+    })).unwrap();
+    assert_eq!(
+        final_validation_commands(&leaf.pair.wire.owner, no_diff["id"].as_str().unwrap(), true),
+        Value::Null,
+        "a no-diff-expected invocation conveys no required-command ownership"
+    );
 }
 
 /// A claim an older owner admitted captured no gates: the leaf falls back to
@@ -162,7 +173,8 @@ fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
 
 /// An implementer may leave the required commands to final validation only
 /// in a pipeline that runs it: every shipped job whose `agent_implement` step
-/// sets `final_validation` validates the candidate in a later step.
+/// sets `final_validation` validates the candidate in a later step. Managed
+/// synchronization uses the same continuation with the same skip condition.
 #[test]
 fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
     let jobs = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs");
@@ -175,8 +187,10 @@ fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
         let job: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let steps = job["spec"]["steps"].as_array().cloned().unwrap_or_default();
         let hands_over = |step: &Value| {
-            step["target"] == "activity:agent_implement"
-                && step["default_input"]["final_validation"] == true
+            matches!(
+                step["target"].as_str(),
+                Some("activity:agent_implement" | "activity:git_rebase")
+            ) && step["default_input"]["final_validation"] == true
         };
         let Some(implement) = steps.iter().position(|step| {
             hands_over(step)
@@ -196,6 +210,26 @@ fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
              a delivery would drop its checks",
             path.display()
         );
+        for (index, step) in steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step["target"] == "activity:git_rebase" && hands_over(step))
+        {
+            assert_eq!(
+                step["id"], "sync_base",
+                "only pre-publication recovery hands over gates"
+            );
+            assert!(
+                steps[index + 1..].iter().any(|validation| {
+                    matches!(
+                        validation["target"].as_str(),
+                        Some("activity:candidate_validate" | "activity:claim_validate")
+                    ) && validation["when"] == step["when"]
+                }),
+                "{} hands over recovery gates without a validation continuation under the same condition",
+                path.display()
+            );
+        }
     }
     assert!(
         !handing_over.is_empty(),
