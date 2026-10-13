@@ -14,6 +14,12 @@
 //!   minute's figure is the maximum seen in it, because a short rustc or
 //!   linker peak is what triggers the OOM killer.
 //!
+//! macOS has no worker scope. The same thread sums the worker's process tree
+//! instead ([`super::usage_tree`]): CPU deltas of processes seen in both
+//! samples, plus the full CPU time of processes that appeared, and the sum of
+//! each process's `ri_phys_footprint`. The first read is a baseline. An
+//! unreadable tree skips that sample and leaves the baseline in place.
+//!
 //! Each minute since the worker started becomes one `run_resource_minutes`
 //! row, written as soon as the minute ends; the last, partial minute is
 //! written when the run ends. The same thread offers the host's
@@ -22,7 +28,7 @@
 //! same units. Concurrent workers offer the same minute and the first insert
 //! wins.
 //!
-//! A worker with no scope (macOS, `machine.worker_containment = false`, no
+//! A Linux worker with no scope (`machine.worker_containment = false`, no
 //! user manager) starts no sampler, records nothing and logs nothing.
 //! Recording is telemetry: a failed read skips a sample and a failed write
 //! loses a row, and neither touches the run.
@@ -38,7 +44,8 @@ use orbit_store::contracts::{HostResourceMinute, ResourceUsageStoreBackend, RunR
 use orbit_types::workflow::JobRun;
 
 use super::delivery_class::DeliveryResourceClass;
-use super::scope::WorkerScopeCgroup;
+use super::scope::{ScopeUsage, WorkerScopeCgroup};
+use super::usage_tree::TreeSampler;
 use crate::OrbitRuntime;
 use crate::runtime::host_resource::{HostUsageReading, read_host_usage};
 
@@ -70,10 +77,30 @@ struct HostMinute {
     samples: u32,
 }
 
+/// Where a sample's CPU counter and memory point come from.
+enum ResourceSource {
+    /// Linux worker scope. The cgroup counter already covers the whole tree,
+    /// including processes that have exited.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Scope(WorkerScopeCgroup),
+    /// macOS process tree, presented as a monotonic counter.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Tree(TreeSampler),
+}
+
+impl ResourceSource {
+    fn usage(&mut self) -> Option<ScopeUsage> {
+        match self {
+            Self::Scope(scope) => scope.usage(),
+            Self::Tree(tree) => tree.usage(),
+        }
+    }
+}
+
 /// Aggregates one worker's samples into minutes and writes each as it ends.
 pub(crate) struct RunResourceSampler {
     store: Arc<dyn ResourceUsageStoreBackend>,
-    scope: WorkerScopeCgroup,
+    source: ResourceSource,
     proc_root: PathBuf,
     workspace_id: String,
     run_id: String,
@@ -105,9 +132,55 @@ impl RunResourceSampler {
     /// A sampler for `run_id` that reads `scope` and `<proc_root>/{stat,meminfo}`.
     /// A run that already has minutes was restarted part way through: it
     /// continues after them and is marked resumed.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn new(
         store: Arc<dyn ResourceUsageStoreBackend>,
         scope: WorkerScopeCgroup,
+        proc_root: PathBuf,
+        workspace_id: String,
+        run_id: String,
+        class: DeliveryResourceClass,
+        started_at: DateTime<Utc>,
+    ) -> Self {
+        Self::assemble(
+            store,
+            ResourceSource::Scope(scope),
+            proc_root,
+            workspace_id,
+            run_id,
+            class,
+            started_at,
+        )
+    }
+
+    /// A sampler that reads the process tree `read` returns. The same minute
+    /// rows as [`Self::new`]. `read` returning `None` skips that sample.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn from_process_tree(
+        store: Arc<dyn ResourceUsageStoreBackend>,
+        read: impl FnMut() -> Option<Vec<orbit_common::process::ancestry::ProcessTreeProcess>>
+        + Send
+        + 'static,
+        proc_root: PathBuf,
+        workspace_id: String,
+        run_id: String,
+        class: DeliveryResourceClass,
+        started_at: DateTime<Utc>,
+    ) -> Self {
+        Self::assemble(
+            store,
+            ResourceSource::Tree(TreeSampler::new(read)),
+            proc_root,
+            workspace_id,
+            run_id,
+            class,
+            started_at,
+        )
+    }
+
+    fn assemble(
+        store: Arc<dyn ResourceUsageStoreBackend>,
+        source: ResourceSource,
         proc_root: PathBuf,
         workspace_id: String,
         run_id: String,
@@ -122,7 +195,7 @@ impl RunResourceSampler {
         class.resumed |= first_minute > 0;
         Self {
             store,
-            scope,
+            source,
             proc_root,
             workspace_id,
             run_id,
@@ -138,7 +211,7 @@ impl RunResourceSampler {
 
     /// Take one sample at `at`, writing every minute it completes.
     pub(crate) fn sample(&mut self, at: DateTime<Utc>) {
-        if let Some(usage) = self.scope.usage() {
+        if let Some(usage) = self.source.usage() {
             self.sample_scope(at, usage.cpu_usage_usec, usage.memory_bytes);
         }
         if let Some(reading) = read_host_usage(&self.proc_root) {
@@ -396,18 +469,57 @@ impl Drop for ResourceSamplerThread {
 }
 
 impl OrbitRuntime {
-    /// Start sampling this worker's scope for `run`, or `None` when the
-    /// worker has no scope or the run is not a delivery. `adopted` marks a
-    /// worker that took the run over mid-flight.
+    /// Start sampling this worker for `run`, or `None` when there is nothing
+    /// to sample or the run is not a delivery. Linux samples the worker's
+    /// scope and skips a worker that has none. macOS has no scopes and
+    /// samples the worker's process tree. `adopted` marks a worker that took
+    /// the run over mid-flight.
     pub(super) fn start_resource_sampler(
         &self,
         run: &JobRun,
         adopted: bool,
     ) -> Option<ResourceSamplerThread> {
-        self.start_resource_sampler_in(WorkerScopeCgroup::of_current_process(), run, adopted)
+        #[cfg(target_os = "linux")]
+        {
+            self.start_resource_sampler_in(WorkerScopeCgroup::of_current_process(), run, adopted)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.start_process_tree_sampler(run, adopted)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (run, adopted);
+            None
+        }
+    }
+
+    /// Sample `run` from this process's tree. `None` when the run is not a
+    /// delivery. An unreadable tree skips samples; it does not stop the run.
+    #[cfg(target_os = "macos")]
+    fn start_process_tree_sampler(
+        &self,
+        run: &JobRun,
+        adopted: bool,
+    ) -> Option<ResourceSamplerThread> {
+        let class = self.delivery_resource_class(run, adopted)?;
+        let store: Arc<dyn ResourceUsageStoreBackend> = Arc::new(self.sqlite_store().ok()?);
+        let workspace_id = self.workspace_id().ok()?;
+        ResourceSamplerThread::spawn(RunResourceSampler::from_process_tree(
+            store,
+            || orbit_common::process::ancestry::process_tree(std::process::id()),
+            PathBuf::from("/proc"),
+            workspace_id,
+            run.run_id.clone(),
+            class,
+            Utc::now(),
+        ))
     }
 
     /// [`Self::start_resource_sampler`] for the scope this worker resolved.
+    /// Linux tests inject a fixture scope. A missing scope records nothing,
+    /// including on macOS, where production uses the process tree instead.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn start_resource_sampler_in(
         &self,
         scope: Option<WorkerScopeCgroup>,

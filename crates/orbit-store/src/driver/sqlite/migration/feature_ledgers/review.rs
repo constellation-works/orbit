@@ -1,0 +1,39 @@
+//! The frozen review feature registry.
+
+use orbit_common::storage::sqlite::sqlite_store_error;
+
+use super::FeatureMigration;
+
+pub(super) const FEATURE: &str = "review";
+
+pub(super) const MIGRATIONS: &[FeatureMigration] = &[
+    FeatureMigration::breaking(1, "lineages_certificates_landings", |conn| {
+        conn.execute_batch(
+                "CREATE TABLE review_lineages (workspace_id TEXT NOT NULL, lineage_key TEXT NOT NULL, revision INTEGER NOT NULL, ledger_json TEXT NOT NULL, PRIMARY KEY(workspace_id, lineage_key));
+                 CREATE TABLE review_certificates (attempt_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, repository TEXT NOT NULL, candidate_commit TEXT NOT NULL, candidate_tree TEXT NOT NULL, passed INTEGER NOT NULL, certificate_json TEXT NOT NULL, issued_at TEXT NOT NULL);
+                 CREATE INDEX review_certificates_tree ON review_certificates(repository, candidate_tree, issued_at);
+                 CREATE TABLE review_landings (record_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, landed_commit TEXT NOT NULL, landing_json TEXT NOT NULL, recorded_at TEXT NOT NULL);
+                 CREATE INDEX review_landings_attempt ON review_landings(attempt_id, recorded_at);",
+            )
+            .map_err(sqlite_store_error)
+    }),
+    FeatureMigration::breaking(2, "lineage_holder_run", |conn| {
+        conn.execute_batch(
+            "ALTER TABLE review_lineages ADD COLUMN holder_run_id TEXT;
+         CREATE INDEX review_lineages_holder ON review_lineages(workspace_id, holder_run_id);",
+        )
+        .map_err(sqlite_store_error)
+    }),
+    FeatureMigration::breaking(3, "review_reconciliations", |conn| {
+        conn.execute_batch(
+            "CREATE TABLE review_reconciliations (workspace_id TEXT NOT NULL, reconciliation_id TEXT NOT NULL, task_id TEXT NOT NULL, request_key TEXT NOT NULL, revision INTEGER NOT NULL, record_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(workspace_id, reconciliation_id), UNIQUE(workspace_id, task_id, request_key));
+         CREATE INDEX review_reconciliations_task ON review_reconciliations(workspace_id, task_id, updated_at);",
+        )
+        .map_err(sqlite_store_error)
+    }),
+    // The persisted reconciliation JSON now binds the actual landed commit.
+    // There is no SQLite column change, but the feature version must advance
+    // so binaries that cannot read this record contract are refused before
+    // they can join and mutate the same store.
+    FeatureMigration::breaking(4, "reconciliation_landed_delivery_binding", |_| Ok(())),
+];

@@ -5,11 +5,10 @@ use crate::OrbitRuntime;
 #[cfg(unix)]
 mod actions;
 mod admissions_stop;
-mod conflict;
 mod drain_cancel;
 mod owner;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
 use serde_json::json;
 use tempfile::tempdir;

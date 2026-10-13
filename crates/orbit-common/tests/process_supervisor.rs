@@ -55,6 +55,8 @@ fn extendable_deadline_is_refreshed_before_expiry_and_periodic_checks_can_stop()
             cancelled: None,
             intercept_signals: false,
             drain_budget: Duration::ZERO,
+            cap_drain_at_deadline: false,
+            require_eof: false,
             stopped_descendants: None,
             on_stopped_descendant: None,
             on_spawn: Some(&|pid| spawned.set(Some(pid))),
@@ -84,4 +86,28 @@ fn extendable_deadline_is_refreshed_before_expiry_and_periodic_checks_can_stop()
         "extendable deadline takes precedence over the fixed timeout: {outcome:?}"
     );
     assert_eq!(outcome.stop_cause(), Some(ProcessStopCause::Periodic));
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_runner_preserves_nonzero_and_signal_exit_status() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
+    use std::time::Duration;
+
+    use orbit_common::process::run_bounded;
+
+    for (script, code, signal) in [
+        ("exit 23", Some(23), None),
+        ("kill -TERM $$", None, Some(libc::SIGTERM)),
+    ] {
+        let output = run_bounded(
+            Command::new("/bin/sh").args(["-c", script]),
+            Duration::from_secs(30),
+        )
+        .expect("a child's failure is a completed bounded wait");
+        assert_eq!(output.status.code(), code);
+        assert_eq!(output.status.signal(), signal);
+        assert!(!output.status.success());
+    }
 }

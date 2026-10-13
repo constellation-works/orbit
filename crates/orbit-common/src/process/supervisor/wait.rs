@@ -71,6 +71,18 @@ impl SupervisedChild {
         self.process.child_mut()
     }
 
+    /// Tear down descendants after observing the leader's exit. Capped
+    /// drains signal immediately and spend their remaining budget on pipes;
+    /// the owned handle's additional group-drain wait would exceed that bound.
+    fn finish_reaped_group(&mut self, cap_drain_at_deadline: bool) {
+        if cap_drain_at_deadline {
+            let _ = self.process.signal_group(9);
+            self.mark_reaped();
+        } else {
+            self.process.kill_and_reap();
+        }
+    }
+
     fn mark_reaped(&mut self) {
         self.process.mark_reaped();
         self.release_process_group();
@@ -171,6 +183,8 @@ impl SupervisedChild {
             cancelled,
             intercept_signals,
             drain_budget,
+            cap_drain_at_deadline,
+            require_eof,
             stopped_descendants: stopped_threshold,
             on_stopped_descendant,
             on_spawn,
@@ -206,7 +220,13 @@ impl SupervisedChild {
         // Every pipe worker is bounded by `drain_stop`: once the child is gone
         // the supervisor waits at most `drain_budget` for them. Dropping it on
         // an early error return stops them as well.
+        let mut deadline = Deadline::new(timeout, extendable_deadline, clock);
         let drain_stop = DrainStop::new();
+        #[cfg(all(test, unix))]
+        seam::inject_supervision_failure(
+            seam::SupervisionFailure::PreparePipes,
+            child.process.pid(),
+        )?;
 
         // Drain stdout/stderr in background threads so the child never blocks
         // on a full pipe buffer (which would prevent it from exiting).
@@ -227,7 +247,6 @@ impl SupervisedChild {
             || drain_stop.watch(),
         );
 
-        let mut deadline = Deadline::new(timeout, extendable_deadline, clock);
         let mut next_periodic = every
             .as_ref()
             .map(|periodic| Instant::now() + periodic.interval);
@@ -239,9 +258,15 @@ impl SupervisedChild {
         let mut sink_stopped: Option<ProcessStopCause> = None;
         let mut check_stopped = None;
         let mut termination_status = None;
+        let mut completed_status = None;
         // An error leaves the child to the cleanup below, so the pipe
         // workers are finished before it returns.
         let waited: Result<(bool, Option<i32>, bool, Option<i32>), OrbitError> = (|| loop {
+            #[cfg(all(test, unix))]
+            seam::inject_supervision_failure(
+                seam::SupervisionFailure::PipeRead,
+                child.process.pid(),
+            )?;
             // Check before waiting or another cancellation cause: registration
             // may have raced a signal before the handler could fan it out.
             #[cfg(unix)]
@@ -286,7 +311,9 @@ impl SupervisedChild {
 
             // The child is not reaped yet, so its pid still names it. Each
             // one is reported as it is ended, and in the outcome.
-            if let Some(watch) = stopped_watch.as_mut() {
+            if completed_status.is_none()
+                && let Some(watch) = stopped_watch.as_mut()
+            {
                 for stopped in watch.poll(child.process.pid()) {
                     if let Some(report) = on_stopped_descendant {
                         report(&stopped);
@@ -302,32 +329,42 @@ impl SupervisedChild {
             } else if let Some(end) = deadline.current() {
                 wait_slice = wait_slice.min(end.saturating_duration_since(now));
             }
-            if let Some(next) = next_periodic {
+            if completed_status.is_none()
+                && let Some(next) = next_periodic
+            {
                 wait_slice = wait_slice.min(next.saturating_duration_since(now));
             }
 
-            #[cfg(all(test, unix))]
-            inject_supervision_failure(SupervisionFailure::Wait)?;
-            if let Some(status) = seam::wait_timeout(child.process.child_mut(), wait_slice)
-                .map_err(|e| OrbitError::Execution(format!("wait timeout error: {e}")))?
+            if completed_status.is_none() {
+                #[cfg(all(test, unix))]
+                inject_supervision_failure(SupervisionFailure::Wait)?;
+                #[cfg(all(test, unix))]
+                seam::inject_supervision_failure(
+                    seam::SupervisionFailure::Wait,
+                    child.process.pid(),
+                )?;
+                completed_status = seam::wait_timeout(child.process.child_mut(), wait_slice)
+                    .map_err(|e| OrbitError::Execution(format!("wait timeout error: {e}")))?;
+                if completed_status.is_some() {
+                    // Stop signal fan-out as soon as the leader is reaped,
+                    // even when completion still waits for its output EOF.
+                    child.release_process_group();
+                }
+            } else if !streams_finished(&stdout_thread, &stderr_thread) {
+                std::thread::sleep(wait_slice);
+            }
+            if let Some(status) = completed_status
+                .filter(|_| !require_eof || streams_finished(&stdout_thread, &stderr_thread))
             {
-                // The child is reaped: its pid is free for reuse from here
-                // on, so a SIGINT/SIGTERM arriving before this wait returns
-                // must not `killpg` whatever process group now owns that
-                // number.
-                child.release_process_group();
-
                 #[cfg(unix)]
                 if let Some(signal) = child.take_signal() {
                     end_group(&mut child.process, termination, signal)?;
                     return Ok((false, Some(signal), false, Some(128 + signal)));
                 }
 
-                // Child exited within the timeout. Kill its process group and
-                // wait for it to drain, so any orphan subprocesses still
-                // holding the pipes open are gone before the pipe workers
-                // settle below.
-                child.process.kill_and_reap();
+                // Tear down descendants as soon as the chosen completion
+                // mode finishes, before settling the pipe workers below.
+                child.finish_reaped_group(cap_drain_at_deadline);
                 if !status.success() && status.code().is_none() {
                     termination_status = Some(status);
                 }
@@ -341,11 +378,19 @@ impl SupervisedChild {
             }
 
             if deadline.passed() {
-                end_group(&mut child.process, termination, termination_signal())?;
+                if completed_status.is_some() {
+                    // The leader already exited in EOF completion mode. Its
+                    // descendants get no additional termination grace.
+                    child.finish_reaped_group(cap_drain_at_deadline);
+                } else {
+                    end_group(&mut child.process, termination, termination_signal())?;
+                }
                 return Ok((true, None, false, None));
             }
 
-            if let (Some(periodic), Some(next)) = (every.as_mut(), next_periodic) {
+            if completed_status.is_none()
+                && let (Some(periodic), Some(next)) = (every.as_mut(), next_periodic)
+            {
                 let now = Instant::now();
                 if now >= next {
                     if let Some(cause) = (periodic.run)() {
@@ -370,6 +415,13 @@ impl SupervisedChild {
         // workers normally hit EOF at once. Only a holder outside the group
         // keeps one open; `settle` stops such workers after the budget, so
         // the joins below are bounded either way.
+        let drain_budget = if cap_drain_at_deadline {
+            deadline
+                .remaining()
+                .map_or(drain_budget, |left| drain_budget.min(left))
+        } else {
+            drain_budget
+        };
         let drain_stopped = drain_stop.settle(drain_budget);
         let stdout = stdout_thread
             .map(|h| h.join().unwrap_or_default())
@@ -434,6 +486,7 @@ impl SupervisedChild {
         Ok(Outcome {
             success,
             exit_code,
+            status: completed_status,
             stdout,
             stderr,
             timed_out,
@@ -499,6 +552,14 @@ impl<'a> Deadline<'a> {
         })
     }
 
+    /// Time left under either the caller clock or the wall-clock deadline.
+    fn remaining(&mut self) -> Option<Duration> {
+        self.clock_remaining().or_else(|| {
+            self.current()
+                .map(|end| end.saturating_duration_since(Instant::now()))
+        })
+    }
+
     /// Whether the deadline has passed, reading an extendable one afresh
     /// before saying so.
     fn passed(&mut self) -> bool {
@@ -522,6 +583,14 @@ impl<'a> Deadline<'a> {
         self.cached = Some((deadline, now));
         deadline
     }
+}
+
+fn streams_finished(
+    stdout: &Option<JoinHandle<Vec<u8>>>,
+    stderr: &Option<JoinHandle<Vec<u8>>>,
+) -> bool {
+    stdout.as_ref().is_none_or(JoinHandle::is_finished)
+        && stderr.as_ref().is_none_or(JoinHandle::is_finished)
 }
 
 fn attach_stream<R>(

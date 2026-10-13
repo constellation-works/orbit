@@ -155,6 +155,8 @@ pub(super) fn run<G>(
         cancelled: None,
         intercept_signals: false,
         drain_budget: DRAIN_GRACE,
+        cap_drain_at_deadline: false,
+        require_eof: false,
         stopped_descendants: None,
         on_stopped_descendant: None,
         on_spawn: None,

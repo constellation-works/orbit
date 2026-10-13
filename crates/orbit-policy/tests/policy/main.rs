@@ -2,4 +2,5 @@
 
 #![allow(clippy::expect_used)]
 
+mod admission;
 mod engine;

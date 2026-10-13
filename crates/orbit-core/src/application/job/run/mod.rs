@@ -53,8 +53,6 @@ pub use admissions_stop::{
     DrainAdmissionsStopResult, RemainingDrainChild,
 };
 pub(crate) use child_timeout::{kept_candidate, kept_clause};
-#[cfg(test)]
-pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_display_steps};
 pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};

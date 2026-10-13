@@ -1,11 +1,9 @@
 //! Shared plugin fixtures: a real Orbit root, and plugin directories written
 //! outside it so `add` exercises the ordinary global-install path.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use orbit_types::tool::{McpCapability, ToolSessionContext};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
@@ -69,7 +67,6 @@ pub(super) struct PluginFixture {
     _home_env: orbit_common::test_env::ScopedEnv,
     pub(super) _root: TempDir,
     pub(super) global_root: PathBuf,
-    pub(super) workspace_root: PathBuf,
     pub(super) repo_root: PathBuf,
     /// Somewhere outside the repository to write plugin sources.
     pub(super) sources: PathBuf,
@@ -117,57 +114,10 @@ impl PluginFixture {
             _home_env: home_env,
             _root: root,
             global_root,
-            workspace_root,
             repo_root,
             sources,
             runtime,
         }
-    }
-
-    /// Rebuild the runtime so a newly installed plugin reaches the registry,
-    /// exactly as the next `orbit` invocation would.
-    pub(super) fn reopen(&self) -> OrbitRuntime {
-        OrbitRuntime::from_roots(&self.global_root, &self.workspace_root).expect("reopen runtime")
-    }
-
-    /// Call one plugin tool through the audited dispatch this runtime uses,
-    /// with the activity allowlist pinned to that tool so a managed
-    /// executor's inherited envelope cannot decide the outcome.
-    pub(super) fn call(
-        &self,
-        runtime: &OrbitRuntime,
-        tool: &str,
-    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
-        self.call_with_input(runtime, tool, serde_json::json!({}))
-    }
-
-    /// Same audited dispatch as [`Self::call`], with a caller-supplied input.
-    pub(super) fn call_with_input(
-        &self,
-        runtime: &OrbitRuntime,
-        tool: &str,
-        input: serde_json::Value,
-    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
-        let _activity_tools =
-            crate::adapter::command::dispatch_test_support::override_activity_tools_for_test([
-                tool,
-            ]);
-        // `execute_tool_command` builds an empty session and reads the process
-        // envelope. CI has no TTY and no agent identity, so that caller
-        // resolves as `unknown` and the identification floor refuses even a
-        // read-only plugin tool. Name the caller here — `agent` is the floor
-        // `plugin.tool.read_only` already admits — rather than depending on
-        // the runner's environment.
-        runtime.execute_tool_command_with_session_context(
-            tool,
-            input,
-            None,
-            None,
-            ToolSessionContext {
-                effective_capabilities: BTreeSet::from([McpCapability::Agent]),
-                ..ToolSessionContext::default()
-            },
-        )
     }
 
     /// A minimal working plugin directory under `sources`.
@@ -216,18 +166,6 @@ impl<'a> PluginSpecFixture<'a> {
             output_schema: None,
             secrets: None,
         }
-    }
-
-    /// Declare `spec.secrets` (list entries indented four spaces).
-    pub(super) fn declaring_secrets(mut self, entries: &'a str) -> Self {
-        self.secrets = Some(entries);
-        self
-    }
-
-    /// Request `fs.write` under the plugin's own state directory.
-    pub(super) fn requesting_fs_write(mut self) -> Self {
-        self.permissions = Some("  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n");
-        self
     }
 }
 

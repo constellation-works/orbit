@@ -205,7 +205,7 @@ with an audit warning. Ordinary writable runtimes reuse their audit handle.
 
 ## Automation persistence
 
-- Automation state (consumer checkpoints, delivery-owner intents, accepted coverage, and recovery records) lives in the host SQLite store's feature migrations. Every checkpoint and receipt change is generation-fenced. Recovery never moves a cursor, drops an obligation, or mints a receipt.
+- Automation state (consumer checkpoints, delivery-owner intents, accepted coverage, and recovery records) lives in host SQLite store tables that the store ledger creates (v49 absorbed the automation feature ledger). Every checkpoint and receipt change is generation-fenced. Recovery never moves a cursor, drops an obligation, or mints a receipt.
 - Task action keys live with task allocation in the registry, and job keys commit with job admission.
 - Task artifacts reserve `automation-evidence-authority.json` for transport-supplied run origin plus a digest. Neither a model nor caller JSON can create that authority. Source ranges are retained under `refs/orbit/automation/...` until explicit cleanup.
 

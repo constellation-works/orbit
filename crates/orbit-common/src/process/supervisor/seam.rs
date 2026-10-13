@@ -11,6 +11,8 @@ use std::process::{Child, ExitStatus};
 use std::rc::Rc;
 use std::time::Duration;
 
+#[cfg(all(test, unix))]
+use crate::OrbitError;
 use wait_timeout::ChildExt;
 
 /// How long supervision sleeps between polls of an injected wait hook that
@@ -71,4 +73,70 @@ pub(super) fn wait_timeout(child: &mut Child, slice: Duration) -> io::Result<Opt
         std::thread::sleep(slice.min(HOOKED_WAIT_POLL_INTERVAL));
     }
     result
+}
+
+// Per-thread fault injection exercises the public bounded-run boundary without
+// exhausting host descriptors or corrupting a process-wide wait disposition.
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SupervisionFailure {
+    PreparePipes,
+    PipeRead,
+    Wait,
+}
+
+#[cfg(all(test, unix))]
+type FailureInjection = (SupervisionFailure, Box<dyn FnOnce(u32)>);
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static FAILURE: std::cell::RefCell<Option<FailureInjection>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn with_supervision_failure<T>(
+    point: SupervisionFailure,
+    on_failure: impl FnOnce(u32) + 'static,
+    run: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<FailureInjection>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FAILURE.with(|failure| *failure.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(FAILURE.replace(Some((point, Box::new(on_failure)))));
+    let result = run();
+    assert!(
+        FAILURE.with_borrow(Option::is_none),
+        "did not reach {point:?}"
+    );
+    result
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn inject_supervision_failure(
+    point: SupervisionFailure,
+    pid: u32,
+) -> Result<(), OrbitError> {
+    let injection = FAILURE.with(|failure| {
+        let mut failure = failure.borrow_mut();
+        if failure
+            .as_ref()
+            .is_some_and(|(expected, _)| *expected == point)
+        {
+            failure.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, on_failure)) = injection {
+        on_failure(pid);
+        return Err(OrbitError::Execution(format!(
+            "injected bounded supervision failure: {point:?}"
+        )));
+    }
+    Ok(())
 }

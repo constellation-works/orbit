@@ -161,7 +161,7 @@ fn shape_hints(diagnostic: &str, content: &[u8]) -> String {
         })
     });
     if unknown_role {
-        hints.push_str("; validation[] role must be one of required, expected_failure, excluded, superseded (use required, with outcome passed, for each required command)");
+        hints.push_str("; validation[] role must be one of required, expected_failure, excluded, superseded, diagnostic (use required, with outcome passed, for each required command)");
     }
     hints
 }
@@ -307,7 +307,6 @@ fn verify_checks(
     if commands.is_empty()
         || commands.len() != evidence.required_commands.len()
         || commands.iter().any(|command| command.trim().is_empty())
-        || evidence.validation.len() != commands.len()
         || task.acceptance_criteria.is_empty()
         || evidence.criteria_evidence.len() != task.acceptance_criteria.len()
         || evidence
@@ -323,14 +322,23 @@ fn verify_checks(
     let mut logs = Vec::new();
     for check in &evidence.validation {
         let validation = &check.validation;
-        if validation.outcome != ValidationOutcome::Passed
-            || validation.role != ValidationRole::Required
-            || !commands.contains(&validation.command)
-            || !checked.insert(&validation.command)
-        {
-            return Err(refused(
-                "required validation is missing, duplicated, failed, denied or not run",
-            ));
+        match validation.role {
+            ValidationRole::Required => {
+                if validation.outcome != ValidationOutcome::Passed
+                    || !commands.contains(&validation.command)
+                    || !checked.insert(&validation.command)
+                {
+                    return Err(refused(
+                        "required validation is missing, duplicated, failed, denied or not run",
+                    ));
+                }
+            }
+            ValidationRole::ExpectedFailure | ValidationRole::Diagnostic => {}
+            ValidationRole::Excluded | ValidationRole::Superseded => {
+                return Err(refused(
+                    "already-landed validation accepts only required, expected_failure or diagnostic checks",
+                ));
+            }
         }
         let log = artifact(artifacts, &check.log_artifact)?;
         let provenance: Value = serde_json::from_slice(&log.content).map_err(|error| {
@@ -339,17 +347,30 @@ fn verify_checks(
                 check.log_artifact
             ))
         })?;
-        if !log_matches(
-            &provenance,
-            &evidence.run_id,
-            &evidence.tested_head,
-            &validation.command,
-        ) {
+        let exit_code = provenance["exit_code"].as_i64();
+        let exit_matches = match validation.role {
+            ValidationRole::Required => exit_code == Some(0),
+            ValidationRole::ExpectedFailure => exit_code.is_some_and(|code| code != 0),
+            ValidationRole::Diagnostic => exit_code.is_some(),
+            ValidationRole::Excluded | ValidationRole::Superseded => false,
+        };
+        if validation.command.trim().is_empty()
+            || !exit_matches
+            || !log_has_provenance(
+                &provenance,
+                &evidence.run_id,
+                &evidence.tested_head,
+                &validation.command,
+            )
+        {
             return Err(refused(
-                "validation log must capture the exact run, tested HEAD, command, zero exit code and output",
+                "validation log must capture the exact run, tested HEAD, command, integer exit code and output; required checks must exit zero and expected_failure checks must exit nonzero",
             ));
         }
         logs.push(provenance);
+    }
+    if checked != commands {
+        return Err(refused("required validation is missing"));
     }
     Ok(logs)
 }
@@ -362,10 +383,13 @@ pub(super) fn log_matches(
     tested_head: &str,
     command: &str,
 ) -> bool {
+    log_has_provenance(provenance, run_id, tested_head, command) && provenance["exit_code"] == 0
+}
+
+fn log_has_provenance(provenance: &Value, run_id: &str, tested_head: &str, command: &str) -> bool {
     provenance["run_id"] == run_id
         && provenance["tested_head"] == tested_head
         && provenance["command"] == command
-        && provenance["exit_code"] == 0
         && provenance["output"].as_str().is_some()
 }
 

@@ -21,7 +21,4 @@
 mod engine;
 mod evaluator;
 
-#[cfg(test)]
-mod tests;
-
 pub use engine::{FsPolicyEvaluation, PolicyEngine, resolve_symlinks};

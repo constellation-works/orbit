@@ -146,9 +146,11 @@ impl OrbitRuntime {
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
-        // Telemetry only: a worker with no scope samples nothing, and the
-        // sampler never touches the run's outcome. Stopped before the run is
-        // finalized, so its last minute is recorded first.
+        // Telemetry only. Linux samples the worker scope and skips a worker
+        // with none; macOS samples the process tree and skips a sample it
+        // cannot read. Either way the sampler never touches the run's
+        // outcome. Stopped before the run is finalized, so its last minute
+        // is recorded first.
         let sampler = self.start_resource_sampler(run, !announce_start);
         // Once Start succeeds, every later error belongs to this run. Keep the
         // whole setup path inside the outcome finalized below so crew

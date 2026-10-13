@@ -42,6 +42,8 @@ fn periodic_checks_continue_until_the_caller_requests_a_stop() {
             cancelled: None,
             intercept_signals: false,
             drain_budget: Duration::from_secs(1),
+            cap_drain_at_deadline: false,
+            require_eof: false,
             stopped_descendants: None,
             on_stopped_descendant: None,
             on_spawn: None,

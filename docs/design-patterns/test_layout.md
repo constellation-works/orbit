@@ -49,7 +49,7 @@ use super::super::skill::install_skill;            // up two: tests/ -> command 
 fn installs_skill_into_workspace() { ... }
 ```
 
-The principle: keep production directory listings free of `#[cfg(test)]` artefacts, and let the file structure itself enforce that tests only exercise public seams. If you find you need access to a private item, that's a signal — widen the visibility deliberately (with a comment) or restructure the seam, don't reach around the convention.
+The principle: keep production directory listings free of `#[cfg(test)]` artefacts, and let the file structure itself enforce that tests only exercise public seams. A private item is a signal to reassess the test's admission and boundary. Use an existing exported helper or runtime entry point when it proves the same guarantee economically; keep a qualifying private seam beside its source. Do not widen production visibility solely for test access.
 
 ## When to reach for it
 
@@ -112,7 +112,7 @@ For each source file with an inline `#[cfg(test)] mod tests { ... }`:
 3. Move the test body into `<parent>/tests/<source_filename>.rs`. Replace `use super::*;` with `use super::super::<source_module_name>::<item>;` — these must go through `pub` / `pub(crate)` / `pub(super)`.
 4. Append `mod <source_filename_stem>;` to `<parent>/tests/mod.rs`.
 5. Delete the inline block from the source file.
-6. If any test required a truly private item, widen the item's visibility deliberately (with a comment explaining why) or restructure the test against a public seam — *don't* fall back to the nested anti-pattern above.
+6. If a test requires a truly private item, check its admission and use an existing public boundary when possible. Preserve a qualifying private fault, security or platform harness without widening production visibility solely for tests; do not fall back to the nested anti-pattern above.
 7. `cargo test -p <crate>` must pass.
 
 For each sibling `*_tests.rs` file:
@@ -133,3 +133,30 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 ## What tests assert (invariants vs. policy)
 
 Tests assert what the code guarantees (parses, required fields present, ships disabled, structural safeguards, tool reachability). Crew, model, schedule, complexity and prompt wording are policy owned by config and prompts; a test may not pin them unless it cites the incident it guards.
+
+## Audit migrations
+
+Orbit-core's existing behavioral cases now share the runtime integration binary's
+`admission_audit/` modules. They use exported helper APIs, public runtime dispatch
+and public store constructors for hostile fixture state. Each mutable case runs
+in an exact child with inherited authority cleared and a disposable home. A moved
+case carries its platform `cfg` from both the original function and declaring
+module; native macOS cases remain macOS coverage.
+
+The [per-identity reconciliation](../reviews/unit-test-admission-orbit-core-2026-10-13.json)
+records relocations, retirements and corrected admissions. Private broker scope,
+worker scope/counters, keyed admission, injected stop/clock/probe behavior and raw
+confined writers retain their required child fixtures and seams. Copying a private
+implementation into an integration fixture or widening its visibility is not a
+public-boundary migration.
+
+## Public API integration suites
+
+Tests of an exported crate API belong in the crate-root integration suite even
+when they use only an in-memory definition or a temporary directory. For
+example, `orbit-policy`'s validation, precedence and symlink checks exercise
+`PolicyEngine` and `PolicyDef` through `tests/policy/admission.rs`; putting
+those cases under `src/tests/` would not expose a private seam that the public
+boundary needs. Keep `src/<module>/tests/` for admitted private logic,
+deterministic interleavings, fault injection and platform behavior that the
+crate-root boundary cannot reach economically.

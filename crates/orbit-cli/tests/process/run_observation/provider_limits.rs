@@ -164,7 +164,6 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         params![drain, fixture.workspace_id(), at.to_rfc3339(), std::process::id()],
     )
     .unwrap();
-    db.execute_batch("CREATE TABLE IF NOT EXISTS local_pull_admissions (workspace_id TEXT NOT NULL, owner_machine TEXT NOT NULL, owner_workspace TEXT NOT NULL, execution_machine TEXT NOT NULL, request_id TEXT NOT NULL, claim_id TEXT, leaf_run_id TEXT, record_json TEXT NOT NULL, PRIMARY KEY(workspace_id,owner_machine,owner_workspace,execution_machine,request_id), UNIQUE(workspace_id,owner_machine,owner_workspace,claim_id), UNIQUE(workspace_id,leaf_run_id));").unwrap();
     let mut state = PipelineState::new(
         drain.into(),
         "workspace_pull_pipeline".into(),
