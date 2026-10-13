@@ -80,12 +80,16 @@ makes each local drain pass record in `drain_last_pass.admission_forecast`
 what gap fit would admit, while it admits as `off` and reserves nothing.
 `enforce` admits local candidates whose profile fits under the forecast
 within `admit_cpu_percent` and `admit_memory_percent`, after the drain's
-ceiling, the resource throttle and the conflict checks.
+ceiling, the resource throttle and the conflict checks. While the forecast
+holds no running delivery or reservation, the first candidate is admitted
+even when it does not fit, so work larger than the thresholds still runs on
+an idle host; its admission records the miss as `idle_host`.
 
 For a pull drain (`orbit run auto --pull`), under `enforce` each
 `orbit.task.pull` request names the work this host's load forecast has room
 for, the owner grants only a task inside it, and the drain requests nothing
-while nothing fits (`forecast_no_headroom`). `shadow` records that list on
+while nothing fits (`forecast_no_headroom`). On an idle host every kind of
+work fits, as in a local drain. `shadow` records that list on
 the drain as `pull_admission_fit` and requests as with `off`. A host without
 resource profiles requests as with `off`. Claims are reserved before the
 next request is forecast. `profile_window`, `min_profile_deliveries` and
@@ -111,7 +115,7 @@ head_max_wait_minutes = 30
 | `machine.auto_concurrency.profile_window` | `50` deliveries | Most recent completed deliveries retained per profile key; must be at least `min_profile_deliveries`. |
 | `machine.auto_concurrency.min_profile_deliveries` | `10` deliveries | Minimum samples before using a profile key rather than falling back along the profile chain. |
 | `machine.auto_concurrency.horizon_cap_minutes` | `120` minutes | Maximum forecast horizon for a candidate. |
-| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits. |
+| `machine.auto_concurrency.head_max_wait_minutes` | `30` minutes | Starvation guard: once the first candidate gap fit judges has failed for longer than this, a drain admits nothing behind it until it fits, or until the host holds no running delivery or reservation, when it is admitted. |
 
 **Observing admission.** `orbit run show <drain>` renders an `Admission:`
 line from `pipeline_state.drain_last_pass.admission_forecast`: skipped
