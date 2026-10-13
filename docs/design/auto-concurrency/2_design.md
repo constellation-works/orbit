@@ -513,6 +513,34 @@ while it is still pending. A head that fits, or leaves the backlog, ends the
 wait. Smarter backfilling is an open question
 ([3_vision.md §1](./3_vision.md#1-open-questions)).
 
+**Stuck head.** A protected head can still idle a drain for a long time when
+its miss never improves: a memory profile near the limit on a host whose
+baseline `B` stays high, or a stale `heaviest_*` fallback profile. The drain
+reports such a head; it does not bypass it, and nothing about admission
+changes.
+
+- **Miss.** Each pass that judges the head records its miss in
+  `head.miss`: the profile source and key (`change/medium`), the failing
+  resource, minute and percentage, and that resource's baseline `B` as a
+  share of the host. Passes that judge no head carry it.
+- **Stall.** From the first protected pass, `head.stall` counts consecutive
+  protected passes against a reference miss. A pass whose miss improves on
+  the reference (another resource fails, it fails at a later minute, or by at
+  least one percentage point less, so baseline noise does not count) becomes
+  the new reference and the count starts again from one.
+- **Stuck.** Once the count reaches `head_stuck_passes` (20, about ten
+  minutes at the default 30-second poll, after the 30-minute wait), the stall
+  is `stuck`. An `enforce` drain files one friction (tag `automation`) naming
+  the drain, the head task, its profile source and key, the miss and the
+  baseline, and keeps its id in `stall.friction_id`; a `dedupe-key` line keyed
+  on the drain, the head and the stall's start keeps a retried pass from
+  filing twice. `shadow` records the stall without filing, since it holds
+  nothing.
+- **While it lasts.** `orbit run show` and `orbit run readiness` print a
+  `Stuck head:` line from the recorded pass. A head that improves, fits or
+  leaves the backlog drops its stall and the line with it; the friction stays
+  as the incident's record.
+
 ### 5.4 Without profiles
 
 A host with no profiles admits exactly as today, under the throttle. Profile
@@ -596,10 +624,10 @@ Limitations:
 
 | Surface | Proposed change |
 |---|---|
-| Machine config | Global-only `[machine.auto_concurrency]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because Linux throttle CPU is load-based and can exceed 100%. |
-| `drain_last_pass` | Implemented for local drains (§5.1): an `admission_forecast` block with the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource and their profile source, and whether the head is being protected |
-| `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard. After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
-| `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, and each judged candidate's profile source and wait. JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
+| Machine config | Global-only `[machine.auto_concurrency]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes), `head_stuck_passes` (20 passes, §5.3). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because Linux throttle CPU is load-based and can exceed 100%. |
+| `drain_last_pass` | Implemented for local drains (§5.1): an `admission_forecast` block with the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource and their profile source, and whether the head is being protected, with its miss and, once protected, its stall (§5.3) |
+| `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
+| `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
 | `orbit run profiles --accuracy` | Implemented (§8.1): recorded forecasts against the measured host per offset, and shadow decisions against actual admissions per drain. `--json` for the raw pairs |
 | Dashboard | later: the forecast curve against measured load, with running tasks stacked |
@@ -709,7 +737,8 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
 - **Starvation guard is crude.** Once the head is protected, a drain admits
   nothing else until the running deliveries and reservations it waits on are
   gone. Other drains on the host are not held by it, so while they keep
-  admitting, its wait has no bound.
+  admitting, its wait has no bound. A head whose miss stops improving is
+  reported as stuck (§5.3), not admitted.
 - **An idle host admits whatever comes first.** The idle-host rule admits a
   candidate larger than the thresholds, and judges one without the baseline
   `B`, which includes memory used outside Orbit. Such a delivery can push the
@@ -726,5 +755,6 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   workspace gates.
 - [ORB-15766] — filed to stop counting build-heavy QA sweeps as CPU-light.
 - [ORB-15774] — gap-fit admission for pull drains (§6).
+- [ORB-15894] — reports a protected head whose miss stops improving (§5.3).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

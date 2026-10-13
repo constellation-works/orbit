@@ -21,6 +21,10 @@
 //!   over consecutive passes, nothing behind it is admitted until it fits.
 //!   It waits only on running deliveries and reservations, which end: once
 //!   they have, the idle-host rule admits it.
+//! - **Stuck head.** A protected head whose miss has not improved over
+//!   `head_stuck_passes` consecutive protected passes is marked stuck, with
+//!   the miss, its profile and the baseline, so the drain can report it.
+//!   Being stuck changes no admission.
 //! - **No profiles.** On a host without profiles every lookup finds none
 //!   and every candidate fits, so admission is what it is without gap fit.
 //!   A host whose size cannot be read admits the same way.
@@ -31,14 +35,20 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
-    DrainAdmissionForecast, ForecastPeak, GapFitAdmission, GapFitHead, GapFitSkip,
+    DrainAdmissionForecast, ForecastPeak, GapFitAdmission, GapFitHead, GapFitHeadMiss,
+    GapFitHeadStall, GapFitSkip,
 };
 
 use crate::runtime::host_resource::delivery::work_class;
 use crate::runtime::host_resource::forecast::{
-    AdmissionReservationRequest, ForecastGap, HostLoadForecast,
+    AdmissionReservationRequest, ForecastGap, GapMiss, GapResource, HostLoadForecast,
 };
-use crate::runtime::host_resource::profile::ProfileLookup;
+use crate::runtime::host_resource::profile::{ProfileLookup, ResourceProfile};
+
+/// How far, in percentage points, a head's miss must fall below the one its
+/// stall is measured against to count as an improvement. Smaller moves are
+/// baseline noise, which would otherwise restart the count on every pass.
+const IMPROVEMENT_POINTS: f64 = 1.0;
 
 /// `machine.auto_concurrency.mode` when it is not `off`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,20 +83,53 @@ pub(in crate::adapter::engine_host::actions) struct HeadWait<'a> {
     /// The previous pass's head, while it was failing.
     pub(in crate::adapter::engine_host::actions) previous: Option<&'a GapFitHead>,
     pub(in crate::adapter::engine_host::actions) max_wait: Duration,
+    /// `head_stuck_passes`: protected passes without a better miss before
+    /// the head is stuck.
+    pub(in crate::adapter::engine_host::actions) stuck_passes: u32,
     pub(in crate::adapter::engine_host::actions) now: DateTime<Utc>,
 }
 
 impl HeadWait<'_> {
+    /// `task_id` as the head, carrying the previous pass's wait, miss and
+    /// stall when it was the head then too.
     fn head(&self, task_id: &str) -> GapFitHead {
-        let failing_since = self
-            .previous
-            .filter(|head| head.task_id == task_id)
-            .map_or(self.now, |head| head.failing_since);
+        let previous = self.previous.filter(|head| head.task_id == task_id);
+        let failing_since = previous.map_or(self.now, |head| head.failing_since);
+        let protected = self.now - failing_since > self.max_wait;
         GapFitHead {
             task_id: task_id.to_string(),
             failing_since,
-            protected: self.now - failing_since > self.max_wait,
+            protected,
+            miss: previous.and_then(|head| head.miss.clone()),
+            stall: previous
+                .filter(|_| protected)
+                .and_then(|head| head.stall.clone()),
         }
+    }
+
+    /// `task_id` as the head of a pass that judged it and found `miss`. A
+    /// protected head's stall counts this pass unless the miss improved on
+    /// the stall's reference, which starts the count again from it.
+    fn judged(&self, task_id: &str, miss: GapFitHeadMiss) -> GapFitHead {
+        let mut head = self.head(task_id);
+        head.stall = head.protected.then(|| {
+            let mut stall = head
+                .stall
+                .take()
+                .filter(|stall| !improves(&miss, &stall.reference))
+                .unwrap_or_else(|| GapFitHeadStall {
+                    reference: miss.clone(),
+                    since: self.now,
+                    passes: 0,
+                    stuck: false,
+                    friction_id: None,
+                });
+            stall.passes = stall.passes.saturating_add(1);
+            stall.stuck = stall.passes >= self.stuck_passes;
+            stall
+        });
+        head.miss = Some(miss);
+        head
     }
 
     /// The previous head, while it is still waiting in `pending`: a pass
@@ -201,7 +244,8 @@ impl<'a> GapFit<'a> {
             Ok(idle_host) => idle_host,
             Err(miss) => {
                 if is_head {
-                    self.head = Some(self.head_wait.head(&task.id));
+                    let miss = self.head_miss(&profile_source, found.profile.as_deref(), miss);
+                    self.head = Some(self.head_wait.judged(&task.id, miss));
                 }
                 self.skipped.push(GapFitSkip {
                     task_id: task.id.clone(),
@@ -227,6 +271,39 @@ impl<'a> GapFit<'a> {
             lookup,
         });
         true
+    }
+
+    /// The head's `miss`, with the profile it was priced by and the host
+    /// baseline of the resource that failed.
+    fn head_miss(
+        &self,
+        profile_source: &str,
+        profile: Option<&ResourceProfile>,
+        miss: GapMiss,
+    ) -> GapFitHeadMiss {
+        let baseline_percent = self.gap.as_ref().and_then(|gap| match miss.resource {
+            GapResource::Cpu => self
+                .forecast
+                .cpu
+                .baseline
+                .map(|cores| gap.cpu_percent(cores)),
+            GapResource::Memory => self
+                .forecast
+                .memory
+                .baseline
+                .map(|bytes| gap.memory_percent(bytes)),
+        });
+        GapFitHeadMiss {
+            profile_source: profile_source.to_string(),
+            profile_key: profile.map(|profile| match &profile.key.complexity {
+                Some(complexity) => format!("{}/{complexity}", profile.key.work_class),
+                None => profile.key.work_class.clone(),
+            }),
+            resource: miss.resource.as_str().to_string(),
+            minute: miss.minute,
+            percent: miss.percent,
+            baseline_percent,
+        }
     }
 
     /// The pass's record, and the reservations for what it admitted.
@@ -267,4 +344,12 @@ impl<'a> GapFit<'a> {
         };
         (record, self.reservations)
     }
+}
+
+/// Whether `miss` improves on `reference`: another resource fails, it fails
+/// at a later minute, or by at least [`IMPROVEMENT_POINTS`] less.
+fn improves(miss: &GapFitHeadMiss, reference: &GapFitHeadMiss) -> bool {
+    miss.resource != reference.resource
+        || miss.minute > reference.minute
+        || miss.percent <= reference.percent - IMPROVEMENT_POINTS
 }

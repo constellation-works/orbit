@@ -11,6 +11,9 @@ pub(super) fn admission_lines(
     if let Some(line) = admission_line(current, &mut title) {
         lines.push(line);
     }
+    if let Some(line) = stuck_head_line(current, &mut title) {
+        lines.push(line);
+    }
     let forecast = if current["forecast_at"].is_null() {
         if let Some(at) = last_built["forecast_at"].as_str() {
             if lines.is_empty() {
@@ -70,6 +73,50 @@ pub(super) fn admission_line(
         decisions.push(format!("starvation guard protects {name}"));
     }
     Some(format!("Admission: {label} — {}", decisions.join("; ")))
+}
+
+/// The head the starvation guard has protected over `head_stuck_passes`
+/// passes without a better miss, while it is still the head.
+fn stuck_head_line(
+    forecast: &Value,
+    mut title: impl FnMut(&str) -> Option<String>,
+) -> Option<String> {
+    let head = &forecast["head"];
+    let stall = &head["stall"];
+    if stall["stuck"].as_bool() != Some(true) {
+        return None;
+    }
+    let miss = &head["miss"];
+    let name = head["task_id"]
+        .as_str()
+        .and_then(&mut title)
+        .unwrap_or_else(|| "queue head".to_string());
+    let resource = miss["resource"].as_str().unwrap_or("resource");
+    let profile = match miss["profile_key"].as_str() {
+        Some(key) => format!(
+            "profile {key} via {}",
+            miss["profile_source"].as_str().unwrap_or("?")
+        ),
+        None => format!(
+            "profile {}",
+            miss["profile_source"].as_str().unwrap_or("none")
+        ),
+    };
+    let baseline = miss["baseline_percent"].as_f64().map_or_else(
+        || "unmeasured".to_string(),
+        |percent| format!("{percent:.0}%"),
+    );
+    let label = if forecast["mode"] == "shadow" {
+        "Stuck head (shadow; hypothetical)"
+    } else {
+        "Stuck head"
+    };
+    Some(format!(
+        "{label}: {name} — {} ({profile}; {resource} baseline {baseline}) has not improved over {} protected passes since {}; nothing behind it is admitted until it fits.",
+        skip_detail(miss),
+        stall["passes"],
+        stall["since"].as_str().unwrap_or("?"),
+    ))
 }
 
 // Derive the explanation from structured fields: a persisted starvation

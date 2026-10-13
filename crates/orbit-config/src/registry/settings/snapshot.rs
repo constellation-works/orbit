@@ -213,6 +213,7 @@ impl ConfigSnapshot {
             min_profile_deliveries: self.machine_auto_concurrency_min_profile_deliveries,
             horizon_cap_minutes: self.machine_auto_concurrency_horizon_cap_minutes,
             head_max_wait_minutes: self.machine_auto_concurrency_head_max_wait_minutes,
+            head_stuck_passes: self.machine_auto_concurrency_head_stuck_passes,
         }
     }
 

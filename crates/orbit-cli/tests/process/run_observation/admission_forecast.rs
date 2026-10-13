@@ -91,7 +91,14 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
                 {"task_id": ids[0], "profile_source": "exact", "resource": "cpu", "minute": 6, "percent": 94.0, "detail": "cpu 94% at +6m"},
                 {"task_id": ids[1], "profile_source": "heaviest_on_host", "detail": format!("starvation guard protects {}", ids[0])},
             ],
-            "head": {"task_id": ids[0], "failing_since": now, "protected": true},
+            "head": {
+                "task_id": ids[0], "failing_since": now, "protected": true,
+                "miss": {"profile_source": "exact", "profile_key": "change/medium", "resource": "cpu", "minute": 6, "percent": 94.0, "baseline_percent": 12.0},
+                "stall": {
+                    "reference": {"profile_source": "exact", "profile_key": "change/medium", "resource": "cpu", "minute": 6, "percent": 94.0, "baseline_percent": 12.0},
+                    "since": now, "passes": 3, "stuck": true,
+                },
+            },
         });
         let forecast = serde_json::from_value::<DrainAdmissionForecast>(block).unwrap();
         let mut pass = state.pull_drain.drain_last_pass.clone().unwrap();
@@ -125,6 +132,26 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         assert_eq!(line.contains("shadow"), mode == "shadow", "{line}");
         for task_id in &ids {
             assert!(!line.contains(task_id), "internal ID leaked: {line}");
+        }
+        let ready_text = text(&fixture, &["run", "readiness"]);
+        for rendered in [&show_text, &ready_text] {
+            let stuck = rendered
+                .lines()
+                .find(|line| line.starts_with("Stuck head"))
+                .unwrap_or_else(|| panic!("stuck head not shown: {rendered}"));
+            for named in [
+                "heavy candidate",
+                "cpu 94% at +6m",
+                "change/medium via exact",
+                "cpu baseline 12%",
+                "3 protected passes",
+            ] {
+                assert!(stuck.contains(named), "{named}: {stuck}");
+            }
+            assert_eq!(stuck.contains("shadow"), mode == "shadow", "{stuck}");
+            for task_id in &ids {
+                assert!(!stuck.contains(task_id), "internal ID leaked: {stuck}");
+            }
         }
 
         let readiness = fixture.json(&["run", "readiness", "--json"]);
@@ -317,11 +344,13 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         shown.contains("starvation guard protects heavy candidate"),
         "{shown}"
     );
+    assert!(shown.contains("Stuck head: heavy candidate"), "{shown}");
     let ready = text(&fixture, &["run", "readiness"]);
     assert!(
         ready.contains("starvation guard protects heavy candidate"),
         "{ready}"
     );
+    assert!(ready.contains("Stuck head: heavy candidate"), "{ready}");
     assert!(!ready.contains("Forecast peak"), "{ready}");
 
     // Unknown host size must not be formatted as zero headroom.
@@ -403,7 +432,11 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
     let absent = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(absent, baseline, "absent forecast changed readiness JSON");
     assert_eq!(text(&fixture, &["run", "readiness"]), baseline_text);
-    assert!(!text(&fixture, &["run", "show", id, "--no-reconcile"]).contains("Admission:"));
+    let shown = text(&fixture, &["run", "show", id, "--no-reconcile"]);
+    assert!(
+        !shown.contains("Admission:") && !shown.contains("Stuck head"),
+        "{shown}"
+    );
     assert_eq!(fixture.snapshot(), snapshot);
 }
 

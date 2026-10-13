@@ -645,6 +645,56 @@ pub struct GapFitHead {
     /// It has failed for longer than `head_max_wait_minutes`, so nothing else
     /// is admitted until it fits.
     pub protected: bool,
+    /// Where it failed in the last pass that judged it; carried through
+    /// passes that judge no head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miss: Option<GapFitHeadMiss>,
+    /// The protected passes over which its miss has not improved; absent
+    /// while it is not protected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall: Option<GapFitHeadStall>,
+}
+
+/// Where the queue head failed gap fit, and what it was priced and judged
+/// against.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapFitHeadMiss {
+    /// The fallback step that found its profile, as in [`GapFitSkip`].
+    pub profile_source: String,
+    /// The key of the profile that step found: its work class and, when it
+    /// has one, its complexity, e.g. `change/medium`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_key: Option<String>,
+    /// `cpu` or `memory`.
+    pub resource: String,
+    /// The first minute the forecast with the head exceeds its threshold.
+    pub minute: u32,
+    /// The forecast at that minute, with the head, as a share of the host.
+    pub percent: f64,
+    /// The host baseline `B` of `resource`, the load outside deliveries, as
+    /// a share of the host; absent when it could not be measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_percent: Option<f64>,
+}
+
+/// A protected head's run of passes without a better miss.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapFitHeadStall {
+    /// The miss the run is measured against: the head's miss in its first
+    /// protected pass, or in the last pass that improved on the one before.
+    pub reference: GapFitHeadMiss,
+    /// When the pass that set `reference` ran.
+    pub since: DateTime<Utc>,
+    /// Consecutive protected passes, counting the one that set `reference`,
+    /// whose miss did not improve on it.
+    pub passes: u32,
+    /// `passes` has reached `head_stuck_passes`: the head is stuck, and the
+    /// drain says so until its miss improves or it stops being the head.
+    #[serde(default)]
+    pub stuck: bool,
+    /// The friction an `enforce` drain filed once the head became stuck.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction_id: Option<String>,
 }
 
 /// One host resource whose sustained pressure holds new admissions.
