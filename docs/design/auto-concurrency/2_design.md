@@ -189,7 +189,10 @@ class in `worker/delivery_class.rs`, the host reads in
   CPU time of a process that appeared since the previous sample. The first
   sample is a baseline, so a worker's lifetime before that does not land in
   the first minute. A process that exits drops out of the sum; it is not
-  subtracted and its CPU is not added again. Memory is the sum of
+  subtracted and its CPU is not added again. Each process is charged only
+  when its start time and parent read the same before and after its usage
+  read, and while the parent that listed it still has the same start time.
+  A reused or reparented pid is left out of that sample. Memory is the sum of
   `ri_phys_footprint` (`proc_pid_rusage`), the non-reclaimable footprint, not
   resident size: resident size counts file-backed and shared pages and would
   overstate the tree the way `memory.current` does. A tree that cannot be
