@@ -434,3 +434,50 @@ seam or an extra process. This applies to parent traversal, host exceptions,
 workspace exception validation, resolved symlinks, newline globs and rule
 precedence. No source-level unit-test identities remain admitted for
 `orbit-policy`, and no production visibility or behavior changed.
+
+## MCP admission audit reconciliation
+
+The 2026-10-12 audit cleanup moves orbit-mcp cases onto the crate-root
+`boundary` binary, which already holds the listener and the id-routed tool
+list. The moved cases call exported helpers. They do not widen production
+visibility:
+
+- `capability` calls `CapabilityClasses::for_checkout` and
+  `ensure_tool_class_held`.
+- `identity` calls `mcp_server_identity`.
+- `listener` calls `McpListener::bind` and `serve`. `bind` refuses a
+  non-loopback address with `InvalidInput` before it opens a socket. A silent
+  peer is closed, and its slot is observed by filling the listener's session
+  ceiling, because the permit semaphore is not part of the public listener.
+- `federated_routing` calls `FederatedMcpHost` with a `DestinationProbe`
+  implemented in the test. That trait, plus `RoutedSession`, is the seam the
+  mux uses for every destination. Unknown selectors, a lost dispatched
+  answer, prefix routing, and `host_workspace_selector` stay on that seam.
+
+`the_locked_mapping_covers_exactly_the_advertised_surface` is retired. It
+compared canonical tool names with a handwritten set and did not assert a
+class. Discovery shape is the MCP tools-list golden
+(`crates/orbit-cli/tests/snapshots/mcp_tools_list.json`). Classification stays
+in `mcp_tool_class`, and the relocated replica refusals still prove that
+control-plane and drain tools are refused.
+
+Two proposed moves stay unit tests, with corrected rationale. The audit text
+for them names listener and routing exports, but the cases call
+`DestinationSession`, which is `pub(in crate::federated)`. Its `handshake`
+helper exists only while the library is built for unit tests. A public
+`DestinationProbe` returns a `RoutedSession` and cannot attach the bounded
+line reader to a caller-supplied child. They now live next to the other
+admitted session cases in `federated/probe/tests/session.rs`:
+
+- `a_flooding_destination_is_refused_without_buffering_the_flood` (criterion
+  2). A `yes` child floods non-JSON lines during handshake. The session
+  returns `UnreachableDestination` before the deadline. The admitted
+  peer-flood case runs after a valid handshake, during `tools/call`, and must
+  stay `OutcomeUnknown`.
+- `a_lost_internal_admission_answer_is_outcome_unknown` (criterion 2). A
+  child that accepts `call_internal_drain` and never replies is
+  `OutcomeUnknown`. The admitted malformed-reply case corrupts a consumed
+  internal answer; it does not cover silence after a sent admission.
+
+The eight originally admitted orbit-mcp tests remain, including the private
+SSH proxy argv seam in `remote/tests/proxy.rs`.

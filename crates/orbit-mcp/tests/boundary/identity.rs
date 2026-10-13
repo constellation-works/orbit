@@ -1,6 +1,9 @@
-use super::super::identity::{McpSessionAuthority, mcp_server_identity};
-use orbit_types::tool::McpCapability;
+//! Session authority stamped by the exported server-identity helper.
+
 use std::collections::BTreeSet;
+
+use orbit_mcp::{McpSessionAuthority, mcp_server_identity};
+use orbit_types::tool::McpCapability;
 
 #[test]
 fn a_default_server_serves_agent_sessions_only() {
