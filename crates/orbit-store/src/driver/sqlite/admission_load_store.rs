@@ -176,7 +176,7 @@ fn delivery_runs(
         .prepare(
             "SELECT workspace_id, run_id, minute_index, minute_started_at, task_id,
                     work_class, complexity, resumed, delivery_admitted_at,
-                    cpu_cores, memory_bytes, samples
+                    cpu_cores, memory_bytes, samples, cpu_accounting
              FROM run_resource_minutes
              WHERE workspace_id = ?1 AND run_id = ?2
              ORDER BY minute_index DESC
@@ -202,6 +202,7 @@ fn delivery_runs(
                     cpu_cores: row.get(9)?,
                     memory_bytes: unsigned(row.get(10)?),
                     samples: row.get(11)?,
+                    cpu_accounting: row.get(12)?,
                 })
             })
             .map_err(sqlite_store_error)?;

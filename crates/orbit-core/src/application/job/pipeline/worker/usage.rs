@@ -393,6 +393,13 @@ impl RunResourceSampler {
             } else {
                 0.0
             },
+            cpu_accounting: if cfg!(target_os = "macos") {
+                Some(orbit_store::contracts::CPU_ACCOUNTING_MACOS.to_string())
+            } else if cfg!(target_os = "linux") {
+                Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.to_string())
+            } else {
+                None
+            },
             memory_bytes: minute.memory_max,
             samples: minute.samples,
         };

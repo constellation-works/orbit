@@ -94,6 +94,7 @@ fn finished_delivery_using(follower: &OrbitRuntime, bytes: u64, cores: f64) {
                 resumed: false,
                 delivery_admitted_at: Some(admitted),
                 cpu_cores: cores,
+                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                 memory_bytes: bytes,
                 samples: 12,
             })

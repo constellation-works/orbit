@@ -529,12 +529,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_pull_forecast_decisions,
     },
+    Migration {
+        version: 51,
+        name: "worker_cpu_accounting",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_worker_cpu_accounting,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 50;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 51;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

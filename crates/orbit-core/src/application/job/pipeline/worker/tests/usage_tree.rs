@@ -305,6 +305,11 @@ fn macos_worker_records_a_spawned_child_tree() {
         rows[0].memory_bytes
     );
     let charged_usec = rows[0].cpu_cores * 5_000_000.0;
+    assert_eq!(
+        rows[0].cpu_accounting.as_deref(),
+        Some(orbit_store::contracts::CPU_ACCOUNTING_MACOS),
+        "native worker minutes carry corrected Mach accounting provenance"
+    );
     let newcomer_usec = newcomer_cpu_ns as f64 / 1_000.0;
     assert!(
         charged_usec + 1.0 >= newcomer_usec,

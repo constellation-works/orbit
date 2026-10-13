@@ -52,8 +52,8 @@ impl ResourceUsageStoreBackend for Store {
                     INSERT INTO run_resource_minutes (
                         workspace_id, run_id, minute_index, minute_started_at, task_id,
                         work_class, complexity, resumed, delivery_admitted_at,
-                        cpu_cores, memory_bytes, samples
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                        cpu_cores, memory_bytes, samples, cpu_accounting
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                     ON CONFLICT (workspace_id, run_id, minute_index) DO UPDATE SET
                         minute_started_at = excluded.minute_started_at,
                         task_id = excluded.task_id,
@@ -63,7 +63,8 @@ impl ResourceUsageStoreBackend for Store {
                         delivery_admitted_at = excluded.delivery_admitted_at,
                         cpu_cores = excluded.cpu_cores,
                         memory_bytes = excluded.memory_bytes,
-                        samples = excluded.samples
+                        samples = excluded.samples,
+                        cpu_accounting = excluded.cpu_accounting
                     "#,
                     params![
                         minute.workspace_id,
@@ -78,6 +79,7 @@ impl ResourceUsageStoreBackend for Store {
                         minute.cpu_cores,
                         bytes(minute.memory_bytes),
                         minute.samples,
+                        minute.cpu_accounting,
                     ],
                 )
                 .map(|_| ())
@@ -122,7 +124,7 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT workspace_id, run_id, minute_index, minute_started_at, task_id,
                        work_class, complexity, resumed, delivery_admitted_at,
-                       cpu_cores, memory_bytes, samples
+                       cpu_cores, memory_bytes, samples, cpu_accounting
                 FROM run_resource_minutes
                 WHERE workspace_id = ?1 AND run_id = ?2
                 ORDER BY minute_index
@@ -147,6 +149,7 @@ impl ResourceUsageStoreBackend for Store {
                     cpu_cores: row.get(9)?,
                     memory_bytes: unsigned(row.get(10)?),
                     samples: row.get(11)?,
+                    cpu_accounting: row.get(12)?,
                 })
             })
             .map_err(sqlite_store_error)?;
@@ -164,7 +167,7 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT r.workspace_id, r.run_id, j.job_id, r.task_id, r.work_class,
                        r.complexity, r.resumed, r.delivery_admitted_at, j.finished_at,
-                       r.minute_started_at, r.cpu_cores, r.memory_bytes
+                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting
                 FROM run_resource_minutes r
                 LEFT JOIN job_runs j
                   ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
@@ -194,6 +197,7 @@ impl ResourceUsageStoreBackend for Store {
                     minute_started_at: crate::parse_timestamp(&row.get::<_, String>(9)?)?,
                     cpu_cores: row.get(10)?,
                     memory_bytes: unsigned(row.get(11)?),
+                    cpu_accounting: row.get(12)?,
                 };
                 Ok((run, minute))
             })

@@ -81,6 +81,7 @@
         "process/supervisor/tests/wait.rs::supervision_errors_kill_the_process_group_and_reap_the_child",
         "process/supervisor/tests/wait.rs::timeout_returns_within_drain_budget_while_escaped_helper_holds_output",
         "process/tests/ancestry.rs::a_child_is_in_the_process_tree_until_it_exits",
+        "process/tests/ancestry.rs::native_cpu_time_agrees_with_getrusage",
         "process/tests/ancestry.rs::tree_walk_omits_reused_pids_and_reparented_children",
         "process/tests/bounded.rs::argv_probe_recovers_when_a_live_child_outgrows_the_queried_buffer",
         "process/tests/bounded.rs::blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_that_pid",

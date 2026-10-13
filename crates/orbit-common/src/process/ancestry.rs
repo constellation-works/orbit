@@ -295,9 +295,43 @@ pub(super) mod darwin_tree {
         // Safety: a zero return writes the flavor's structure.
         let info = unsafe { info.assume_init() };
         Ok((
-            info.ri_user_time.saturating_add(info.ri_system_time),
+            own_cpu_ns(info.ri_user_time, info.ri_system_time, read_timebase())?,
             info.ri_phys_footprint,
         ))
+    }
+
+    // libc recommends mach2 for these bindings; the underlying kernel API
+    // remains supported. Keep the existing libc dependency for this query.
+    #[allow(deprecated)]
+    fn read_timebase() -> Option<(u32, u32)> {
+        let mut timebase = MaybeUninit::<libc::mach_timebase_info_data_t>::zeroed();
+        // Safety: the pointer names a writable timebase structure, read only
+        // after the kernel reports success. These counters are Mach absolute
+        // time (task power totals), not nanoseconds on every Mac.
+        let rc = unsafe { libc::mach_timebase_info(timebase.as_mut_ptr()) };
+        if rc == libc::KERN_SUCCESS {
+            // Safety: the successful call initialized the structure.
+            let timebase = unsafe { timebase.assume_init() };
+            Some((timebase.numer, timebase.denom))
+        } else {
+            None
+        }
+    }
+
+    /// Convert only own user/system absolute ticks. Widen before both addition
+    /// and multiplication, then truncate sub-nanoseconds once. An unavailable
+    /// timebase or an unrepresentable result invalidates the sample.
+    pub(in crate::process) fn own_cpu_ns(
+        user: u64,
+        system: u64,
+        timebase: Option<(u32, u32)>,
+    ) -> Result<u64, ReadError> {
+        let (numer, denom) = timebase.ok_or(ReadError::Unreadable)?;
+        if numer == 0 || denom == 0 {
+            return Err(ReadError::Unreadable);
+        }
+        let ns = (u128::from(user) + u128::from(system)) * u128::from(numer) / u128::from(denom);
+        u64::try_from(ns).map_err(|_| ReadError::Unreadable)
     }
 
     /// Direct children of `ppid`. A full buffer is treated as truncated and
