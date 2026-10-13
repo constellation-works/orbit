@@ -557,3 +557,45 @@ permission repair, and preserving an outside symlink target's mode. The nine
 collector cases, including the formerly admitted trash cases, use the exported
 collector independently of those final-removal seams. No production visibility
 is widened and no implementation is copied into a boundary fixture.
+
+
+The [orbit-store per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json)
+checks the pinned audit against the current export surface. Twenty-nine existing
+cases now use crate-root boundaries: catalog and definition composition in
+`tests/file_store.rs`, task/history/document mutations in `tests/task_mutations.rs`,
+store adoption and frozen-v1 compatibility in `tests/migration_freeze.rs`, relation
+validation in `tests/task_registry_ledger.rs`, and archive/publication workflows in
+`tests/publication.rs`. Mutable cases re-execute in children with inherited Orbit
+authority cleared and disposable homes. The ignored listing benchmark and three
+stale run-state allowances are retired; the original twenty-eight admissions and
+their child entry points remain.
+
+Eleven proposed moves are corrected to keep their qualifying private seams:
+
+- The cached-citation oracle consumes private pre-fold incidents. The exported
+  grouping result has already folded and ranked them; moving the oracle would
+  require copying production grouping or exposing that intermediate state
+  (criterion 1, combinatorial fold precedence).
+- Audit aggregate and run-recency plan matrices pass the real private SQL
+  builders to SQLite's planner. Public returned rows cannot prove index use or
+  absence of workspace sorting (criterion 1, combinatorial SQL generation).
+- Invocation attribution starts at the shipped v35 registry prefix, and the
+  resource-minute compatibility case opens with the real older registry and
+  compares compatibility floors. The public latest-schema open cannot supply
+  those private prefixes (criterion 3, persisted-format safety).
+- The registry symlink key check observes private `workspaces_dir`; ordinary
+  persisted bindings would remain correct even if the process-local repair
+  budget split (criterion 3, confinement).
+- The three degraded-read/recovery cases retain private `RepairGate` counters,
+  unresolved-target observations and listing-read counters. Equal public rows
+  alone do not prove suppression or recovery to indexed hydration (criterion 2,
+  fault injection). The strict rebuild-refusal message uses the exported registry
+  validator and moves to the boundary.
+- Publication's winning-evidence/losing-CAS race uses the private pending-write
+  stage callback to force its ordering (criterion 2, deterministic interleaving).
+  Its three no-hook pending/reconciliation cases move. The private Git failure
+  formatter still guards credential and cache-path redaction (criterion 3): the
+  public credential check refuses those arguments before invoking Git.
+
+Each correction names its source identity and seam in the reconciliation; no
+production export is widened to make a test move possible.

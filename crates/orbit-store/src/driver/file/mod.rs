@@ -14,6 +14,3 @@ pub(crate) mod task_bundle;
 pub(crate) mod workspace_binding;
 
 pub(crate) mod auto_task;
-
-#[cfg(test)]
-mod tests;

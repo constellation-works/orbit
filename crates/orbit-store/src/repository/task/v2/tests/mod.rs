@@ -3,7 +3,7 @@ use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, Task
 use tempfile::TempDir;
 
 use super::*;
-use crate::contracts::{TaskCreateParams, TaskHistoryUpdateParams};
+use crate::contracts::TaskCreateParams;
 use crate::driver::sqlite::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
@@ -94,5 +94,4 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
 }
 
 mod concurrency;
-mod creation_grant;
 mod repair_gate;

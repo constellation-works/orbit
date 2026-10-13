@@ -201,3 +201,6 @@ fn actor_backfills_stamp_the_map_and_preserve_roles_and_current_rows() {
         }
     }
 }
+
+#[path = "migration_freeze/ledger.rs"]
+mod ledger;

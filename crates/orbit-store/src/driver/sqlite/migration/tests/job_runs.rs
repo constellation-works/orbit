@@ -1,7 +1,4 @@
 // v38 `job_run_states`: pipeline state leaves `job_runs` for a side table.
-use std::time::{Duration, Instant};
-
-use orbit_types::workflow::JobRunState;
 use rusqlite::Connection;
 
 use super::super::ledger::{self, Migration};
@@ -128,93 +125,5 @@ fn job_run_states_move_survives_interruption_byte_for_byte() {
     assert!(
         runs.iter()
             .all(|run| run.crew_model.as_deref() == Some("claude-opus"))
-    );
-}
-
-/// Runs in the listing fixture and their mean pipeline-state size.
-const BENCH_RUNS: usize = 20_000;
-const BENCH_MEAN_STATE_BYTES: usize = 90 * 1024;
-
-/// Best of four listings of every `success` run in `ws_a`; the first warms
-/// the page cache.
-fn time_success_listing(path: &std::path::Path) -> (Duration, usize) {
-    let store = Store::open_read_only(path).expect("open fixture");
-    let jobs = workspace_job_run_store(store, "ws_a");
-    let query = JobRunQuery {
-        state: Some(JobRunState::Success),
-        ..Default::default()
-    };
-    let mut best = Duration::MAX;
-    let mut listed = 0;
-    for _ in 0..4 {
-        let started = Instant::now();
-        listed = jobs.list_job_runs_filtered(&query).expect("list").len();
-        best = best.min(started.elapsed());
-    }
-    (best, listed)
-}
-
-/// Bench: listing 20k runs whose state averages 90 KB, before and
-/// after v38, plus the migration's own duration and leftover freelist.
-///
-/// Run with `cargo test -p orbit-store --lib job_run_states_listing_bench --
-/// --ignored --nocapture`; it writes a 1.8 GB fixture under the system temp
-/// directory (`TMPDIR`). Measured 2026-10-07 on the Linux build host (SSD,
-/// warm page cache), listing 18,000 success runs: 517 ms before the state move
-/// and 84 ms after; the migration took 32 s and left a 5.8 MB freelist. The
-/// fixture now measures from schema v37 to v38 after the ledger was rebased.
-#[test]
-#[ignore = "bench: writes a 1.8 GB fixture; run with --ignored --nocapture"]
-#[allow(clippy::print_stderr)]
-fn job_run_states_listing_bench() {
-    let dir = tempfile::tempdir().expect("bench dir");
-    let path = dir.path().join("orbit.db");
-    {
-        let conn = Connection::open(&path).expect("open fixture");
-        orbit_common::storage::sqlite::apply_default_pragmas(&conn).expect("pragmas");
-        ledger::run_migrations(&conn, before_job_run_states()).expect("migrate to v37");
-        let tx = conn.unchecked_transaction().expect("seed transaction");
-        for index in 0..BENCH_RUNS {
-            // 30..=150 KB in 10 KB steps: a 90 KB mean.
-            let size = (30 + (index % 13) * 10) * 1024;
-            let state = format!("{{\"pad\":\"{}\"}}", "x".repeat(size));
-            let run_state = if index % 10 == 0 { "failed" } else { "success" };
-            seed_run(
-                &tx,
-                "ws_a",
-                &format!("jrun-{index:05}"),
-                run_state,
-                Some(&state),
-            );
-        }
-        tx.commit().expect("commit fixture");
-    }
-    assert_eq!(BENCH_MEAN_STATE_BYTES, (30 + 6 * 10) * 1024);
-
-    let (before, listed_before) = time_success_listing(&path);
-    let started = Instant::now();
-    drop(Store::open(&path).expect("apply v38"));
-    let migration = started.elapsed();
-    let freelist_bytes = {
-        let conn = Connection::open(&path).expect("reopen fixture");
-        let pages: i64 = conn
-            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
-            .expect("freelist");
-        let page_size: i64 = conn
-            .query_row("PRAGMA page_size", [], |row| row.get(0))
-            .expect("page size");
-        pages * page_size
-    };
-    let (after, listed_after) = time_success_listing(&path);
-
-    eprintln!(
-        "job_run_states bench: {BENCH_RUNS} runs, listed {listed_after} success runs; \
-         before v38 {before:?}, after v38 {after:?}; migration {migration:?}; \
-         freelist {freelist_bytes} bytes"
-    );
-    assert_eq!(listed_before, listed_after);
-    assert!(
-        after < Duration::from_millis(300),
-        "listing every success run took {after:?} after v38 (before: {before:?})"
     );
 }

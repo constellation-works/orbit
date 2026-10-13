@@ -5,10 +5,15 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use tempfile::tempdir;
 
-use super::super::*;
+use orbit_store::skill_store::SkillCatalog;
 
 #[test]
 fn load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog() {
+    if !crate::support::isolated(
+        "skills::load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog",
+    ) {
+        return;
+    }
     let parent = tempdir().expect("sandbox tempdir");
     let catalog_root = parent.path().join("catalog");
     fs::create_dir(&catalog_root).expect("create catalog root");

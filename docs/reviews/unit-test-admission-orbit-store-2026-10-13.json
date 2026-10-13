@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "audited_head": "dd268d0d5a1640b709bcac0d3759b04879f77a14",
+  "delivery_base": "85cf809141a7dca0ecf5beaae079aa4980786f7b",
+  "scope": "orbit-store only",
+  "counts": {
+    "move": 29,
+    "retire": 5,
+    "keep": 10
+  },
+  "preserved_admitted_identities": [
+    "contracts/incident/tests/classify.rs::deferral_rows_and_provider_usage_limits_classify_as_deferred",
+    "contracts/incident/tests/classify.rs::doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected",
+    "driver/file/task_bundle/bundle_io/tests/write.rs::interrupted_bundle_publish_never_exposes_partial_final_directory",
+    "driver/sqlite/migration/tests/job_runs.rs::job_run_states_move_survives_interruption_byte_for_byte",
+    "driver/sqlite/migration/tests/ledger.rs::failed_migration_rolls_back_schema_and_ledger",
+    "driver/sqlite/tests/v2_audit_store.rs::delayed_insert_during_tail_read_keeps_snapshot_ranks_and_the_newest_event",
+    "fs/tests/lock.rs::crash_holder_child",
+    "fs/tests/lock.rs::sigkilled_holder_releases_lock",
+    "repository/task/coordination/tests/admission.rs::a_candidate_changed_after_selection_is_never_admitted_from_the_selection",
+    "repository/task/coordination/tests/admission.rs::a_grant_never_takes_a_footprint_the_owner_wave_admitted_before_its_section",
+    "repository/task/coordination/tests/admission.rs::an_admission_reading_another_partitions_dependency_excludes_the_host",
+    "repository/task/coordination/tests/admission.rs::an_admission_within_its_partition_leaves_other_partitions_running",
+    "repository/task/coordination/tests/admission.rs::an_owner_wave_after_a_grant_refuses_the_claimed_footprint",
+    "repository/task/coordination/tests/admission.rs::one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundles",
+    "repository/task/coordination/tests/boundary.rs::a_status_observation_passes_a_queued_writer_that_ordinary_reads_wait_for",
+    "repository/task/coordination/tests/boundary.rs::an_admission_is_not_starved_by_overlapping_reentrant_ordinary_sections",
+    "repository/task/coordination/tests/boundary.rs::nested_reads_never_queue_behind_writers_they_hold_back",
+    "repository/task/coordination/tests/claim_section.rs::a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit",
+    "repository/task/coordination/tests/claim_section.rs::a_reader_waits_out_a_slow_claim_commit_and_no_longer",
+    "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_exclusive_holder",
+    "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_shared_holders",
+    "repository/task/coordination/tests/lock_holders.rs::a_section_held_past_its_threshold_reports_its_label_and_duration",
+    "repository/task/v2/tests/concurrency.rs::a_reader_never_observes_a_transition_between_its_event_and_its_envelope",
+    "repository/task/v2/tests/repair_gate.rs::concurrent_readers_across_store_instances_share_one_attempt",
+    "repository/task/v2/tests/repair_gate.rs::repeated_reads_while_degraded_attempt_one_rebuild_and_stay_correct",
+    "workflow/layout/tests/mod.rs::failed_migration_keeps_the_marker_at_the_last_applied_version",
+    "workflow/task/tests/archive.rs::packing_failure_preserves_destination_and_cleans_staging_file"
+  ],
+  "entries": [
+    {
+      "identity": "contracts/incident/tests/grouping.rs::cached_citations_preserve_recorded_folds_and_combinatorial_precedence",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/contracts/incident/tests/grouping.rs",
+      "criterion": 1,
+      "rationale": "group_run_cascades and collapse_cited_run_cascades are private; the frozen merger consumes the pre-fold incidents, not the public already-folded and ranked result. The generated corpus compares that private fold against the existing oracle. Moving it would require exporting the intermediate grouping or copying the production grouping into the fixture; neither is allowed. The public helper alone cannot reproduce the existing pre-fold oracle comparison."
+    },
+    {
+      "identity": "driver/file/skill_store/tests/skill_store.rs::load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/skills.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "orbit_store::skill_store::SkillCatalog::load"
+    },
+    {
+      "identity": "driver/file/task_bundle/bundle_io/tests/jsonl.rs::torn_utf8_comment_tail_is_ignored_on_read_and_removed_before_append",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/jsonl.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends and TaskHistoryStoreBackend::{get_task_comments,update_task_history}; persisted comment IDs checked from exported row type"
+    },
+    {
+      "identity": "driver/file/tests/executor_def_store.rs::rejects_traversal_executor_metadata_name_when_loading",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/executor.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::global_executor_def_store and ExecutorDefStoreBackend::{upsert_executor_def,get_executor_def,list_executor_defs}"
+    },
+    {
+      "identity": "driver/file/tests/executor_def_store.rs::rejects_traversal_executor_name_without_external_write",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/executor.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::global_executor_def_store and ExecutorDefStoreBackend::{upsert_executor_def,get_executor_def,list_executor_defs}"
+    },
+    {
+      "identity": "driver/file/tests/policy_def_store.rs::rejects_traversal_policy_metadata_name_when_loading",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/policy.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::global_policy_def_store and PolicyDefStoreBackend::{upsert_policy_def,get_policy_def,list_policy_defs}"
+    },
+    {
+      "identity": "driver/file/tests/policy_def_store.rs::rejects_traversal_policy_name_without_external_write",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/policy.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::global_policy_def_store and PolicyDefStoreBackend::{upsert_policy_def,get_policy_def,list_policy_defs}"
+    },
+    {
+      "identity": "driver/file/tests/run_state.rs::resolve_active_run_state_dir_rejects_traversal_run_id",
+      "pinned_decision": "retire",
+      "decision": "retire",
+      "rationale": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete.",
+      "coverage": "No source function at the delivery base; remove only the stale allowance."
+    },
+    {
+      "identity": "driver/file/tests/run_state.rs::validate_active_run_state_dir_rejects_absolute_path_outside_workspace",
+      "pinned_decision": "retire",
+      "decision": "retire",
+      "rationale": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete.",
+      "coverage": "No source function at the delivery base; remove only the stale allowance."
+    },
+    {
+      "identity": "driver/file/tests/run_state.rs::validate_active_run_state_dir_rejects_traversal_state_dir",
+      "pinned_decision": "retire",
+      "decision": "retire",
+      "rationale": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete.",
+      "coverage": "No source function at the delivery base; remove only the stale allowance."
+    },
+    {
+      "identity": "driver/sqlite/audit_event_store/tests/aggregates.rs::tool_call_queries_search_the_invocation_index_for_every_window_and_limit",
+      "pinned_decision": "move",
+      "decision": "retire",
+      "rationale": "Upstream scoreboard retirement e9bb5f2e2362c763e5270959f4f702a5a731ffbd removed the role/surface tool-call aggregate SQL builders and their planner test. The private-seam keep decision at the original implementation base is superseded by that independent backend removal; preserve its removal and drop the baseline allowance.",
+      "coverage": "The queries this identity exercised no longer exist at the delivery base; no surviving behavior or test is removed by this reconciliation."
+    },
+    {
+      "identity": "driver/sqlite/job_run_store/tests/queries.rs::recency_pages_walk_an_index_instead_of_sorting_the_workspace",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/driver/sqlite/job_run_store/tests/queries.rs",
+      "criterion": 1,
+      "rationale": "job_run_list_sql is private and supplies the actual query/parameters for the filtered and unfiltered recency planner checks. Public list results cannot prove absence of a temporary B-tree or selection of the recency index, and timing a larger fixture is both weaker and more expensive. Preserve the deterministic SQL-generation/planner matrix without copying a production query."
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/job_runs.rs::job_run_states_listing_bench",
+      "pinned_decision": "retire",
+      "decision": "retire",
+      "rationale": "Ignored job-state listing wall-time benchmark is not an admitted combinatorial pure invariant, private fault seam, safety or uncovered kernel test. Existing crates/orbit-store/tests/job_run_states.rs and performance tooling are the appropriate scale boundary; do not retain a benchmark as a unit-test admission.",
+      "coverage": "Existing tests/job_run_states.rs covers public state/list separation; retired benchmark was ignored and added only a wall-time/scale fixture."
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/ledger.rs::breaking_newer_database_refuses_and_names_the_first_missing_migration",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/migration_freeze/ledger.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "Store::open and Store::applied_migrations with the unchanged frozen/hostile SQL fixtures"
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/ledger.rs::concurrent_store_open_on_pre_ledger_fixture_applies_each_version_once",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/migration_freeze/ledger.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "Store::open and Store::applied_migrations with the unchanged frozen/hostile SQL fixtures"
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/ledger.rs::invocation_workspace_backfill_attributes_only_unambiguous_runs",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs",
+      "criterion": 3,
+      "rationale": "The guarantee is migration of legacy invocation rows at the actual v35 registry prefix to v36, including colliding and orphan run ids. ledger::MIGRATIONS and run_migrations are private. Public Store::open always migrates to the latest schema; no public composition constructs the exact pre-workspace-column prefix. Retain this persisted-format safety fixture alongside the admitted prefix goldens, rather than substituting a current-schema NULL-column repair or exposing the registry."
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/ledger.rs::legacy_db_adopts_versioned_ledger",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/migration_freeze/ledger.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "Store::open and Store::applied_migrations with the unchanged frozen/hostile SQL fixtures"
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/ledger.rs::resource_minute_tables_keep_an_older_binary_writing",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs",
+      "criterion": 3,
+      "rationale": "The existing fixture opens the newer resource/admission tables with the actual older ledger prefix and compares older/newer writer and reader floors. Both real registry slices are private. Store::open cannot impersonate the older binary; exported run_database_migrations accepts a caller-supplied registry but does not expose the shipped registry. Preserve the pre-existing documented persisted-format admission; a synthetic registry would change the tested invariant."
+    },
+    {
+      "identity": "driver/sqlite/migration/tests/ledger.rs::v1_upgrade_and_fresh_database_have_identical_columns",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/migration_freeze/ledger.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "Store::open and Store::applied_migrations with the unchanged frozen/hostile SQL fixtures"
+    },
+    {
+      "identity": "driver/sqlite/task_registry/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/driver/sqlite/task_registry/tests/mod.rs",
+      "criterion": 3,
+      "rationale": "The regression compares TaskRegistryStore::workspaces_dir, the crate-private key of RepairGate, for two spellings of one registry root. Public bindings and allocations share persisted rows even if that process-local attempt-budget key splits, so they do not prove the asserted confinement invariant. Retain the existing documented symlink admission without exporting that key."
+    },
+    {
+      "identity": "driver/sqlite/task_registry/tests/relations.rs::relation_cycle_through_another_workspace_is_rejected",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_registry/relations.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "maintenance::task_registry::TaskRegistryStore::{replace_task_index,indexed_relation_targets}"
+    },
+    {
+      "identity": "driver/sqlite/task_reservation_store/tests/workspace_claim.rs::persisted_workspace_claim_is_not_group_or_world_readable",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/workspace_claim.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "Store::acquire_workspace_claim using contracts::WorkspaceClaimAcquireParams"
+    },
+    {
+      "identity": "repository/task/v2/tests/concurrency.rs::desktop_concurrent_status_receipts_are_atomic_and_durable",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/concurrency.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/history contracts, including desktop revision, mutation and durable receipt replay"
+    },
+    {
+      "identity": "repository/task/v2/tests/concurrency.rs::parallel_updates_to_one_task_keep_every_appended_comment",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/concurrency.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/history contracts, including desktop revision, mutation and durable receipt replay"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::a_failed_scope_write_leaves_neither_its_scope_nor_its_grant",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::a_history_append_cannot_forge_a_grant",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::concurrent_scope_writes_leave_a_grant_bound_to_the_final_scope",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::desktop_comment_refreshes_the_revision_seal_without_changing_intent",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::maintained_document_edits_rebind_creation_intent_to_the_new_revision",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::revoke_and_same_scope_reauthorization_changes_the_pilot_generation",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::revoked_or_voided_grants_never_revive",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/creation_grant.rs::the_atomic_pilot_write_compares_and_carries_the_grant",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/creation_grant.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "compose::workspace_task_backends task/document/history contracts; ContextCreationState::resolve over persisted exported envelope/event types"
+    },
+    {
+      "identity": "repository/task/v2/tests/repair_gate.rs::degraded_reads_still_fail_on_task_field_corruption",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/repository/task/v2/tests/repair_gate.rs",
+      "criterion": 2,
+      "rationale": "The existing case proves corruption does not bypass a suppressed repair and that the same gate attempt count remains one before and after restoration. RepairGate::attempts is cfg(test) private. Public read failures alone omit the suppression/attempt invariant; retain the fixture and private counter together rather than weaken its behavior."
+    },
+    {
+      "identity": "repository/task/v2/tests/repair_gate.rs::rebuild_refusal_names_the_canonical_source_edge",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/task_mutations/repair_gate.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "maintenance::task_registry::TaskRegistryStore::{replace_workspace_task_indexes,unresolved_relation_targets}"
+    },
+    {
+      "identity": "repository/task/v2/tests/repair_gate.rs::removing_the_edge_through_a_supported_update_repairs_on_the_next_read",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/repository/task/v2/tests/repair_gate.rs",
+      "criterion": 2,
+      "rationale": "The case asserts an exact second RepairGate attempt after the canonical edge changes, empty unresolved_targets, and LISTING_BUNDLE_READS dropping from a full scan to one indexed hydration. Those private cfg(test) counters expose the recovery ordering and absence of repeat scans; public row equality cannot distinguish fallback from repaired-index reads. Preserve this existing counter-based fault fixture."
+    },
+    {
+      "identity": "repository/task/v2/tests/repair_gate.rs::restoring_the_target_repairs_on_the_next_read",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/repository/task/v2/tests/repair_gate.rs",
+      "criterion": 2,
+      "rationale": "The fixture unregisters and restores a target, asserts the shared RepairGate unresolved-target set and exact attempts, then proves the next read uses one indexed hydration through LISTING_BUNDLE_READS. Both observers are private cfg(test) seams; a public correct listing could still be a repeated full scan. Preserve the existing recovery/scan invariant with its admitted child isolation."
+    },
+    {
+      "identity": "workflow/layout/tests/mod.rs::legacy_cleanup_does_not_follow_a_symlinked_tasks_parent",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/file_store/layout.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "workflow::layout::upgrade_workspace_layout with the existing v2 marker to run cleanup"
+    },
+    {
+      "identity": "workflow/task/tests/git.rs::git_failure_redacts_remote_credentials_in_arguments",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/workflow/task/tests/git.rs",
+      "criterion": 3,
+      "rationale": "GitRunner is private. The public publication boundary now rejects credential-bearing remotes before reaching Git (covered by tests/publication.rs::inspect_and_restore_refuse_credentials_before_git_or_cache_writes). That boundary cannot supply these arguments to the runner failure formatter. The existing matrix guards the separate diagnostic redaction invariant, including the private cache path; retain it without exposing the runner."
+    },
+    {
+      "identity": "workflow/task/tests/import.rs::import_refuses_an_archive_entry_that_is_a_symlink",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/publication/archive.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "workflow::task::{export_tasks,import_tasks}; honest fixture seeded using public task/artifact composition"
+    },
+    {
+      "identity": "workflow/task/tests/inspect.rs::publication_consume_refuses_symlink_before_reading_the_target",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/publication/inspect.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "workflow::task::{inspect_publication,restore_publication}"
+    },
+    {
+      "identity": "workflow/task/tests/publish.rs::concurrent_losing_push_preserves_landed_evidence_across_failed_saves",
+      "pinned_decision": "move",
+      "decision": "keep",
+      "source": "crates/orbit-store/src/workflow/task/tests/publish.rs",
+      "criterion": 2,
+      "rationale": "The private publish_task_snapshot_inner PendingWriteStage::{Before,After} callback deterministically orders a winner durable pending write, its push, and a losing write/CAS, then prohibits any new staged push during reconciliation. The exported publish_task_snapshot has no callback and random parallel pushes do not choose these windows. Keep the exact isolated race and foreign-tip controls with the private hook; move only the three no-hook cases from the same file."
+    },
+    {
+      "identity": "workflow/task/tests/publish.rs::failed_push_whose_parent_is_still_the_tip_publishes_from_that_tip",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/publication/pending.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "workflow::task::publish_task_snapshot; existing pending-record, failed-save and authority-conflict fixtures"
+    },
+    {
+      "identity": "workflow/task/tests/publish.rs::legacy_landed_evidence_survives_failed_saves_until_acknowledged",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/publication/pending.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "workflow::task::publish_task_snapshot; existing pending-record, failed-save and authority-conflict fixtures"
+    },
+    {
+      "identity": "workflow/task/tests/publish.rs::pending_record_refuses_a_tip_that_is_neither_its_commit_nor_its_parent",
+      "pinned_decision": "move",
+      "decision": "move",
+      "destination": "crates/orbit-store/tests/publication/pending.rs",
+      "rationale": "Preserves the existing case at the exported boundary; fixture writes run in an isolated child. No production visibility change.",
+      "boundary": "workflow::task::publish_task_snapshot; existing pending-record, failed-save and authority-conflict fixtures"
+    }
+  ],
+  "macos_workflow": "No owned moved or retired identity, source module path or filter is named by .github/workflows/ci-macos.yml; workflow remains unchanged and scripts/check-ci-macos.sh verifies its current selections.",
+  "preserved_later_admissions": [
+    "driver/sqlite/migration/tests/feature_ledgers.rs::a_binary_without_absorption_keeps_writing_and_decides_features_from_their_records",
+    "driver/sqlite/migration/tests/feature_ledgers.rs::absorbed_repair_releases_members_shelved_at_a_source_the_branch_left",
+    "driver/sqlite/migration/tests/feature_ledgers.rs::absorbed_repair_releases_pilot_failures_settled_from_another_steps_checkpoint",
+    "driver/sqlite/migration/tests/feature_ledgers.rs::absorption_writes_what_each_feature_open_wrote",
+    "driver/sqlite/migration/tests/ledger.rs::store_schema_prefix_goldens",
+    "driver/sqlite/migration/tests/ledger.rs::task_registry_schema_prefix_goldens"
+  ],
+  "baseline": {
+    "before": 76,
+    "after": 43,
+    "other_crates": "unchanged"
+  },
+  "boundary_validation": {
+    "command": "./scripts/build-budget.py -- cargo nextest run -p orbit-store --test file_store --test migration_freeze --test publication --test task_mutations --test task_registry_ledger",
+    "outcome": "passed",
+    "tests": 38
+  },
+  "base_sync": {
+    "original_implementation_base": "56ca5e1997c1037abc94f64a08fcfcfec3d76471",
+    "original_candidate_head": "aa55f51bb04c1a1baf3a798a2d12ee753dd9add0",
+    "original_candidate_unit_tests": 45,
+    "upstream_retirement_commit": "e9bb5f2e2362c763e5270959f4f702a5a731ffbd",
+    "upstream_removed_identities": [
+      "driver/file/scoreboard/tests/mod.rs::increment_refuses_a_symlink_swapped_in_after_validation",
+      "driver/sqlite/audit_event_store/tests/aggregates.rs::tool_call_queries_search_the_invocation_index_for_every_window_and_limit"
+    ],
+    "rationale": "Keep the candidate boundary relocations and private-seam admissions alongside the independent upstream scoreboard retirement. Regenerated orbit-store only; other crate allowances remain unchanged."
+  }
+}

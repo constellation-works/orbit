@@ -181,7 +181,7 @@ const JOB_RUN_STATES_BATCH: i64 = 64;
 /// partially filled side table converges on the same result.
 ///
 /// Duration: about 18 s per GB of pipeline state on an SSD host (32 s for the
-/// 1.8 GB fixture of `job_run_states_listing_bench`), so roughly 40 s for a
+/// historical 1.8 GB benchmark fixture), so roughly 40 s for a
 /// 2.3 GB `job_runs`, longer when its pages are cold. The open that applies it
 /// holds the write lock for that long, and the WAL grows by about the payload
 /// size until the next checkpoint. Because each batch reuses the pages the
