@@ -312,6 +312,29 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
         &["ORB-4"],
         &[],
     );
+    // Three pull requests: a shadow claim, a shadow idle response and an
+    // enforce-held request. Only requests sent under shadow would be held.
+    for (mode, sent, admitted, minute) in [
+        ("shadow", true, vec!["ORB-5"], 2),
+        ("shadow", true, vec![], 3),
+        ("enforce", false, vec![], 4),
+    ] {
+        fixture.forecast(
+            "jrun-pull",
+            mode,
+            at(minute),
+            &[(5, 7.0, 9)],
+            &admitted,
+            &[],
+            &[],
+        );
+        fixture.db().execute(
+            "UPDATE admission_forecasts SET pull_decision_json = ?1 WHERE run_id = 'jrun-pull' AND forecast_at = ?2",
+            params![serde_json::json!({"sent": sent, "forecast_no_headroom": true}).to_string(),
+                at(minute).to_rfc3339_opts(SecondsFormat::Micros, true)],
+        ).unwrap();
+        fixture.host_minute(at(minute + 5), 7.0, 9);
+    }
     fixture.host_minute(at(5), 6.0, 6);
     fixture.host_minute(at(6), 2.0, 1);
     fixture.host_minute(at(10), 1.0, 4);
@@ -320,9 +343,9 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     let doc: Value =
         serde_json::from_str(&fixture.stdout(&["run", "profiles", "--accuracy", "--json"]))
             .unwrap();
-    assert_eq!(doc["forecasts"], 2, "{doc:#}");
+    assert_eq!(doc["forecasts"], 5, "{doc:#}");
     let pairs = doc["pairs"].as_array().unwrap();
-    assert_eq!(pairs.len(), 4, "{doc:#}");
+    assert_eq!(pairs.len(), 7, "{doc:#}");
     let first = &pairs[0];
     assert_eq!(first["run_id"], "jrun-shadow");
     assert_eq!(first["offset_minutes"], 5);
@@ -332,6 +355,18 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(first["measured_cpu_cores"], 6.0);
     assert_eq!(first["forecast_memory_bytes"], 8 * GIB);
     assert_eq!(first["measured_memory_bytes"], 6 * GIB);
+    let pull_pairs: Vec<_> = pairs
+        .iter()
+        .filter(|pair| pair["run_id"] == "jrun-pull")
+        .collect();
+    assert_eq!(pull_pairs.len(), 3);
+    for pair in pull_pairs {
+        assert_eq!(pair["offset_minutes"], 5);
+        assert_eq!(pair["forecast_cpu_cores"], 7.0);
+        assert_eq!(pair["measured_cpu_cores"], 7.0);
+        assert_eq!(pair["forecast_memory_bytes"], 9 * GIB);
+        assert_eq!(pair["measured_memory_bytes"], 9 * GIB);
+    }
 
     let offsets = doc["offsets"].as_array().unwrap();
     let offset = |minutes: u64| {
@@ -340,16 +375,17 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
             .find(|offset| offset["offset_minutes"] == minutes)
             .unwrap()
     };
-    // +5: CPU errors -2 and +1 cores; memory errors +2 GiB and 0.
+    // +5: CPU errors -2 and +1 cores, then three exact pull predictions;
+    // memory errors +2 GiB followed by four exact predictions.
     let five = offset(5);
-    assert_eq!(five["paired"], 2);
+    assert_eq!(five["paired"], 5);
     assert_eq!(five["unmeasured"], 0);
-    assert_eq!(five["cpu"]["mean_error"], -0.5);
-    assert_eq!(five["cpu"]["mean_absolute_error"], 1.5);
-    assert_eq!(five["cpu"]["under_rate"], 0.5);
+    assert_eq!(five["cpu"]["mean_error"], -0.2);
+    assert_eq!(five["cpu"]["mean_absolute_error"], 0.6);
+    assert_eq!(five["cpu"]["under_rate"], 0.2);
     assert_eq!(five["cpu"]["worst_miss"]["error"], -2.0);
     assert_eq!(five["cpu"]["worst_miss"]["run_id"], "jrun-shadow");
-    assert_eq!(five["memory"]["mean_error"], GIB as f64);
+    assert_eq!(five["memory"]["mean_error"], 2.0 * GIB as f64 / 5.0);
     assert_eq!(five["memory"]["under_rate"], 0.0);
     assert_eq!(five["memory"]["worst_miss"]["error"], 2.0 * GIB as f64);
     // +20: CPU under by half a core; memory over by 1 GiB.
@@ -363,7 +399,7 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(thirty["cpu"]["mean_error"], Value::Null);
 
     let drains = doc["drains"].as_array().unwrap();
-    assert_eq!(drains.len(), 2, "{doc:#}");
+    assert_eq!(drains.len(), 3, "{doc:#}");
     let drain = |run_id: &str| {
         drains
             .iter()
@@ -375,6 +411,15 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(shadow["admitted"], 2);
     assert_eq!(shadow["would_hold"], serde_json::json!(["ORB-1"]));
     assert_eq!(shadow["would_add"], serde_json::json!(["ORB-3"]));
+    let pull = drain("jrun-pull");
+    assert_eq!(pull["shadow_passes"], 2);
+    assert_eq!(pull["enforce_passes"], 1);
+    assert_eq!(pull["admitted"], 1);
+    assert_eq!(pull["pull_requests"], 3);
+    assert_eq!(pull["pull_sent"], 2);
+    assert_eq!(pull["pull_would_hold"], 2);
+    assert_eq!(pull["would_hold"], serde_json::json!([]));
+    assert_eq!(pull["would_add"], serde_json::json!([]));
     let enforce = drain("jrun-enforce");
     assert_eq!(enforce["enforce_passes"], 1);
     assert_eq!(enforce["shadow_passes"], 0);
@@ -389,8 +434,42 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(
         drain_rows,
         vec![
-            vec!["ws_fixture", "jrun-enforce", "0", "1", "0", "0", "0"],
-            vec!["ws_fixture", "jrun-shadow", "1", "0", "2", "1", "1"],
+            vec![
+                "ws_fixture",
+                "jrun-enforce",
+                "0",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+            ],
+            vec![
+                "ws_fixture",
+                "jrun-pull",
+                "2",
+                "1",
+                "1",
+                "0",
+                "0",
+                "3",
+                "2",
+                "2"
+            ],
+            vec![
+                "ws_fixture",
+                "jrun-shadow",
+                "1",
+                "0",
+                "2",
+                "1",
+                "1",
+                "0",
+                "0",
+                "0"
+            ],
         ],
         "{plain}"
     );

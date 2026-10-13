@@ -16,11 +16,16 @@
 //! profiles or no readable load, nothing is computed and no list is sent.
 //!
 //! A claim that returns is reserved under the same lock before the next
-//! request is forecast, so that forecast counts it.
+//! request is forecast, so that forecast counts it. Each computed fit also
+//! records accuracy points and its request decision; a returned claim is
+//! added to those points with the same profile lookup as its reservation.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionReceipt, AdmissionWorkFit, AdmissionWorkKey};
+use orbit_store::contracts::{
+    AdmissionForecastRecord, AdmissionReceipt, AdmissionWorkFit, AdmissionWorkKey,
+    PullForecastDecision,
+};
 use orbit_types::task::{
     CHANGE_WORK_CLASS, NO_DIFF_EXPECTED_TAG, NO_DIFF_WORK_CLASS, TaskComplexity, work_class,
 };
@@ -28,7 +33,8 @@ use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, PullAdmissionFit, PullUnfitWor
 
 use crate::OrbitRuntime;
 use crate::runtime::host_resource::forecast::{
-    AdmissionLimits, AdmissionReservationRequest, ForecastDecision, HostLoadForecast, gap_fit,
+    AdmissionLimits, AdmissionReservationRequest, ForecastDecision, ForecastPoints,
+    HostLoadForecast, gap_fit,
 };
 use crate::runtime::host_resource::profile::{BaseClass, ProfileLookup};
 
@@ -50,6 +56,7 @@ const COMPLEXITIES: [Option<TaskComplexity>; 6] = [
 pub(crate) struct PullWorkFit {
     pub(crate) fit: AdmissionWorkFit,
     pub(crate) record: PullAdmissionFit,
+    accuracy: ForecastPoints,
 }
 
 impl PullWorkFit {
@@ -62,6 +69,40 @@ impl PullWorkFit {
     /// `enforce` only when some work fits.
     pub(crate) fn requests(&self) -> bool {
         !self.record.sent || !self.fit.is_empty()
+    }
+
+    /// Record the request's original forecast, counting the returned claim
+    /// with exactly the lookup used to reserve it for the next request.
+    pub(crate) fn record_forecast(
+        mut self,
+        runtime: &OrbitRuntime,
+        run_id: &str,
+        sent: bool,
+        receipt: Option<&AdmissionReceipt>,
+    ) -> Result<(), OrbitError> {
+        let mut admitted = Vec::new();
+        if let Some(receipt) = receipt
+            && let Some(request) = runtime.pulled_claim_reservation(receipt)?
+        {
+            self.accuracy.admit(&request.lookup);
+            admitted.push(request.task_id);
+        }
+        runtime.record_admission_forecast(&AdmissionForecastRecord {
+            workspace_id: runtime.workspace_id()?,
+            run_id: run_id.to_string(),
+            forecast_at: self.accuracy.at,
+            mode: self.record.mode,
+            cpu_count: self.accuracy.cpu_count,
+            memory_total_bytes: self.accuracy.memory_total_bytes,
+            points: self.accuracy.into_points(),
+            admitted,
+            fit_admitted: Vec::new(),
+            fit_skipped: Vec::new(),
+            pull: Some(PullForecastDecision {
+                sent,
+                forecast_no_headroom: self.fit.is_empty(),
+            }),
+        })
     }
 }
 
@@ -103,8 +144,18 @@ impl OrbitRuntime {
         receipt: &AdmissionReceipt,
         requested_at: DateTime<Utc>,
     ) -> Result<(), OrbitError> {
-        let Some(task) = receipt.task.as_ref().filter(|_| receipt.claim.is_some()) else {
+        let Some(request) = self.pulled_claim_reservation(receipt)? else {
             return Ok(());
+        };
+        self.reserve_admissions_at(requested_at, vec![request])
+    }
+
+    fn pulled_claim_reservation(
+        &self,
+        receipt: &AdmissionReceipt,
+    ) -> Result<Option<AdmissionReservationRequest>, OrbitError> {
+        let Some(task) = receipt.task.as_ref().filter(|_| receipt.claim.is_some()) else {
+            return Ok(None);
         };
         let local = self.get_task(&task.id).ok();
         let tags = local
@@ -119,13 +170,10 @@ impl OrbitRuntime {
             complexity.map(|complexity| complexity.as_str().to_string()),
             tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
         );
-        self.reserve_admissions_at(
-            requested_at,
-            vec![AdmissionReservationRequest {
-                task_id: task.id.clone(),
-                lookup,
-            }],
-        )
+        Ok(Some(AdmissionReservationRequest {
+            task_id: task.id.clone(),
+            lookup,
+        }))
     }
 }
 
@@ -199,6 +247,7 @@ fn work_fit(
         }
     }
     Some(PullWorkFit {
+        accuracy: forecast.accuracy_points(),
         fit,
         record: PullAdmissionFit {
             mode: mode.to_string(),

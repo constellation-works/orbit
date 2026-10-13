@@ -401,7 +401,7 @@ Default thresholds are CPU 80% and memory 75%. Both sit below the throttle's
 90% high and 85% resume marks, so forecast admission and the throttle do not
 fight each other.
 
-Implemented for local drains in `admission/gap_fit.rs`, over
+Implemented for local and pull drains, with local passes in `admission/gap_fit.rs`, over
 `HostLoadForecast::gap` (`runtime/host_resource/forecast/fit.rs`):
 
 - **Where.** `select_admissions` asks gap fit about each candidate that
@@ -577,7 +577,7 @@ first.
 
 ### 8.1 The accuracy report
 
-Implemented for local drains in `workspace_auto/classify.rs` (recording),
+Implemented for local and pull drains, with local passes in `workspace_auto/classify.rs` (recording),
 `runtime/host_resource/forecast/record.rs` (the recorded points) and
 `runtime/host_resource/accuracy.rs` (the report), read through
 `OrbitRuntime::forecast_accuracy` and shown by
@@ -610,8 +610,18 @@ Implemented for local drains in `workspace_auto/classify.rs` (recording),
 - **Window and retention.** The report reads the last 30 days. Rows are
   pruned with the resource history by `orbit gc runs --apply` after 30 days,
   whatever `retention.runs_days` says.
-- **Pull drains** record nothing yet: a follower's `pull_admission_fit`
-  fits kinds of work, not tasks, and is kept only on its run state.
+- **Pull drains** record one row per request forecast in shadow or enforce,
+  including forecasts whose request was held. Store schema v50 adds a nullable
+  pull decision alongside local task decisions: whether the request was sent
+  and whether no kind of work fit (`forecast_no_headroom`). A returned claim
+  is added to the original forecast with the same lookup as
+  `reserve_pulled_claim`, before the next request is forecast. The accuracy
+  report pairs these points identically to local passes. Per drain,
+  `PULL_REQUESTS` counts pull forecasts, `PULL_SENT` counts requests sent
+  (including idle or failed attempts), and `PULL_WOULD_HOLD` counts shadow
+  requests enforce would have held, including ones that returned no claim.
+  Pull request counts are separate from the distinct local-task
+  `WOULD_HOLD` and `WOULD_ADD` sets.
 
 ## 9. Concerns & Honest Limitations
 

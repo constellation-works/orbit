@@ -154,7 +154,13 @@ pass under `shadow` or `enforce` that built a forecast records it at +5, +10,
 minute and shows, per offset and for CPU and memory, the mean error
 (forecast minus measured), how often the forecast was under, and the worst
 miss. Per drain it counts the tasks shadow would have held or added against
-what the drain admitted. `--json` adds the raw pairs. Records are kept for
+what the drain admitted. Pull drains record each request's forecast, counting a
+returned claim using the same profile as its reservation. `PULL_REQUESTS` counts
+these forecasts, including requests enforce held; `PULL_SENT` counts requests
+sent to the owner, including idle responses and failed attempts.
+`PULL_WOULD_HOLD` counts shadow requests enforce would have held because no
+kind of work fit (`forecast_no_headroom`), even if no claim returned.
+`--json` adds the raw pairs. Records are kept for
 30 days and pruned by `orbit gc runs --apply`. See
 [auto-concurrency §8.1](design/auto-concurrency/2_design.md#81-the-accuracy-report).
 

@@ -282,6 +282,7 @@ impl ResourceUsageStoreBackend for Store {
         let admitted = encode(&record.admitted)?;
         let fit_admitted = encode(&record.fit_admitted)?;
         let fit_skipped = encode(&record.fit_skipped)?;
+        let pull = record.pull.as_ref().map(encode).transpose()?;
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
                 .execute(
@@ -289,8 +290,8 @@ impl ResourceUsageStoreBackend for Store {
                     INSERT INTO admission_forecasts (
                         workspace_id, run_id, forecast_at, mode, cpu_count,
                         memory_total_bytes, points_json, admitted_json,
-                        fit_admitted_json, fit_skipped_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                        fit_admitted_json, fit_skipped_json, pull_decision_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                     "#,
                     params![
                         record.workspace_id,
@@ -303,6 +304,7 @@ impl ResourceUsageStoreBackend for Store {
                         admitted,
                         fit_admitted,
                         fit_skipped,
+                        pull,
                     ],
                 )
                 .map(|_| ())
@@ -320,7 +322,7 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT workspace_id, run_id, forecast_at, mode, cpu_count,
                        memory_total_bytes, points_json, admitted_json,
-                       fit_admitted_json, fit_skipped_json
+                       fit_admitted_json, fit_skipped_json, pull_decision_json
                 FROM admission_forecasts
                 WHERE forecast_at >= ?1
                 ORDER BY forecast_at, rowid
@@ -340,6 +342,10 @@ impl ResourceUsageStoreBackend for Store {
                     admitted: decode(7, &row.get::<_, String>(7)?)?,
                     fit_admitted: decode(8, &row.get::<_, String>(8)?)?,
                     fit_skipped: decode(9, &row.get::<_, String>(9)?)?,
+                    pull: row
+                        .get::<_, Option<String>>(10)?
+                        .map(|value| decode(10, &value))
+                        .transpose()?,
                 })
             })
             .map_err(sqlite_store_error)?;

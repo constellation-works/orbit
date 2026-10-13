@@ -5,9 +5,9 @@ use orbit_store::contracts::{AdmissionReceipt, AdmissionRequest, PullDestination
 
 use super::{PullDrain, Reconciled, RefillPass};
 
-/// Called with a claim's receipt and the time its request was allocated.
-pub(crate) type Claimed<'a> =
-    dyn Fn(&AdmissionReceipt, DateTime<Utc>) -> Result<(), OrbitError> + 'a;
+/// Called after every allocated request, with its receipt when available.
+pub(crate) type Requested<'a> =
+    dyn Fn(Option<&AdmissionReceipt>, DateTime<Utc>) -> Result<(), OrbitError> + 'a;
 
 impl PullDrain<'_> {
     /// One bounded refill. Each new ID is made durable before the request goes
@@ -29,16 +29,16 @@ impl PullDrain<'_> {
     /// this pass just settled as failed: that pass must not request
     /// replacements [ORB-15639].
     ///
-    /// `claimed`, when given, is called with each claim's receipt and the
-    /// time its request was allocated once the claim returns, before the next
-    /// request's `template` is built: also when carrying the claim on to its
-    /// leaf then fails. An error from it ends the pass.
-    pub(crate) fn refill_pass_claiming(
+    /// `requested`, when given, observes every allocated request, including
+    /// idle responses and failures, before the next template is built. Its
+    /// receipt can contain a claim even if carrying it to a leaf failed.
+    /// An error from the hook ends the pass.
+    pub(crate) fn refill_pass_requesting(
         &self,
         destination: &PullDestination,
         template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
-        claimed: Option<&Claimed<'_>>,
+        requested: Option<&Requested<'_>>,
         ceiling: usize,
     ) -> RefillPass {
         let mut pass = RefillPass {
@@ -51,7 +51,7 @@ impl PullDrain<'_> {
                 destination,
                 template,
                 admitting,
-                claimed,
+                requested,
                 ceiling,
                 &mut pass,
             )
@@ -59,7 +59,7 @@ impl PullDrain<'_> {
         pass
     }
 
-    /// [`Self::refill_pass_claiming`] with no claim hook.
+    /// [`Self::refill_pass_requesting`] with no claim hook.
     #[cfg(test)]
     pub(crate) fn refill_pass(
         &self,
@@ -68,7 +68,7 @@ impl PullDrain<'_> {
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
         ceiling: usize,
     ) -> RefillPass {
-        self.refill_pass_claiming(destination, template, admitting, None, ceiling)
+        self.refill_pass_requesting(destination, template, admitting, None, ceiling)
     }
 
     /// [`Self::refill_pass`] as a `Result`, for fixtures that only care
@@ -97,7 +97,7 @@ impl PullDrain<'_> {
         destination: &PullDestination,
         template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
-        claimed: Option<&Claimed<'_>>,
+        requested: Option<&Requested<'_>>,
         ceiling: usize,
         pass: &mut RefillPass,
     ) -> Result<(), OrbitError> {
@@ -139,20 +139,26 @@ impl PullDrain<'_> {
             else {
                 break;
             };
-            let sent = claimed.map(|_| record.clone());
+            let sent = requested.map(|_| record.clone());
             let reconciled = self.reconcile(record);
-            let reserved = match (claimed, sent) {
-                (Some(claimed), Some(sent)) => self.reread(&sent).and_then(|current| match current
-                    .and_then(|current| current.receipt)
-                    .filter(|receipt| receipt.claim.is_some())
-                {
-                    Some(receipt) => claimed(&receipt, requested_at),
-                    None => Ok(()),
-                }),
+            let observed = match (requested, sent) {
+                (Some(requested), Some(sent)) => {
+                    let current = self.reread(&sent);
+                    let observed = requested(
+                        current
+                            .as_ref()
+                            .ok()
+                            .and_then(|current| current.as_ref())
+                            .and_then(|current| current.receipt.as_ref()),
+                        requested_at,
+                    );
+                    current?;
+                    observed
+                }
                 _ => Ok(()),
             };
             let reconciled = reconciled?;
-            reserved?;
+            observed?;
             match reconciled {
                 Reconciled::Open => pass.admitted += 1,
                 Reconciled::Held => break,

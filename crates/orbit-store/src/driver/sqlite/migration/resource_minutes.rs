@@ -86,3 +86,14 @@ pub(super) fn apply_admission_forecasts(conn: &Connection) -> Result<(), OrbitEr
     )
     .map_err(sqlite_store_error)
 }
+
+/// v50: pull request decisions beside local pass decisions. Nullable so
+/// existing records and older writers retain their local-pass semantics.
+pub(super) fn apply_pull_forecast_decisions(conn: &Connection) -> Result<(), OrbitError> {
+    super::introspect::add_column_if_missing(
+        conn,
+        "admission_forecasts",
+        "pull_decision_json",
+        "TEXT",
+    )
+}
