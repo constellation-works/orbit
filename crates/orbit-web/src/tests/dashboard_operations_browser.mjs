@@ -285,6 +285,61 @@ try {
     throw new Error(`untasked Running now card changed at 280px: ${JSON.stringify(untasked)}`);
   }
   await page.locator('#operations-jobs-main .operation-running').screenshot({ path: path.join(evidence, 'running-now-280.png') });
+
+  // The task ID shares a flex row with its title. Across each generated grid
+  // column count, the ID stays one line while the title consumes and clips to
+  // the remaining width. Then repeat at a real 375px viewport.
+  const assertRunningTaskHeader = async (label, expectedColumns = null) => {
+    const layout = await page.evaluate(() => {
+      const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+      const grouped = grid.querySelector('.operation-running-task[data-task="ORB-15001"]');
+      const head = grouped.querySelector('.operation-running-head');
+      const id = head.querySelector('.operation-task-link');
+      const title = head.querySelector('.operation-running-task-title');
+      const probe = id.cloneNode(true);
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;flex-shrink:0';
+      head.appendChild(probe);
+      const oneLineHeight = probe.getBoundingClientRect().height;
+      probe.remove();
+      const range = document.createRange();
+      range.selectNodeContents(id);
+      const columns = getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length;
+      return {
+        columns,
+        idHeight: id.getBoundingClientRect().height,
+        oneLineHeight,
+        idLines: range.getClientRects().length,
+        titleWidth: title.clientWidth,
+        titleScrollWidth: title.scrollWidth,
+        titleWhiteSpace: getComputedStyle(title).whiteSpace,
+        titleOverflow: getComputedStyle(title).textOverflow,
+      };
+    });
+    if (expectedColumns != null && layout.columns !== expectedColumns) {
+      throw new Error(`Running now grid has ${layout.columns} columns at ${label}, expected ${expectedColumns}: ${JSON.stringify(layout)}`);
+    }
+    if (layout.idLines !== 1 || Math.abs(layout.idHeight - layout.oneLineHeight) > 0.5) {
+      throw new Error(`Running now task ID is not one rendered line at ${label}: ${JSON.stringify(layout)}`);
+    }
+    if (layout.titleWhiteSpace !== 'nowrap' || layout.titleOverflow !== 'ellipsis' || layout.titleScrollWidth <= layout.titleWidth) {
+      throw new Error(`Running now title does not truncate with an ellipsis at ${label}: ${JSON.stringify(layout)}`);
+    }
+  };
+  for (const { width, columns } of [{ width: 280, columns: 1 }, { width: 576, columns: 2 }, { width: 872, columns: 3 }]) {
+    await page.evaluate((gridWidth) => {
+      const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+      grid.style.width = `${gridWidth}px`;
+      grid.style.gridTemplateColumns = '';
+    }, width);
+    await assertRunningTaskHeader(`${columns}-column layout`, columns);
+  }
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => {
+    const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+    grid.style.width = '';
+    grid.style.gridTemplateColumns = '';
+  });
+  await assertRunningTaskHeader('375px viewport', 1);
   await page.evaluate(() => { document.querySelector('#operations-jobs-main .operation-running-grid').style.gridTemplateColumns = ''; });
 
   // ORB-12898: the retired #auto-drain destination opens Tasks with the Drain
