@@ -1470,7 +1470,10 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
 }
 
 /// [ORB-15548] Carried candidates still owe host and replay coverage at the
-/// final gate, including known-red commands.
+/// final gate, including known-red commands. This fixture follows the
+/// `ORBIT_VALIDATION_SELECTION` replay request and reports executed identities:
+/// production correctly refuses a base run with a different selection or
+/// without proof that the requested test ran.
 fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
     isolated(
         "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
@@ -1484,12 +1487,30 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
                 ("replay-zero", "", true, 0, false),
                 ("replay-executed", "", true, 3, true),
                 ("replay-deferred", notice, true, 3, false),
+                ("replay-missing", "", true, 3, false),
+                ("replay-partial", "", true, 3, false),
+                ("selection-mismatch", "", true, 3, false),
             ] {
                 let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                let mismatch_selection = if case == "selection-mismatch" {
+                    "if [ -n \"$ORBIT_VALIDATION_SELECTION\" ]; then \
+                     selection='{\"packages\":[\"other\"],\"failing_tests\":[\"fixture\"]}'; fi; "
+                } else {
+                    ""
+                };
+                let executed_tests = match case {
+                    "replay-missing" => "",
+                    "replay-partial" => ",\"executed_tests\":[\"other\"]",
+                    "replay-zero" => ",\"executed_tests\":[]",
+                    _ => ",\"executed_tests\":[\"fixture\"]",
+                };
                 let command = format!(
-                    "printf 'test fixture ... FAILED\\n{output_notice}\\n'; \
-                     printf '{{\"schema_version\":1,\"selection\":{{\"packages\":[\"fixture\"]}},\"tests_run\":{tests_run}}}' \
-                     > \"$ORBIT_VALIDATION_SUMMARY\"; exit 2"
+                    "selection=\"$ORBIT_VALIDATION_SELECTION\"; \
+                     [ -n \"$selection\" ] || selection='{{\"packages\":[\"fixture\"]}}'; \
+                     {mismatch_selection} \
+                     printf 'test fixture ... FAILED\\n{output_notice}\\n'; \
+                     printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":{tests_run}{executed_tests}}}' \
+                     \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"; exit 2"
                 );
                 preserved.host.set_required_commands(&[&command]);
                 if replay {
@@ -1537,10 +1558,23 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
                         );
                         assert!(message.contains("replayed nothing"), "{message}");
                     } else {
-                        assert!(
-                            orbit_types::workflow::is_baseline_red_failure(None, Some(&message)),
-                            "{case}: incomplete coverage cannot be known red: {message}"
-                        );
+                        let refusal = match case {
+                            "replay-missing" => "no executed-test identity proof",
+                            "replay-partial" => "did not execute requested test",
+                            "selection-mismatch" => "the base run tested",
+                            _ => "",
+                        };
+                        if !refusal.is_empty() {
+                            assert!(message.contains(refusal), "{case}: {message}");
+                        } else {
+                            assert!(
+                                orbit_types::workflow::is_baseline_red_failure(
+                                    None,
+                                    Some(&message)
+                                ),
+                                "{case}: incomplete coverage cannot be known red: {message}"
+                            );
+                        }
                     }
                 }
             }
