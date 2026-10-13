@@ -76,6 +76,8 @@ Admitted unit tests:
 
 - `crates/orbit-common/src/process/tests/bounded.rs`: `leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped` (criterion 2, fault injection). An injected argv probe and clock force a read failure followed by readable live argv, an unreadable probe throughout the grace budget, or a confirmed exit. It checks the leak assertion's panic classification and full retry budget without racing macOS sysctl or generating host load. The public bounded runner cannot force these observer failures; the native blocked-writer test covers pid-only cleanup.
 
+- `crates/orbit-common/src/process/tests/bounded.rs`: `bounded_run_returns_when_a_descendant_holds_either_pipe`, `bounded_run_enforces_deadline_while_a_stream_stays_readable` and `bounded_run_bounds_post_exit_drain_while_a_detached_writer_continues` (criterion 4, platform-kernel behaviour). A descendant keeps one output pipe open after the leader exits; sixteen `cat /dev/zero` writers keep a stream readable past the deadline; `setsid` writers outside the owned group keep filling a pipe during the post-exit drain. Each case's leak check and watchdog are this file's argv-identity harness (`assert_reaped`, `FloodCleanup`). It reads Linux `/proc` or macOS `KERN_PROCARGS2` and signals a pid only when its argv carries the recorded marker, and the admitted cleanup and leak-assertion tests above prove that harness safe. A crate-root copy would duplicate the native harness without those tests, so the public runner is not the cheaper boundary for these three.
+
 - `orbit-engine`'s `branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget` (criterion 2, fault injection). A stub Git stalls until the supervisor deadline, then succeeds, exhausts the budget, or completes with a refusal. It drives the branch lookup used by PR preparation and verifies the timeout class, elapsed time, bounded backoff and attempt count. The private Git budget guard scales the deadline; `pr_prepare` does not expose that guard through its public action boundary.
 
 - `crates/orbit-config/src/tests/seed.rs`: `every_family_combination_seeds_valid_defaults_pools_and_enabled_flags` (criterion 1, combinatorial seed rendering) checks all detected-family subsets in memory: defaults name enabled crews, pools parse and reference enabled crews, and each crew's enabled flag follows its provider availability. It avoids filesystem setup for every subset. `rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled` (criterion 2, fault injection) removes or disables a dynamically selected pool member in the private renderer's crew map; the public seeder always constructs that map itself. Neither test fixes crew choices, models or weights as policy.
@@ -289,3 +291,45 @@ environment prefix, instead of supplying the operator override itself.
 The 15 admitted `orbit-cmd` tests remain. Their update fixture is now trimmed
 to the restore-callback fault injection, and the stale-lock holder helpers
 sit beside the one test that uses them.
+
+## Common-crate admission audit reconciliation
+
+The 2026-10-12 audit's `orbit-common` moves run in the crate-root
+`mechanisms` binary. It holds one module per responsibility (`fs`,
+`governance`, `migration`, `observability`, `process`, `security`, `sqlite`,
+`storage`) and calls the same exported helpers the sibling tests called. The
+SQLite observation fixture keeps its re-executed writer child, now named
+`sqlite::read_only_observation::external_writer_process`.
+
+Two cases reach their guarantee through another public caller, because the
+helper they called is crate-private:
+
+- `private_open_repairs_a_permissive_existing_file` opens a permissive
+  existing lock file through `try_acquire_exclusive_file_lock`. Lock files use
+  the same create, read and write private open the case used.
+- `private_append_rejects_a_final_symlink` joins `jsonl_exit_flush`, because
+  the JSONL feed is the only public caller of the private append. The binary's
+  existing child logs a warning with a symlink planted at the feed path, and
+  the case asserts that the link's target is unchanged and the link remains.
+
+`bounded_run_times_out_and_reaps_the_process_group` was retired as a
+duplicate. `git_deadline`'s `hung_git_times_out_and_leaves_no_child` runs the
+same stalled leader-and-`sleep` script through `run_bounded_capped`. It
+asserts the timeout error and its `timeout_ms`, and that both pids are gone.
+`process_group_liveness`'s
+`bounded_timeout_reaps_a_child_that_moves_into_the_callers_group` asserts the
+lower deadline bound, the reaped leader and an exited group on every Unix.
+
+Five audited moves stay unit tests, with corrected rationale:
+
+- `fs/generation/tests/handoff.rs::a_completed_refusal_is_not_probed_again`.
+  The public `handover_target` keys its process-wide cache on the replaced
+  image of the running test binary. Only the `judge_candidate` seam takes a
+  caller's cache and probe timeout (see the handoff entry above).
+- `process/tests/signal.rs::retained_signal_identity_never_targets_a_reused_numeric_pid`.
+  It substitutes a bystander's number for a bound process's private pid to
+  simulate reuse, which no public caller can do (see the run-owner entry
+  above).
+- The three `bounded_run_*` cases admitted above, whose leak checks and
+  watchdog are the argv-identity harness the other admitted `bounded.rs`
+  tests guard.

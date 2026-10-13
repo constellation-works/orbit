@@ -1,7 +1,12 @@
-use crate::security::redaction::redact_all;
-use crate::storage::blob_store::BlobStore;
-use sha2::{Digest, Sha256};
+//! Content-addressed blob storage redacts before it hashes and writes.
+
+use orbit_common::security::redaction::redact_all;
+use orbit_common::security::release::sha256_hex;
+use orbit_common::storage::blob_store::BlobStore;
+use orbit_common::test_env::scoped;
 use tempfile::tempdir;
+
+use crate::{debug_string_body, json_string_body};
 
 #[test]
 fn write_redacts_secret_patterns_in_non_utf8_blob() {
@@ -40,7 +45,7 @@ fn redact_for_storage_scrubs_json_escaped_multiline_private_key() {
     // body differs from the Debug body; the lines themselves stay verbatim
     // inside the JSON encoding.
     let key = format!("{}\n\u{7}", lines.join("\n"));
-    let _env = crate::test_env::scoped([("GITHUB_APP_PRIVATE_KEY", Some(key.as_str()))]);
+    let _env = scoped([("GITHUB_APP_PRIVATE_KEY", Some(key.as_str()))]);
     let serialized = serde_json::to_vec(&serde_json::json!({"o": key})).expect("json");
     let dir = tempdir().expect("tempdir");
     let redacted = BlobStore::new(dir.path()).redact_for_storage(&serialized);
@@ -66,33 +71,4 @@ fn redact_for_storage_scrubs_json_escaped_multiline_private_key() {
             "private-key line survived JSON blob redaction: {line} in {text}"
         );
     }
-}
-
-fn json_string_body(value: &str) -> String {
-    let encoded = serde_json::to_string(value).expect("json string");
-    encoded
-        .strip_prefix('"')
-        .and_then(|body| body.strip_suffix('"'))
-        .expect("json quotes")
-        .to_string()
-}
-
-fn debug_string_body(value: &str) -> String {
-    let encoded = format!("{value:?}");
-    encoded
-        .strip_prefix('"')
-        .and_then(|body| body.strip_suffix('"'))
-        .expect("debug quotes")
-        .to_string()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push_str(&format!("{:02x}", byte));
-    }
-    out
 }

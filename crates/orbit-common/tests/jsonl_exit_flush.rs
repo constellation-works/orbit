@@ -4,10 +4,14 @@
 //! record, so a warning logged right before exit is still queued when the
 //! process ends. The child is a fresh process that installs the global
 //! subscriber, logs one warning, and exits through `std::process::exit`.
+//!
+//! The feed opens its file through the private append, so a symlink planted at
+//! the feed path is refused rather than followed.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 orbit_common::isolate_test_process!();
 
+use std::path::Path;
 use std::process::Command;
 
 use orbit_common::observability::logging;
@@ -17,18 +21,17 @@ use serde_json::Value;
 const CHILD: &str = "warn_then_exit_child";
 const EXIT_CODE: i32 = 7;
 
-#[test]
-fn final_record_before_process_exit_reaches_the_jsonl_feed() {
+/// Run the child with `home` as its home, so its feed is the one under it.
+fn warn_then_exit_in(home: &Path) {
     assert_child_test_exists(CHILD);
-    let home = tempfile::tempdir().expect("temp home");
     let mut command = Command::new(std::env::current_exe().unwrap());
     clear_inherited_authority(|key| {
         command.env_remove(key);
     });
     let output = command
         .args(["--exact", CHILD, "--ignored", "--nocapture"])
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .env("RUST_LOG", "warn")
         .output()
         .expect("run child");
@@ -39,6 +42,12 @@ fn final_record_before_process_exit_reaches_the_jsonl_feed() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn final_record_before_process_exit_reaches_the_jsonl_feed() {
+    let home = tempfile::tempdir().expect("temp home");
+    warn_then_exit_in(home.path());
 
     let feed = home.path().join(".orbit/state/logs/orbit.jsonl");
     let raw = std::fs::read_to_string(&feed).unwrap_or_default();
@@ -56,8 +65,35 @@ fn final_record_before_process_exit_reaches_the_jsonl_feed() {
     assert_eq!(records[0]["fields"]["code"], EXIT_CODE);
 }
 
+#[cfg(unix)]
 #[test]
-#[ignore = "re-executed by final_record_before_process_exit_reaches_the_jsonl_feed"]
+fn private_append_rejects_a_final_symlink() {
+    let home = tempfile::tempdir().expect("temp home");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let outside_file = outside.path().join("outside.log");
+    std::fs::write(&outside_file, b"unchanged").expect("outside file");
+    let logs = home.path().join(".orbit/state/logs");
+    std::fs::create_dir_all(&logs).expect("feed directory");
+    let link = logs.join("orbit.jsonl");
+    std::os::unix::fs::symlink(&outside_file, &link).expect("symlink");
+
+    warn_then_exit_in(home.path());
+
+    assert_eq!(
+        std::fs::read(&outside_file).expect("outside file remains"),
+        b"unchanged"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("feed path")
+            .file_type()
+            .is_symlink(),
+        "the planted link is neither followed nor replaced"
+    );
+}
+
+#[test]
+#[ignore = "re-executed by the feed tests above"]
 fn warn_then_exit_child() {
     logging::init_default_subscriber("warn");
     tracing::warn!(target: "orbit.test.exit", code = EXIT_CODE, "last words before exit");
