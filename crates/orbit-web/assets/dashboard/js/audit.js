@@ -37,7 +37,7 @@ let auditFilter = {
   // Time-window filter for the Events sub-tab. Accepts the same shorthands as
   // the API (`24h`, `7d`, `1w`, RFC3339); null means the API-side default.
   since: null,
-  // Source metric from a scoreboard drill-down (display + hash only).
+  // Source metric from a drill-down (display + hash only).
   metric: null,
   // Hides successful calls from the unconfirmed caller (probe traffic).
   hide_unverified: false,
@@ -826,8 +826,9 @@ function navigateToRole(role, ctx) {
   navigateToDrilldown({ role }, ctx);
 }
 
-/// Scoreboard actor/metric drill-down. Carries the shared dashboard window
-/// and records the source metric so the landing chips explain the scope.
+/// Family, role, or metric drill-down into Audit Events. Incidents use this
+/// for evidence. Carries the shared dashboard window and records the source
+/// metric so the landing chips explain the scope.
 function navigateToDrilldown(opts = {}, ctx) {
   auditFilter = emptyAuditFilter();
   auditFilter.eventIds = Array.isArray(opts.eventIds)

@@ -89,7 +89,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 
 ### Observe and extend
 
-- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, per-agent scoreboard, jobs, frictions, and effective config, with inline editing.
+- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, managed-execution cost, jobs, frictions, and effective config, with inline editing.
 - **Plugins** (`orbit plugin`). A plugin can add its own tools, jobs, routines, auto-tasks, skills, and CLI commands. Plugins run sandboxed under explicit permission grants, and `orbit plugin scaffold` generates a starter.
 - **Agent skills.** Three skills ship with Orbit: `orbit` (everyday task work), `orbit-orchestrate` (backlog and dispatch), and `orbit-setup` (machine and repo configuration). `orbit init` links them into your agents.
 

@@ -1,7 +1,7 @@
-// Superseded audit, codebase, and scoreboard responses must not paint.
+// Superseded audit, codebase, and cost responses must not paint.
 // Holds the real module fetches, then releases an older request after a newer
 // one — a later search and a workspace A→B — and checks aggregate view clears
-// every scoreboard surface the previous workspace filled.
+// the cost panel the previous workspace filled.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -98,9 +98,7 @@ function matchesChain(path, chain) {
 const ids = [
   'audit-body', 'audit-codebase-body', 'audit-count', 'audit-search',
   'plugins-body', 'plugins-count',
-  'scoreboard-body', 'scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-meta',
-  'scoreboard-insights', 'scoreboard-orchestration', 'scoreboard-count',
-  'scoreboard-insights-count', 'scoreboard-orchestration-count',
+  'scoreboard-orchestration', 'scoreboard-orchestration-count',
 ];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
@@ -130,8 +128,16 @@ const load = name => {
 const scoreboardModule = load('scoreboard.js');
 await scoreboardModule.link(specifier => load(specifier.replace(/^\.\//, '')));
 await scoreboardModule.evaluate();
-const audit = modules.get('audit.js').namespace;
-const codebase = modules.get('codebase.js').namespace;
+// Cost no longer imports Audit. Load it explicitly so the race still drives
+// the events renderer and the codebase ranking it depends on.
+const codebaseModule = load('codebase.js');
+await codebaseModule.link(specifier => load(specifier.replace(/^\.\//, '')));
+await codebaseModule.evaluate();
+const auditModule = load('audit.js');
+await auditModule.link(specifier => load(specifier.replace(/^\.\//, '')));
+await auditModule.evaluate();
+const audit = auditModule.namespace;
+const codebase = codebaseModule.namespace;
 const scoreboard = scoreboardModule.namespace;
 const common = modules.get('common.js').namespace;
 const pluginsModule = load('plugins.js');
@@ -234,14 +240,12 @@ shows('audit-codebase-body', 'codebase-workspace-b', 'codebase-workspace-a');
 common.setWorkspace('ws-a');
 await overlap(() => scoreboard.fetchAndRenderScoreboard(), summary('score-old-refresh'), summary('score-new-refresh'));
 shows('scoreboard-orchestration', 'score-new-refresh', 'score-old-refresh');
-assert.ok(text('scoreboard-narrative').includes('claude'), 'scoreboard narrative painted the newer summary');
-assert.ok(text('scoreboard-agent-strip').includes('claude'), 'scoreboard agent strip painted the newer summary');
 
 const lateScore = scoreboard.fetchAndRenderScoreboard();
 assert.equal(pending.at(-1).url.pathname, '/api/scoreboard');
 assert.equal(pending.at(-1).url.searchParams.get('workspace'), 'ws-a');
 common.setWorkspace('ws-b');
-assert.ok(!text('scoreboard-orchestration').includes('score-new-refresh'), 'workspace change clears scoreboard chrome before the next response');
+assert.ok(!text('scoreboard-orchestration').includes('score-new-refresh'), 'workspace change clears cost chrome before the next response');
 const currentScore = scoreboard.fetchAndRenderScoreboard();
 assert.equal(pending.at(-1).url.searchParams.get('workspace'), 'ws-b');
 pending.at(-1).resolve(response(summary('score-workspace-b')));
@@ -250,19 +254,12 @@ pending.at(-2).resolve(response(summary('score-workspace-a')));
 await settle();
 await Promise.all([lateScore, currentScore]);
 shows('scoreboard-orchestration', 'score-workspace-b', 'score-workspace-a');
-assert.ok(text('scoreboard-body').includes('claude'), 'scoreboard matrix shows the newer workspace');
-assert.ok(!text('scoreboard-insights').includes('score-workspace-a'), 'insights do not keep the previous workspace');
 
 common.setWorkspace(null);
 scoreboard.placeholdScoreboardAggregate();
-for (const id of ['scoreboard-body', 'scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-insights', 'scoreboard-orchestration']) {
-  assert.ok(placeheld(id), `${id} is placeheld in aggregate view`);
-  assert.ok(!text(id).includes('score-workspace-b'), `${id} still shows the previous workspace in aggregate view: ${text(id)}`);
-  assert.ok(!text(id).includes('claude'), `${id} still shows the previous agent strip in aggregate view: ${text(id)}`);
-}
-for (const id of ['scoreboard-meta', 'scoreboard-count', 'scoreboard-insights-count', 'scoreboard-orchestration-count']) {
-  assert.equal(text(id), '—', `${id} keeps a previous-workspace count in aggregate view`);
-}
+assert.ok(placeheld('scoreboard-orchestration'), 'cost panel is placeheld in aggregate view');
+assert.ok(!text('scoreboard-orchestration').includes('score-workspace-b'), `cost panel still shows the previous workspace in aggregate view: ${text('scoreboard-orchestration')}`);
+assert.equal(text('scoreboard-orchestration-count'), '—', 'cost count keeps a previous-workspace count in aggregate view');
 
 common.setWorkspace('ws-a');
 const crossing = scoreboard.fetchAndRenderScoreboard();
@@ -272,10 +269,8 @@ scoreboard.placeholdScoreboardAggregate();
 pending.at(-1).resolve(response(summary('score-after-aggregate')));
 await settle();
 await crossing;
-for (const id of ['scoreboard-body', 'scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-insights', 'scoreboard-orchestration']) {
-  assert.ok(placeheld(id), `${id} stays placeheld after a late response`);
-  assert.ok(!text(id).includes('score-after-aggregate'), `${id} painted a late workspace response in aggregate view`);
-}
+assert.ok(placeheld('scoreboard-orchestration'), 'cost panel stays placeheld after a late response');
+assert.ok(!text('scoreboard-orchestration').includes('score-after-aggregate'), 'cost panel painted a late workspace response in aggregate view');
 await audit.fetchAndRenderAudit(ctx);
 await codebase.fetchAndRenderCodebase();
 assert.ok(placeheld('audit-body') && !text('audit-body').includes('audit-workspace-b'), 'aggregate audit drops the previous workspace');
@@ -345,4 +340,4 @@ for (const [certified, host, behind] of [
   assert.equal(Boolean(chip), Boolean(certified), 'uncertified plugins have no certification chip');
 }
 
-console.log('audit, codebase, scoreboard, and plugin panel behaviors passed');
+console.log('audit, codebase, cost, and plugin panel behaviors passed');
