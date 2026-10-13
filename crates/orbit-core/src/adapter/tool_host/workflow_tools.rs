@@ -7,7 +7,10 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 
-use crate::application::job::{JobRunListParams, SubmissionKind};
+use crate::application::job::{
+    ActivityInvocationEvidence, JobRunListParams, SubmissionKind, job_run_to_json,
+    job_run_to_json_with_activity_provenance, run_display_steps,
+};
 use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
     RunRecoveryAttempts,
@@ -85,7 +88,18 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let run = runtime.show_job_run(&id)?;
     let state = runtime.read_run_state(&run.run_id).ok().flatten();
     let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
-    let mut value = run_json_enriched(Some(runtime), &run, state.as_ref(), recovery.as_ref())?;
+    // An unreadable invocation store shows every activity as `unavailable`,
+    // never as a failed read of the run.
+    let evidence = runtime
+        .activity_invocation_evidence(&run.run_id)
+        .unwrap_or_default();
+    let mut value = run_json_enriched(
+        runtime,
+        &run,
+        state.as_ref(),
+        Some(&evidence),
+        recovery.as_ref(),
+    )?;
     let progress = runtime
         .collect_run_execution_progress(&run.run_id)
         .unwrap_or_else(|_| RunExecutionProgress::unavailable());
@@ -219,9 +233,10 @@ fn project_workflow_run_list(
         .iter()
         .map(|run| {
             run_json_enriched(
-                Some(runtime),
+                runtime,
                 run,
                 states.get(&run.run_id).and_then(Option::as_ref),
+                None,
                 recoveries.get(&run.run_id),
             )
         })
@@ -278,44 +293,36 @@ fn parse_limit(input: &Value) -> Result<usize, OrbitError> {
     usize::try_from(limit).map_err(|_| OrbitError::InvalidInput("`limit` is too large".to_string()))
 }
 
-fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
-    let mut value = serde_json::to_value(run).map_err(serialize_error("serialize workflow run"))?;
-    value["steps"] = serde_json::to_value(&run.steps)
-        .map_err(serialize_error("serialize workflow run steps"))?;
-    value["steps_source"] = json!("record");
-    let task_ids = crate::application::job::job_run_task_ids(run);
-    value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
-    Ok(value)
-}
-
+/// One run on the MCP surface: the shared run projection, the displayed steps
+/// every run view chooses by one rule, and this surface's own additions.
+///
+/// The additions are the submitted `input` and the claimed worker's
+/// `pid`/`pid_start_time`, which the shared projection leaves to each
+/// surface, plus the drain and recovery evidence this surface has always
+/// carried on every run.
 fn run_json_enriched(
-    runtime: Option<&OrbitRuntime>,
+    runtime: &OrbitRuntime,
     run: &JobRun,
     state: Option<&PipelineState>,
+    evidence: Option<&[ActivityInvocationEvidence]>,
     recovery: Option<&RunRecoveryAttempts>,
 ) -> Result<Value, OrbitError> {
-    let mut value = run_json(run)?;
-    if let Some(trigger) = state.and_then(|state| state.trigger.as_ref()) {
-        value["trigger"] =
-            serde_json::to_value(trigger).map_err(serialize_error("serialize run trigger"))?;
-    }
-    if let Some(runtime) = runtime {
-        attach_displayed_steps(runtime, run, &mut value)?;
-    }
-    let dispatches = state
-        .map(|state| state.child_dispatches.clone())
-        .unwrap_or_default();
-    value["child_dispatches"] =
-        serde_json::to_value(&dispatches).map_err(serialize_error("serialize child dispatches"))?;
-    // [ORB-11253] The effective ceiling and who moved it, from the same read:
-    // an operator asking why a drain is admitting five tasks rather than seven
-    // is asking about this field, not about the submitted input.
-    value["drain_worker_limit"] =
-        serde_json::to_value(state.and_then(|state| state.drain_worker_limit.as_ref()))
-            .map_err(serialize_error("serialize drain worker limit"))?;
-    value["drain_admissions_stop"] =
-        serde_json::to_value(state.and_then(|state| state.drain_admissions_stop.as_ref()))
-            .map_err(serialize_error("serialize drain admissions stop"))?;
+    let mut value = match evidence {
+        Some(evidence) => job_run_to_json_with_activity_provenance(run, state, evidence),
+        None => job_run_to_json(run, state),
+    };
+    value["input"] = json!(run.input);
+    value["pid"] = json!(run.pid);
+    value["pid_start_time"] = json!(run.pid_start_time);
+    // [ORB-12255] A worker that left the record empty still has its steps in
+    // the audit trail; `steps_source` names which one answered.
+    let steps = run_display_steps(run, || {
+        runtime
+            .collect_run_audit_steps(&run.run_id)
+            .unwrap_or_default()
+    });
+    value["steps"] = steps.to_json();
+    value["steps_source"] = json!(steps.source.as_str());
     // [ORB-13901] A drain's last admission pass, including the host resource
     // throttle that held it; null for every run that is not a drain.
     value["drain_last_pass"] =
@@ -325,14 +332,6 @@ fn run_json_enriched(
     value["drain_approvals"] =
         serde_json::to_value(state.and_then(|state| state.drain_approvals.as_ref()))
             .map_err(serialize_error("serialize drain approvals"))?;
-    // [ORB-11354] An operator tracking an agent invocation reads it here, from
-    // the same show/list surface as any other run: its distinguishable outcome,
-    // a bounded preview of the answer, and the durable reference to the full
-    // captured output.
-    value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
-        run, state, None,
-    ))
-    .map_err(serialize_error("serialize agent invocation result"))?;
     // Recovery evidence remains separate from the run and step errors above:
     // a successful or failed recovery attempt never rewrites the original
     // workflow failure that triggered it. Older/unreadable audit trails remain
@@ -348,55 +347,4 @@ fn run_json_enriched(
         }),
     };
     Ok(value)
-}
-
-/// [ORB-12255] Prefer stored `JobRun::steps`; reconstruct from the v2 audit
-/// trail when the worker path left the record empty. `steps_source` names
-/// which one answered, matching CLI `run show --json`.
-fn attach_displayed_steps(
-    runtime: &OrbitRuntime,
-    run: &JobRun,
-    value: &mut Value,
-) -> Result<(), OrbitError> {
-    if !run.steps.is_empty() {
-        value["steps_source"] = json!("record");
-        return Ok(());
-    }
-    let audit = runtime
-        .collect_run_audit_steps(&run.run_id)
-        .unwrap_or_default();
-    if audit.is_empty() {
-        value["steps_source"] = json!("record");
-        return Ok(());
-    }
-    let steps = audit
-        .iter()
-        .map(|step| {
-            let duration_ms = match (step.started_at, step.finished_at) {
-                (Some(started), Some(finished)) => Some(
-                    finished
-                        .signed_duration_since(started)
-                        .num_milliseconds()
-                        .max(0) as u64,
-                ),
-                _ => None,
-            };
-            json!({
-                "step_index": step.step_index,
-                "target_type": "activity",
-                "target_id": step.step_id,
-                "started_at": step.started_at.map(|value| value.to_rfc3339()),
-                "finished_at": step.finished_at.map(|value| value.to_rfc3339()),
-                "duration_ms": duration_ms,
-                "exit_code": Value::Null,
-                "agent_response_json": Value::Null,
-                "state": step.state.as_deref().unwrap_or("running"),
-                "error_code": Value::Null,
-                "error_message": step.error_message,
-            })
-        })
-        .collect::<Vec<_>>();
-    value["steps"] = Value::Array(steps);
-    value["steps_source"] = json!("audit");
-    Ok(())
 }

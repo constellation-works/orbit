@@ -6,6 +6,7 @@
 //! - `reconcile` — stale-run reconciliation, terminal timing repair, audit parsing.
 //! - `owner` — process signalling, owner identity classification, liveness probes (Unix + shims).
 //! - `delivery` — the bounded public commit/landing observation for one task.
+//! - `display_steps` — the one rule for which steps a run view renders and how an audit step reads.
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
 //! - `deferral` — recording a run that deferred its work instead of failing, for Incidents.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
@@ -25,6 +26,7 @@ mod child_timeout;
 mod conflict;
 mod deferral;
 mod delivery;
+mod display_steps;
 mod drain_cancel;
 mod interrupted_review;
 mod owner;
@@ -53,6 +55,7 @@ pub use admissions_stop::{
 pub(crate) use child_timeout::{kept_candidate, kept_clause};
 #[cfg(test)]
 pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
+pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_display_steps};
 pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{

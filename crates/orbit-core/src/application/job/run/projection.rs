@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 
 use crate::runtime::run_input::carried_task_ids;
 
+use super::display_steps::RunDisplayStep;
+
 /// Durable provider/model evidence for one completed agent invocation.
 ///
 /// This is intentionally separate from a run's resolved crew: the crew is the
@@ -143,19 +145,9 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             "crew": run.resolved_crew,
             "model": run.crew_model,
         },
-        "steps": run.steps.iter().map(|step| json!({
-            "step_index": step.step_index,
-            "target_type": step.target_type.to_string(),
-            "target_id": step.target_id,
-            "state": step.state.to_string(),
-            "started_at": step.started_at.map(|value| value.to_rfc3339()),
-            "finished_at": step.finished_at.map(|value| value.to_rfc3339()),
-            "duration_ms": step.duration_ms,
-            "exit_code": step.exit_code,
-            "agent_response_json": step.agent_response_json,
-            "error_code": step.error_code,
-            "error_message": step.error_message,
-        })).collect::<Vec<_>>(),
+        // The record's own steps, exactly as stored. A surface that renders
+        // a run's steps chooses them with `run_display_steps`.
+        "steps": run.steps.iter().map(|step| RunDisplayStep::from_job_step(step).to_json()).collect::<Vec<_>>(),
         "created_at": run.created_at.to_rfc3339(),
     });
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
