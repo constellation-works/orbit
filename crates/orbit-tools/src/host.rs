@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
 
 use super::context::{ReservationOwnerContext, ToolContext};
@@ -92,11 +94,8 @@ pub enum OrbitBuiltinAction {
     DesktopAutomation,
     DesktopTaskSnapshot,
     DesktopTaskWrite,
-    DrainClaimBind,
-    DrainClaimSettle,
-    DrainClaims,
-    DrainProbe,
-    DrainReceiptLookup,
+    /// Distributed-drain verbs, including the historical task pull tool.
+    Drain(DrainVerb),
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
@@ -112,7 +111,6 @@ pub enum OrbitBuiltinAction {
     TaskLocks,
     TaskLocksRelease,
     TaskLocksReserve,
-    TaskPull,
     TaskReject,
     TaskReconcileReview,
     TaskReviewReset,
@@ -122,9 +120,20 @@ pub enum OrbitBuiltinAction {
     WorkflowRunResume,
     WorkflowRunShow,
     WorkflowShip,
-    WorkspaceClaimAcquire,
-    WorkspaceClaimRelease,
-    WorkspaceClaimShow,
+    /// Workspace coordination-hold verbs.
+    WorkspaceClaim(WorkspaceClaimVerb),
+}
+
+impl From<DrainVerb> for OrbitBuiltinAction {
+    fn from(verb: DrainVerb) -> Self {
+        Self::Drain(verb)
+    }
+}
+
+impl From<WorkspaceClaimVerb> for OrbitBuiltinAction {
+    fn from(verb: WorkspaceClaimVerb) -> Self {
+        Self::WorkspaceClaim(verb)
+    }
 }
 
 impl From<AutoTaskVerb> for OrbitBuiltinAction {
@@ -147,6 +156,18 @@ pub struct OrbitTaskScope {
 }
 
 pub trait OrbitToolHost: Send + Sync {
+    /// Prepare a versioned operation before shape validation: check wire
+    /// compatibility and apply historical wire defaults.
+    /// An incompatible protocol must be reported before a new request shape
+    /// can hide it as invalid input. Hosts without such a protocol do nothing.
+    fn prepare_operation_input(
+        &self,
+        _action: OrbitBuiltinAction,
+        _input: &mut Value,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn execute(
         &self,
         action: OrbitBuiltinAction,

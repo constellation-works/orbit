@@ -7,18 +7,18 @@ status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/object and CLI-only parameters, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on the friction and auto-task nouns, plus the planned migration of the remaining nouns.
+summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/object and CLI-only parameters, input validation at the tool entry in warn mode, generic tool and CLI adapters) as built on friction, auto-task, drain and workspace claim, plus the planned migration of the remaining nouns.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936]
 ---
 
 # Operations as Data — Design
 
 This doc describes the friction implementation and the revisions accepted on
 2026-10-12 for every noun that migrates after it. Each section says whether it
-is **Implemented** (true of the code today, on friction and auto-task) or
+is **Implemented** (true of the code today, on the migrated nouns) or
 **Planned** (accepted but not yet built). Kernel v2's structure, its richer
 parameter kinds and its input validation are implemented, the validation in
 warn mode for unknown fields. Both follow the rules in
@@ -29,8 +29,8 @@ forward-looking questions are in
 
 ## 1. Where a fact lives
 
-**Implemented** for friction and auto-task; the rule binds every noun that
-migrates.
+**Implemented** for friction, auto-task, drain and workspace claim; the rule
+binds every noun that migrates.
 
 The friction pilot put every fact it could into the spec, including the CLI's
 rendering choice. Facts it could not express as data stayed behind on several
@@ -64,6 +64,7 @@ leaf crate every surface can already read.
 pub struct NounSpec<V: 'static> {
     pub cli_name: &'static str,             // "friction", "auto-task"
     pub tool_prefix: &'static str,          // "orbit.friction", "orbit.auto_task"
+    pub tool_only_registration: ToolOnlyRegistration, // Active | Inactive off MCP
     pub cli_about: &'static str,            // `orbit friction --help` summary
     pub audit_target_type: &'static str,    // "friction"
     pub audit_target_param: &'static str,   // "id"; auto-task's is "name"
@@ -171,7 +172,7 @@ What each kernel v2 piece is for:
 
 ```rust
 pub enum ParamType {
-    String, StringList, Integer, Boolean,
+    String, StringList, Integer, UnsignedInteger, Boolean,
     Switch,                          // presence flag on the CLI; boolean on the wire
     Enum(&'static [EnumValue]),      // fixed values; a string on the wire
     Object,                          // a JSON object, for structured input
@@ -250,8 +251,8 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 
 ## 4. Input validation at the tool entry
 
-**Implemented (warn mode)** on friction: unknown fields are reported, not yet
-refused.
+**Implemented (warn mode)** on friction, auto-task, drain and workspace claim:
+unknown fields are reported, not yet refused.
 
 `OperationSpec::parse_input(&self, input: Value) -> Result<OperationInput,
 OrbitError>` in `orbit-common` checks a call against its spec, reusing the
@@ -362,11 +363,14 @@ into a `ToolSchema` in declaration order; its `execution_kind` comes from
 `effect` (§5); `execute` checks the input with `parse_input` (§4), reports any
 unknown fields, and dispatches the verb's action with the canonical input. `register_noun(registry, &NOUN)` registers
 each operation of a noun at its `mcp_scope`, or keeps it off MCP when the value
-is `None`. The scope says only whether dispatch is global or requires a
-workspace; it carries no placement or capability policy beyond that.
+is `None`, using the noun's `tool_only_registration` to preserve active versus
+inactive local availability. The scope says only whether dispatch is global or
+requires a workspace; it carries no placement or capability policy beyond that.
 
 `OrbitBuiltinAction` collapsed friction's seven `Friction*` variants into one
 `Friction(FrictionVerb)`, and auto-task's five into `AutoTask(AutoTaskVerb)`;
+phase 2 similarly replaces six drain variants with `Drain(DrainVerb)` and three
+workspace-claim variants with `WorkspaceClaim(WorkspaceClaimVerb)`.
 `orbit-tools` implements `From<V>` for each. Downstream matches pattern-match
 on the inner verb. Friction needs no module of its own in `orbit-tools`.
 
@@ -377,7 +381,7 @@ exhaustive match on `AutoTaskVerb` that `OperationTool::execute` consults after
 host action instead of the handler: `list` with `view: "bounded"` (bounded
 read), `update` with `expected_enabled` (operator-checked toggle) and `mint`
 with `acknowledge_unconditional` (operator-acknowledged mint). Every other verb,
-and every friction verb, returns no mode.
+every friction verb, and every drain/workspace-claim verb return no mode.
 
 The `list` spec also declares the tool-only `response_mode` parameter (no CLI
 flag; `list` is not advertised over MCP, where agents list frictions with
@@ -502,8 +506,8 @@ other nouns.
 
 ## 9. Migration plan
 
-**Planned**, except phase 0a, phase 0b's warn mode and phase 1, which are implemented. This replaces the
-touch-it-move-it ratchet; see
+**Planned**, except phase 0a, phase 0b's warn mode and phases 1–2, which are
+implemented. This replaces the touch-it-move-it ratchet; see
 [Migrate the remaining nouns on a plan, not on contact](./4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
 
 Each phase is one Orbit task tagged `operations-as-data` (large nouns split per
@@ -514,7 +518,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 0a (done) | Kernel v2 structure, ported onto friction: noun spec, `cli_path`, `effect`, parameter groups, `redact`, the registry macro, generic tool and CLI adapters, CLI surface tables | Proves v2 against existing goldens with no new noun at stake; the only behaviour change is §5's read-only runtime for three verbs |
 | 0b (warn mode done) | Kernel v2 input validation on friction: `parse_input`, aliases, retired fields, `at_least_one_of`, unknown-field warnings | Moves the friction handlers onto canonical names and the warn-then-refuse rollout onto the one migrated noun |
 | 1 (done) | auto-task: 5 tools (`show` inactive), 10 CLI verbs | Second pilot. First noun whose CLI calls core directly; exercises `Enum`, `default`, parameter groups, CLI-only verbs (`toggle`, `delete`, `restore`, `recover`, `reset` with `mcp_scope: None`) and the tool-path rule |
-| 2 | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
+| 2 (done) | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
 | 3 | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
 | 4 | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
 | 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
@@ -522,7 +526,7 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
 [ORB-15933] (input validation, warn mode, done) and [ORB-15934] (refuse unknown
 fields after the window); phase 1
-[ORB-15935] (done); phase 2 [ORB-15936]; phase 3 [ORB-15937] (reads), [ORB-15938]
+[ORB-15935] (done); phase 2 [ORB-15936] (done); phase 3 [ORB-15937] (reads), [ORB-15938]
 (add/update), [ORB-15939] (artifact and locks), [ORB-15940] (review and
 lifecycle); phase 4 [ORB-15941]; phase 5 [ORB-15942]. [ORB-15943] verifies the
 authorization golden that phases 1 and 4 rely on.
@@ -536,8 +540,40 @@ variants other than the `Desktop*` host actions and the nouns' single
 `Noun(Verb)` variants. On 2026-10-12 those were 41 and 36 (friction is the one collapsed
 noun, and the generic `OperationTool<V>` is one of the 41). On 2026-10-13, after phase 1,
 they are 36 and 32: auto-task's five tool impls and five variants are gone (37
-variants were counted at phase 1's base). The weekly code-health sweep reports both numbers. Neither is a merge
-gate.
+variants were counted at phase 1's base). After phase 2 on the same date, they
+are 27 and 23: nine per-verb tool impls and nine action variants are replaced by
+the generic tool and two noun variants. The weekly code-health sweep reports
+both numbers. Neither is a merge gate.
+
+### Phase 2: tool-only nouns (Implemented)
+
+Drain and workspace claim use `OperationTool<V>` and one action variant per
+noun. Their handler, guarded-mode, worker-route and redaction tables match
+exhaustively on `DrainVerb` or `WorkspaceClaimVerb`; they derive no CLI or
+dashboard surface. All nine tools stay off MCP. `NounSpec::tool_only_registration`
+distinguishes drain's six active registrations from workspace claim's three
+inactive registrations, and existing friction/auto-task non-MCP registrations
+remain inactive. MCP-scoped operations still use `register_mcp`.
+
+Drain uses the common `orbit` tool prefix, with each operation declaring its
+full shipped name, so `orbit.task.pull` stays part of this noun without a rename.
+The workspace-claim TTL retains its historical `u64` schema token via
+`ParamType::UnsignedInteger`, with the same non-negative integer validation as
+`Integer`, while the generic CLI adapter projects it as a `u64` when bound.
+Its `ttlSeconds` and `ttl-seconds` aliases are declared on
+`ttl_seconds`; probe's ignored legacy review-policy field stays hidden from the
+schema. Workspace-claim show retains the old tool's conservative write effect.
+No governed-operation row changes.
+
+Unknown fields warn and audit at the generic tool entry, then handlers ignore
+them. Pull still checks protocol fingerprint skew **before** input-shape
+validation: `OrbitToolHost::prepare_operation_input` delegates to the drain's
+exhaustive compatibility table before `parse_input`, and the drain handler
+repeats this ordering for direct host calls. This preparation also preserves
+`AdmissionRequest`'s historical omitted `caller_before_pr` → `false` default
+without changing its advertised requiredness. Typed request decoding and replay
+comparison remain in the owner application. Supplied structural claim values
+are not redacted or rewritten.
 
 ## 10. Concerns & Honest Limitations
 

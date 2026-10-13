@@ -183,6 +183,7 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
         ParamType::String | ParamType::Object => {}
         ParamType::StringList => arg = arg.action(ArgAction::Append).value_delimiter(delimiter),
         ParamType::Integer => arg = arg.value_parser(clap::value_parser!(usize)),
+        ParamType::UnsignedInteger => arg = arg.value_parser(clap::value_parser!(u64)),
         ParamType::Boolean => arg = arg.value_parser(clap::value_parser!(bool)),
         ParamType::Enum(values) => {
             arg = arg.value_parser(PossibleValuesParser::new(values.iter().map(possible_value)))
@@ -250,6 +251,11 @@ fn input_from_matches<V: 'static>(
             }
             ParamType::Integer => {
                 if let Some(value) = matches.get_one::<usize>(param.name) {
+                    input.insert(param.name.to_string(), Value::from(*value));
+                }
+            }
+            ParamType::UnsignedInteger => {
+                if let Some(value) = matches.get_one::<u64>(param.name) {
                     input.insert(param.name.to_string(), Value::from(*value));
                 }
             }

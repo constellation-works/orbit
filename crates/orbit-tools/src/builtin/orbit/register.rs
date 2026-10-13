@@ -1,8 +1,10 @@
 use orbit_common::governance::auto_task::AUTO_TASK;
+use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::friction::FRICTION;
+use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
 
-use super::{agent, command, drain, operation, pipeline, search, task, workflow, workspace_claim};
+use super::{agent, command, operation, pipeline, search, task, workflow};
 use crate::ToolRegistry;
 
 pub fn register(registry: &mut ToolRegistry) {
@@ -22,12 +24,7 @@ pub fn register(registry: &mut ToolRegistry) {
     // Deterministic owner/follower operations remain active for runtime and
     // operator diagnostics, but have no public MCP schemas. The internal
     // transport selects their existing guarded handlers explicitly.
-    registry.register(drain::probe::OrbitDrainProbeTool);
-    registry.register(drain::receipt_lookup::OrbitDrainReceiptLookupTool);
-    registry.register(drain::pull::OrbitTaskPullTool);
-    registry.register(drain::claim_bind::OrbitDrainClaimBindTool);
-    registry.register(drain::claim_settle::OrbitDrainClaimSettleTool);
-    registry.register(drain::claims::OrbitDrainClaimsTool);
+    operation::register_noun(registry, &DRAIN);
     // Friction schemas, MCP exposure and execution kinds are declared once in
     // the shared operation registry and registered from there.
     operation::register_noun(registry, &FRICTION);
@@ -50,9 +47,7 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register_inactive(task::locks::release::OrbitTaskLocksReleaseTool);
     // Workspace claims are coordination holds like task locks and remain off
     // the MCP surface.
-    registry.register_inactive(workspace_claim::OrbitWorkspaceClaimAcquireTool);
-    registry.register_inactive(workspace_claim::OrbitWorkspaceClaimReleaseTool);
-    registry.register_inactive(workspace_claim::OrbitWorkspaceClaimShowTool);
+    operation::register_noun(registry, &WORKSPACE_CLAIM);
     // Agent invocation is workspace-scoped: the admission is made against the
     // checkout that owns it, and Core is where that decision lives.
     registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);

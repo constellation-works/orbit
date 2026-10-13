@@ -11,7 +11,7 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -129,7 +129,8 @@ not advertise has neither binding (auto-task `update`'s `template_patch`).
 
 Before wiring any surface, check what the compiler cannot:
 
-- tool names follow `<tool_prefix>.<verb>` and are unique;
+- tool names lie beneath `tool_prefix` and are unique (drain uses `orbit`
+  to retain `orbit.task.pull` alongside `orbit.drain.*`);
 - parameter names and aliases are unique within each operation, and no alias
   equals another parameter's name;
 - subcommand order matches the shipped `--help` order (the Step 0 goldens);
@@ -165,7 +166,10 @@ the generic `OperationTool<V>`; it takes `execution_kind` from `effect` and
 dispatches through the `From<<Noun>Verb> for OrbitBuiltinAction` impl from
 Step 4. It also validates input with `parse_input` and reports unknown fields
 (a `warn!` and one audit row each) before dispatch.
-Delete the noun's block from `register_builtins`.
+Delete the noun's hand-written registration block. For a verb without MCP
+scope, `NounSpec::tool_only_registration` selects active local registration
+or inactive registration; preserve the previous kind. MCP-scoped verbs still
+use `register_mcp`.
 
 If a verb overrode `input_schema()`, move the override into the noun's exhaustive
 `schema_extension(verb)` table in `orbit-tools`. Allowed values and defaults stay
@@ -177,6 +181,9 @@ If a tool routed some inputs elsewhere before dispatch (auto-task's bounded
 implement the noun's `GuardedModes` table in `orbit-tools`, an exhaustive match
 on the verb that returns `None` for every verb without such a mode. Every noun
 implements it; friction's returns `None` throughout.
+
+For versioned inputs whose protocol-skew refusal must precede shape validation,
+use the host's `prepare_operation_input` hook before `parse_input` (drain pull).
 
 Unknown-field refusal starts in warn-and-audit mode for the noun; the refusal
 flip is a separate change after the 30-day compatibility window.

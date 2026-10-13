@@ -62,6 +62,8 @@ pub enum ParamType {
     StringList,
     /// A non-negative integer.
     Integer,
+    /// A non-negative integer with the historical `u64` tool-schema token.
+    UnsignedInteger,
     /// A boolean; on the CLI an explicit `--flag true|false` value.
     Boolean,
     /// A boolean that is a presence flag on the CLI: `--flag` sends `true`,
@@ -114,6 +116,7 @@ impl ParamType {
             ParamType::String => "string",
             ParamType::StringList => "string_list",
             ParamType::Integer => "integer",
+            ParamType::UnsignedInteger => "u64",
             ParamType::Boolean | ParamType::Switch => "boolean",
             // Allowed values stay in the parameter's description, so a
             // migrated enum is wire-identical to the string it replaced.
@@ -533,7 +536,7 @@ fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> 
                 "a string or array of strings",
             ),
         },
-        ParamType::Integer => (
+        ParamType::Integer | ParamType::UnsignedInteger => (
             non_negative_integer(value).is_some(),
             "a non-negative integer",
         ),
@@ -646,6 +649,15 @@ pub struct CliGroup {
     pub cli_about: &'static str,
 }
 
+/// Registration of a noun's tools that have no MCP scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolOnlyRegistration {
+    /// Advertise the tool on the active local tool surface, without MCP.
+    Active,
+    /// Keep the tool reachable but hidden from the active and MCP surfaces.
+    Inactive,
+}
+
 /// One noun: the strings every surface needs about it, and its operations.
 #[derive(Debug, Clone, Copy)]
 pub struct NounSpec<V: 'static> {
@@ -654,6 +666,8 @@ pub struct NounSpec<V: 'static> {
     /// The tool-name prefix (`orbit.friction`, `orbit.auto_task`). Separate
     /// from `cli_name` because shipped surfaces already spell them differently.
     pub tool_prefix: &'static str,
+    /// Registration for operations whose `mcp_scope` is `None`.
+    pub tool_only_registration: ToolOnlyRegistration,
     /// `orbit <noun> --help` summary.
     pub cli_about: &'static str,
     /// The audit `target_type` the noun's CLI rows carry.

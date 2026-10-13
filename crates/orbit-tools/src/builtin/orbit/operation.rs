@@ -17,7 +17,7 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{
-    Effect, NounSpec, OperationInput, OperationSpec, OperationVerb,
+    Effect, NounSpec, OperationInput, OperationSpec, OperationVerb, ToolOnlyRegistration,
 };
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -81,7 +81,10 @@ where
         }
     }
 
-    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+    fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
+        if let Some(host) = ctx.orbit_host.as_deref() {
+            host.prepare_operation_input(self.0.verb.into(), &mut input)?;
+        }
         let input = self.0.parse_input(input)?;
         if let Some(served) = self.0.verb.guarded_mode(ctx, &input) {
             return served;
@@ -101,7 +104,10 @@ where
         let tool = OperationTool(spec);
         match spec.mcp_scope {
             Some(scope) => registry.register_mcp(tool, scope),
-            None => registry.register_inactive(tool),
+            None => match noun.tool_only_registration {
+                ToolOnlyRegistration::Active => registry.register(tool),
+                ToolOnlyRegistration::Inactive => registry.register_inactive(tool),
+            },
         }
     }
 }

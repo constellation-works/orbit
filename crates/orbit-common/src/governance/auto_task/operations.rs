@@ -61,6 +61,7 @@ pub const AUTO_TASK: NounSpec<AutoTaskVerb> = NounSpec {
     cli_about: "Define and manage recurring auto-task templates",
     audit_target_type: "auto_task",
     audit_target_param: "name",
+    tool_only_registration: crate::governance::operation::ToolOnlyRegistration::Inactive,
     cli_groups: &[],
     operations: AUTO_TASK_OPERATIONS,
 };
