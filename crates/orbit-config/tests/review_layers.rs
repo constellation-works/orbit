@@ -25,7 +25,7 @@ fn before_landing_resolves_built_in_then_global_then_workspace_with_its_layer() 
             .review_before_landing
     };
 
-    write_config(workspace.path(), "[scoring]\nenabled = false\n");
+    write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
     let built_in = load();
     assert!(!built_in.value);
     assert_eq!(built_in.source, OperationLayerSource::BuiltIn);

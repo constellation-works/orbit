@@ -7,9 +7,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::Store;
 
-use crate::contracts::{
-    ActivityInvocationMetrics, AgentInvocationMetrics, TaskInvocationMetrics, ToolInvocationMetrics,
-};
+use crate::contracts::{ActivityInvocationMetrics, TaskInvocationMetrics, ToolInvocationMetrics};
 
 #[derive(Debug, Clone)]
 struct InvocationSample {
@@ -95,59 +93,12 @@ impl Store {
         Ok(rows)
     }
 
-    pub fn list_agent_invocation_metrics(&self) -> Result<Vec<AgentInvocationMetrics>, OrbitError> {
-        let samples = self.load_model_attributed_invocation_samples()?;
-        let grouped = self.group_invocation_metrics(samples, |sample| {
-            (sample.agent.clone(), sample.model.clone())
-        });
-        let mut rows = grouped
-            .into_iter()
-            .map(|((agent, model), bucket)| {
-                let mut totals = bucket.totals;
-                totals.sort_unstable();
-                AgentInvocationMetrics {
-                    agent,
-                    model,
-                    invocation_count: bucket.invocation_count,
-                    total_input_tokens: bucket.total_input_tokens,
-                    total_cache_read_tokens: bucket.total_cache_read_tokens,
-                    total_cache_create_tokens: bucket.total_cache_create_tokens,
-                    total_output_tokens: bucket.total_output_tokens,
-                    total_tokens: bucket
-                        .total_input_tokens
-                        .saturating_add(bucket.total_output_tokens),
-                    avg_tokens: average(&totals),
-                    p50_tokens: percentile(&totals, 50),
-                    p95_tokens: percentile(&totals, 95),
-                    total_tool_calls: bucket.total_tool_calls,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        rows.sort_by(|left, right| {
-            right
-                .total_tokens
-                .cmp(&left.total_tokens)
-                .then_with(|| left.agent.cmp(&right.agent))
-                .then_with(|| left.model.cmp(&right.model))
-        });
-        Ok(rows)
-    }
-
     pub fn get_task_invocation_metrics(
         &self,
         task_id: &str,
     ) -> Result<TaskInvocationMetrics, OrbitError> {
-        let mut rows = self.list_task_invocation_metrics(Some(task_id), 0)?;
+        let mut rows = self.list_task_invocation_metrics(task_id)?;
         Ok(rows.pop().unwrap_or_else(|| empty_task_metrics(task_id)))
-    }
-
-    /// Per-task totals, heaviest first; `limit == 0` means no limit.
-    pub fn list_top_task_invocation_metrics(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<TaskInvocationMetrics>, OrbitError> {
-        self.list_task_invocation_metrics(None, limit)
     }
 
     pub fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError> {
@@ -237,38 +188,30 @@ impl Store {
         grouped
     }
 
-    /// Aggregates in SQL so the top-N scoreboard reads N rows, not the
+    /// Aggregates one task's invocations in SQL rather than reading the
     /// whole invocation join.
     fn list_task_invocation_metrics(
         &self,
-        task_id: Option<&str>,
-        limit: usize,
+        task_id: &str,
     ) -> Result<Vec<TaskInvocationMetrics>, OrbitError> {
         let conn = self.read()?;
-        let limit = if limit == 0 {
-            -1
-        } else {
-            i64::try_from(limit).unwrap_or(i64::MAX)
-        };
         let mut stmt = conn
             .prepare(
                 r#"
                 SELECT it.task_id, COUNT(*),
                        COALESCE(SUM(i.input_tokens), 0), COALESCE(SUM(i.cache_read_tokens), 0),
                        COALESCE(SUM(i.cache_create_tokens), 0), COALESCE(SUM(i.output_tokens), 0),
-                       COALESCE(SUM(i.input_tokens + i.output_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(i.input_tokens + i.output_tokens), 0),
                        COALESCE(SUM(i.tool_call_count), 0)
                 FROM invocation_tasks it
                 INNER JOIN invocations i ON i.id = it.invocation_id
-                WHERE ?1 IS NULL OR it.task_id = ?1
+                WHERE it.task_id = ?1
                 GROUP BY it.task_id
-                ORDER BY total_tokens DESC, it.task_id ASC
-                LIMIT ?2
                 "#,
             )
             .map_err(sqlite_store_error)?;
         let rows = stmt
-            .query_map(params![task_id, limit], |row| {
+            .query_map(params![task_id], |row| {
                 Ok(TaskInvocationMetrics {
                     task_id: row.get(0)?,
                     invocation_count: row.get::<_, i64>(1)? as u64,

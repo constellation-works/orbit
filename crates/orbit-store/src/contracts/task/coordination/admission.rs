@@ -155,7 +155,7 @@ impl AdmissionShipContract {
 
 /// Wire-protocol version of pull, probe, and lifecycle request/response shapes.
 ///
-/// It versions the distributed-drain protocol alone, not the scoreboard's
+/// It versions the distributed-drain protocol alone, not the Cost page's
 /// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
 /// Retained for persisted requests and lifecycle semantics. Pull request field
 /// compatibility is now derived by [`distributed_drain_protocol_fingerprint`],

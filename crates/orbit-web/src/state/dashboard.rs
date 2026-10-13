@@ -56,8 +56,8 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
     /// and the raw `since` window so relative cutoffs (`24h`) still hit.
     audit_summary: RuntimeMemo<String>,
-    /// Per-server scoreboard memo, keyed by live workspace runtime and window.
-    scoreboard: RuntimeMemo<String>,
+    /// Per-server Cost page memo, keyed by live workspace runtime and window.
+    cost: RuntimeMemo<String>,
     /// Host-wide routine projection, invalidated by its input stamps.
     routines: RuntimeMemo<crate::api::routines::RoutineMemoKey>,
     /// Per-server single-flight TTL memo for audited plugin panel reads.
@@ -410,7 +410,7 @@ impl DashboardState {
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: RuntimeMemo::new("audit summary aggregation"),
-                scoreboard: RuntimeMemo::new("scoreboard aggregation"),
+                cost: RuntimeMemo::new("managed-execution cost"),
                 routines: RuntimeMemo::new("routine health"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
@@ -490,9 +490,9 @@ impl DashboardState {
         &self.inner.audit_summary
     }
 
-    /// Process-local scoreboard memo shared by every dashboard tab.
-    pub(crate) fn scoreboard_memo(&self) -> &RuntimeMemo<String> {
-        &self.inner.scoreboard
+    /// Process-local Cost page memo shared by every dashboard tab.
+    pub(crate) fn cost_memo(&self) -> &RuntimeMemo<String> {
+        &self.inner.cost
     }
 
     /// Host-wide routine memo shared even across different selected workspaces.

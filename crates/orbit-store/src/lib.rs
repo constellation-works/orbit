@@ -66,25 +66,6 @@ pub mod friction_store {
     pub use crate::repository::friction::{FrictionAddParams, FrictionListFilter, FrictionStore};
 }
 
-pub mod pr_scoreboard {
-    pub use crate::driver::file::scoreboard::pr_scoreboard::{
-        record_pr_count_with_revision, record_pr_count_without_revision,
-    };
-}
-
-pub mod scoreboard_summary {
-    pub use crate::driver::file::scoreboard::scoreboard_summary::{
-        NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION, OrchestrationBucketKind,
-        OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary,
-        ScoreboardInputs, ScoreboardSummary, ScoreboardWindow, fill_notable_summary_excerpts,
-        generate_summary_with_inputs, write_summary,
-    };
-}
-
-pub mod token_scoreboard {
-    pub use crate::repository::token_scoreboard::write_token_scoreboard;
-}
-
 use chrono::{DateTime, Utc};
 
 pub use contracts::incident::{
@@ -95,7 +76,6 @@ pub use contracts::incident::{
 };
 pub(crate) use contracts::{
     ActiveTaskReservation, AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate,
-    AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall,
     ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationCheckParams,
     TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
     TaskReservationOwnedConflictsResult, TaskReservationRecord,

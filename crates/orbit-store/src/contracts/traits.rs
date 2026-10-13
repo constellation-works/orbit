@@ -15,12 +15,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::friction::{
     FrictionAddParams, FrictionLandingOutcome, FrictionListFilter, FrictionRehomeOutcome,
-    FrictionRehomeParams, FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
+    FrictionRehomeParams, FrictionUpdateParams, StoredFrictionRecord,
 };
 use super::invocation::{
-    ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
-    InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    ProviderLedgerEntry, TaskInvocationMetrics, ToolInvocationMetrics,
+    ActivityInvocationMetrics, InvocationAccountingFact, InvocationAccountingQuery,
+    InvocationInsertParams, InvocationQuery, InvocationRecord, ProviderLedgerEntry,
+    TaskInvocationMetrics, ToolInvocationMetrics,
 };
 use super::params::*;
 use super::routine::{
@@ -34,9 +34,7 @@ use super::v2_audit::{
 use crate::contracts::incident::{FailureIncidentQuery, FailureIncidentReport};
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditRoleAggregate, AuditToolAggregate, AuditToolCallCountsByRole,
-    AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall, TaskCompletionByComplexity,
-    TaskTerminalTransition,
+    AuditRoleAggregate, AuditToolAggregate, TaskCompletionByComplexity, TaskTerminalTransition,
 };
 
 pub trait TaskStoreBackend: Send + Sync {
@@ -579,10 +577,6 @@ pub trait FrictionStoreBackend: Send + Sync {
     ) -> Result<FrictionLandingOutcome, OrbitError>;
     fn tags(&self) -> Result<Vec<String>, OrbitError>;
     fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError>;
-    fn reported_by_model(
-        &self,
-        since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<FrictionReportedCount>, OrbitError>;
     fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError>;
 }
 
@@ -632,23 +626,11 @@ pub trait InvocationStoreBackend: Send + Sync {
     fn list_activity_invocation_metrics(
         &self,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError>;
-    fn list_agent_invocation_metrics(&self) -> Result<Vec<AgentInvocationMetrics>, OrbitError>;
     fn get_task_invocation_metrics(
         &self,
         task_id: &str,
     ) -> Result<TaskInvocationMetrics, OrbitError>;
-    fn list_top_task_invocation_metrics(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<TaskInvocationMetrics>, OrbitError>;
     fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
-    /// Insert-only change signal for the token scoreboard skip path.
-    ///
-    /// `Some(n)` is `MAX(id)` over `invocations` (`0` when the table is empty).
-    /// `None` means the backend cannot cheaply detect changes; callers rewrite.
-    fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, OrbitError> {
-        Ok(None)
-    }
 }
 
 pub trait V2AuditStoreBackend: Send + Sync {
@@ -871,35 +853,18 @@ pub trait AuditEventStoreBackend: Send + Sync {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<(String, i64)>, OrbitError>;
-    fn get_audit_denials_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<(String, i64)>, OrbitError>;
     fn get_audit_denials_by_operation(
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError>;
-    fn get_audit_tool_call_counts_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<AuditToolCallCountsByRole>, OrbitError>;
-    fn get_audit_tool_call_counts_by_surface_and_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<AuditToolCallCountsBySurfaceAndRole>, OrbitError>;
-    /// The same tool-call rows as [`Self::get_audit_tool_call_counts_by_role`],
-    /// classified by how each row's identity was established [ORB-10890]. The
+    /// Audited tool invocations, classified by how each row's identity was
+    /// established [ORB-10890]. The
     /// buckets are disjoint, so authenticated-only, self-reported-only, and
     /// combined counts all come from one call.
     fn get_audit_tool_call_counts_by_attribution(
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<AuditAttributionAggregate>, OrbitError>;
-    fn get_audit_top_tool_calls(
-        &self,
-        since: Option<&DateTime<Utc>>,
-        limit: usize,
-    ) -> Result<Vec<AuditTopToolCall>, OrbitError>;
     fn get_audit_event_aggregates_by_tool(
         &self,
         since: &DateTime<Utc>,

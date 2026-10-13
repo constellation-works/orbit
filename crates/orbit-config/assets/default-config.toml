@@ -26,9 +26,6 @@ sandbox = "danger-full-access"
 # Optional: enable escalation requests for workflows that legitimately need approval.
 # approval_policy = "on-request"
 
-[scoring]
-enabled = true
-
 [workflow]
 # Config fallback for ship/auto/pilot when no registered workspace
 # base_branch is bound. Override per-invocation with `--base <branch>`.

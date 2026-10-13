@@ -114,10 +114,9 @@ pub struct StoredFrictionRecord {
     pub path: Option<PathBuf>,
 }
 
-/// Friction count for one reporting model label over a caller-chosen window.
-///
-/// The scoreboard consumes this instead of the record slice it used to scan:
-/// the row count is bounded by distinct model labels, not by corpus size.
+/// Friction count for one reporting model label, as `orbit.friction.stats`
+/// reads it: the row count is bounded by distinct model labels, not by
+/// corpus size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrictionReportedCount {
     pub model: String,

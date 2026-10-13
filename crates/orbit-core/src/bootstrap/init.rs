@@ -23,12 +23,10 @@ use crate::bootstrap::global_defaults::{
 };
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
-use orbit_common::fs::io::{
-    atomic_write_text, create_dir_symlink, create_private_dir_all, remove_path_if_exists,
-};
+use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::resolve_global_root;
-use orbit_config::{ConfigRoots, ConfigSeed, ResolvedConfig, seed_default_config};
+use orbit_config::{ConfigSeed, seed_default_config};
 
 #[derive(Debug, Clone)]
 pub struct InitResult {
@@ -116,10 +114,6 @@ pub(crate) fn ensure_orbit_root_initialized(
 
     let workspace_layout = prepare_workspace_root_layout(workspace_root, global_root);
     ignore_denied_implicit_bootstrap_write("workspace layout", workspace_root, workspace_layout)?;
-    if ResolvedConfig::load(&ConfigRoots::global_only(global_root))?.scoring_enabled {
-        let scoreboard = seed_scoreboard_templates(workspace_root);
-        ignore_denied_implicit_bootstrap_write("scoreboard templates", workspace_root, scoreboard)?;
-    }
     Ok(())
 }
 
@@ -239,7 +233,6 @@ pub fn init_workspace_at_root(
         managed_asset_warnings,
         refreshed_default_executors,
         refreshed_default_policies,
-        scoring_enabled,
     ) = match workspace_global_root {
         None => {
             let executor_store = global_executor_def_store(layout.executors_dir.clone());
@@ -266,7 +259,6 @@ pub fn init_workspace_at_root(
                 managed_asset_warnings,
                 refreshed_default_executors,
                 refreshed_default_policies,
-                false,
             )
         }
         Some(global_root) => {
@@ -346,14 +338,10 @@ pub fn init_workspace_at_root(
                 managed_asset_warnings,
                 global_result.refreshed_default_executors,
                 global_result.refreshed_default_policies,
-                ResolvedConfig::load(&ConfigRoots::new(&global_root, &orbit_root))?.scoring_enabled,
             )
         }
     };
 
-    if scoring_enabled {
-        seed_scoreboard_templates(&orbit_root)?;
-    }
     if !options.global_only {
         friction_store::ensure_default_tag_taxonomy(&orbit_root.join("frictions"))?;
     }
@@ -411,23 +399,6 @@ pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn seed_scoreboard_templates(orbit_root: &Path) -> Result<(), OrbitError> {
-    let scoreboard_dir = orbit_layout_paths(orbit_root).scoreboard_dir;
-    create_private_dir_all(&scoreboard_dir).map_err(OrbitError::from)?;
-
-    let pr_path = scoreboard_dir.join("pr.json");
-    if !pr_path.exists() {
-        atomic_write_text(&pr_path, "{}\n").map_err(OrbitError::from)?;
-    }
-
-    let task_review_path = scoreboard_dir.join("task_review.json");
-    if !task_review_path.exists() {
-        atomic_write_text(&task_review_path, "{}\n").map_err(OrbitError::from)?;
-    }
-
-    Ok(())
-}
-
 fn prepare_workspace_root_layout(
     orbit_root: &Path,
     global_root: &Path,
@@ -462,7 +433,6 @@ fn ensure_workspace_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.audit_dir,
         &paths.job_runs_dir,
         &paths.logs_dir,
-        &paths.scoreboard_dir,
         &paths.worktrees_dir,
     ] {
         create_private_dir_all(dir).map_err(OrbitError::from)?;

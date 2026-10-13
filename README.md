@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/orbit-demo.gif" alt="Animated tour of the real Orbit dashboard while Orbit's agents work on Orbit itself: proposed tasks waiting for approval with a crew on each, one auto-drain running 12 tasks across a Linux box and a Mac with 83 files locked and admissions paused while the host runs hot, a task's durable record with its outcome, evidence, complexity and context files, the run list and a pull-request pipeline run from worktree through implement, commit, validate, review gate and push to pr_open, the routines that turn red CI and Dependabot alerts into tasks, the audit log and its grouped incidents, a scoreboard comparing Codex, Claude, Grok and Gemini, and the frictions agents report." width="880" />
+  <img src="docs/assets/orbit-demo.gif" alt="Animated tour of the real Orbit dashboard while Orbit's agents work on Orbit itself: proposed tasks waiting for approval with a crew on each, one auto-drain running 12 tasks across a Linux box and a Mac with 83 files locked and admissions paused while the host runs hot, a task's durable record with its outcome, evidence, complexity and context files, the run list and a pull-request pipeline run from worktree through implement, commit, validate, review gate and push to pr_open, the routines that turn red CI and Dependabot alerts into tasks, the audit log and its grouped incidents, the since-retired scoreboard comparing Codex, Claude, Grok and Gemini, and the frictions agents report." width="880" />
 </p>
 
 Orbit is a local-first runtime for coding agents. Keep using your authenticated agent CLI; Orbit adds a durable task queue, sandboxed worktrees, file locks for parallel runs, a gated delivery pipeline, and an audit log.

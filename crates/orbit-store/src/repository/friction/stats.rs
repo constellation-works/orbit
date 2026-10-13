@@ -75,30 +75,19 @@ pub(super) fn resolved_in_window(
     Ok(count.max(0) as u64)
 }
 
-/// Record counts grouped by reporting model label, optionally windowed.
+/// Record counts grouped by reporting model label.
 pub(super) fn counts_by_model(
     conn: &Connection,
     workspace_id: &str,
-    since: Option<DateTime<Utc>>,
 ) -> Result<Vec<FrictionReportedCount>, OrbitError> {
-    let (sql, params): (&str, Vec<rusqlite::types::Value>) = match since {
-        Some(since) => (
-            "SELECT model, COUNT(*) FROM friction_records
-             WHERE workspace_id = ?1 AND created_at >= ?2 GROUP BY model",
-            vec![
-                rusqlite::types::Value::Text(workspace_id.to_string()),
-                rusqlite::types::Value::Text(encode_timestamp(since)),
-            ],
-        ),
-        None => (
+    let mut statement = conn
+        .prepare(
             "SELECT model, COUNT(*) FROM friction_records
              WHERE workspace_id = ?1 GROUP BY model",
-            vec![rusqlite::types::Value::Text(workspace_id.to_string())],
-        ),
-    };
-    let mut statement = conn.prepare(sql).map_err(sqlite_store_error)?;
+        )
+        .map_err(sqlite_store_error)?;
     let rows = statement
-        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        .query_map([workspace_id], |row| {
             Ok(FrictionReportedCount {
                 model: row.get::<_, String>(0)?,
                 count: row.get::<_, i64>(1)?.max(0) as u64,

@@ -7,7 +7,7 @@
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
-//! `/api/scoreboard` (keyed by the canonical window), and the codebase
+//! `/api/cost` (keyed by the canonical window), and the codebase
 //! analytics scan behind `/api/codebase/analytics`, which caches typed facts
 //! rather than a response body. `/api/routines` uses a host namespace keyed by
 //! definition, config and database stamps instead of a selected runtime. Every
@@ -23,7 +23,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::Value;
 
 /// Freshness bound for the dashboard memos the 30 s poll reads: audit summary,
-/// scoreboard, diagnostics errors and diagnostics friction. A viewer's polls
+/// cost, diagnostics errors and diagnostics friction. A viewer's polls
 /// land about 31 s apart (the interval plus the refresh's own duration), so
 /// three poll intervals keep the second and third poll on the entry the first
 /// one computed. A miss scans up to 50k audit rows plus stderr blobs, so a new

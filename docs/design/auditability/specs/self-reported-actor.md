@@ -112,9 +112,8 @@ producers have no claim to supply and should not have to name the field.
 
 ## Aggregates
 
-`get_audit_tool_call_counts_by_attribution` covers the same rows as
-`get_audit_tool_call_counts_by_role` and classifies each into exactly one of three disjoint
-buckets:
+`get_audit_tool_call_counts_by_attribution` covers every tool-call row in the window and
+classifies each into exactly one of three disjoint buckets:
 
 | attribution | condition | grouped on |
 |---|---|---|
@@ -124,9 +123,8 @@ buckets:
 
 Because the buckets are disjoint and every row lands in one, the three denominators a
 caller needs are all readable from one result set: filter on `attribution` for
-authenticated-only or self-reported-only, sum for combined. Their total equals the
-role-grouped denominator over the same rows, so the new view neither drops nor
-double-counts anything.
+authenticated-only or self-reported-only, sum for combined. Their total is the window's
+tool-call count, so the view neither drops nor double-counts anything.
 
 The same actor may appear under two attributions — one agent, half of whose traffic Orbit
 could authenticate. Those rows are not duplicates to merge. Merging them is exactly how an

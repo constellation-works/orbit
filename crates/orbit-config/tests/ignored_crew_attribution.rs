@@ -32,7 +32,7 @@ provider = "codex"
 effort = "bogus"
 "#,
     );
-    write_config(workspace.path(), "[scoring]\nenabled = false\n");
+    write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
 
     let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect("layered config with an ignored effort loads");

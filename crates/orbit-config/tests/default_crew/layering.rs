@@ -23,7 +23,7 @@ inherit = true
 pass = ["GLOBAL_SECRET"]
 "#,
     );
-    write_config(workspace.path(), "[scoring]\nenabled = false\n");
+    write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
 
     let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect("workspace config loads");

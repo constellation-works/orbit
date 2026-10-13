@@ -725,10 +725,6 @@ impl RuntimeHost for OrbitRuntime {
         orbit_engine::run_private_vcs_operation(operation, &input)
     }
 
-    fn scoring_enabled(&self) -> bool {
-        self.context.scoring_enabled()
-    }
-
     fn actor_model_identity(&self) -> Option<String> {
         matches!(self.actor().kind, crate::context::ActorKind::Agent)
             .then(|| self.actor_label().trim())
@@ -738,10 +734,6 @@ impl RuntimeHost for OrbitRuntime {
 
     fn pr_config(&self) -> orbit_engine::PrConfig {
         OrbitRuntime::pr_config(self).clone()
-    }
-
-    fn scoreboard_dir(&self) -> &std::path::Path {
-        &self.context.paths().scoreboard_dir
     }
 
     fn run_deterministic(

@@ -224,8 +224,8 @@ impl OrbitRuntime {
 
     /// Plan, or with `apply` perform, run retention: drop the pipeline state
     /// of this workspace's terminal runs that finished before the cutoff and
-    /// stamp their `archived_at`. Run rows and steps stay, so `run show`, run
-    /// history and the scoreboard keep working. `retention_days` overrides
+    /// stamp their `archived_at`. Run rows and steps stay, so `run show` and
+    /// run history keep working. `retention_days` overrides
     /// `retention.runs_days`. The host's per-minute resource history and
     /// admission forecasts older than [`RESOURCE_MINUTES_RETENTION_DAYS`] go
     /// in the same pass.

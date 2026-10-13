@@ -31,7 +31,7 @@ registry sweeps, and MCP setup use this same path interpretation.
 ### Workspace `.orbit/`
 
 `orbit workspace init` scaffolds `.orbit/resources/` plus
-`.orbit/state/{audit,job-runs,logs,scoreboard,worktrees}`. It does not create
+`.orbit/state/{audit,job-runs,logs,worktrees}`. It does not create
 `.orbit/knowledge` or `.orbit/state/diagnostics`; leftover empty copies from
 older inits are unused and may be `rmdir`'d. Init tolerates both absence and
 presence. Path fields live on `WorkspacePaths` in
@@ -47,7 +47,7 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/layout.version` | plain-text workspace layout version marker | regenerable marker (see [upgrades](./upgrades.md)) |
 | `state/layout.lock` | advisory lock taken during layout upgrades | transient |
 | `state/semantic.db` | lexical task index (FTS5 chunks) | regenerable (`orbit search reindex`) |
-| `state/scoreboard/` | rolling counters (`pr.json`, `task_review.json`, `tokens.json`, …) | mostly regenerable |
+| `state/scoreboard/` | retired scoreboard counters left by older Orbit versions; nothing reads or writes them | non-authoritative; safe to delete |
 | `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
 | `state/logs/`, `state/worktrees/` | workspace-local worker stdio logs and linked worktrees | regenerable |
@@ -317,7 +317,7 @@ from the captured settings only after the old source identity is restored.
   (canonical bundles and the `index.sqlite` task-id allocator), `orbit.db`, `frictions/`, and `resources/` whenever it contains operator-authored YAML or
   `.retired-managed/` recovery copies. The database holds non-derivable audit and run history.
 - **Safe to lose or regenerate:** retired `graph/` and `knowledge/graph/`, `state/semantic.db`,
-  `~/.orbit/embed/`, `~/.orbit/state/logs/`, scoreboard counters.
+  `~/.orbit/embed/`, `~/.orbit/state/logs/`, retired `state/scoreboard/` counters.
 
 ### Preserve SQLite consistency
 

@@ -440,12 +440,10 @@ pub trait RuntimeHost: Send + Sync {
     fn run_private_vcs_operation(&self, operation: &str, input: Value)
     -> Result<Value, OrbitError>;
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair>;
-    fn scoring_enabled(&self) -> bool;
     /// Return the current agent model identity when this runtime is operating
     /// as an agent, or `None` when there is no model-bearing actor.
     fn actor_model_identity(&self) -> Option<String>;
     fn pr_config(&self) -> PrConfig;
-    fn scoreboard_dir(&self) -> &Path;
 
     /// Dispatch a deterministic action by name. The host looks up `action`
     /// in its registry and returns the action's structured output.

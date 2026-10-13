@@ -242,7 +242,7 @@ await overlap(() => scoreboard.fetchAndRenderScoreboard(), summary('score-old-re
 shows('scoreboard-orchestration', 'score-new-refresh', 'score-old-refresh');
 
 const lateScore = scoreboard.fetchAndRenderScoreboard();
-assert.equal(pending.at(-1).url.pathname, '/api/scoreboard');
+assert.equal(pending.at(-1).url.pathname, '/api/cost');
 assert.equal(pending.at(-1).url.searchParams.get('workspace'), 'ws-a');
 common.setWorkspace('ws-b');
 assert.ok(!text('scoreboard-orchestration').includes('score-new-refresh'), 'workspace change clears cost chrome before the next response');

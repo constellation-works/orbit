@@ -473,17 +473,11 @@ pub trait NullRuntimeHost: Send + Sync {
         let _ = agent_cli;
         None
     }
-    fn scoring_enabled(&self) -> bool {
-        false
-    }
     fn actor_model_identity(&self) -> Option<String> {
         None
     }
     fn pr_config(&self) -> PrConfig {
         PrConfig::default()
-    }
-    fn scoreboard_dir(&self) -> &Path {
-        Path::new("")
     }
 
     fn run_deterministic(
@@ -1058,17 +1052,11 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         NullRuntimeHost::resolved_agent_model_pair(self, agent_cli)
     }
-    fn scoring_enabled(&self) -> bool {
-        NullRuntimeHost::scoring_enabled(self)
-    }
     fn actor_model_identity(&self) -> Option<String> {
         NullRuntimeHost::actor_model_identity(self)
     }
     fn pr_config(&self) -> PrConfig {
         NullRuntimeHost::pr_config(self)
-    }
-    fn scoreboard_dir(&self) -> &Path {
-        NullRuntimeHost::scoreboard_dir(self)
     }
     fn run_deterministic(
         &self,

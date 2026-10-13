@@ -66,8 +66,6 @@ pub struct ResolvedConfig {
     pub persistence: PersistenceConfig,
     /// Config-owned PR settings.
     pub pr: PrSettings,
-    /// Whether scoreboard metrics are recorded for task runs.
-    pub scoring_enabled: bool,
     /// Minutes a deferred delivery-automation reason may persist before it is
     /// escalated (`[automation] stall_window_minutes`; default 60).
     pub automation_stall_window_minutes: u32,
@@ -123,7 +121,6 @@ impl ResolvedConfig {
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
             },
-            scoring_enabled: snapshot.scoring_enabled,
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
@@ -345,7 +342,6 @@ impl ResolvedConfig {
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
             },
-            scoring_enabled: snapshot.scoring_enabled,
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,

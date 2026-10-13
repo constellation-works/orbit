@@ -82,28 +82,29 @@ default, the session has only the `agent` capability; a server started with `--o
 grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
 not.
 
-## Scoreboard and incident reads
+## Cost and incident reads
 
-`GET /api/scoreboard` builds a read-only summary and joins incident and metrics
-counts. It does not create or replace `state/scoreboard/summary.json`; explicit
-runtime summary generation still persists that document. Each dashboard server
-shares one computation per live workspace runtime and canonical window for 15
-seconds, including concurrent requests. Omitted `window` and `window=all` share
-an entry. A rebuilt workspace runtime starts a fresh cache namespace.
+`GET /api/cost` builds the managed-execution cost accounting for one window from
+the invocation store and writes nothing. Each dashboard server shares one
+computation per live workspace runtime and canonical window for 15 seconds,
+including concurrent requests. Omitted `window` and `window=all` share an
+entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired
+`GET /api/scoreboard` returns the same body with `Deprecation` and `Sunset`
+headers until 2026-11-12. Files left under `state/scoreboard/` are never read.
 
 Cross-run incident grouping tokenizes messages once and incrementally refreshes
 only citations affected by a fold. It preserves the existing fold order,
 same-class/earlier-root checks, 60-second cascade window, and ambiguous run-ID
-handling. Both scoreboard joins and `/api/audit/incidents` use this grouping.
+handling. `/api/audit/incidents` uses this grouping.
 Tool-call aggregates use the command/subcommand/timestamp index added by the
 store migration, while retaining their existing host-global scope.
 
 Analytics › Cost does not rank agent families and does not open Events from a
 metric cell. Incidents still open Health › Incidents › Events (the audit event
 log, `#diagnostics/incidents/events`) through the family drill-down:
-`agent_family=<name>` applies the same family normalization as the scoreboard
-summary, including rows whose recorded role is a model label. The existing
-`role=<label>` Events filter still matches the exact stored role. A
+`agent_family=<name>` applies the agent-family normalization, including rows
+whose recorded role is a model label. The existing `role=<label>` Events filter
+still matches the exact stored role. A
 failure-incident drill-down adds `status=non_success`, which includes both
 `failure` and `denied`; Events shows these filters as removable scope chips.
 The rows are raw evidence, so several rows can belong to one counted incident.

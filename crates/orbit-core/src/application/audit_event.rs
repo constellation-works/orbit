@@ -4,9 +4,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditRoleAggregate, AuditToolAggregate, AuditToolCallCountsByRole,
-    AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall, FailureIncidentQuery,
-    FailureIncidentReport,
+    AuditRoleAggregate, AuditToolAggregate, FailureIncidentQuery, FailureIncidentReport,
 };
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
 
@@ -167,17 +165,6 @@ impl OrbitRuntime {
             .get_audit_event_hourly_buckets(since)
     }
 
-    /// `(role, count)` for `status='denied'` audit events at or after `since`,
-    /// sorted desc by count. When `since` is `None`, all-time totals are returned.
-    pub fn audit_denials_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<(String, i64)>, OrbitError> {
-        self.stores()
-            .audit_events()
-            .get_audit_denials_by_role(since)
-    }
-
     /// Canonical SQLite capability/policy decisions by operation, excluding
     /// coordination and settlement refusals and duplicate invocation evidence.
     pub fn audit_denials_by_operation(
@@ -252,30 +239,7 @@ impl OrbitRuntime {
         })
     }
 
-    /// Per-role counts for audited tool invocations. `failed` counts every
-    /// non-success tool run (`failure` and `denied` statuses).
-    pub fn audit_tool_call_counts_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<AuditToolCallCountsByRole>, OrbitError> {
-        self.stores()
-            .audit_events()
-            .get_audit_tool_call_counts_by_role(since)
-    }
-
-    /// Per-(surface, role) tool-call counts where `tool_name` matches
-    /// `orbit.<surface>.<verb>`. Drives the public scoreboard's
-    /// per-Orbit-surface usage sections.
-    pub fn audit_tool_call_counts_by_surface_and_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<AuditToolCallCountsBySurfaceAndRole>, OrbitError> {
-        self.stores()
-            .audit_events()
-            .get_audit_tool_call_counts_by_surface_and_role(since)
-    }
-
-    /// The same tool-call rows as [`Self::audit_tool_call_counts_by_role`],
+    /// Audited tool invocations (`failed` counts every non-success run),
     /// split by how each row's identity was established [ORB-10890].
     ///
     /// Authenticated, self-reported, and anonymous traffic are disjoint
@@ -289,18 +253,6 @@ impl OrbitRuntime {
         self.stores()
             .audit_events()
             .get_audit_tool_call_counts_by_attribution(since)
-    }
-
-    /// Top (role, tool_name) pairs from the audit log, restricted to
-    /// `orbit.*` tool names. `limit` caps the result count after sorting.
-    pub fn audit_top_tool_calls(
-        &self,
-        since: Option<&DateTime<Utc>>,
-        limit: usize,
-    ) -> Result<Vec<AuditTopToolCall>, OrbitError> {
-        self.stores()
-            .audit_events()
-            .get_audit_top_tool_calls(since, limit)
     }
 
     /// Per-tool aggregate of audit events at or after `since`. One row per

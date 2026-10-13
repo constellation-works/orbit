@@ -139,22 +139,6 @@ pub struct ActivityInvocationMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AgentInvocationMetrics {
-    pub agent: String,
-    pub model: Option<String>,
-    pub invocation_count: u64,
-    pub total_input_tokens: u64,
-    pub total_cache_read_tokens: u64,
-    pub total_cache_create_tokens: u64,
-    pub total_output_tokens: u64,
-    pub total_tokens: u64,
-    pub avg_tokens: f64,
-    pub p50_tokens: u64,
-    pub p95_tokens: u64,
-    pub total_tool_calls: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskInvocationMetrics {
     pub task_id: String,
     pub invocation_count: u64,

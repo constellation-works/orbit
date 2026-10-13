@@ -63,7 +63,7 @@ pub enum ConfigSection {
     /// automatic-review crew. After-landing review is an auto-task flag, not
     /// a key.
     Review,
-    /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`,
+    /// Everything else: `automation.*`, `runtime.*`, `tasks.*`,
     /// `pr.*`, `plugin.*`.
     Housekeeping,
 }
@@ -99,7 +99,7 @@ impl ConfigSection {
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
             Self::Review => "before-PR review and the automatic-review crew",
-            Self::Housekeeping => "logs, scoring, ids, plugins, and PR links",
+            Self::Housekeeping => "logs, ids, plugins, and PR links",
         }
     }
 

@@ -47,7 +47,6 @@ database recovery, and upgrades, see the
     diagnostics/
     job-runs/
     logs/
-    scoreboard/
     worktrees/
     auto-tasks.json  # scheduler cursor
     layout.version

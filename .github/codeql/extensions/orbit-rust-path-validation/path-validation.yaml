@@ -178,12 +178,6 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_store::driver::file::scoreboard::common::validated_scoreboard_file_path",
-          "ReturnValue",
-          "path-injection",
-          "manual",
-        ]
-      - [
           "orbit_core::runtime::recovery_authority::root::validated_authority_global_root",
           "ReturnValue",
           "path-injection",

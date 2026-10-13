@@ -38,7 +38,7 @@ fn config_path_rejects_a_symlink_without_reading_its_external_target() {
         .join("outside-config.toml");
     std::fs::write(
         global_root.join("config.toml"),
-        "[scoring]\nenabled = false\n",
+        "[workflow]\nauto_ship = true\n",
     )
     .expect("write global config");
     std::fs::write(&outside_target, "leaked = true\n").expect("write file outside workspace root");
