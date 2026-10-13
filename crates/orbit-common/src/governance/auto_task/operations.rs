@@ -387,13 +387,13 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
             "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.",
         ),
         NAME_PARAM,
-        free_text(both(
+        preserve_empty(free_text(both(
             "description",
             ParamType::String,
             "New description.",
             CliArgKind::flag("description"),
             "New description",
-        )),
+        ))),
         mcp_only(
             "schedule",
             ParamType::Object,
@@ -429,18 +429,18 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
             CliArgKind::flag("dedupe"),
             "New dedupe policy",
         ),
-        cli_only(
+        preserve_empty(cli_only(
             "title",
             ParamType::String,
             CliArgKind::flag("title"),
             "New task title",
-        ),
-        cli_only(
+        )),
+        preserve_empty(cli_only(
             "body",
             ParamType::String,
             CliArgKind::flag("body"),
             "New task body",
-        ),
+        )),
         cli_only(
             "criteria",
             ParamType::StringList,
