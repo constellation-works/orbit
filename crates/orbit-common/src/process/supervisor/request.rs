@@ -1,5 +1,6 @@
 //! The supervision request and its outcome.
 
+use std::process::ExitStatus;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
@@ -87,6 +88,14 @@ pub struct Supervision<'a> {
     /// long: output buffered when a reader stops is still read, later output
     /// is discarded, and stdin bytes nobody read are abandoned.
     pub drain_budget: Duration,
+    /// Signal the remaining group immediately after the leader exits and
+    /// cap the pipe drain at the time remaining on the run's deadline.
+    /// A termination grace period for a live leader may outlast that deadline.
+    pub cap_drain_at_deadline: bool,
+    /// Require the child to exit and both output workers to finish before
+    /// success. A descendant retaining a pipe keeps the run pending until
+    /// EOF or the deadline; the group is torn down only after completion.
+    pub require_eof: bool,
     /// End a descendant that stays stopped for this long, so the child's wait
     /// on it returns (see [`crate::process::stopped_descendants`]). The watch samples
     /// the process table, so callers on the process-identity path keep it
@@ -108,6 +117,10 @@ pub struct Outcome {
     /// The child exited zero and no sink or periodic check stopped the run.
     pub success: bool,
     pub exit_code: Option<i32>,
+    /// The direct child's unmodified exit status when it finished naturally.
+    /// A stop before the leader exits has no status; stop metadata describes
+    /// what ended the run even when EOF completion already reaped the leader.
+    pub status: Option<ExitStatus>,
     /// What the stdout sink retained.
     pub stdout: Vec<u8>,
     /// What the stderr sink retained.
