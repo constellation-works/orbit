@@ -107,7 +107,9 @@ pub(crate) fn task_context_for_agent_input(
 /// candidate, for an implementer that need not run them first. Only a
 /// delivery pipeline whose deterministic final validation follows the
 /// implementer or managed pre-publication conflict recovery sets
-/// `final_validation` on its input. Absorbed synchronization validates at
+/// `final_validation` on its input. The job executor proves the resolved
+/// validation continuation before forwarding conflict recovery's flag.
+/// Absorbed synchronization validates at
 /// the host rebase boundary before no-diff settlement.
 fn final_validation_commands(runtime: &OrbitRuntime, input: &Value) -> Option<Vec<String>> {
     if input.get("final_validation").and_then(Value::as_bool) != Some(true) {

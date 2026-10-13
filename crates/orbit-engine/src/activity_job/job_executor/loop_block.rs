@@ -50,6 +50,7 @@ pub(super) fn run_loop(
             recovery_activity: ctx.recovery_activity.clone(),
             failure_activity: ctx.failure_activity.clone(),
             final_recovery_activity: None,
+            recovery_validation_continuations: Default::default(),
             item: loop_items
                 .as_ref()
                 .and_then(|items| items.get(iteration_index as usize).cloned()),

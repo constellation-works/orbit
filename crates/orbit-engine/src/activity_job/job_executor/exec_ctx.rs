@@ -28,6 +28,9 @@ pub(super) struct ExecCtx<'a> {
     /// carries it: the hook answers for a failed top-level step, so nested
     /// block contexts leave it `None`.
     pub(super) final_recovery_activity: Option<ResolvedRecoveryActivity>,
+    /// Top-level rebase step ids whose resolved continuation will execute host
+    /// validation. Computed after job validation; nested contexts clear it.
+    pub(super) recovery_validation_continuations: std::collections::HashSet<String>,
     /// `Some(value)` inside a fan-out worker. Rendered into template context
     /// as `{{ item }}`.
     pub(super) item: Option<Value>,

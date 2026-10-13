@@ -51,6 +51,12 @@ pub fn execute_job_with_resume(
     // runs — so a job whose (possibly terminal) activity names an action this
     // binary cannot dispatch never reaches `worktree_setup`'s task admission.
     validate_job_deterministic_actions(job, host)?;
+    let recovery_validation_continuations = super::validate::recovery_validation_continuations(
+        job,
+        resume,
+        host.worker_invocation().as_ref(),
+        run_id,
+    );
 
     let base_input = merge_job_input(job.default_input.as_ref(), &input);
     let recovery_activity = match (&job.recovery_activity, &job.resolved_recovery_activity) {
@@ -97,6 +103,7 @@ pub fn execute_job_with_resume(
         recovery_activity,
         failure_activity,
         final_recovery_activity,
+        recovery_validation_continuations,
         item: None,
         iteration: None,
     };

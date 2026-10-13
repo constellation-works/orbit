@@ -61,12 +61,20 @@ pub(super) fn bind_recovery_context(
         input["repo_root"] = workspace;
     }
     input["run_id"] = Value::String(ctx.run_id.clone());
-    // Only pre-publication synchronization has the managed continuation:
-    // validate follows it, and an absorbed candidate validates at git_rebase's
-    // host boundary instead. Completion and custom/standalone routes keep
-    // their advisory checks. The envelope projects the captured command list.
-    if step.id == "sync_base"
-        && step_activity_name(step) == "git_rebase"
+    // The resolved job must prove a later active host validator on this
+    // candidate. An absorbed candidate validates at git_rebase's boundary
+    // instead. Names and a caller flag alone do not establish ownership.
+    if ctx.recovery_validation_continuations.contains(&step.id)
+        && ctx.host.worker_invocation().is_none_or(|worker| {
+            failed_input.get("job_run_id").and_then(Value::as_str)
+                == Some(worker.bound_run_id.as_str())
+                && failed_input
+                    .get("completed_task_ids")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ids| {
+                        ids.len() == 1 && ids[0].as_str() == Some(worker.task_id.as_str())
+                    })
+        })
         && failed_input
             .get("final_validation")
             .and_then(Value::as_bool)
