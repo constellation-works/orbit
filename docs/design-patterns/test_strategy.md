@@ -57,6 +57,21 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-exec` retains six corrected security-seam admissions from the
+  [applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md).
+  `build_sandbox/tests/supervise.rs` checks host process-group reaping before
+  Bubblewrap changes PID identity and isolates the fetch TCP ruleset from
+  filesystem/namespace restrictions (criterion 3). The credential alias test
+  injects an arbitrary bind destination; the two `host_alias` tests inject
+  mount tables and confirm real device/inode identity without privileged
+  mounts (criteria 2 and 3). The bundled-wrapper test injects a disposable
+  candidate path that the fixed-path public launcher cannot accept (criterion
+  3). The outside-symlink measurement moves through the public phase with a
+  zero cap; the missing-path control joins the existing unreadable measurement
+  fixture. Exported build-log, compiler, grant and login-shell cases live in the
+  crate-root integration suites, and the native macOS PTY parent and child
+  stay together there.
+
 - `crates/orbit-common/src/process/supervisor/tests/wait.rs`: `a_stalled_caller_clock_does_not_apply_the_wall_clock_deadline` and `a_jumped_caller_clock_stops_at_the_deadline_without_the_wall_wait` (criterion 2, deterministic clock). An injected clock that stays still must let a child outlive a wall-clock timeout, and one that jumps past the timeout must stop without waiting out that wall time. Automation source measures its budget on this clock; the existing deadline test covers `clock: None`. `redirected_output_stops_when_the_periodic_check_crosses_its_limit` (criterion 4) writes to a caller-owned file, so no capture sink sees the bytes, and asserts the periodic check stops the run with `ProcessStopCause::Periodic` before the deadline.
 
 - `crates/orbit-common/src/process/tests/bounded.rs::bounded_supervision_errors_kill_the_group_and_reap_the_leader` (criterion 2, fault injection). A per-thread seam injects pipe-setup, pipe-read and wait errors through the public `run_bounded` boundary, after placing an independently waitable peer in the child's group. The test verifies the leader is reaped and the peer is killed; descriptor exhaustion or global wait-state corruption would otherwise be needed to reach those errors. The crate-root `process_group_liveness` tests cover owned-handle drop, unwinding, explicit cleanup, TERM escalation and signal guards without injection.

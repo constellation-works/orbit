@@ -1,7 +1,12 @@
-use super::super::test_support::*;
+use super::macos_audit_support::*;
 
 #[test]
 fn copilot_reallows_the_user_keychain_but_not_github_cli_credentials() {
+    if super::audit_support::run_isolated(
+        "macos_provider::copilot_reallows_the_user_keychain_but_not_github_cli_credentials",
+    ) {
+        return;
+    }
     // Copilot's `/login` session lives in the macOS login keychain item
     // `github-copilot-app`, so the confined Copilot profile re-allows that
     // user directory. It must still not borrow the GitHub CLI's credential

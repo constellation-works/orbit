@@ -46,6 +46,9 @@ fn only_root_owned_unwritable_non_setuid_entries_qualify() {
 }
 
 #[cfg(target_os = "linux")]
+/// Unit admission: security invariant through trusted_wrapper_at with an injected
+/// bundled path. The public spawn only verifies the two fixed host paths;
+/// reproducing this ownership/symlink failure there requires privileged writes.
 #[test]
 fn a_user_writable_or_symlinked_bundled_copy_is_refused_before_spawn() {
     let temp = tempfile::tempdir().expect("tempdir");

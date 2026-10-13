@@ -512,17 +512,19 @@ Risk-weighted regression tests sit beside the implementations they guard
   `make` / `gh` still run. `crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs`
   reproduces the same alias bypass through the tool itself and pins the
   request-time `/etc` denial ([ORB-11514]).
-- `crates/orbit-exec/src/macos_sandbox/compile.rs#tests` and
-  `crates/orbit-exec/src/macos_sandbox/tests/provider_dirs.rs` — trusted wrapper
-  resolution ignores `PATH`, including a macOS runtime test that places a fake
-  `sandbox-exec` earlier on `PATH` and verifies the fake wrapper is not
-  executed ([T20260509-30]). SBPL compilation tests
-  cover `denyRead` / `denyModify` clause emission (`subpath` for simple
-  rules, `regex` for non-trivial globs) and resolved deny/re-allow ordering
-  under last-match-wins. macOS-gated runtime tests
-  (`compiled_profile_denies_reads_to_negated_read_path` and
-  `compiled_profile_for_realistic_agent_loop_profile_allows_repo_writes_denies_dotenv`)
-  exercise an `agent_loop`-shaped profile end-to-end against the kernel
+- `crates/orbit-exec/tests/sandbox/macos_spawn.rs` — trusted wrapper
+  resolution ignores `PATH`: a macOS runtime fixture places a fake
+  `sandbox-exec` earlier on `PATH` and verifies it is not executed
+  ([T20260509-30]). The same suite checks the supplied child environment and
+  runs its ignored PTY child under a real compiled profile.
+  `crates/orbit-exec/tests/sandbox/macos_audit.rs` checks keychain deny/re-allow
+  ordering, public CA reads versus synthetic private credentials, Cargo cache
+  permissions, glob compilation and plugin-state masks against the kernel.
+  `crates/orbit-exec/tests/sandbox/macos_provider.rs` covers the Copilot
+  keychain carve-out through the exported compiler, and
+  `crates/orbit-exec/tests/sandbox_profile_goldens.rs` records compiled SBPL
+  clause emission. `crates/orbit-exec/tests/sandbox/macos_sandbox.rs` exercises
+  masked reads/listings/writes and the granted write root against the kernel
   sandbox. The Codex CA regression additionally runs a real macOS wrapper,
   loads one certificate from the injected public PEM bundle, and proves
   synthetic Keychain material stays unreadable; platform-neutral fixtures pin

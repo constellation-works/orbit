@@ -32,8 +32,6 @@ pub(crate) mod provider_dirs;
 pub(crate) mod sbpl_filter;
 pub(crate) mod spawn;
 #[cfg(test)]
-pub(crate) mod test_support;
-#[cfg(test)]
 mod tests;
 
 pub use compile::{

@@ -208,7 +208,3 @@ fn create_directory_component(root: &Path, component: &Path) -> Result<(), Orbit
         ))),
     }
 }
-
-#[cfg(test)]
-#[path = "tests/path_identity.rs"]
-mod tests;

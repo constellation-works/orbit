@@ -16,3 +16,13 @@ mod macos_compile;
 mod macos_sandbox;
 
 mod apply_probe;
+
+mod audit_support;
+mod build_sandbox;
+mod linux_credentials;
+mod linux_masks;
+mod macos_audit;
+mod macos_audit_support;
+mod macos_provider;
+mod macos_spawn;
+mod path_identity;

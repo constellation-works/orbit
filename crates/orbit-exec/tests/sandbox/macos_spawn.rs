@@ -1,17 +1,22 @@
 #[cfg(target_os = "macos")]
-use super::super::spawn::{MacosSandboxSpawnRequest, spawn_under_macos_sandbox};
-#[cfg(target_os = "macos")]
-use super::super::test_support::{
+use super::macos_audit_support::{
     EnvOverrides, NEUTRAL_PROVIDER, compile_with_env, profile, shell_escape,
 };
+#[cfg(target_os = "macos")]
+use orbit_exec::{MacosSandboxSpawnRequest, spawn_under_macos_sandbox};
 #[cfg(target_os = "macos")]
 use std::process::Stdio;
 
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_spawn::spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path",
     ) {
         return;
     }
@@ -72,8 +77,13 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
-    if !crate::macos_sandbox_test_guard(
+    if !orbit_exec::macos_sandbox_test_guard(
         "spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment",
+    ) {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_spawn::spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment",
     ) {
         return;
     }
@@ -158,7 +168,12 @@ fn pty_probe_process() {
 #[cfg(target_os = "macos")]
 #[test]
 fn pty_allocation_is_allowed_under_compiled_profile() {
-    if !crate::macos_sandbox_test_guard("pty_allocation_is_allowed_under_compiled_profile") {
+    if !orbit_exec::macos_sandbox_test_guard("pty_allocation_is_allowed_under_compiled_profile") {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "macos_spawn::pty_allocation_is_allowed_under_compiled_profile",
+    ) {
         return;
     }
 
@@ -167,7 +182,7 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
     let current_exe = std::env::current_exe().expect("current test binary path");
     let args = [
         "--exact".to_string(),
-        "macos_sandbox::tests::spawn::pty_probe_process".to_string(),
+        "macos_spawn::pty_probe_process".to_string(),
         "--ignored".to_string(),
     ];
     let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
@@ -186,7 +201,7 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
     let output = child.wait_with_output().expect("wait for pty probe");
 
     orbit_common::test_env::assert_child_test_passed(
-        "macos_sandbox::tests::spawn::pty_probe_process",
+        "macos_spawn::pty_probe_process",
         output.status,
         &output.stdout,
         &output.stderr,
