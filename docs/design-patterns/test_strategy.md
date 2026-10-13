@@ -566,19 +566,23 @@ cases now use crate-root boundaries: catalog and definition composition in
 store adoption and frozen-v1 compatibility in `tests/migration_freeze.rs`, relation
 validation in `tests/task_registry_ledger.rs`, and archive/publication workflows in
 `tests/publication.rs`. Mutable cases re-execute in children with inherited Orbit
-authority cleared and disposable homes. The ignored listing benchmark and three
-stale run-state allowances are retired; the original twenty-eight admissions and
-their child entry points remain.
+authority cleared and disposable homes. The ignored listing benchmark, three
+stale run-state allowances, and the audit-aggregate planner identity removed
+independently by ORB-15922 are retired; twenty-seven of the original twenty-eight
+admitted identities and their child entry points remain. The landed
+reconciliation records 29 moves, 10 keeps and 5 retirements, reducing the
+orbit-store baseline from 76 to 43.
 
-Eleven proposed moves are corrected to keep their qualifying private seams:
+Ten proposed moves remain as keeps because their private seams prove behavior
+the crate-root boundary cannot observe:
 
 - The cached-citation oracle consumes private pre-fold incidents. The exported
   grouping result has already folded and ranked them; moving the oracle would
   require copying production grouping or exposing that intermediate state
   (criterion 1, combinatorial fold precedence).
-- Audit aggregate and run-recency plan matrices pass the real private SQL
-  builders to SQLite's planner. Public returned rows cannot prove index use or
-  absence of workspace sorting (criterion 1, combinatorial SQL generation).
+- The run-recency plan matrix passes the real private `job_run_list_sql` builder
+  to SQLite's planner. Public returned rows cannot prove index use or absence
+  of workspace sorting (criterion 1, combinatorial SQL generation).
 - Invocation attribution starts at the shipped v35 registry prefix, and the
   resource-minute compatibility case opens with the real older registry and
   compares compatibility floors. The public latest-schema open cannot supply
@@ -599,3 +603,9 @@ Eleven proposed moves are corrected to keep their qualifying private seams:
 
 Each correction names its source identity and seam in the reconciliation; no
 production export is widened to make a test move possible.
+
+One originally proposed planner move has a different outcome: ORB-15922
+(`e9bb5f2e`) removed the scoreboard aggregate SQL builders before PR4686. The
+final reconciliation records
+`driver/sqlite/audit_event_store/tests/aggregates.rs::tool_call_queries_search_the_invocation_index_for_every_window_and_limit`
+as one of the five retirements, not as a current private-seam keep.
