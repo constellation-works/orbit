@@ -16,3 +16,12 @@ mod plugin_loader;
 mod proc_spawn_lockdown;
 mod proc_spawn_timeout;
 mod public_tool_surface;
+
+mod artifact_admission;
+mod domain_admission;
+mod plugin_admission;
+mod plugin_build;
+#[cfg(unix)]
+mod plugin_source_admission;
+mod program_admission;
+mod working_directory;

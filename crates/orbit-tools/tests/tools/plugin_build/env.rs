@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use super::super::super::build::{
+use super::spec;
+use orbit_tools::plugin::ResolvedCommit;
+use orbit_tools::plugin::{
     PLUGIN_BUILD_DENIED_ENV, PLUGIN_BUILD_DENIED_ENV_PREFIXES, PLUGIN_BUILD_TOOLCHAIN_LOCATORS,
     PluginBuildHostEnv, PluginBuildPhase, is_denied_build_env, plan_plugin_build,
     plugin_build_environment,
 };
-use super::super::super::source::ResolvedCommit;
-use super::spec;
 
 /// §3.5: the locator list and the denylist never overlap, and a phase's
 /// environment holds no denied name, no operator variable outside the

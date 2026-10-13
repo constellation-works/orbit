@@ -1,5 +1,5 @@
-use super::super::super::build::{install_plugin_build_outputs, plugin_artifact_digest};
 use super::spec;
+use orbit_tools::plugin::{install_plugin_build_outputs, plugin_artifact_digest};
 
 #[cfg(unix)]
 fn build_dir_with(files: &[(&str, &[u8], u32)]) -> tempfile::TempDir {
@@ -121,8 +121,9 @@ fn only_physical_declared_outputs_cross_back_into_the_install() {
 fn oversized_build_outputs_are_refused_before_copying() {
     let build = tempfile::tempdir().expect("build dir");
     let oversized = std::fs::File::create(build.path().join("large")).expect("output");
+    // Public installation uses the production 256 MiB unpacked/output cap.
     oversized
-        .set_len(super::super::super::source::MAX_UNPACKED_BYTES + 1)
+        .set_len(256 * 1024 * 1024 + 1)
         .expect("sparse output");
     let staging = tempfile::tempdir().expect("staging");
     let error = install_plugin_build_outputs(

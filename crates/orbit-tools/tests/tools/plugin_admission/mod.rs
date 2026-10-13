@@ -1,12 +1,12 @@
-//! Shell for the plugin-backend unit tests that the keep list retains.
+//! Plugin admission through exported profiles and tool execution.
 
 use std::path::Path;
 
 use orbit_types::plugin::{PluginFsPermissions, PluginGrant, PluginPermissions};
 
-use super::super::backend::PluginBackendSpec;
-use super::super::loader::physical_with_missing_tail;
-use super::support::{context, spec};
+use self::support::{context, spec};
+use orbit_tools::plugin::PluginBackendSpec;
+use orbit_tools::plugin::physical_with_missing_tail;
 
 fn fs_state_permissions() -> PluginPermissions {
     PluginPermissions {
@@ -21,3 +21,8 @@ fn fs_state_permissions() -> PluginPermissions {
 mod brokered;
 mod confinement;
 mod state_isolation;
+
+mod support;
+
+#[cfg(unix)]
+mod rotation;

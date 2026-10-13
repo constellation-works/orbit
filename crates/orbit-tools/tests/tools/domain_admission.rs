@@ -1,8 +1,9 @@
 //! Domain mutation modes must retain the managed-run dispatch denial.
-use crate::{
-    OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext, Tool, ToolContext,
-};
 use orbit_common::OrbitError;
+use orbit_tools::{
+    OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext, ToolContext,
+    ToolRegistry,
+};
 use serde_json::{Value, json};
 use std::sync::{
     Arc,
@@ -35,33 +36,34 @@ fn domain_operator_modes_never_dispatch_from_a_managed_run() {
         orbit_host: Some(host.clone()),
         ..Default::default()
     };
-    let calls: Vec<(Box<dyn Tool>, Value)> = vec![
+    let calls: Vec<(&str, Value)> = vec![
         (
-            Box::new(super::super::domain_control::WorkflowAutoTool),
+            "orbit.workflow.auto",
             json!({"workspace":"ws_fixture","action":"start","for_seconds":60}),
         ),
         (
-            Box::new(super::super::domain_control::RoutineControlTool),
+            "orbit.routine.control",
             json!({"workspace":"ws_fixture","action":"toggle","name":"routine","target":"job:maintenance","expected_enabled":true,"enabled":false}),
         ),
         (
-            Box::new(super::super::domain_control::WorkflowAutoTool),
+            "orbit.workflow.auto",
             json!({"workspace":"ws_fixture","action":"resize","concurrency":2}),
         ),
         (
-            Box::new(super::super::auto_task::update::OrbitAutoTaskUpdateTool),
+            "orbit.auto_task.update",
             json!({"workspace":"ws_fixture","name":"routine","expected_enabled":true,"enabled":false}),
         ),
         (
-            Box::new(super::super::auto_task::mint::OrbitAutoTaskMintTool),
+            "orbit.auto_task.mint",
             json!({"workspace":"ws_fixture","name":"routine","acknowledge_unconditional":true}),
         ),
         (
-            Box::new(super::super::pipeline::invoke::OrbitPipelineInvokeTool),
+            "orbit.pipeline.invoke",
             json!({"workspace":"ws_fixture","job_name":"maintenance","default_input":true}),
         ),
     ];
-    let ordinary = super::super::pipeline::invoke::OrbitPipelineInvokeTool.execute(
+    let ordinary = registry().execute(
+        "orbit.pipeline.invoke",
         &ctx,
         json!({"workspace":"ws_fixture","job_name":"delivery","input":{"task_ids":["TST-1"]}}),
     );
@@ -72,11 +74,11 @@ fn domain_operator_modes_never_dispatch_from_a_managed_run() {
     for (tool, input) in calls {
         assert!(
             matches!(
-                tool.execute(&ctx, input),
+                registry().execute(tool, &ctx, input),
                 Err(OrbitError::CapabilityDenied(_))
             ),
             "{}",
-            tool.schema().name
+            tool
         );
     }
     assert_eq!(
@@ -99,16 +101,27 @@ fn trusted_child_admission_preserves_internal_pipeline_invocation() {
         }),
         ..Default::default()
     };
-    super::super::pipeline::invoke::OrbitPipelineInvokeTool
-        .execute(&ctx, json!({"job_name":"child","input":{}}))
+    registry()
+        .execute(
+            "orbit.pipeline.invoke",
+            &ctx,
+            json!({"job_name":"child","input":{}}),
+        )
         .unwrap();
     assert_eq!(host.0.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        super::super::pipeline::invoke::OrbitPipelineInvokeTool.execute(
+        registry().execute(
+            "orbit.pipeline.invoke",
             &ctx,
             json!({"workspace":"ws_fixture","job_name":"child","default_input":true})
         ),
         Err(OrbitError::CapabilityDenied(_))
     ));
     assert_eq!(host.0.load(Ordering::SeqCst), 1);
+}
+
+fn registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    registry
 }
