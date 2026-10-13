@@ -243,8 +243,8 @@ fn query_systemd_service_health(
 }
 
 /// Apply the service health rules shared by status and activation verification.
-/// An active timer with no next elapse is schedulable only while its loaded
-/// oneshot is healthy and in flight.
+/// Service health can grant schedulability while a loaded timer waits for its
+/// in-flight oneshot to finish; it cannot revoke a finite next elapse.
 pub(super) fn systemd_schedulability_with_health(
     runner: &dyn ClockCommandRunner,
     details: Option<&SystemdClockDetails>,
@@ -265,13 +265,10 @@ pub(super) fn systemd_schedulability_with_health(
                 // finish before assigning the timer's next elapse.
                 schedulable = true;
             }
-            if service.issue.is_some() {
-                schedulable = false;
-            }
             (schedulable, service.issue)
         }
         Err(error) => (
-            false,
+            schedulable,
             Some(format!(
                 "systemd tick health could not be verified: {error}"
             )),

@@ -250,9 +250,20 @@ fn systemd_enable_accepts_healthy_in_flight_and_finite_timers() {
     let home = tempfile::tempdir().unwrap();
     let service = "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n";
 
-    for next_elapse in ["infinity", "1000000"] {
+    let cases = [
+        ("healthy in-flight service", "infinity", Some(service)),
+        ("healthy finite timer", "1000000", Some(service)),
+        (
+            "finite timer with failed service",
+            "1000000",
+            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
+        ),
+        ("finite timer with unreadable service", "1000000", None),
+    ];
+
+    for (case, next_elapse, observed_service) in cases {
         let runner = MockRunner::with_outputs(
-            systemd_activation_outputs(next_elapse, Some(service)),
+            systemd_activation_outputs(next_elapse, observed_service),
             vec![Ok(true), Ok(true), Ok(true), Ok(true)],
         );
         let status = set_clock_enabled_with(
@@ -262,12 +273,18 @@ fn systemd_enable_accepts_healthy_in_flight_and_finite_timers() {
             &runner,
             home.path(),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{case}: {error}"));
 
-        assert!(status.enabled);
-        assert!(status.schedulable, "next elapse {next_elapse}");
-        assert!(status.health_issue.is_none(), "next elapse {next_elapse}");
-        assert_eq!(runner.commands().len(), 6, "no retry or extra probe");
+        assert!(status.enabled, "{case}");
+        assert!(status.schedulable, "{case}");
+        if observed_service == Some(service) {
+            assert!(status.health_issue.is_none(), "{case}");
+        }
+        assert_eq!(
+            runner.commands().len(),
+            6,
+            "{case}: no retry or extra probe"
+        );
     }
 }
 
