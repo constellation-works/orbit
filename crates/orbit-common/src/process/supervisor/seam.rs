@@ -3,7 +3,8 @@
 //!
 //! Supervision reads them on the thread that calls
 //! [`SupervisedChild::supervise`](super::SupervisedChild::supervise), so a
-//! seam never reaches concurrent supervisors on other threads.
+//! seam never reaches concurrent supervisors on other threads. Output fault
+//! injection below explicitly transfers one fault to the owning drain worker.
 
 use std::cell::RefCell;
 use std::io;
@@ -112,12 +113,13 @@ pub(super) fn wait_timeout(child: &mut Child, slice: Duration) -> io::Result<Opt
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SupervisionFailure {
     PreparePipes,
+    PipeSetup,
     PipeRead,
     Wait,
 }
 
 #[cfg(all(test, unix))]
-type FailureInjection = (SupervisionFailure, Box<dyn FnOnce(u32)>);
+type FailureInjection = (SupervisionFailure, Box<dyn FnOnce(u32) + Send>);
 
 #[cfg(all(test, unix))]
 thread_local! {
@@ -129,7 +131,7 @@ thread_local! {
 #[cfg(all(test, unix))]
 pub(crate) fn with_supervision_failure<T>(
     point: SupervisionFailure,
-    on_failure: impl FnOnce(u32) + 'static,
+    on_failure: impl FnOnce(u32) + Send + 'static,
     run: impl FnOnce() -> T,
 ) -> T {
     struct Restore(Option<FailureInjection>);
@@ -145,6 +147,48 @@ pub(crate) fn with_supervision_failure<T>(
         "did not reach {point:?}"
     );
     result
+}
+
+/// A fault transferred from the calling thread to exactly one output worker.
+#[cfg(all(test, unix))]
+pub(super) struct OutputFailure {
+    point: SupervisionFailure,
+    pid: u32,
+    on_failure: Option<Box<dyn FnOnce(u32) + Send>>,
+}
+
+#[cfg(all(test, unix))]
+impl OutputFailure {
+    pub(super) fn take(pid: u32) -> Option<Self> {
+        FAILURE.with(|failure| {
+            let mut failure = failure.borrow_mut();
+            if !failure.as_ref().is_some_and(|(point, _)| {
+                matches!(
+                    point,
+                    SupervisionFailure::PipeSetup | SupervisionFailure::PipeRead
+                )
+            }) {
+                return None;
+            }
+            failure.take().map(|(point, on_failure)| Self {
+                point,
+                pid,
+                on_failure: Some(on_failure),
+            })
+        })
+    }
+
+    pub(super) fn inject(&mut self, point: SupervisionFailure) -> io::Result<()> {
+        if self.point == point
+            && let Some(on_failure) = self.on_failure.take()
+        {
+            on_failure(self.pid);
+            return Err(io::Error::other(format!(
+                "injected output worker failure: {point:?}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(all(test, unix))]

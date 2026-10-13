@@ -13,8 +13,8 @@
 //! The [`Outcome`] carries typed stop metadata, so callers never classify a
 //! run by parsing its output.
 //!
-//! Every setup or wait failure kills the child's process group and reaps the
-//! child before the error returns, and every pipe worker finishes before
+//! Every setup, output capture or wait failure kills the child's process group
+//! and reaps the child before the error returns. Every pipe worker finishes before
 //! [`SupervisedChild::supervise`] returns: a pipe held open by a process
 //! outside the group delays the return by at most the drain budget. A host
 //! that cannot create the workers' wakeup socket pair (`EMFILE`) does not fail
