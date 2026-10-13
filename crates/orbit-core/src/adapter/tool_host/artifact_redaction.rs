@@ -2,8 +2,10 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
+use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
     redact_sensitive_env_text,
@@ -112,6 +114,7 @@ pub(super) fn sanitize_tool_input(
                 }
                 ParamType::String
                 | ParamType::Integer
+                | ParamType::UnsignedInteger
                 | ParamType::Boolean
                 | ParamType::Switch
                 | ParamType::Enum(_) => {
@@ -312,6 +315,27 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: &[],
         },
+        // Claim-lifecycle payloads are compared against durable replay records;
+        // all parameters are structural and must stay byte-for-byte intact.
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
         OrbitBuiltinAction::Friction(verb) => ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
@@ -340,15 +364,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         // Desktop writes redact at their transactional persistence boundary.
         | OrbitBuiltinAction::DesktopTaskWrite
         | OrbitBuiltinAction::CommandExec
-        | OrbitBuiltinAction::DrainClaims
-        | OrbitBuiltinAction::DrainProbe
-        | OrbitBuiltinAction::DrainReceiptLookup
-        // [ORB-13625] Claim-lifecycle payloads are the owner's durable
-        // settlement record: the claim journal compares a replay against the
-        // exact input, so rewriting any of it would make a retry mismatch.
-        | OrbitBuiltinAction::DrainClaimBind
-        | OrbitBuiltinAction::DrainClaimSettle
-        | OrbitBuiltinAction::TaskPull
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search
@@ -365,9 +380,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::WorkflowRunResume
         | OrbitBuiltinAction::WorkflowRunShow
         | OrbitBuiltinAction::WorkflowShip
-        | OrbitBuiltinAction::WorkspaceClaimAcquire
-        | OrbitBuiltinAction::WorkspaceClaimRelease
-        | OrbitBuiltinAction::WorkspaceClaimShow
         // [ORB-11354] The invocation prompt is free text and *is* persisted on
         // the run record, but redacting it would change the instruction the
         // agent receives — an operator debugging an auth failure needs to name
@@ -391,6 +403,19 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
                 .nested_objects
                 .is_empty()
         }
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => false,
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => false,
+        },
         action => matches!(
             action,
             OrbitBuiltinAction::TaskAdd
@@ -739,6 +764,23 @@ fn artifact_target<'a>(
                 "unsupported redaction audit action: {action:?}"
             ))),
         },
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
         _ => Err(OrbitError::Execution(format!(
             "unsupported redaction audit action: {action:?}"
         ))),
@@ -760,6 +802,19 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
         OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => verb.tool_name(),
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => verb.tool_name(),
+        },
         _ => "orbit.unknown",
     }
 }

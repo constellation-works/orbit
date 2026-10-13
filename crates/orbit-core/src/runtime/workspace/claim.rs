@@ -57,8 +57,8 @@ pub(crate) fn acquire(
     agent: Option<String>,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    let ttl_seconds = optional_u32_alias(&input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?
-        .unwrap_or(DEFAULT_CLAIM_TTL_SECONDS);
+    let ttl_seconds =
+        optional_u32_alias(&input, &["ttl_seconds"])?.unwrap_or(DEFAULT_CLAIM_TTL_SECONDS);
     if !(1..=MAX_CLAIM_TTL_SECONDS).contains(&ttl_seconds) {
         return Err(OrbitError::InvalidInput(format!(
             "`ttl_seconds` must be between 1 and {MAX_CLAIM_TTL_SECONDS} seconds"

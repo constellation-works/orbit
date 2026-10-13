@@ -57,6 +57,7 @@ pub const FRICTION: NounSpec<FrictionVerb> = NounSpec {
     cli_about: "Report, list, and triage friction records",
     audit_target_type: "friction",
     audit_target_param: "id",
+    tool_only_registration: crate::governance::operation::ToolOnlyRegistration::Inactive,
     cli_groups: &[],
     operations: FRICTION_OPERATIONS,
 };

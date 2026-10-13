@@ -1,7 +1,9 @@
 //! Generic coordination writes translated into owner claim transactions.
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimWorkerUpdate,
@@ -19,33 +21,49 @@ pub(crate) fn execute(
     input: &Value,
     model: Option<&str>,
 ) -> Result<Option<Value>, OrbitError> {
-    if !matches!(
-        action,
-        OrbitBuiltinAction::TaskUpdate
-            | OrbitBuiltinAction::TaskShow
-            | OrbitBuiltinAction::TaskList
-            | OrbitBuiltinAction::TaskEligible
-            | OrbitBuiltinAction::TaskArtifactGet
-            | OrbitBuiltinAction::TaskLint
-            | OrbitBuiltinAction::TaskLocks
-            | OrbitBuiltinAction::TaskAdd
-            | OrbitBuiltinAction::TaskDelete
-            | OrbitBuiltinAction::TaskReject
-            | OrbitBuiltinAction::TaskReconcileReview
-            | OrbitBuiltinAction::TaskReviewReset
-            | OrbitBuiltinAction::TaskLocksRelease
-            | OrbitBuiltinAction::TaskLocksReserve
-            | OrbitBuiltinAction::AutoTask(
-                AutoTaskVerb::Add
-                    | AutoTaskVerb::Update
-                    | AutoTaskVerb::Toggle
-                    | AutoTaskVerb::Delete
-                    | AutoTaskVerb::Restore
-                    | AutoTaskVerb::Recover
-                    | AutoTaskVerb::Reset
-            )
-            | OrbitBuiltinAction::Friction(_)
-    ) {
+    let worker_routed = match action {
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => false,
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => false,
+        },
+        action => matches!(
+            action,
+            OrbitBuiltinAction::TaskUpdate
+                | OrbitBuiltinAction::TaskShow
+                | OrbitBuiltinAction::TaskList
+                | OrbitBuiltinAction::TaskEligible
+                | OrbitBuiltinAction::TaskArtifactGet
+                | OrbitBuiltinAction::TaskLint
+                | OrbitBuiltinAction::TaskLocks
+                | OrbitBuiltinAction::TaskAdd
+                | OrbitBuiltinAction::TaskDelete
+                | OrbitBuiltinAction::TaskReject
+                | OrbitBuiltinAction::TaskReconcileReview
+                | OrbitBuiltinAction::TaskReviewReset
+                | OrbitBuiltinAction::TaskLocksRelease
+                | OrbitBuiltinAction::TaskLocksReserve
+                | OrbitBuiltinAction::AutoTask(
+                    AutoTaskVerb::Add
+                        | AutoTaskVerb::Update
+                        | AutoTaskVerb::Toggle
+                        | AutoTaskVerb::Delete
+                        | AutoTaskVerb::Restore
+                        | AutoTaskVerb::Recover
+                        | AutoTaskVerb::Reset
+                )
+                | OrbitBuiltinAction::Friction(_)
+        ),
+    };
+    if !worker_routed {
         return Ok(None);
     }
     crate::runtime::check_worker_host_input(input, session.worker_host_call)?;
@@ -311,6 +329,19 @@ pub(crate) fn execute(
                 "claimed worker operation requires its lifecycle boundary".into(),
             ));
         }
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => return Ok(None),
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => return Ok(None),
+        },
         _ => return Ok(None),
     };
     apply(runtime, session, mutation, friction_tag_substitutions).map(Some)

@@ -45,6 +45,23 @@ struct RuntimeOrbitToolHost {
 }
 
 impl OrbitToolHost for RuntimeOrbitToolHost {
+    fn prepare_operation_input(
+        &self,
+        action: OrbitBuiltinAction,
+        input: &mut Value,
+    ) -> Result<(), OrbitError> {
+        use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
+        match action {
+            OrbitBuiltinAction::Drain(verb) => super::drain_tools::prepare_input(verb, input),
+            OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+                WorkspaceClaimVerb::Acquire
+                | WorkspaceClaimVerb::Release
+                | WorkspaceClaimVerb::Show => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
+
     fn execute(
         &self,
         action: OrbitBuiltinAction,

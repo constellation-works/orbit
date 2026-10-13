@@ -93,19 +93,8 @@ pub(super) fn execute(
             super::desktop::task::write(runtime, session_context, input, agent, model)
         }
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
-        OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
-        OrbitBuiltinAction::DrainClaimBind => {
-            super::drain_tools::claim_bind(runtime, session_context, input)
-        }
-        OrbitBuiltinAction::DrainClaimSettle => {
-            super::drain_tools::claim_settle(runtime, session_context, input)
-        }
-        OrbitBuiltinAction::TaskPull => super::drain_tools::pull(runtime, session_context, input),
-        OrbitBuiltinAction::DrainProbe => {
-            super::drain_tools::probe(runtime, session_context, input)
-        }
-        OrbitBuiltinAction::DrainReceiptLookup => {
-            super::drain_tools::receipt_lookup(runtime, session_context, input)
+        OrbitBuiltinAction::Drain(verb) => {
+            super::drain_tools::dispatch(runtime, session_context, verb, input)
         }
         // ADR-0209 bearing 1 [ORB-10358]: the friction handler table lives with
         // the other friction handlers, keyed by the registry's verb enum.
@@ -204,13 +193,9 @@ pub(super) fn execute(
         OrbitBuiltinAction::WorkflowRunResume => {
             super::workflow_tools::resume(runtime, input, agent, model)
         }
-        OrbitBuiltinAction::WorkspaceClaimAcquire => {
-            crate::runtime::workspace::claim::acquire(runtime, input, agent, model)
+        OrbitBuiltinAction::WorkspaceClaim(verb) => {
+            super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
         }
-        OrbitBuiltinAction::WorkspaceClaimRelease => {
-            crate::runtime::workspace::claim::release(runtime, input, agent, model)
-        }
-        OrbitBuiltinAction::WorkspaceClaimShow => crate::runtime::workspace::claim::show(runtime),
     }?;
     super::artifact_redaction::finish_tool_response(
         runtime,
