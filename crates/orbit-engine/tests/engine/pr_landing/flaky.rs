@@ -44,17 +44,14 @@ raise SystemExit(100 if failed else 0)
 fn fixture(sandbox: &Path, mode: &str, count: usize) -> (Fixture, PathBuf) {
     let fx = Fixture::new(sandbox);
     let runs = fx._root.path().join("gate-runs.jsonl");
-    fx.commit_on_base(
-        "test_gate.py",
-        &GATE
-            .replace("__RUNS__", &serde_json::to_string(&runs).unwrap())
-            .replace("__COUNT__", &count.to_string())
-            .replace(
-                "__BASE_SKIP__",
-                if mode == "base_skip" { "True" } else { "False" },
-            ),
-    );
-    fx.commit_on_base("mode", "base\n");
+    let gate = GATE
+        .replace("__RUNS__", &serde_json::to_string(&runs).unwrap())
+        .replace("__COUNT__", &count.to_string())
+        .replace(
+            "__BASE_SKIP__",
+            if mode == "base_skip" { "True" } else { "False" },
+        );
+    fx.commit_files_on_base(&[("test_gate.py", &gate), ("mode", "base\n")]);
     git(&fx.repo, &["rebase", BASE]);
     git(&fx.repo, &["push", "--force", "origin", BRANCH]);
     let candidate = fx.commit("mode", mode);

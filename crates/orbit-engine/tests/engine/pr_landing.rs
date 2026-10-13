@@ -6228,8 +6228,10 @@ impl Fixture {
             .map(|test| format!("test {test} ... FAILED\n"))
             .unwrap_or_default();
         base_output.push_str(&nextest_failures(base_tests));
-        fixture.commit_on_base("failing.txt", &base_output);
-        fixture.commit_on_base("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n");
+        fixture.commit_files_on_base(&[
+            ("failing.txt", &base_output),
+            ("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n"),
+        ]);
         git(&fixture.repo, &["rebase", BASE]);
         git(&fixture.repo, &["push", "--force", "origin", BRANCH]);
         let candidate = match candidate_tests {
@@ -6245,14 +6247,29 @@ impl Fixture {
 
     /// Commit `file` on the base and push it, leaving the candidate checked out.
     fn commit_on_base(&self, file: &str, contents: &str) {
+        self.commit_files_on_base(&[(file, contents)]);
+    }
+
+    /// Seed one final base tree when the fixture observes no intermediate write.
+    /// Separate base advances still use `commit_on_base` at each observation.
+    fn commit_files_on_base(&self, files: &[(&str, &str)]) {
         git(&self.repo, &["checkout", BASE]);
-        let path = self.repo.join(file);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-        git(&self.repo, &["add", file]);
+        for (file, contents) in files {
+            let path = self.repo.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        let mut add = vec!["add", "--"];
+        add.extend(files.iter().map(|(file, _)| *file));
+        git(&self.repo, &add);
+        let names = files
+            .iter()
+            .map(|(file, _)| *file)
+            .collect::<Vec<_>>()
+            .join(", ");
         git(
             &self.repo,
-            &["commit", "-m", &format!("base writes {file}")],
+            &["commit", "-m", &format!("base writes {names}")],
         );
         git(&self.repo, &["push", "origin", BASE]);
         git(&self.repo, &["checkout", BRANCH]);
