@@ -1,9 +1,9 @@
 //! Missing-tool classification is combinatorial pure logic over shell,
 //! `make`, cargo and guardrail diagnostics; a wrong answer either repairs code
 //! that has no defect or hides a real failure behind "install a tool"
-//! [ORB-13987]. Capture keeps a head and a tail of each stream so a stdout
-//! longer than the cap cannot discard the stderr failure before that
-//! classification [ORB-14086].
+//! [ORB-13987]. Capture keeps each stream's head/tail, short stderr and
+//! bounded nextest causal blocks, preserving diagnostics and explicit
+//! omissions even across oversized UTF-8 output [ORB-14086] [ORB-16045].
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::super::required_command::{
-    RequiredCommandRun, VALIDATION_TIMEOUT_MS, missing_tool, run_required_command,
+    RequiredCommandRun, VALIDATION_TIMEOUT_MS, capture, missing_tool, run_required_command,
 };
 
 const DIAGNOSTIC: &str = "make: rg: No such file or directory";
@@ -154,6 +154,60 @@ fn oversized_stdout_keeps_the_stderr_tail_and_names_the_missing_tool() {
         "/bin/cat stdout.txt; /bin/cat stderr.txt >&2; exit 2",
     );
     assert_environment(&both, "both streams over the cap");
+    // Extend the existing identity with causal blocks in both streams. An
+    // oversized early failure cannot crowd out the next failure's scenario.
+    for count in [2, 140] {
+        let blocks = (0..count)
+            .map(|index| {
+                format!(
+                    "\x1b[31mFAIL\x1b[0m [   0.512s] orbit-core::runtime case_{index}\n\
+             --- STDOUT: case_{index} ---\nscenario middle-{index}\n\
+             --- STDERR: case_{index} ---\nnested assertion: cause-{index}\n{}\
+             final nested assertion: tail-{index}\n",
+                    if index == 0 {
+                        "é payload\n".repeat(20_000)
+                    } else {
+                        String::new()
+                    },
+                )
+            })
+            .collect::<String>();
+        let failures = format!("\n{blocks}PASS [   0.001s] orbit-core::runtime unrelated\n");
+        let padding = "é padding\n".repeat(20_000);
+        let stream = format!("HEAD\n{padding}{failures}{padding}TAIL");
+        let bounded = capture(&stream, &stream);
+        assert!(
+            bounded.len() <= 256 * 1024,
+            "bounded regions: {}",
+            bounded.len()
+        );
+        assert!(bounded.contains("truncated") && bounded.contains("omitted"));
+        for index in [0, 1] {
+            assert_eq!(
+                bounded
+                    .matches(&format!("scenario middle-{index}\n"))
+                    .count(),
+                2
+            );
+            assert_eq!(
+                bounded
+                    .matches(&format!("nested assertion: cause-{index}\n"))
+                    .count(),
+                2
+            );
+            assert_eq!(
+                bounded
+                    .matches(&format!("final nested assertion: tail-{index}\n"))
+                    .count(),
+                2
+            );
+        }
+        assert!(bounded.starts_with("HEAD") && bounded.ends_with("TAIL"));
+        if count > 128 {
+            assert!(bounded.contains("selected 128 of 140 nextest failure blocks"));
+        }
+    }
+
     assert_stream_bounds(
         &both,
         "STDOUT_HEAD",
