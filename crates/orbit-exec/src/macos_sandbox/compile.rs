@@ -135,6 +135,10 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 
     out.push_str("(allow file-read*)\n");
     out.push_str("(allow process*)\n");
+    // setpriority(2) uses system-sched, outside process*. Only the calling
+    // process may change its scheduling; normal unprivileged OS checks still
+    // forbid lowering niceness (raising priority).
+    out.push_str("(allow system-sched (target self))\n");
     out.push_str("(allow signal)\n");
     out.push_str("(allow ipc-posix*)\n");
     out.push_str("(allow mach*)\n");

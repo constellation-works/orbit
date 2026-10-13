@@ -28,6 +28,144 @@ use wait_timeout::ChildExt;
 
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
+#[test]
+fn sandbox_exec_build_budget_self_test_passes_under_worker_profile() {
+    if !macos_sandbox_test_guard("sandbox_exec_build_budget_self_test_passes_under_worker_profile")
+    {
+        return;
+    }
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("checkout root");
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{}/**", checkout.display())],
+        modify: vec![format!("{}/**", root.path().display())],
+    };
+    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let env = [
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").expect("test PATH"),
+        ),
+        ("HOME".to_string(), root.path().display().to_string()),
+        ("TMPDIR".to_string(), root.path().display().to_string()),
+    ];
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        profile_text: &profile_text,
+        program: "/bin/bash",
+        args: &[checkout
+            .join("scripts/test-build-budget.sh")
+            .display()
+            .to_string()],
+        env: &env,
+        cwd: Some(&checkout),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+        inherited_fds: &[],
+    })
+    .expect("spawn build-budget self-test under worker profile");
+    // The script exercises bounded admission, signal and timeout cases; give
+    // the whole suite more time than an individual probe on a shared host.
+    wait_with_deadline(child, Duration::from_secs(180));
+}
+
+#[test]
+fn sandbox_exec_scheduling_changes_are_self_only_and_unprivileged() {
+    const PROBE_ENV: &str = "ORBIT_TEST_SCHEDULING_PARENT";
+    const TEST_NAME: &str =
+        "macos_sandbox::sandbox_exec_scheduling_changes_are_self_only_and_unprivileged";
+    if let Ok(parent) = std::env::var(PROBE_ENV) {
+        let parent: libc::id_t = parent.parse().expect("parent PID");
+        // Scheduling state changes stay in this re-executed, confined child.
+        assert_ne!(unsafe { libc::geteuid() }, 0, "probe must be unprivileged");
+        let start = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        assert!(
+            (0..=18).contains(&start),
+            "probe needs room to raise niceness twice, got {start}"
+        );
+        let raised = (start + 1).max(10);
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, raised) },
+            0,
+            "worker must allow raising its own niceness: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) }, raised);
+        // An explicit self PID must have the same grant as who=0.
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, std::process::id(), raised + 1) },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) },
+            raised + 1
+        );
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, start - 1) },
+            -1,
+            "worker must not elevate its priority below its starting niceness"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EACCES)
+        );
+        assert_eq!(
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) },
+            raised + 1
+        );
+        let parent_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, parent) };
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, parent, parent_nice + 1) },
+            -1,
+            "self-only scheduling must deny changing another same-user process"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        );
+        assert_eq!(
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, parent) },
+            parent_nice
+        );
+        return;
+    }
+    if !macos_sandbox_test_guard(TEST_NAME) {
+        return;
+    }
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{}/**", root.path().display())],
+        modify: vec![format!("{}/**", root.path().display())],
+    };
+    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let program = std::env::current_exe().expect("test binary");
+    let env = [(PROBE_ENV.to_string(), std::process::id().to_string())];
+    let start = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        profile_text: &profile_text,
+        program: program.to_str().expect("test binary path"),
+        args: &[
+            "--exact".to_string(),
+            TEST_NAME.to_string(),
+            "--nocapture".to_string(),
+        ],
+        env: &env,
+        cwd: Some(root.path()),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+        inherited_fds: &[],
+    })
+    .expect("spawn scheduling probe under worker profile");
+    wait_bounded(child);
+    assert_eq!(unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) }, start);
+}
+
 fn fixture_root_outside_profile_write_grants() -> tempfile::TempDir {
     let home = std::env::var_os("HOME").map(PathBuf::from).expect(
         "macOS sandbox test precondition: HOME must be set for a fixture outside granted trees",
@@ -470,14 +608,18 @@ printf 'inline-profile-enforced\n'
 /// Wait for the sandboxed child within [`CHILD_DEADLINE`], then collect its
 /// output. The guard kills and reaps it on any early exit.
 fn wait_bounded(child: Child) -> (String, String) {
+    wait_with_deadline(child, CHILD_DEADLINE)
+}
+
+fn wait_with_deadline(child: Child, deadline: Duration) -> (String, String) {
     use std::io::Read;
 
     let mut guard = ChildGuard(child);
     let status = guard
         .0
-        .wait_timeout(CHILD_DEADLINE)
+        .wait_timeout(deadline)
         .expect("wait for sandboxed child")
-        .unwrap_or_else(|| panic!("sandboxed child ran past {CHILD_DEADLINE:?}"));
+        .unwrap_or_else(|| panic!("sandboxed child ran past {deadline:?}"));
     let mut stdout = String::new();
     let mut stderr = String::new();
     guard
