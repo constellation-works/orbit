@@ -682,7 +682,9 @@ fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionP
         .stores()
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
-            state.pull_drain.drain_last_pass = pass.take();
+            if let Some(pass) = pass.take() {
+                state.pull_drain.record_admission_pass(pass);
+            }
             Ok(())
         })
     {

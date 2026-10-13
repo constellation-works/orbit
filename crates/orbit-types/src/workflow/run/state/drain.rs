@@ -67,6 +67,11 @@ pub struct PullDrainState {
     /// drain never started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_last_pass: Option<DrainAdmissionPass>,
+    /// The most recent local pass that built a forecast. Idle passes keep
+    /// this observation, including its timestamp, decisions and peaks.
+    /// Survives terminalization; absent before any forecast was built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_last_forecast: Option<DrainAdmissionForecast>,
     /// What this `--approve-proposed` drain approved and held. Survives
     /// terminalization like `drain_last_pass`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,6 +87,26 @@ pub struct PullDrainState {
     /// hold and checkpoints, but clears this run-local acknowledgement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge_hold_expired_at: Option<DateTime<Utc>>,
+}
+
+impl PullDrainState {
+    /// Replace the current pass while retaining the latest built forecast.
+    pub fn record_admission_pass(&mut self, pass: DrainAdmissionPass) {
+        let built = pass
+            .admission_forecast
+            .as_ref()
+            .filter(|forecast| forecast.forecast_at.is_some());
+        // Seed history from older checkpoints before an idle pass replaces it.
+        let previous = self
+            .drain_last_pass
+            .as_ref()
+            .and_then(|pass| pass.admission_forecast.as_ref())
+            .filter(|forecast| forecast.forecast_at.is_some());
+        if let Some(forecast) = built.or(previous) {
+            self.drain_last_forecast = Some(forecast.clone());
+        }
+        self.drain_last_pass = Some(pass);
+    }
 }
 
 /// A live operator request to stop a bounded drain's new admissions [ORB-11283].

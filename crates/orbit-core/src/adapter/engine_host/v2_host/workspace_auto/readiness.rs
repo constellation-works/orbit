@@ -575,7 +575,7 @@ pub fn explain_workspace_auto_readiness(
         .as_ref()
         .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
         .and_then(|pass| pass.admission_forecast.as_ref());
-    let forecast_view = admission_forecast.map(|forecast| {
+    let project_forecast = |forecast: &orbit_types::workflow::DrainAdmissionForecast| {
         let settings = runtime.context.settings().auto_concurrency();
         let mut view = json!(forecast);
         view["headroom"] = json!({
@@ -599,6 +599,14 @@ pub fn explain_workspace_auto_readiness(
             }
         }
         view["task_titles"] = json!(titles);
+        view
+    };
+    let forecast_view = admission_forecast.map(&project_forecast);
+    let last_forecast_view = status_state
+        .as_ref()
+        .and_then(|state| state.pull_drain.drain_last_forecast.as_ref())
+        .map(project_forecast);
+    if let Some(forecast) = admission_forecast {
         for task in &mut tasks {
             let Some(id) = task["task_id"].as_str() else {
                 continue;
@@ -636,8 +644,7 @@ pub fn explain_workspace_auto_readiness(
                 task["reason"] = json!("gap_fit");
             }
         }
-        view
-    });
+    }
 
     // `total` describes the current view: the full backlog for the default
     // bounded listing, or the number of explicitly selected tasks.
@@ -755,6 +762,9 @@ pub fn explain_workspace_auto_readiness(
     // No block means the older/off response shape remains unchanged.
     if let Some(forecast) = forecast_view {
         payload["capacity"]["admission_forecast"] = forecast;
+    }
+    if let Some(forecast) = last_forecast_view {
+        payload["capacity"]["last_admission_forecast"] = forecast;
     }
     Ok(payload)
 }
