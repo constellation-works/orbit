@@ -702,6 +702,13 @@ impl TaskCommitBoundary {
             friction: handoff_effects.friction,
             replacements: handoff_effects.replacements,
             release_reservation: release.then_some(claim.reservation_id),
+            // `claim_authority` matched a worker's machine and run to this
+            // binding; an operator's mutation carries no worker evidence.
+            claimed_submission: state
+                .bound_run
+                .clone()
+                .filter(|_| !auth.operator)
+                .map(|run| (claim.claim_id.clone(), run)),
         };
         effects
             .replacements

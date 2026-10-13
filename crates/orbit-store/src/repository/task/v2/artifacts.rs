@@ -264,6 +264,7 @@ impl TaskV2Store {
                 action_id: id.into(),
                 evidence_digest: sha256_hex(&artifact.content),
                 run_id: run_id.clone(),
+                claim: None,
             };
             artifacts.push(orbit_types::task::TaskArtifact {
                 path: EVIDENCE_AUTHORITY_ARTIFACT.into(),

@@ -357,6 +357,9 @@ fn agent_summary_missing(task: &Task) -> bool {
     summary.is_empty() || summary.starts_with(DERIVED_EXECUTION_SUMMARY_PREFIX)
 }
 
+/// Who submitted the coverage bytes with `artifact_digest`, as the
+/// Store-authored witness proves, or `None` when the witness does not bind
+/// those bytes to this task's assigned run.
 fn evidence_owner(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -376,7 +379,14 @@ fn evidence_owner(
     {
         return Ok(None);
     }
+    if let Some(claimed) = &submission.claim {
+        return claimed_owner(runtime, task, &submission.run_id, claimed);
+    }
 
+    // A follower's run is not in this store; only a claimed witness proves it.
+    if !runtime.task_run_is_local(task) {
+        return Ok(None);
+    }
     let run = runtime.show_job_run(&submission.run_id)?;
     // Exact, untrimmed membership. A padded stored id must not match the
     // canonical task: that would flip `assigned` and the `run:<id>` owner.
@@ -387,4 +397,40 @@ fn evidence_owner(
     });
 
     Ok(assigned.then(|| format!("run:{}", submission.run_id)))
+}
+
+/// [ORB-15962] A claimed worker's coverage, verified against the owner's
+/// durable claim journal rather than the follower's run record or a live
+/// claim: a landed claim is legitimately settled, and the mutation receipts
+/// pruned after settlement are not consulted. The witness must name a claim
+/// admitted for this task to the follower machine the task's run is linked
+/// to, bound to exactly that run.
+fn claimed_owner(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    run_id: &str,
+    claimed: &ClaimedSubmission,
+) -> Result<Option<String>, AutomationError> {
+    if task
+        .job_run_machine
+        .as_ref()
+        .map(|location| location.machine_id.as_str())
+        != Some(claimed.machine_id.as_str())
+    {
+        return Ok(None);
+    }
+    let Some(state) = runtime
+        .stores()
+        .tasks()
+        .execution_claim_state(&claimed.claim_id)?
+    else {
+        return Ok(None);
+    };
+    let bound = state
+        .bound_run
+        .as_ref()
+        .is_some_and(|run| run.machine_id == claimed.machine_id && run.run_id == run_id);
+    let admitted =
+        state.claim.task_id == task.id && state.claim.executed_on.machine_id == claimed.machine_id;
+    Ok((bound && admitted).then(|| format!("run:{}/{run_id}", claimed.machine_id)))
 }

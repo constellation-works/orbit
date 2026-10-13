@@ -1046,6 +1046,12 @@ binding apart from tool arguments, and bound sessions and their proxies lose ope
 - Evidence, document and friction writes share one SQLite commit with the claim comparison and
   mutation receipt. Omitted `during_task` means the bound task; conflicting arguments refuse;
   canonical digests (excluding friction timestamps) deduplicate retries.
+- Delivery coverage (`automation-coverage.json`) a claimed worker puts is witnessed by the owner
+  in that same commit: `automation-evidence-authority.json` binds the bytes' digest to the task,
+  claim, follower machine and bound run. Workers cannot write it. Settlement checks it against
+  the retained claim and lifecycle rows, never the follower's run, a live claim or a receipt, so
+  coverage stays verifiable after landing and receipt pruning
+  ([operations](../automation-triggers/5_operations.md#evidence-submission)).
 
 Payload host labels are diagnostic; session capability and attempt context are revalidated on
 retries. An uncertain request stays pending until its receipt is reconciled and never licenses a

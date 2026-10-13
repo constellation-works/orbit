@@ -816,6 +816,279 @@ fn a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner() {
     }
 }
 
+/// The frozen batch an owner's after-landing review consumer admits for
+/// `task`: one delivery on the `reviewed` branch, published beside `main`
+/// so the clean base the leaf reviews does not move.
+fn reviewed_batch(fixture: &CleanLeaf) -> orbit_types::workflow::automation::BatchAttempt {
+    use orbit_types::workflow::automation::{
+        BatchAttempt, BatchState, CoverageBatch, CoverageClass, Delivery,
+    };
+    let repo = &fixture.pair.owner_repo;
+    git(repo, &["checkout", "-q", "-b", "reviewed"]);
+    std::fs::write(repo.join("src/reviewed.rs"), "fn reviewed() {}\n").unwrap();
+    git(repo, &["add", "src/reviewed.rs"]);
+    git(repo, &["commit", "-q", "-m", "Squash-merge #42"]);
+    git(repo, &["push", "-q", "origin", "HEAD:refs/heads/reviewed"]);
+    git(repo, &["checkout", "-q", "main"]);
+    git(repo, &["fetch", "-q", "origin"]);
+    let revision = |spec: &str| {
+        let commit = git(repo, &["rev-parse", spec]).trim().to_string();
+        let tree = git(repo, &["rev-parse", &format!("{commit}^{{tree}}")]);
+        SourceRevision {
+            commit,
+            tree: tree.trim().to_string(),
+        }
+    };
+    let (before, after) = (revision(&fixture.base), revision("reviewed"));
+    let owner = &fixture.pair.wire.owner;
+    let consumer = format!(
+        "{OWNER}/{}/auto-task/landed-review",
+        owner.workspace_id().unwrap()
+    );
+    BatchAttempt {
+        batch: CoverageBatch {
+            schema_version: 1,
+            id: "batch-reviewed".into(),
+            consumer,
+            epoch: "epoch".into(),
+            repository: "owner/repository".into(),
+            branch: "reviewed".into(),
+            coverage: CoverageClass::LandedCodeReviewV1,
+            from_exclusive: before.clone(),
+            through_inclusive: after.clone(),
+            commits: vec![after.commit.clone()],
+            deliveries: vec![Delivery {
+                key: "pr:owner/repository:reviewed:42".into(),
+                repository: "owner/repository".into(),
+                branch: "reviewed".into(),
+                before,
+                commits: vec![after.commit.clone()],
+                after,
+                task_ids: vec![],
+                unattributed: None,
+                evidence_reference: "pull:42".into(),
+                evidence_digest: "digest".into(),
+                landed_at: Utc::now(),
+            }],
+            exclusions: vec![],
+            created_at: Utc::now(),
+            max_attempts: 1,
+            retry_until: Utc::now() + chrono::Duration::hours(4),
+        },
+        input_digest: "input-digest".into(),
+        attempt: 1,
+        action_key: "automation:batch-reviewed:1".into(),
+        action_id: Some(fixture.task.clone()),
+        state: BatchState::Admitted,
+        reason: None,
+        retry_after: None,
+        reissue: None,
+    }
+}
+
+/// Record `attempt` as its consumer's admitted action on the owner.
+fn admit(owner: &OrbitRuntime, attempt: &orbit_types::workflow::automation::BatchAttempt) {
+    use orbit_types::workflow::automation::AutomationState;
+    let from = attempt.batch.from_exclusive.clone();
+    let baseline = AutomationState {
+        members: None,
+        consumer: attempt.batch.consumer.clone(),
+        epoch: attempt.batch.epoch.clone(),
+        trigger: None,
+        repository: attempt.batch.repository.clone(),
+        branch: attempt.batch.branch.clone(),
+        generation: 0,
+        baseline: from.clone(),
+        observed: from.clone(),
+        covered: from,
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        lookup_retries: Default::default(),
+        active: None,
+        stall: None,
+    };
+    let store = owner.automation_store().unwrap();
+    assert!(store.automation_initialize(&baseline).unwrap());
+    let mut admitted = baseline.clone();
+    admitted.generation = 1;
+    admitted.observed = attempt.batch.through_inclusive.clone();
+    admitted.pending_commits = attempt.batch.commits.clone();
+    admitted.pending = attempt.batch.deliveries.clone();
+    admitted.active = Some(attempt.clone());
+    assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
+}
+
+/// The one file named `name` under `root`.
+fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(root).ok()? {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().is_some_and(|file| file == name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// [ORB-15962] A claimed review's coverage, put through the worker's own
+/// artifact route, is stamped by the owner with the claim, follower and bound
+/// run it authenticated. After the no-diff landing settles that claim and its
+/// mutation receipts are gone, the owner still accepts exactly those bytes
+/// for the frozen batch naming the task, though its store has no record of
+/// the follower's run. A witness naming any other claim, machine or run, a
+/// late put from the landed claim, and bytes the witness does not cover are
+/// all refused. Before, the claimed route stored no witness, so the batch
+/// stayed owed as `unauthorized_submitter`.
+#[test]
+fn claimed_coverage_is_authenticated_by_the_owners_claim_journal_after_landing() {
+    use orbit_types::workflow::automation::{
+        COVERAGE_ARTIFACT, ClaimedSubmission, EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission,
+        ExaminationCheck, evidence_template,
+    };
+
+    if !isolated(
+        module_path!(),
+        "claimed_coverage_is_authenticated_by_the_owners_claim_journal_after_landing",
+    ) {
+        return;
+    }
+    let fixture = CleanLeaf::review_only("done");
+    let owner = &fixture.pair.wire.owner;
+    let attempt = reviewed_batch(&fixture);
+    let mut coverage = evidence_template(&attempt);
+    coverage.examination_complete = true;
+    coverage.checks = vec![ExaminationCheck {
+        subject: "src/reviewed.rs".into(),
+        method: "read the delivery diff".into(),
+        observation: "adds one empty function".into(),
+    }];
+    coverage.delivery_examinations[0].examined_paths = vec!["src/reviewed.rs".into()];
+    coverage.delivery_examinations[0].rationale =
+        "The delivery adds an empty function that nothing calls yet.".into();
+    fixture.attach(COVERAGE_ARTIFACT, serde_json::to_value(&coverage).unwrap());
+    let refused = fixture
+        .bound
+        .attach_claim_validation_log(EVIDENCE_AUTHORITY_ARTIFACT, b"{}".to_vec())
+        .expect_err("a worker cannot write the owner's witness");
+    assert!(refused.to_string().contains("reserved"), "{refused}");
+
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    fixture.settle(&handoff).expect("the owner accepts it");
+    let accepted = owner.accepted_task_handoff(&handoff.claim_id).unwrap();
+    engine_action(
+        owner,
+        "handoff_land",
+        &json!({"handoff_id": accepted.handoff_id}),
+    )
+    .unwrap();
+    assert_eq!(fixture.pair.owner_status(&fixture.task), "done");
+    admit(owner, &attempt);
+
+    let bytes = owner
+        .get_task_artifact(&fixture.task, COVERAGE_ARTIFACT)
+        .unwrap()
+        .unwrap()
+        .content;
+    let witness_bytes = owner
+        .get_task_artifact(&fixture.task, EVIDENCE_AUTHORITY_ARTIFACT)
+        .unwrap()
+        .expect("the owner stamps the claimed submission")
+        .content;
+    let witness: EvidenceSubmission = serde_json::from_slice(&witness_bytes).unwrap();
+    assert_eq!(
+        witness,
+        EvidenceSubmission {
+            action_id: fixture.task.clone(),
+            evidence_digest: sha256_hex(&bytes),
+            run_id: fixture.leaf.clone(),
+            claim: Some(ClaimedSubmission {
+                claim_id: handoff.claim_id.clone(),
+                machine_id: FOLLOWER.into(),
+            }),
+        }
+    );
+
+    // Settlement prunes a landed claim's receipts after a week; the proof
+    // must not need them, nor the follower's run, which this store lacks.
+    let workspace = owner.workspace_id().unwrap();
+    let pruned = owner
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            Ok(tx
+                .connection()
+                .execute(
+                    "DELETE FROM task_coordination_rows WHERE workspace_id = ?1 AND kind = ?2",
+                    [workspace.as_str(), "distributed-claim-mutation-v1"],
+                )
+                .unwrap())
+        })
+        .unwrap();
+    assert!(pruned > 0, "the claim's mutation receipts existed");
+    assert!(owner.show_job_run(&fixture.leaf).is_err());
+    let accepted_coverage = || RuntimeHost::accepted_automation_coverage(owner, &fixture.task);
+    assert_eq!(accepted_coverage().unwrap(), Some(coverage.clone()));
+
+    let witness_path = find_file(&owner.paths().global_dir, EVIDENCE_AUTHORITY_ARTIFACT)
+        .or_else(|| find_file(&owner.paths().orbit_dir, EVIDENCE_AUTHORITY_ARTIFACT))
+        .expect("the witness file");
+    let foreign = |edit: fn(&mut EvidenceSubmission)| {
+        let mut forged = witness.clone();
+        edit(&mut forged);
+        forged
+    };
+    for (case, forged) in [
+        (
+            "foreign claim",
+            foreign(|w| w.claim.as_mut().unwrap().claim_id = "claim-elsewhere".into()),
+        ),
+        (
+            "foreign machine",
+            foreign(|w| w.claim.as_mut().unwrap().machine_id = OWNER.into()),
+        ),
+        ("stale run", foreign(|w| w.run_id = "jrun-earlier".into())),
+        ("unclaimed follower run", foreign(|w| w.claim = None)),
+    ] {
+        std::fs::write(&witness_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+        assert_eq!(accepted_coverage().unwrap(), None, "{case}");
+    }
+    std::fs::write(&witness_path, &witness_bytes).unwrap();
+    assert_eq!(accepted_coverage().unwrap(), Some(coverage.clone()));
+
+    // The landed claim takes no further put, and bytes the owner writes
+    // itself carry no claimed witness.
+    let mut replaced = coverage.clone();
+    replaced.findings = vec!["ORB-1".into()];
+    let late = fixture
+        .bound
+        .attach_claim_validation_log(COVERAGE_ARTIFACT, serde_json::to_vec(&replaced).unwrap())
+        .expect_err("a landed claim refuses its worker's put");
+    assert!(late.to_string().contains("stale_claim"), "{late}");
+    owner
+        .update_task_as_human(
+            &fixture.task,
+            orbit_core::application::task::TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact {
+                    path: COVERAGE_ARTIFACT.into(),
+                    media_type: "application/json".into(),
+                    content: serde_json::to_vec(&replaced).unwrap(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+    assert_eq!(accepted_coverage().unwrap(), None, "tampered bytes");
+}
+
 /// [ORB-15764] A claimed `no-diff-expected` review compiles nothing, as the
 /// owner's own pipelines skip `validate` for the tag: its leaf runs no
 /// required command and replays no deferred gate on its clean base, and hands

@@ -84,6 +84,14 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.resolve_execution_claims()
     }
+    fn execution_claim_state(
+        &self,
+        claim_id: &str,
+    ) -> Result<Option<crate::contracts::ClaimInspection>, OrbitError> {
+        self.coordination_boundary().map_or(Ok(None), |boundary| {
+            boundary.execution_claim_state(claim_id)
+        })
+    }
     fn record_deferred_branch_observation(
         &self,
         observation: &crate::contracts::DeferredBranchObservation,
