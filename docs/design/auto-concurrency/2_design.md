@@ -203,9 +203,11 @@ class in `worker/delivery_class.rs`, the host reads in
   on today's admission (§5.4) until it has samples.
 
 Workers also keep a host series, `host_resource_minutes`, holding host CPU
-and memory per wall-clock minute in the same units: busy cores from
-`/proc/stat` tick deltas, and `MemTotal − MemAvailable` bytes. It does not use
-`/proc/loadavg`, which the throttle reads: load counts the run queue and runs
+and memory per wall-clock minute in the same units, using the shared
+`runtime/host_resource/usage.rs` reader for history and forecast baselines.
+Linux measures busy cores from `/proc/stat` tick deltas (excluding idle and
+iowait, without double-counting guest), and `MemTotal − MemAvailable` bytes.
+It does not use `/proc/loadavg`, which the throttle reads: load counts the run queue and runs
 far past 100% (load 36 on 15 cores at about 95% utilization on dk-server-1).
 Each worker offers every wall-clock minute it observed whole, and the first
 insert for that minute wins. Busy and total tick deltas are split across
@@ -214,6 +216,31 @@ intervals spanning multiple minutes. The initial host minute is omitted unless
 a preceding reading covers its beginning; the final partial minute is omitted.
 Profiles do not need it. It is the ground truth
 for checking the forecast (§8).
+
+On macOS the reader uses `host_statistics(HOST_CPU_LOAD_INFO)` for the
+host-wide user, system, idle and nice tick counters. Each 32-bit counter's
+wrapping delta is computed separately; busy is user + system + nice, and
+utilization in cores is `busy_delta / total_delta × online_CPU_count`.
+`sysconf(_SC_NPROCESSORS_ONLN)` supplies the actual online CPU count. No tick
+advance means unknown CPU, not zero; a failed CPU, VM or capacity read means
+an unknown host sample. The admission probe waits at least 1.1 seconds outside
+the admission lock for its initial/recent baseline, crossing XNU's one-second
+statistics cache. Worker history samples every five seconds and applies the
+same tick deltas. A changed CPU count invalidates the interval.
+
+Native memory is `hw.memsize − min(hw.memsize, (free_count + inactive_count)
+× sysconf(_SC_PAGESIZE))`, in bytes, from `host_statistics64(HOST_VM_INFO64)`
+and `sysctlbyname("hw.memsize")`. This is the throttle's existing estimate of
+non-reclaimable physical memory: free includes speculative pages, inactive is
+treated as reclaimable, and purgeable overlaps active/inactive so is not
+subtracted again. Compressed physical storage remains in used memory; logical
+uncompressed pages and swap are not added. This estimate is not Activity
+Monitor's Memory Used or the sum of worker footprints. Both native users
+release each acquired Mach host send right. See Apple's
+[host statistics implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c)
+and [VM statistics definition](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h).
+Explicit injected proc roots still read only their fixture files on every OS;
+a missing fixture never falls back to the live host.
 
 ## 3. Profiles
 
@@ -391,8 +418,9 @@ and built only under the host admission lock (§5.2):
 - **Flat tail.** A delivery past its profile's last minute, or with no
   profile at all, contributes its current use at every minute.
 - **Baseline.** CPU is busy cores over the interval since the previous
-  `/proc/stat` reading, at least 250 ms; the first call waits for that
-  interval before taking the lock. Memory is `MemTotal − MemAvailable`. `B`
+  native tick reading, at least 250 ms for Linux/proc fixtures or 1.1 s for
+  macOS; the first call waits before taking the lock. Memory uses the shared
+  native accounting described in §2. `B`
   never goes below zero. An unreadable host, or a CPU reading with no ticks
   since the previous one, leaves that baseline unknown, and the series counts
   it as zero.
@@ -687,6 +715,33 @@ first.
    `orbit-common/src/process/ancestry.rs`, and writes the same
    `run_resource_minutes` rows as the Linux scope sampler. The Mac admits
    as today until those rows exist; recording does not change admission.
+
+### Native macOS verification
+
+Run `scripts/build-budget.py -- cargo test -p orbit-core --lib
+runtime::host_resource::tests::usage -- --nocapture` on macOS. The native row
+reads real host ticks beyond the cache window, asserts finite core utilization,
+a positive CPU count and coherent memory byte totals, and checks failed Mach
+calls return unknown. The same matrix covers proc fixtures and independent
+Mach counter rollover without generating host load. Existing sampler and pull
+forecast/accuracy suites cover shared deltas and unchanged shadow admission.
+
+For operational verification after the candidate is installed through the
+normal delivery process, retain public `orbit run profiles --json`,
+`orbit run show <pull-drain> --no-reconcile --json`, and
+`orbit run profiles --accuracy --json` output from the native Mac workspace.
+With eligible profiles carrying recognized CPU accounting provenance and
+the existing shadow configuration, an ordinary real pull request should
+record `pull_admission_fit` and forecast points; keep existing ceilings and
+policy. Let real delivery workers sample
+through complete host minutes and the earliest recorded offset (+5 minutes),
+then retain a fresh accuracy report with measured pairs. A unit/fixture pass,
+a worker-only measurement, or forecasts with no paired host minutes does not
+satisfy this operational verification. New native Mac worker minutes carry
+`macos-mach-ns-v1` provenance from the process CPU-unit repair. Historical
+unmarked Mac minutes remain stored but their deliveries are excluded from
+profiles; this host-reader change does not rescale, backfill or relabel them.
+Linux eligibility and raw history retention remain unchanged.
 
 ### 8.1 The accuracy report
 

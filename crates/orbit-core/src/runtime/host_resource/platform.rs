@@ -196,71 +196,88 @@ impl NativeProbe {
 
 #[cfg(target_os = "macos")]
 impl NativeProbe {
-    // libc recommends mach2 for these bindings; the underlying Mach APIs remain
-    // supported. Keep the existing dependency for this small native collector.
-    #[allow(deprecated)]
     fn cpu_memory(&self, history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
-        use std::mem::{MaybeUninit, size_of};
-        // libc exposes the statistics calls but omits this libSystem symbol.
-        // The signature matches the macOS SDK's mach/mach_port.h declaration.
-        unsafe extern "C" {
-            fn mach_port_deallocate(
-                task: libc::mach_port_t,
-                name: libc::mach_port_t,
-            ) -> libc::kern_return_t;
-        }
-        // SAFETY: mach_host_self returns a send right owned by this call. Both
-        // statistics buffers use the libc ABI with counts in integer_t units.
-        let host = unsafe { libc::mach_host_self() };
-        let cpu_percent = self.cpu_percent(host, history);
-        let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
-        let mut vm_count = libc::HOST_VM_INFO64_COUNT;
-        // SAFETY: same ABI/count guarantee as CPU stats above.
-        let vm_result = unsafe {
-            libc::host_statistics64(
-                host,
-                libc::HOST_VM_INFO64,
-                vm.as_mut_ptr().cast(),
-                &mut vm_count,
-            )
-        };
-        let mut total: u64 = 0;
-        let mut length = size_of::<u64>();
-        // SAFETY: NUL-terminated name, correctly sized output, no new value.
-        let total_result = unsafe {
-            libc::sysctlbyname(
-                c"hw.memsize".as_ptr(),
-                (&mut total as *mut u64).cast(),
-                &mut length,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        let memory_percent = if vm_result == libc::KERN_SUCCESS
-            && vm_count == libc::HOST_VM_INFO64_COUNT
-            && total_result == 0
-            && length == size_of::<u64>()
-            && total > 0
-            && page_size > 0
-        {
-            // SAFETY: host_statistics64 returned all requested fields.
-            let vm = unsafe { vm.assume_init() };
-            // Free includes speculative pages; inactive is reclaimable. Do not
-            // add purgeable separately (it overlaps active/inactive pages).
-            let available = (u64::from(vm.free_count) + u64::from(vm.inactive_count))
-                .saturating_mul(page_size as u64)
-                .min(total);
-            Some(100.0 * (total - available) as f64 / total as f64)
-        } else {
-            None
-        };
-        // SAFETY: release the send right acquired by mach_host_self each sample.
-        unsafe {
-            mach_port_deallocate(libc::mach_task_self(), host);
-        }
-        (cpu_percent, memory_percent)
+        with_mach_host(|host| {
+            let cpu = self.cpu_percent(host, history);
+            let memory =
+                host_memory_bytes(host).map(|(used, total)| 100.0 * used as f64 / total as f64);
+            (cpu, memory)
+        })
     }
+}
+
+/// Borrow one Mach host send right for the duration of a sample.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub(super) fn with_mach_host<T>(sample: impl FnOnce(libc::mach_port_t) -> T) -> T {
+    // libc omits this libSystem symbol; the signature is mach/mach_port.h's.
+    unsafe extern "C" {
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+    struct HostPort(libc::mach_port_t);
+    impl Drop for HostPort {
+        fn drop(&mut self) {
+            // SAFETY: release the send right acquired by mach_host_self.
+            unsafe {
+                mach_port_deallocate(libc::mach_task_self(), self.0);
+            }
+        }
+    }
+    // SAFETY: mach_host_self returns a send right owned by this call.
+    let host = HostPort(unsafe { libc::mach_host_self() });
+    sample(host.0)
+}
+
+/// Used and total physical memory bytes, shared by throttle and utilization.
+/// Free includes speculative pages; inactive is treated as reclaimable.
+/// Purgeable overlaps active/inactive and is not subtracted again.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub(super) fn host_memory_bytes(host: libc::mach_port_t) -> Option<(u64, u64)> {
+    use std::mem::{MaybeUninit, size_of};
+    let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
+    let mut vm_count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: the buffer/count follow the vm_statistics64 ABI.
+    let vm_result = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            vm.as_mut_ptr().cast(),
+            &mut vm_count,
+        )
+    };
+    let mut total: u64 = 0;
+    let mut length = size_of::<u64>();
+    // SAFETY: NUL-terminated name, correctly sized output, no new value.
+    let total_result = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&mut total as *mut u64).cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    // SAFETY: sysconf with this constant has no pointer arguments.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if vm_result != libc::KERN_SUCCESS
+        || vm_count != libc::HOST_VM_INFO64_COUNT
+        || total_result != 0
+        || length != size_of::<u64>()
+        || total == 0
+        || page_size <= 0
+    {
+        return None;
+    }
+    // SAFETY: host_statistics64 returned all requested fields.
+    let vm = unsafe { vm.assume_init() };
+    let available = (u64::from(vm.free_count) + u64::from(vm.inactive_count))
+        .saturating_mul(page_size as u64)
+        .min(total);
+    Some((total - available, total))
 }
 
 /// One timestamped observation of the host's aggregate tick counters.
@@ -381,7 +398,7 @@ impl NativeProbe {
 /// Aggregate host CPU tick counters, or `None` when the kernel call fails.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
-fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
+pub(super) fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
     use std::mem::MaybeUninit;
     let mut cpu = MaybeUninit::<libc::host_cpu_load_info>::zeroed();
     let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
