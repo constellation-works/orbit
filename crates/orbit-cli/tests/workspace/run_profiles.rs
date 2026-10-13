@@ -101,8 +101,8 @@ impl Fixture {
             db.execute(
                 "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
                      minute_started_at, task_id, work_class, complexity, resumed, \
-                     delivery_admitted_at, cpu_cores, memory_bytes, samples) \
-                 VALUES ('ws_fixture', ?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, 12)",
+                     delivery_admitted_at, cpu_cores, memory_bytes, samples, cpu_accounting) \
+                 VALUES ('ws_fixture', ?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, 12, ?10)",
                 params![
                     run_id,
                     index as i64,
@@ -112,7 +112,8 @@ impl Fixture {
                     complexity,
                     stamp(0),
                     cpu,
-                    GIB
+                    GIB,
+                    "linux-cgroup-v1"
                 ],
             )
             .unwrap();

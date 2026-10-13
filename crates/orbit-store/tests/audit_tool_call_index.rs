@@ -54,11 +54,7 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
         DROP TABLE admission_reservations;
         DROP TABLE admission_forecasts;
         CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
-        DELETE FROM schema_meta
-            WHERE key IN ('migration.v0037', 'migration.v0038', 'migration.v0039',
-                'migration.v0040', 'migration.v0041', 'migration.v0042', 'migration.v0043',
-                'migration.v0044', 'migration.v0045', 'migration.v0046', 'migration.v0047', 'migration.v0048',
-            'migration.v0049', 'migration.v0050');
+        DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0037';
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",

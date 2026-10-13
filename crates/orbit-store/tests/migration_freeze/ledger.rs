@@ -410,6 +410,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0050".to_string(),
                 "pull_forecast_decisions".to_string()
             ),
+            (
+                "migration.v0051".to_string(),
+                "worker_cpu_accounting".to_string()
+            ),
         ]
     );
 }
