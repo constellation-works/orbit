@@ -2,10 +2,15 @@
 //!
 //! An *operation* is one verb on one noun (`friction add`, `friction list`).
 //! This module lets a noun declare each of its verbs exactly once, as data:
-//! the wire name, the parameters, how each parameter binds to the CLI, whether
-//! MCP exposes the verb, and how the CLI renders the result. Consumer surfaces
-//! then *derive* their wiring from that declaration instead of restating the
-//! verb once per surface.
+//! the wire name, whether it reads or writes, the parameters, how each
+//! parameter binds to the CLI and whether it is redacted, and whether MCP
+//! exposes the verb. Consumer surfaces then *derive* their wiring from that
+//! declaration instead of restating the verb once per surface.
+//!
+//! A fact only one surface needs, such as how the CLI renders a response, is
+//! not part of the spec: it is an exhaustive `match` on the verb enum in that
+//! surface's crate, so adding a verb fails to compile there until it is
+//! decided.
 //!
 //! # Layering
 //!
@@ -16,10 +21,10 @@
 //!
 //! | Surface          | Derives                                            |
 //! |------------------|----------------------------------------------------|
-//! | `orbit-tools`    | `ToolSchema` + optional MCP scope from the spec     |
-//! | `orbit-cli`      | `clap::Command` + input JSON + audit metadata       |
+//! | `orbit-tools`    | `ToolSchema`, MCP scope and execution kind          |
+//! | `orbit-cli`      | `clap::Command`, input JSON, audit and runtime need |
 //! | `orbit-web`      | tool names + request→input projection               |
-//! | `orbit-core`     | the handler table, keyed by the verb enum           |
+//! | `orbit-core`     | the handler table and redaction, keyed by the verb  |
 //!
 //! Handlers need `&OrbitRuntime`, which lives above this crate, so the handler
 //! table cannot live next to the spec table. The two halves are joined by the
@@ -109,6 +114,18 @@ pub struct CliBinding {
     pub help: Description,
 }
 
+/// How a parameter's value is redacted before an operation persists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Redaction {
+    /// Stored as given: identifiers, enumerated values, structural input.
+    None,
+    /// Free text: secrets and credentials are masked, a whole-token credential
+    /// is refused, and home-directory paths are shortened.
+    FreeText,
+    /// A filesystem path or URL: only home-directory paths are shortened.
+    Path,
+}
+
 /// One parameter of one operation, in every surface's terms at once.
 #[derive(Debug, Clone, Copy)]
 pub struct ParamSpec {
@@ -123,6 +140,8 @@ pub struct ParamSpec {
     /// optional [`ParamType::String`] parameters when true; otherwise it omits
     /// them. Required strings and other parameter types are unaffected.
     pub preserve_empty: bool,
+    /// How the tool host redacts this parameter before it is persisted.
+    pub redact: Redaction,
     /// MCP tool-schema description. `None` keeps the parameter off the MCP
     /// schema entirely.
     pub mcp_description: Option<Description>,
@@ -140,18 +159,18 @@ impl ParamSpec {
     }
 }
 
-/// How the CLI renders an operation's response when `--json` is not passed.
+/// Whether an operation reads or writes durable state.
+///
+/// One declaration that every surface derives its runtime wiring from: the
+/// tool's execution kind and the CLI's default runtime need. A guard that
+/// depends on the input, such as a write permission needed only when an update
+/// moves a record, stays in the handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CliRender {
-    /// Always pretty-print JSON, regardless of `--json`. For aggregate
-    /// responses that have no meaningful flat rendering.
-    AlwaysJson,
-    /// A single record: key/value lines, falling back to JSON for non-objects.
-    Record,
-    /// An array of records: a table, falling back to JSON for non-arrays.
-    RecordTable,
-    /// An array of taxonomy entries: one `name[\tdescription]` line each.
-    TagList,
+pub enum Effect {
+    /// Observes state without changing it.
+    Read,
+    /// May change durable state.
+    Write,
 }
 
 /// One verb on one noun, declared once.
@@ -163,17 +182,22 @@ pub enum CliRender {
 pub struct OperationSpec<V: 'static> {
     /// The typed verb this spec describes.
     pub verb: V,
-    /// The verb's short name: the CLI subcommand and the audit `subcommand`.
-    pub name: &'static str,
+    /// The CLI subcommand path below the noun (`["add"]`). Also the source of
+    /// the audit `subcommand` label.
+    pub cli_path: &'static [&'static str],
     /// The fully-qualified tool name (`orbit.friction.add`).
     pub tool_name: &'static str,
     /// MCP tool description.
     pub tool_description: &'static str,
     /// `--help` summary for the CLI subcommand.
     pub cli_about: &'static str,
-    /// Parameters, in declaration order. Order is contract: it drives both MCP
-    /// schema order and CLI `--help` order.
-    pub params: &'static [ParamSpec],
+    /// Whether the operation reads or writes.
+    pub effect: Effect,
+    /// Parameter groups, concatenated in order. Order is contract: it drives
+    /// both MCP schema order and CLI `--help` order. A group lets verbs share a
+    /// run of parameters without functional record update, which `const` does
+    /// not allow.
+    pub params: &'static [&'static [ParamSpec]],
     /// Whether the operation rejects a legacy top-level `agent` field
     /// (attribution was consolidated to `model`-only).
     pub rejects_agent_field: bool,
@@ -185,14 +209,17 @@ pub struct OperationSpec<V: 'static> {
     /// [`crate::governance::authorization::GOVERNED_OPERATIONS`] alone — see that module's
     /// "Placement is not permission" section.
     pub mcp_scope: Option<McpToolScope>,
-    /// Default (non-`--json`) CLI rendering.
-    pub cli_render: CliRender,
 }
 
 impl<V: 'static> OperationSpec<V> {
+    /// Every parameter, in declaration order across its groups.
+    pub fn params(&self) -> impl Iterator<Item = &'static ParamSpec> {
+        self.params.iter().flat_map(|group| group.iter())
+    }
+
     /// Parameters that MCP advertises, in declaration order.
     pub fn mcp_params(&self) -> impl Iterator<Item = (&'static ParamSpec, Description)> {
-        self.params.iter().filter_map(|param| {
+        self.params().filter_map(|param| {
             param
                 .mcp_description
                 .map(|description| (param, description))
@@ -201,14 +228,13 @@ impl<V: 'static> OperationSpec<V> {
 
     /// Parameters bound to the command line, in declaration order.
     pub fn cli_params(&self) -> impl Iterator<Item = (&'static ParamSpec, CliBinding)> {
-        self.params
-            .iter()
+        self.params()
             .filter_map(|param| param.cli.map(|binding| (param, binding)))
     }
 
     /// Whether the CLI takes a positional `id`, which is also the audit target.
     pub fn cli_positional(&self) -> Option<&'static ParamSpec> {
-        self.params.iter().find(|param| {
+        self.params().find(|param| {
             matches!(
                 param.cli.map(|binding| binding.kind),
                 Some(CliArgKind::Positional)
@@ -217,10 +243,92 @@ impl<V: 'static> OperationSpec<V> {
     }
 }
 
-/// Look up a spec by its short verb name.
-pub fn find_by_name<'a, V: 'static>(
-    registry: &'a [OperationSpec<V>],
-    name: &str,
-) -> Option<&'a OperationSpec<V>> {
-    registry.iter().find(|spec| spec.name == name)
+/// An intermediate CLI subcommand that groups verbs (`task artifact`).
+///
+/// Declared for nouns whose verbs nest; the CLI adapter builds groups once the
+/// first such noun migrates. Friction declares none.
+#[derive(Debug, Clone, Copy)]
+pub struct CliGroup {
+    /// The group's subcommand name, matching the first `cli_path` segment of
+    /// the verbs it holds.
+    pub name: &'static str,
+    /// `--help` summary for the group.
+    pub cli_about: &'static str,
 }
+
+/// One noun: the strings every surface needs about it, and its operations.
+#[derive(Debug, Clone, Copy)]
+pub struct NounSpec<V: 'static> {
+    /// The CLI command (`friction`, `auto-task`).
+    pub cli_name: &'static str,
+    /// The tool-name prefix (`orbit.friction`, `orbit.auto_task`). Separate
+    /// from `cli_name` because shipped surfaces already spell them differently.
+    pub tool_prefix: &'static str,
+    /// `orbit <noun> --help` summary.
+    pub cli_about: &'static str,
+    /// The audit `target_type` the noun's CLI rows carry.
+    pub audit_target_type: &'static str,
+    /// Intermediate CLI subcommands, in `--help` order.
+    pub cli_groups: &'static [CliGroup],
+    /// Every operation, in `--help` order.
+    pub operations: &'static [OperationSpec<V>],
+}
+
+/// A noun's verb enum, as the generic surface adapters see it.
+///
+/// Implemented by the crate-internal `operation_registry!` macro, which emits
+/// the enum, this impl and the ordered operations list from one declaration.
+pub trait OperationVerb: Copy + Eq + std::fmt::Debug + Send + Sync + 'static {
+    /// The noun this verb belongs to.
+    fn noun() -> &'static NounSpec<Self>;
+
+    /// This verb's specification.
+    fn spec(self) -> &'static OperationSpec<Self>;
+
+    /// The verb's fully-qualified tool name (`orbit.friction.add`).
+    fn tool_name(self) -> &'static str {
+        self.spec().tool_name
+    }
+}
+
+/// Declare a noun's verb enum, its [`OperationVerb`] impl and its ordered
+/// operations list from one list of `Variant => SPEC` entries.
+///
+/// The three cannot disagree: list order is both enum order and `--help`
+/// order, and `spec()` is an exhaustive match generated from the same entries.
+macro_rules! operation_registry {
+    (
+        noun: $noun:ident;
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $verb:ident;
+        $(#[$list_meta:meta])*
+        $list_vis:vis const $list:ident;
+        {
+            $( $(#[$variant_meta:meta])* $variant:ident => $spec:ident ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        $enum_vis enum $verb {
+            $( $(#[$variant_meta])* $variant, )+
+        }
+
+        impl $crate::governance::operation::OperationVerb for $verb {
+            fn noun() -> &'static $crate::governance::operation::NounSpec<Self> {
+                &$noun
+            }
+
+            fn spec(self) -> &'static $crate::governance::operation::OperationSpec<Self> {
+                match self {
+                    $( $verb::$variant => &$spec, )+
+                }
+            }
+        }
+
+        $(#[$list_meta])*
+        $list_vis const $list: &[$crate::governance::operation::OperationSpec<$verb>] =
+            &[ $( $spec ),+ ];
+    };
+}
+
+pub(crate) use operation_registry;

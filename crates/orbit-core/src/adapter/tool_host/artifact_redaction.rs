@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
     redact_sensitive_env_text,
@@ -95,6 +96,21 @@ pub(super) fn sanitize_tool_input(
     };
 
     let mut report = ArtifactRedactionReport::default();
+    for param in policy.declared.iter().flat_map(|group| group.iter()) {
+        let mode = match param.redact {
+            Redaction::None => continue,
+            Redaction::FreeText => TextMode::Free,
+            Redaction::Path => TextMode::PathOnly,
+        };
+        match param.param_type {
+            ParamType::StringList => {
+                sanitize_string_array_field(&mut object, param.name, param.name, mode, &mut report)?
+            }
+            ParamType::String | ParamType::Integer | ParamType::Boolean => {
+                sanitize_string_field(&mut object, param.name, param.name, mode, &mut report)?
+            }
+        }
+    }
     for field in policy.free_text_fields {
         sanitize_string_field(&mut object, field, field, TextMode::Free, &mut report)?;
     }
@@ -174,6 +190,9 @@ struct NestedObjectPolicy {
 }
 
 struct ActionPolicy {
+    /// A registry operation's parameter groups; each parameter is redacted
+    /// per its declared [`Redaction`] class, in declaration order.
+    declared: &'static [&'static [ParamSpec]],
     free_text_fields: &'static [&'static str],
     free_text_arrays: &'static [&'static str],
     path_fields: &'static [&'static str],
@@ -183,6 +202,7 @@ struct ActionPolicy {
 }
 
 const NO_REDACTION: ActionPolicy = ActionPolicy {
+    declared: &[],
     free_text_fields: &[],
     free_text_arrays: &[],
     path_fields: &[],
@@ -226,6 +246,7 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[NestedObjectPolicy {
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
         OrbitBuiltinAction::TaskAdd => ActionPolicy {
+            declared: &[],
             free_text_fields: &["title", "description", "plan", "comment"],
             free_text_arrays: &["acceptance_criteria"],
             path_fields: &[],
@@ -234,6 +255,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_objects: &[],
         },
         OrbitBuiltinAction::TaskUpdate => ActionPolicy {
+            declared: &[],
             free_text_fields: &[
                 "title",
                 "description",
@@ -252,14 +274,17 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             // `command` selects an already-authorized stored command. Preserve
             // it byte-for-byte for exact evidence matching, then redact only
             // serialized reports at the response boundary.
+            declared: &[],
             free_text_fields: &["reason"],
             free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
         },
         OrbitBuiltinAction::TaskReviewReset => ActionPolicy {
+            declared: &[],
             free_text_fields: &["reason"],
             free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
         },
         OrbitBuiltinAction::TaskReject => ActionPolicy {
+            declared: &[],
             free_text_fields: &["note", "comment"],
             free_text_arrays: &[],
             path_fields: &[],
@@ -267,23 +292,13 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: &[],
         },
-        OrbitBuiltinAction::Friction(FrictionVerb::Add) => ActionPolicy {
-            free_text_fields: &["title", "body", "description"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
-        OrbitBuiltinAction::Friction(FrictionVerb::Update) => ActionPolicy {
-            free_text_fields: &["title", "body"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
+        OrbitBuiltinAction::Friction(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            free_text_fields: undeclared_friction_free_text(verb),
+            ..NO_REDACTION
         },
         OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => ActionPolicy {
+            declared: &[],
             free_text_fields: &["description"],
             free_text_arrays: &[],
             path_fields: &[],
@@ -301,12 +316,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         // Desktop writes redact at their transactional persistence boundary.
         | OrbitBuiltinAction::DesktopTaskWrite
         | OrbitBuiltinAction::CommandExec
-        | OrbitBuiltinAction::Friction(FrictionVerb::List)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Show)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Stats)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Tags)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Resolve)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Rehome)
         | OrbitBuiltinAction::DrainClaims
         | OrbitBuiltinAction::DrainProbe
         | OrbitBuiltinAction::DrainReceiptLookup
@@ -345,18 +354,43 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     }
 }
 
+/// Input spellings a friction handler accepts beyond its declared parameters,
+/// which must be redacted like the parameter they stand for.
+///
+/// `add` reads `description` as an alias for `body`. Declared aliases replace
+/// this table when the kernel learns them.
+fn undeclared_friction_free_text(verb: FrictionVerb) -> &'static [&'static str] {
+    match verb {
+        FrictionVerb::Add => &["description"],
+        FrictionVerb::List
+        | FrictionVerb::Show
+        | FrictionVerb::Stats
+        | FrictionVerb::Tags
+        | FrictionVerb::Update
+        | FrictionVerb::Resolve
+        | FrictionVerb::Rehome => &[],
+    }
+}
+
 fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
-    matches!(
-        action,
-        OrbitBuiltinAction::TaskAdd
-            | OrbitBuiltinAction::TaskUpdate
-            | OrbitBuiltinAction::TaskReject
-            | OrbitBuiltinAction::TaskReconcileReview
-            | OrbitBuiltinAction::TaskReviewReset
-            | OrbitBuiltinAction::AutoTaskAdd
-            | OrbitBuiltinAction::AutoTaskUpdate
-            | OrbitBuiltinAction::Friction(FrictionVerb::Add | FrictionVerb::Update)
-    )
+    match action {
+        // A registry operation reports redactions when it declares a redacted
+        // parameter.
+        OrbitBuiltinAction::Friction(verb) => verb
+            .spec()
+            .params()
+            .any(|param| param.redact != Redaction::None),
+        action => matches!(
+            action,
+            OrbitBuiltinAction::TaskAdd
+                | OrbitBuiltinAction::TaskUpdate
+                | OrbitBuiltinAction::TaskReject
+                | OrbitBuiltinAction::TaskReconcileReview
+                | OrbitBuiltinAction::TaskReviewReset
+                | OrbitBuiltinAction::AutoTaskAdd
+                | OrbitBuiltinAction::AutoTaskUpdate
+        ),
+    }
 }
 
 fn sanitize_string_field(
@@ -663,13 +697,22 @@ fn artifact_target<'a>(
                 task_id: Some(id),
             })
         }
-        OrbitBuiltinAction::Friction(FrictionVerb::Add | FrictionVerb::Update) => {
-            Ok(ArtifactTarget {
-                artifact_type: "friction",
-                artifact_id: response_string(response, "id")?,
-                task_id: None,
-            })
-        }
+        // Every friction verb that redacts writes the record its response
+        // names.
+        OrbitBuiltinAction::Friction(
+            FrictionVerb::Add
+            | FrictionVerb::List
+            | FrictionVerb::Show
+            | FrictionVerb::Stats
+            | FrictionVerb::Tags
+            | FrictionVerb::Update
+            | FrictionVerb::Resolve
+            | FrictionVerb::Rehome,
+        ) => Ok(ArtifactTarget {
+            artifact_type: "friction",
+            artifact_id: response_string(response, "id")?,
+            task_id: None,
+        }),
         OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
             Ok(ArtifactTarget {
                 artifact_type: "auto_task",
@@ -696,8 +739,7 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
         OrbitBuiltinAction::TaskReject => "orbit.task.reject",
         OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
         OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
-        OrbitBuiltinAction::Friction(FrictionVerb::Add) => "orbit.friction.add",
-        OrbitBuiltinAction::Friction(FrictionVerb::Update) => "orbit.friction.update",
+        OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTaskAdd => "orbit.auto_task.add",
         OrbitBuiltinAction::AutoTaskUpdate => "orbit.auto_task.update",
         _ => "orbit.unknown",

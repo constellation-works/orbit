@@ -11,15 +11,20 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358]
+related_artifacts: [ORB-10358, ORB-15932]
 ---
 
 # Operations as Data — Migration Cookbook
 
 Written from the friction migration ([ORB-10358]) and updated for the accepted
-kernel v2 in [2_design.md](../2_design.md). Steps that need kernel v2 say so;
-until phase 0 of [2_design.md §9](../2_design.md#9-migration-plan) lands, only
-the friction-era kernel exists. Two recipes: migrating a noun that is still
+kernel v2 in [2_design.md](../2_design.md). Phase 0a of
+[2_design.md §9](../2_design.md#9-migration-plan) built kernel v2's structure
+([ORB-15932]): `NounSpec`, `cli_path`, `effect`, parameter groups, `redact`,
+the `operation_registry!` macro and the generic adapters. Steps that use the
+still-planned input validation (`parse_input`, `aliases`, `at_least_one_of`,
+`retired_fields`) or parameter kinds (`Enum`, `Switch`, `Object`, `default`,
+nested `cli_path`) say so; until a phase builds them, a noun that needs one
+extends the kernel first. Two recipes: migrating a noun that is still
 hand-wired, and adding a verb to a noun that is already migrated.
 
 ---
@@ -83,17 +88,20 @@ for `body`, `task_id` for `during_task`). Each one becomes a declared alias.
 
 ### Step 2. Write the noun spec, the verb enum and the registry
 
-In `orbit-common`, next to the noun's existing shared types. Under kernel v2,
-the per-noun declarative macro emits the verb enum, its `spec()` match and the
-ordered operations list from one list, so they cannot disagree. Write a
-`NounSpec` holding the CLI name, tool prefix, `--help` summary, audit target
-type, any intermediate CLI groups, and the operations.
+In `orbit-common`, next to the noun's existing shared types. Invoke
+`operation_registry!` with one `Variant => SPEC` list: it emits the verb enum,
+its `OperationVerb` impl (an exhaustive `spec()` match) and the ordered
+operations list, so they cannot disagree. Write a `NounSpec` const holding the
+CLI name, tool prefix, `--help` summary, audit target type, any intermediate CLI
+groups, and the operations list. `friction/operations.rs` is the example.
 
-For each verb, fill `cli_path`, `effect`, parameter groups,
-`at_least_one_of` and `retired_fields`. For each parameter, fill `aliases`,
-`default` and `redact` in addition to the friction-era fields. Choose `effect`
-from what the verb does, not from what the old CLI arm happened to open; where
-they differ, say so in the PR.
+For each verb, fill `cli_path`, `effect` and its parameter groups. For each
+parameter, fill `redact` in addition to the friction-era fields: `FreeText` for
+prose a caller writes, `Path` for a path or URL, `None` otherwise. Once phase 0b
+lands, also fill `at_least_one_of`, `retired_fields`, `aliases` and `default`.
+Choose `effect` from what the verb does, not from what the old CLI arm happened
+to open; where they differ, say so in the PR, with evidence that a verb moving
+to the read-only runtime does not rely on stale-run reconciliation on open.
 
 Declaration order is contract twice over: it is `--help` subcommand order, and
 within a spec, parameter order is both `--help` arg order and MCP schema order.
@@ -114,7 +122,9 @@ Before wiring any surface, check what the compiler cannot:
 - MCP exposure matches `docs/design/mcp-bridge/references/conformance-v1.yaml`.
 
 Exercise the derived public surface at the boundary, per the test strategy;
-the friction registry's original unit tests were retired.
+the friction registry's original unit tests were retired. The verb enum, the
+`spec()` match and the operations list agree by construction, so there is no
+test for that.
 
 ### Step 4. Collapse the action enum
 
@@ -127,15 +137,20 @@ fallout mechanically:
 - turn every wildcard arm that covers the noun into an exhaustive `match` on
   the verb, so a future verb has to state its behaviour. Under
   [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](../4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)
-  this includes `worker_tools.rs` and `artifact_redaction.rs`. Under kernel v2
-  the redaction field lists come from the parameters' `redact` class; delete the
-  noun's hand-written lists.
+  this includes `worker_tools.rs` and `artifact_redaction.rs`. The redaction
+  field lists come from the parameters' `redact` class: give the noun's arm in
+  `policy_for_action` its spec's `params` and delete its hand-written lists. An
+  input spelling the handler accepts but the spec does not declare must stay
+  redacted, as an explicit per-verb entry until phase 0b declares aliases
+  (friction `add`'s `description`).
 
 ### Step 5. Derive MCP
 
-Delete the per-verb `Tool` files. Under kernel v2, register the noun's
-operations with the generic `OperationTool<V>`; it validates input with
-`parse_input`, takes `execution_kind` from `effect`, and dispatches the action.
+Delete the per-verb `Tool` files. Register the noun with
+`operation::register_noun(registry, &NOUN)`, which serves every operation with
+the generic `OperationTool<V>`; it takes `execution_kind` from `effect` and
+dispatches through the `From<<Noun>Verb> for OrbitBuiltinAction` impl from
+Step 4. Once phase 0b lands it also validates input with `parse_input`.
 Delete the noun's block from `register_builtins`.
 
 If a verb overrode `input_schema()`, move the override into the noun's exhaustive
@@ -154,11 +169,12 @@ parameter order, types, requiredness and exact description strings — through
 
 ### Step 6. Derive the CLI
 
-Delete the per-verb `Args` structs and `Execute` impls. Under kernel v2 the
-generic `Invocation<V>` supplies the clap impls; the parent command's subcommand
-field has type `Invocation<<Noun>Verb>`. Keep only the noun's exhaustive CLI
-surface tables: `render(verb, &Value)` and, if the noun shapes requests for the
-CLI only, `prepare(verb, &mut Map)`.
+Delete the per-verb `Args` structs and `Execute` impls. The generic
+`Invocation<V>` supplies the clap impls; the parent command's subcommand field
+has type `Invocation<<Noun>Verb>`, and its `#[command(about)]` reads the noun
+spec's `cli_about`. Keep only the noun's exhaustive CLI surface tables:
+`render(verb, &Value)` and, if the noun shapes or checks requests for the CLI
+only, `prepare(verb, &mut Map) -> Result<(), OrbitError>`.
 
 Every verb executes through `run_tool`, including CLI-only verbs registered with
 `mcp_scope: None`. A destructive CLI-only verb becomes reachable through
@@ -167,8 +183,8 @@ the authorization matrix golden in `crates/orbit-cli/tests/output/output_goldens
 (`make goldens UPDATE=1`), reviewing its diff.
 
 Replace the noun's arm in `command/operation/registry.rs` with the generic
-helper (runtime need from `effect`, audit metadata from the noun spec and
-`cli_path`). Keep any input-dependent override, such as `governed_when` or a
+helper `registry_operation` (runtime need from `effect`, audit metadata from the
+noun spec and `cli_path`). Keep any input-dependent override, such as `governed_when` or a
 flag that needs the full runtime, around the helper, and check the derived audit
 labels against the old arm.
 
@@ -180,16 +196,16 @@ in `crates/orbit-cli/tests/output/help_goldens.rs`.
 
 Add `dispatch(runtime, verb, input, model)` to `<noun>_tools.rs` with one
 exhaustive `match` on the verb, make the per-verb handlers private to it, and
-reduce `dispatch.rs` to a single arm. Under kernel v2, handlers take
+reduce `dispatch.rs` to a single arm. Once phase 0b lands, handlers take
 `OperationInput` and read canonical names only; delete their alias lists and
-any presence check `parse_input` now performs. Keep content checks.
+any presence check `parse_input` then performs. Keep content checks.
 
 ### Step 8. Point the dashboard at the registry
 
-Take tool names from `<Noun>Verb::tool_name()`. Leave route shapes, serde bodies
-and HTTP-specific defaults alone — they are not verb data. The tool entry
-refuses undeclared fields, so the dashboard needs no field-name check of its
-own.
+Take tool names from `<Noun>Verb::tool_name()` (an `OperationVerb` method).
+Leave route shapes, serde bodies and HTTP-specific defaults alone — they are not
+verb data. Once the tool entry refuses undeclared fields (phase 0b), the
+dashboard needs no field-name check of its own.
 
 ### Step 9. Verify contract stability
 
@@ -217,18 +233,18 @@ surfaced a cost the decisions do not already name, name it in
 
 ## Recipe B — add a verb to a migrated noun
 
-1. Add the verb to the noun's macro list with its spec. Compilation now fails in
-   every surface table for the noun.
-2. Place it in the operations list where it should appear in `--help`.
-3. Fill each failing table: the handler, the CLI renderer, and any schema
-   extension, worker route or redaction decision the compiler asks for.
-4. If it destroys something outside its run's purpose, add its
+1. Add the verb to the noun's `operation_registry!` list with its spec, at the
+   position it should take in `--help`. Compilation now fails in every surface
+   table for the noun.
+2. Fill each failing table: the handler, the CLI renderer and request shaping,
+   and any worker route or redaction decision the compiler asks for.
+3. If it destroys something outside its run's purpose, add its
    `GOVERNED_OPERATIONS` row and re-bless the authorization matrix golden.
-5. Add a route only if the verb should be reachable over HTTP.
+4. Add a route only if the verb should be reachable over HTTP.
 
 No adapter file is edited: the subcommand, its flags, its `--help`, its tool
-schema, its MCP placement, its validation, its audit metadata and its runtime
-need all come from the spec.
+schema, its MCP placement, its execution kind, its audit metadata and its
+runtime need all come from the spec.
 
 ---
 
@@ -247,8 +263,8 @@ need all come from the spec.
 - **Functional record update (`..OTHER`) is not usable in a `const`.** Write
   near-duplicate specs out, factor a `const fn`, or use a parameter group.
 - **`value_name` does not need interning.** The workspace enables clap's
-  `string` feature, so pass the owned SCREAMING_SNAKE `String`; the friction
-  adapter's `Box::leak` predates noticing that.
+  `string` feature, so the adapter passes the owned SCREAMING_SNAKE `String`.
+  The friction pilot `Box::leak`ed it before anyone noticed.
 - **Test layout.** Sibling `tests/` mirroring source filenames, per
   [test_layout.md](../../../design-patterns/test_layout.md), not a nested
   `<module>/tests.rs` child.
@@ -256,5 +272,6 @@ need all come from the spec.
 ## Task References
 
 - [ORB-10358] — the friction migration this cookbook is drawn from.
+- [ORB-15932] — built kernel v2's structure on friction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

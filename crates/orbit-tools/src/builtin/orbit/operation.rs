@@ -1,23 +1,71 @@
 //! MCP adapter over the operations-as-data kernel.
 //!
 //! An operation is declared once in `orbit-common` and each surface derives
-//! its wiring. This module turns an [`OperationSpec`] into the [`ToolSchema`]
-//! MCP advertises and registers it at the declared workspace scope, so no verb
-//! needs a hand-written [`Tool`](crate::Tool) implementation.
+//! its wiring. This module turns every [`OperationSpec`] of a noun into one
+//! registered [`OperationTool`]: the schema MCP advertises, the workspace scope
+//! it is registered at, and its execution kind all come from the spec, so no
+//! verb needs a hand-written [`Tool`] implementation.
 //!
-//! It is generic over the verb type on purpose: the next noun to migrate reuses
-//! both functions unchanged and supplies only its own registry.
+//! A migrated noun supplies only its registry and a
+//! `From<Verb> for OrbitBuiltinAction` impl in [`crate::host`].
 
-use orbit_common::governance::operation::OperationSpec;
+use orbit_common::OrbitError;
+use orbit_common::governance::operation::{Effect, NounSpec, OperationSpec, OperationVerb};
 use orbit_types::tool::{ToolParam, ToolSchema};
+use serde_json::Value;
 
-use crate::ToolRegistry;
+use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegistry};
+
+/// One registry operation, exposed as a tool.
+///
+/// The spec supplies the schema, the exposure policy and the execution kind;
+/// the verb it carries is what the runtime host dispatches on.
+pub struct OperationTool<V: 'static>(pub &'static OperationSpec<V>);
+
+impl<V> Tool for OperationTool<V>
+where
+    V: OperationVerb,
+    OrbitBuiltinAction: From<V>,
+{
+    fn schema(&self) -> ToolSchema {
+        operation_tool_schema(self.0)
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        match self.0.effect {
+            Effect::Read => ToolExecutionKind::ReadOnly,
+            Effect::Write => ToolExecutionKind::Mutating,
+        }
+    }
+
+    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if self.0.rejects_agent_field {
+            super::reject_agent_field(&input, self.0.tool_name)?;
+        }
+        super::execute_host_action(ctx, input, self.0.verb.into())
+    }
+}
+
+/// Register every operation a noun declares, under the exposure each declares.
+pub(super) fn register_noun<V>(registry: &mut ToolRegistry, noun: &'static NounSpec<V>)
+where
+    V: OperationVerb,
+    OrbitBuiltinAction: From<V>,
+{
+    for spec in noun.operations {
+        let tool = OperationTool(spec);
+        match spec.mcp_scope {
+            Some(scope) => registry.register_mcp(tool, scope),
+            None => registry.register_inactive(tool),
+        }
+    }
+}
 
 /// Derive the MCP tool schema an operation advertises.
 ///
 /// Parameter order follows the spec's declaration order, which is contract: it
 /// is what the shipped `mcp_tools_list` snapshot records.
-pub(super) fn operation_tool_schema<V: 'static>(spec: &OperationSpec<V>) -> ToolSchema {
+fn operation_tool_schema<V: 'static>(spec: &OperationSpec<V>) -> ToolSchema {
     ToolSchema {
         name: spec.tool_name.to_string(),
         description: spec.tool_description.to_string(),
@@ -31,17 +79,5 @@ pub(super) fn operation_tool_schema<V: 'static>(spec: &OperationSpec<V>) -> Tool
             })
             .collect(),
         builtin: true,
-    }
-}
-
-/// Register one derived tool under the exposure its spec declares.
-pub(super) fn register_operation<V: 'static, T: crate::Tool + 'static>(
-    registry: &mut ToolRegistry,
-    spec: &OperationSpec<V>,
-    tool: T,
-) {
-    match spec.mcp_scope {
-        Some(scope) => registry.register_mcp(tool, scope),
-        None => registry.register_inactive(tool),
     }
 }

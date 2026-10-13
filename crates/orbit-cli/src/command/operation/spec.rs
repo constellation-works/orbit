@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -15,6 +16,7 @@ use orbit_types::identity::{
 use serde_json::Value;
 
 use super::super::{CommandOut, CommandOutput, Commands, Execute};
+use super::args::Invocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMeta {
@@ -260,6 +262,33 @@ pub(super) fn admin_meta(
         arguments_json: None,
         job_run_id: None,
     }
+}
+
+/// The operation for a registry-derived command, from its spec.
+///
+/// A read opens the runtime without stale-run reconciliation; a write opens
+/// the full runtime. Audit metadata comes from the noun and the CLI path, with
+/// the positional record id as the target.
+pub(super) fn registry_operation<V: OperationVerb>(
+    invocation: &Invocation<V>,
+    dispatch: CommandDispatch,
+) -> CommandOperation {
+    let noun = V::noun();
+    let runtime_need = match invocation.spec.effect {
+        Effect::Read => RuntimeNeed::ReadOnly,
+        Effect::Write => RuntimeNeed::Required,
+    };
+    CommandOperation::new(
+        runtime_need,
+        Some(admin_meta(
+            noun.cli_name,
+            Some(&invocation.audit_subcommand()),
+            Some(noun.audit_target_type),
+            invocation.target_id(),
+        )),
+        None,
+        dispatch,
+    )
 }
 
 pub(super) fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {

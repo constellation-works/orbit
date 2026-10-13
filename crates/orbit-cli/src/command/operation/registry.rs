@@ -450,27 +450,10 @@ impl Commands {
                 runtime_dispatch!(Search),
             ),
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
-            // this arm reads the invocation instead of matching verb by verb.
-            // A new friction verb needs no edit here.
+            // runtime need and audit metadata derive from its spec. A new
+            // friction verb needs no edit here.
             Commands::Friction(command) => {
-                use orbit_common::governance::friction::FrictionVerb;
-                let invocation = &command.command;
-                let runtime_need = if invocation.spec.verb == FrictionVerb::List {
-                    RuntimeNeed::ReadOnly
-                } else {
-                    RuntimeNeed::Required
-                };
-                CommandOperation::new(
-                    runtime_need,
-                    Some(admin_meta(
-                        "friction",
-                        Some(invocation.spec.name),
-                        Some("friction"),
-                        invocation.target_id(),
-                    )),
-                    None,
-                    runtime_dispatch!(Friction),
-                )
+                registry_operation(&command.command, runtime_dispatch!(Friction))
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;
