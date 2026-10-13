@@ -118,7 +118,7 @@ try {
     await navigation(route, 'reload');
   }
   // Changing the hash on an existing page must also reveal the current view.
-  for (const route of ['config/hosts', 'diagnostics/scoreboard', 'operations/jobs']) {
+  for (const route of ['config/hosts', 'diagnostics/cost', 'operations/jobs']) {
     await page.evaluate(route => { document.getElementById('tabs').scrollLeft = 0; location.hash = route; }, route);
     await page.waitForFunction(route => location.hash.slice(1).split('?')[0] === route && document.querySelector('.tab.active').dataset.tab === route.split('/')[0], route);
     await settle();

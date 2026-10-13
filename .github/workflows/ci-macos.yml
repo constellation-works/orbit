@@ -52,7 +52,7 @@ on:
       # [ORB-13237] A backend the host spawns for an agent runs under the
       # plugin profile intersected with the agent's; proven through
       # sandbox-exec.
-      - "crates/orbit-tools/src/plugin/tests/backend/brokered.rs"
+      - "crates/orbit-tools/tests/tools/plugin_admission/brokered.rs"
       # [ORB-13236] The agent-call broker authenticates peers by their
       # ancestry to the spawned sandbox-exec, read through Darwin's
       # LOCAL_PEERTOKEN and libproc.
@@ -197,7 +197,7 @@ jobs:
       # sandbox gate covers the Linux boundary through orbit-exec's
       # Bubblewrap integration tests.
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
-        run: cargo test --no-fail-fast -p orbit-tools --locked plugin::tests::backend::brokered -- --include-ignored
+        run: cargo test --no-fail-fast -p orbit-tools --locked --test tools plugin_admission::brokered -- --include-ignored
 
       - name: Run orbit-core sandbox and blocked-recovery tests
         env:

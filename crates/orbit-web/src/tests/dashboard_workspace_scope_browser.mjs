@@ -184,14 +184,14 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         }
         const reliabilityPositions = await railPositions();
 
-        await page.locator('#diag-subtabs [data-subtab="scoreboard"]').click();
-        await page.locator('#diag-subtabs [data-subtab="scoreboard"].active').waitFor({ state: 'visible' });
+        await page.locator('#diag-subtabs [data-subtab="cost"]').click();
+        await page.locator('#diag-subtabs [data-subtab="cost"].active').waitFor({ state: 'visible' });
         await note.waitFor({ state: 'hidden' });
         if (await note.getAttribute('aria-hidden') !== 'true') {
           throw new Error('The workspace-filter note must be hidden from assistive technology outside Reliability');
         }
-        const scoreboardPositions = await railPositions();
-        for (const [label, positions] of [['Reliability', reliabilityPositions], ['Scoreboard', scoreboardPositions]]) {
+        const costPositions = await railPositions();
+        for (const [label, positions] of [['Reliability', reliabilityPositions], ['Cost', costPositions]]) {
           if (positions.length !== initialRailPositions.length || positions.some((entry, index) =>
             entry.route !== initialRailPositions[index].route || Math.abs(entry.top - initialRailPositions[index].top) > 0.1)) {
             throw new Error(`Opening ${label} must not move dashboard rail entries: ${JSON.stringify({ initialRailPositions, positions })}`);

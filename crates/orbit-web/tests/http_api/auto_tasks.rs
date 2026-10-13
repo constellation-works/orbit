@@ -357,6 +357,135 @@ fn deliveries(owner: Option<&str>) -> AutoTaskSchedule {
     .unwrap()
 }
 
+/// Time cursor failures affect only time schedules. Delivery inspection still
+/// fails closed on its own state, with disabled and plugin skip precedence.
+#[test]
+fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
+    isolated(
+        "auto_tasks::list_keeps_delivery_schedules_independent_of_corrupt_time_cursors",
+        || {
+            let fixture = Fixture::new();
+            for (name, owner, enabled) in [
+                ("delivery", None, true),
+                ("elsewhere", Some("hm_elsewhere"), true),
+                ("disabled", Some("hm_elsewhere"), false),
+                ("inactive", Some("hm_elsewhere"), true),
+            ] {
+                definition_with_schedule(&fixture, name, deliveries(owner));
+                fixture.runtime.auto_task_toggle(name, enabled).unwrap();
+            }
+            definition(&fixture, "interval");
+            definition_with_schedule(
+                &fixture,
+                "cron",
+                AutoTaskSchedule::Cron {
+                    cron: "* * * * *".into(),
+                },
+            );
+            // The missing seeding plugin makes the enabled definition inactive.
+            let inactive = fixture.work.join("auto_tasks/inactive.yaml");
+            let body = fs::read_to_string(&inactive).unwrap();
+            fs::write(
+                &inactive,
+                format!("# provenance: plugin:fixture-missing@1.0.0\n{body}"),
+            )
+            .unwrap();
+            let cursor = orbit_core::application::auto_tasks::cursor_state_path(
+                &fixture.runtime.paths().state_dir,
+            );
+            fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+            fs::write(&cursor, "{broken").unwrap();
+
+            let server = fixture.server(false);
+            let listed = json_ok(server.get(URL));
+            assert_eq!(listed["inactive_plugin_count"], 1, "{listed}");
+            assert!(
+                listed["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row["name"] != "inactive")
+            );
+            let url = format!("{URL}&include_inactive_plugins=true");
+            let listed = json_ok(server.get(&url));
+            let row = |listed: &Value, name: &str| {
+                listed["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == name)
+                    .unwrap()
+                    .clone()
+            };
+            assert!(listed["cursor_state_error"].is_string(), "{listed}");
+            for (name, state) in [
+                ("delivery", "waiting"),
+                ("interval", "unavailable"),
+                ("cron", "unavailable"),
+                ("elsewhere", "unavailable"),
+                ("disabled", "disabled"),
+                ("inactive", "waiting"),
+            ] {
+                let item = row(&listed, name);
+                assert_eq!(item["next_evaluation"]["state"], state, "{item}");
+                assert!(item["next_evaluation"]["at"].is_null(), "{item}");
+            }
+            let delivery = row(&listed, "delivery");
+            assert!(delivery["skipped_reason"].is_null(), "{delivery}");
+            assert_ne!(
+                delivery["automation"]["reason"], "state_unavailable",
+                "{delivery}"
+            );
+            let inactive = row(&listed, "inactive");
+            assert_eq!(inactive["plugin_inactive"], true, "{inactive}");
+            assert!(
+                inactive["skipped_reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("fixture-missing"),
+                "{inactive}"
+            );
+
+            // Malformed trigger state is independent of malformed time cursors.
+            for name in ["delivery", "disabled"] {
+                let consumer = orbit_core::application::automation::consumer_key(
+                    &fixture.runtime,
+                    "auto-task",
+                    name,
+                )
+                .unwrap();
+                fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                    tx.connection().execute(
+                        "INSERT INTO automation_consumers (consumer, generation, state_json) VALUES (?1, 1, ?2)",
+                        [consumer.as_str(), "{broken-trigger"],
+                    ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                }).unwrap();
+            }
+            let listed = json_ok(server.get(&url));
+            assert!(listed["cursor_state_error"].is_string(), "{listed}");
+            let delivery = row(&listed, "delivery");
+            assert_eq!(
+                delivery["automation"]["reason"], "state_unavailable",
+                "{delivery}"
+            );
+            assert_eq!(
+                delivery["next_evaluation"]["state"], "unavailable",
+                "{delivery}"
+            );
+            assert_eq!(
+                row(&listed, "disabled")["next_evaluation"]["state"],
+                "disabled"
+            );
+            assert_eq!(
+                fs::read_to_string(&cursor).unwrap(),
+                "{broken",
+                "listing must preserve corrupt cursor evidence"
+            );
+        },
+    );
+}
+
 fn strip_operator_stamp(fixture: &Fixture, name: &str) {
     let path = fixture.work.join(format!("auto_tasks/{name}.yaml"));
     let body = fs::read_to_string(&path).unwrap();

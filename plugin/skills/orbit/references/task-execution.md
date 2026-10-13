@@ -120,6 +120,14 @@ required command's entry carries `outcome: "passed"` and `role: "required"`.
 The role vocabulary is `required`, `expected_failure`, `excluded`,
 `superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
 refused.
+The already-landed verifier requires exactly one passed `required` entry per
+`required_commands` command and refuses extra required commands. It also accepts
+additional `expected_failure` and `diagnostic` entries, without counting them
+as required coverage. Every accepted entry must reference a JSON log carrying
+the report's exact `run_id`, `tested_head`, and `command`, an integer `exit_code`,
+and string `output`. Required checks must exit zero; expected failures must exit
+nonzero. Diagnostic outcomes and exit status do not determine acceptance.
+`excluded` and `superseded` entries are not accepted in already-landed evidence.
 If a required check or covering evidence is unavailable, record the blocker;
 do not claim a verified already-landed result.
 

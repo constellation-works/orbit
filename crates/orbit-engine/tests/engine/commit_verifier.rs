@@ -17,11 +17,14 @@ use tempfile::tempdir;
 const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-verifier-test";
 
+mod already_landed;
+
 struct VerifierHost {
     repo: PathBuf,
     tasks: Mutex<BTreeMap<String, Task>>,
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
+    worker: Option<orbit_types::tool::WorkerInvocation>,
 }
 
 impl VerifierHost {
@@ -31,6 +34,7 @@ impl VerifierHost {
             tasks: Mutex::new(BTreeMap::from([(task.id.clone(), task)])),
             comments: Mutex::default(),
             artifacts: Mutex::default(),
+            worker: None,
         }
     }
 
@@ -43,6 +47,21 @@ impl VerifierHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        self.worker.clone()
+    }
+
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
+        let mut artifacts = self.artifacts.lock().unwrap();
+        let logs = artifacts.entry(TASK_ID.to_string()).or_default();
+        logs.retain(|artifact| artifact.path != path);
+        logs.push(TaskArtifact::from_text(
+            path,
+            String::from_utf8(content).expect("fixture JSON is UTF-8"),
+        ));
+        Ok(())
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()
