@@ -21,7 +21,7 @@ use orbit_types::workflow::{DrainAdmissionForecast, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::{PressureProbe, running_run};
+use super::{PressureProbe, isolated, running_run};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
