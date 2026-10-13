@@ -333,7 +333,11 @@ unexpected-failure rates use the scanned failure counts with successful-call
 counts from the full window, so rates may be understated. Total audited events
 and raw tool-call counts still cover the full window.
 
-Select a tool on **Tools** to open its events. **Analytics → Cost** shows
+Tools follows the Analytics window independently of an Events cutoff. With
+an **all** window, its bounded summary uses **24h**, named in the cards.
+Select a tool on **Tools** to open its events for the window the card shows.
+Exact incident-event links select **all** statuses because they list the
+recorded event IDs without a status restriction. **Analytics → Cost** shows
 managed-execution cost and token usage for the selected window.
 
 ## Automation

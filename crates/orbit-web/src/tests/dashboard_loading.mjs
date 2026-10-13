@@ -23,6 +23,7 @@ let liveDrain = false;
 let readinessReads = 0;
 let crewReads = 0;
 let summaryReads = 0;
+const summaryQueries = [];
 let summaryDenials = 0;
 const codebaseQueries = [];
 let frictionTitle = 'stable friction title';
@@ -182,7 +183,7 @@ function fixture(url) {
     }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
-    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h',
+    case '/api/audit/summary': summaryReads++; summaryQueries.push(url.searchParams.get('since')); return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h',
       tool_call_failure_rate: { failed: 0, total: summaryReads, denied: 0 } };
     case '/api/codebase/analytics': {
       codebaseQueries.push(url.searchParams);
@@ -857,6 +858,31 @@ check(window.location.hash.startsWith('#diagnostics/incidents?') && node('diagno
 click(document.querySelector('#incidents-views [data-view="events"]')); await settle();
 check(new URLSearchParams(window.location.hash.split('?')[1]).get('status') === 'denied', 'Events keeps the filter it was left with');
 summaryDenials = 0;
+
+// Tools uses Analytics' selected window rather than a remembered Events
+// cutoff. A tool row then opens evidence for the window its summary shows.
+setActiveTab('diagnostics/incidents/events?since=1h&status=denied'); await settle();
+setActiveTab('analytics/reliability/tools?window=7d'); await settle();
+check(summaryQueries.at(-1) === '7d', 'Tools fetches the Analytics window independently of Events');
+click(document.querySelector('.rail .tab[data-tab="diagnostics"]')); await settle();
+check(new URLSearchParams(window.location.hash.split('?')[1]).get('since') === '1h', 'opening Tools preserves the remembered Events cutoff');
+setActiveTab('analytics/reliability/tools?window=all'); await settle();
+check(summaryQueries.at(-1) === '24h', 'Tools keeps the bounded summary fallback for an all window');
+setActiveTab('analytics/reliability/tools?window=7d'); await settle();
+const auditRenderer = await import('./js/audit.js');
+auditRenderer.renderAuditSummary({ window: '7d', tool_call_failures_by_tool: [
+  { tool: 'orbit.task.show', failed: 1, total: 5, rate: 0.2, unexpected: 1, denied: 0 },
+] });
+click(node('audit-summary-body').querySelector('tbody tr')); await settle();
+const toolRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+check(toolRoute.get('since') === '7d' && toolRoute.get('tool') === 'orbit.task.show' && toolRoute.get('status') === 'denied',
+  'Tools drill-down carries the displayed window and keeps the Events status filter');
+setActiveTab('diagnostics/incidents/events?ids=9001'); await settle();
+check(document.querySelector('#audit-filter .chip.active[data-status]')?.dataset.status === 'all',
+  'exact incident evidence highlights all statuses because its request has no status restriction');
+setWindow('24h');
+persistScopeToUrl();
+setActiveTab('diagnostics/incidents/events?since=24h&status=denied'); await settle();
 
 globalThis.showTaskPaginationEvidence = async () => {
   networkDown = false;

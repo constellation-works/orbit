@@ -1615,8 +1615,11 @@ function fetchAndRenderRunLogs() {
 }
 
 function fetchAndRenderSummary() {
-  const since = effectiveAuditWindow() || "24h";
-  return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
+  // Tools follows Analytics' shared window, independently of an Events
+  // drill-down's cutoff. The summary endpoint requires a bounded window.
+  const toolsOpen = activeTab === "analytics" && activeAnalyticsSubtab === "reliability" && activeReliabilityView === "tools";
+  const since = (toolsOpen ? (getWindow() === "all" ? "24h" : getWindow()) : effectiveAuditWindow()) || "24h";
+  return requestPanel("audit-summary-body", since, () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
     renderSummaryCounts(data);
     renderAuditSummary(data, auditContext());

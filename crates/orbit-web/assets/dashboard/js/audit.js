@@ -205,7 +205,12 @@ function applyAuditHashQuery(query) {
   // Mutates auditFilter from URLSearchParams (hash query). Called from setActiveTab.
   // Legacy run_id alias for execution_id is preserved for old deep links.
   const status = query.get("status");
-  auditFilter.status = status === ALL_STATUSES ? null
+  auditFilter.eventIds = (query.get("ids") || "")
+    .split(",")
+    .map(value => Number(value))
+    .filter(value => Number.isSafeInteger(value) && value > 0);
+  // Exact incident evidence applies no status restriction in the request.
+  auditFilter.status = auditFilter.eventIds.length > 0 || status === ALL_STATUSES ? null
     : AUDIT_STATUSES.includes(status) ? status : DEFAULT_AUDIT_STATUS;
   auditFilter.tool = query.get("tool") || null;
   auditFilter.role = query.get("role") || null;
@@ -213,10 +218,6 @@ function applyAuditHashQuery(query) {
   auditFilter.execution_id =
     query.get("execution_id") || query.get("run_id") || null;
   auditFilter.profile = query.get("profile") || null;
-  auditFilter.eventIds = (query.get("ids") || "")
-    .split(",")
-    .map(value => Number(value))
-    .filter(value => Number.isSafeInteger(value) && value > 0);
   auditFilter.q = query.get("q") || "";
   auditFilter.since = query.get("since") || (getWindow() === "all" ? null : getWindow());
   auditFilter.metric = query.get("metric") || null;
@@ -590,11 +591,12 @@ function renderAuditSummary(data, ctx) {
     };
   };
 
-  // A tool's row opens its events under Health, keeping the other filters
-  // Events was left with.
+  // A tool's row opens its events under Health for the summary's window,
+  // keeping the other filters Events was left with.
   const filterByTool = (item) => {
     auditFilter.tool = item.tool;
     auditFilter.eventIds = [];
+    auditFilter.since = data.window || "24h";
     syncAuditControls();
     window.location.hash = buildAuditHash();
   };
