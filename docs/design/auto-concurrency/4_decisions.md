@@ -21,8 +21,8 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 Every entry is a proposed Door 2 rule: it governs choices the implementation
 tasks make. Each is open to the operator's revision while the folder is
 `Draft`. Per-task measurement, the host-wide forecast with its serialized
-reservations, and gap-fit admission in local drains under `shadow` and
-`enforce` are implemented; pull drains do not admit on the forecast yet.
+reservations, gap-fit admission in local drains under `shadow` and
+`enforce`, and forecast admission in pull drains are implemented.
 
 ## Admit on forecast resource use, not on a throughput model
 
