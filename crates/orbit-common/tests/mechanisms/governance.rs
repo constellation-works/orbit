@@ -1,11 +1,11 @@
+//! Caller capability resolution from the signals a chokepoint observed.
+
 use std::collections::BTreeSet;
 
-use super::super::authorization::*;
+use orbit_common::governance::authorization::{
+    CallerCapabilities, CallerEnvelope, CallerProvenance,
+};
 use orbit_types::tool::McpCapability;
-
-fn envelope() -> CallerEnvelope {
-    CallerEnvelope::default()
-}
 
 #[test]
 fn agent_envelope_outranks_a_terminal() {
@@ -13,7 +13,7 @@ fn agent_envelope_outranks_a_terminal() {
         agent_declared: true,
         interactive_terminal: true,
         local_cli: true,
-        ..envelope()
+        ..CallerEnvelope::default()
     });
     assert_eq!(caller.provenance(), CallerProvenance::AgentEnvelope);
     assert_eq!(caller.grants(), &BTreeSet::from([McpCapability::Agent]));

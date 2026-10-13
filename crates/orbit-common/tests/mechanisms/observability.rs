@@ -1,10 +1,13 @@
+//! Redaction of tracing fields before they reach a log writer.
+
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
+use orbit_common::observability::logging::RedactingFields;
+use orbit_common::test_env::scoped;
 use tracing_subscriber::fmt::MakeWriter;
 
-use crate::observability::logging::RedactingFields;
-use crate::test_env::scoped;
+use crate::{debug_string_body, json_string_body};
 
 #[test]
 fn tracing_debug_field_redacts_secret_with_backslash_and_quote() {
@@ -70,22 +73,4 @@ fn capture_redacted_info(emit: impl FnOnce()) -> String {
         .finish();
     tracing::subscriber::with_default(subscriber, emit);
     String::from_utf8(buffer.lock().expect("capture").clone()).expect("utf8 logs")
-}
-
-fn json_string_body(value: &str) -> String {
-    let encoded = serde_json::to_string(value).expect("json string");
-    encoded
-        .strip_prefix('"')
-        .and_then(|body| body.strip_suffix('"'))
-        .expect("json quotes")
-        .to_string()
-}
-
-fn debug_string_body(value: &str) -> String {
-    let encoded = format!("{value:?}");
-    encoded
-        .strip_prefix('"')
-        .and_then(|body| body.strip_suffix('"'))
-        .expect("debug quotes")
-        .to_string()
 }

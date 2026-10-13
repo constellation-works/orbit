@@ -1,7 +1,8 @@
-use serde_yaml::{Mapping, Value};
+//! Forward-only, read-time document migration plans.
 
-use super::super::migration::Plan;
-use crate::OrbitError;
+use orbit_common::OrbitError;
+use orbit_common::migration::Plan;
+use serde_yaml::{Mapping, Value};
 
 fn doc(version: u64) -> Value {
     let mut map = Mapping::new();

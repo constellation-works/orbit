@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/tests/authorization.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 ---
