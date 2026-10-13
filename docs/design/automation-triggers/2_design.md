@@ -2,7 +2,7 @@
 title: Automation Triggers — Design
 owner: codex
 last_updated: 2026-09-25
-last_validated: 2026-10-09
+last_validated: 2026-10-13
 status: Draft
 feature: automation-triggers
 doc_role: design
