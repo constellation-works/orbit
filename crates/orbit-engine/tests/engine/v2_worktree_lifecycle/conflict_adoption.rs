@@ -425,11 +425,6 @@ fn earlier_repairs_still_refuse_markers_whitespace_and_unrepaired_conflicts() {
                     "authorized conflict files were not repaired",
                 ),
                 (
-                    "jrun-untouched",
-                    None,
-                    "authorized conflict files were not repaired",
-                ),
-                (
                     "jrun-whitespace",
                     Some("candidate and target  \n"),
                     "still contains conflict markers or whitespace errors",

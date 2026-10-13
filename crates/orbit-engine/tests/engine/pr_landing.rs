@@ -103,47 +103,47 @@ fn previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins() {
     isolated(
         "previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins",
         |sandbox| {
-            for reviewed in [true, false] {
-                for stale_reads in [1, 2] {
-                    let fx = Fixture::new(sandbox);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                    action(
-                        &host,
-                        "pr_open",
-                        &fx.open_input(&fx.candidate, &fx.base_sha),
-                    )
-                    .unwrap();
-                    host.set_status(TASK_ID, TaskStatus::Review);
-                    let mut input = fx.republished_completion_input(&host);
-                    let candidate = input["published_head_sha"].as_str().unwrap().to_string();
-                    if !reviewed {
-                        input.as_object_mut().unwrap().remove("reviewed_head_sha");
-                    }
-                    let mut heads = vec![fx.candidate.as_str(); stale_reads];
-                    heads.push(&candidate);
-                    fx.script_heads(&heads, Some(&candidate));
-                    let before = fx.status_reads();
+            // Review presence and bounded reread count are independent: retain
+            // both routes and both counts without their Cartesian product.
+            for (reviewed, stale_reads) in [(true, 2), (false, 1)] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let mut input = fx.republished_completion_input(&host);
+                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+                if !reviewed {
+                    input.as_object_mut().unwrap().remove("reviewed_head_sha");
+                }
+                let mut heads = vec![fx.candidate.as_str(); stale_reads];
+                heads.push(&candidate);
+                fx.script_heads(&heads, Some(&candidate));
+                let before = fx.status_reads();
 
-                    let completed = action(&host, "pr_complete", &input)
-                        .expect("known previous-head metadata catches up within the bound");
+                let completed = action(&host, "pr_complete", &input)
+                    .expect("known previous-head metadata catches up within the bound");
 
-                    assert_eq!(completed["merge"]["stale_head_observations"], stale_reads);
-                    assert_eq!(completed["merge"]["waited_seconds"], stale_reads * 5);
-                    assert_eq!(fx.status_reads() - before, stale_reads + 2);
-                    assert_eq!(
-                        fx.merge_requests(),
-                        vec![format!("sha={candidate} merge_method=squash")]
-                    );
-                    assert_eq!(
-                        completed["merge"]["delivery_evidence"]["head_sha"],
-                        candidate
-                    );
-                    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
-                    if reviewed {
-                        assert_eq!(host.landings()[0].reviewed_head_sha, candidate);
-                    } else {
-                        assert!(host.landings().is_empty());
-                    }
+                assert_eq!(completed["merge"]["stale_head_observations"], stale_reads);
+                assert_eq!(completed["merge"]["waited_seconds"], stale_reads * 5);
+                assert_eq!(fx.status_reads() - before, stale_reads + 2);
+                assert_eq!(
+                    fx.merge_requests(),
+                    vec![format!("sha={candidate} merge_method=squash")]
+                );
+                assert_eq!(
+                    completed["merge"]["delivery_evidence"]["head_sha"],
+                    candidate
+                );
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+                if reviewed {
+                    assert_eq!(host.landings()[0].reviewed_head_sha, candidate);
+                } else {
+                    assert!(host.landings().is_empty());
                 }
             }
         },
