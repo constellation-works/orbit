@@ -311,7 +311,6 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         key: &str,
     ) -> Result<KeyedJobRunAdmission, OrbitError> {
         validate_path_stem(job_id, "job")?;
-        super::super::automation::initialize(&self.store)?;
         self.store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn=tx.connection();
             let existing:Option<String>=conn.query_row("SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",rusqlite::params![self.workspace_id,key],|r|r.get(0)).optional().map_err(sqlite_store_error)?;

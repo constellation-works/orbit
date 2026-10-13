@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
-last_validated: 2026-10-12
+last_validated: 2026-10-13
 ---
 
 # Upgrade Orbit Safely
@@ -119,10 +119,10 @@ Each binary is compiled with a **compatibility identity**, which `orbit update
   keep **writing** through, and the newest one it cannot **read** (see
   [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace)
   for how migrations are classified);
-- every feature schema (automation, review, local pull) at the version the binary
-  migrates it to, plus its newest **breaking** migration. A feature migration is
-  declared additive, data-only (a one-time rewrite of existing rows into a shape older
-  binaries already read and write, with no table or column change) or breaking; see
+- every feature schema (automation, review, local pull) at its frozen final version,
+  plus its newest **breaking** migration. A feature migration is declared additive,
+  data-only (a one-time rewrite of existing rows into a shape older binaries already
+  read and write, with no table or column change) or breaking; see
   [Feature schemas](#feature-schemas).
 
 The authority records the envelope of every identity admitted since it last had no
@@ -895,12 +895,19 @@ layout for writes, exactly as it did before.
 
 ### Feature schemas
 
-Feature crates (automation, review, local pull) keep their own ledgers in the
-`feature_schema_meta` table. Each feature migration is declared additive, data-only or
-breaking, and the binary that applies one records the classification in a
-`feature.compat.<feature>` row of `schema_meta`. A binary older than a feature schema
-keeps opening it, for reads and writes, when every newer migration is additive or
-data-only; otherwise it refuses, naming the first breaking migration it lacks:
+Automation, review and local pull once kept their own ledgers in the
+`feature_schema_meta` table, applied the first time each feature store opened. Store
+migration v49 (`absorb_feature_ledgers`) runs each of them to its final version
+(automation v5, review v4, local pull v1) when the store opens, and they are frozen
+there: a later change to one of those tables is an ordinary store migration. v49 is
+additive, so a binary from before it keeps opening the store for reads and writes.
+
+The feature rows stay, and so does the `feature.compat.<feature>` row of `schema_meta`
+that records each feature migration's class (additive, data-only or breaking), because
+binaries from before v49 still run their own feature open. That open applies nothing
+to a feature already at the version the binary supports. A binary older than a feature
+schema keeps opening it when every newer migration is additive or data-only; otherwise
+it refuses, naming the first breaking migration it lacks:
 
 ```text
 error: feature schema 'automation' version 6 is newer than the newest version this binary

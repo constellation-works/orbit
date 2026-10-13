@@ -1,16 +1,12 @@
-//! Append-only schema registry for review records.
+//! The frozen review feature registry.
 
-use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 
-use crate::Store;
-use crate::driver::sqlite::migration::FeatureMigration;
+use super::FeatureMigration;
 
-/// This feature's schema ledger name.
-pub(crate) const FEATURE: &str = "review";
+pub(super) const FEATURE: &str = "review";
 
-/// Append-only schema registry for this feature.
-pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
+pub(super) const MIGRATIONS: &[FeatureMigration] = &[
     FeatureMigration::breaking(1, "lineages_certificates_landings", |conn| {
         conn.execute_batch(
                 "CREATE TABLE review_lineages (workspace_id TEXT NOT NULL, lineage_key TEXT NOT NULL, revision INTEGER NOT NULL, ledger_json TEXT NOT NULL, PRIMARY KEY(workspace_id, lineage_key));
@@ -41,7 +37,3 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
     // they can join and mutate the same store.
     FeatureMigration::breaking(4, "reconciliation_landed_delivery_binding", |_| Ok(())),
 ];
-
-pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {
-    store.apply_feature_migrations(FEATURE, MIGRATIONS)
-}

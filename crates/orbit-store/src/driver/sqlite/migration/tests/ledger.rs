@@ -298,6 +298,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0048".to_string(),
                 "admission_forecasts".to_string()
             ),
+            (
+                "migration.v0049".to_string(),
+                "absorb_feature_ledgers".to_string()
+            ),
         ]
     );
 }

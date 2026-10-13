@@ -1,7 +1,7 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 last_validated: 2026-10-09
 status: Draft
 feature: state-compatibility
@@ -164,8 +164,9 @@ binary, and the apply path are otherwise unchanged.
   task registry runs this contract on its own ledger (§8). Binaries from
   before that ledger read only its `PRAGMA user_version`, so they cannot be
   held read-only: the first registry migration that is not `Additive` refuses
-  them outright, as the layout does. The feature ledgers and the recovery
-  authority are still planned to move onto ledgers of this kind; see
+  them outright, as the layout does. The recovery authority runs on a ledger
+  of this kind too, and the store ledger absorbed the feature ledgers (§9);
+  see
   [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
 
 ## 7 Frozen store migration bodies
@@ -244,6 +245,33 @@ or envelope recorded by a binary from before this ledger lacks it; it reads
 as version 0 with no floors, a binary that knows no registry migration. That
 fails closed: any registry migration with a writer or reader floor refuses
 it, matching the `user_version` fence.
+
+## 9 The absorbed feature ledgers
+
+Automation (v1–v5), review (v1–v4) and local pull (v1) kept independent
+registries in `feature_schema_meta`, each with a `feature.compat.<feature>`
+record in `schema_meta`, applied the first time a feature store opened. Store
+entry v49, `absorb_feature_ledgers`, runs each registry to completion inside
+the store migration's transaction, through the same feature engine
+(`migration/feature.rs::apply_feature_registry`) on the migration's
+connection. The feature rows and records come out exactly as a feature open
+wrote them, and a feature an earlier open advanced resumes where it stopped.
+
+The registries now live, frozen, in `migration/feature_ledgers/`, with private
+copies of the automation v4 and v5 member repairs. Nothing appends to them, and
+`FeatureMigration` is private to the migration module. A later change to an
+automation, review or local-pull table is a store ledger entry. Feature stores
+no longer initialize anything when they open, and readers no longer check
+whether `local_pull_admissions` exists, because every store this binary opens
+writable is at v49 or newer.
+
+v49 is `Additive`. A binary from before it opens the store writable, and its
+own feature open finds each feature at the version it supports and applies
+nothing. A binary that lacks a feature migration still decides from that
+feature's record: data-only and additive migrations above it keep it running,
+and a breaking one refuses, naming it. Upgrade admission keeps reporting the
+frozen feature versions and breaking floors in `CompatibilityIdentity`,
+because those older binaries still compare them.
 
 ## Task References
 

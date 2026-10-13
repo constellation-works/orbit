@@ -10,6 +10,7 @@ mod admission_reservations;
 mod audit_events;
 mod baseline;
 mod feature;
+mod feature_ledgers;
 mod friction;
 mod host_registry;
 mod introspect;
@@ -34,6 +35,7 @@ use audit_events::{
 };
 use baseline::apply_baseline_schema;
 use feature::apply_feature_schema_ledger;
+use feature_ledgers::apply_absorb_feature_ledgers;
 use friction::{apply_friction_records_schema, apply_friction_rehome_target};
 use host_registry::{
     apply_host_registry_core, apply_hub_registry_metadata, apply_workspace_coordination_projections,
@@ -68,9 +70,6 @@ use task_reservations::apply_workspace_claim_scope;
 #[cfg(test)]
 use introspect::table_has_column;
 
-pub use feature::{
-    AppliedFeatureMigration, FeatureMigration, FeatureSchemaStatus, PendingFeatureMigration,
-};
 pub(crate) use ledger::applied_migrations;
 pub use ledger::{
     AppliedMigration, LedgerStamp, LedgeredDatabase, Migration, SUPPORTED_SCHEMA_VERSION,
@@ -179,6 +178,16 @@ pub(crate) fn schema_compatibility() -> orbit_common::fs::generation::LedgerComp
             .iter()
             .map(|m| (m.version, m.compat.is_write_safe(), !m.compat.is_breaking())),
     )
+}
+
+/// The frozen feature schemas as upgrade admission compares them: each
+/// feature's newest version and its newest breaking migration.
+pub(crate) fn feature_compatibility() -> Vec<(
+    &'static str,
+    u32,
+    orbit_common::fs::generation::FeatureFloor,
+)> {
+    feature::feature_compatibility(feature_ledgers::FEATURE_REGISTRIES)
 }
 
 /// Registry migrations newer than `current_version`, in apply order. Lets

@@ -2,16 +2,11 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
-    members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState, StateTriggerKind},
+    members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState},
 };
-use orbit_types::workflow::{JobRunState, PipelineState};
-use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
-
-use super::codec::{decode, encode};
 
 pub(super) fn validate(
     previous: &AutomationState,
@@ -226,161 +221,5 @@ fn every_member_settled(
                     .pending
                     .get(&member.key)
                     .is_none_or(|pending| pending.source != member.source)
-        })
-}
-
-/// One-time repair [ORB-14476]. Before a source move could supersede an
-/// attempt, a task-pilot claim whose branch moved under its material failed,
-/// retried against the same frozen source, failed again and was retired at
-/// the task's fingerprint, so the task was never piloted again until someone
-/// edited it. Persisted state does not record why an attempt failed, so this
-/// releases every member shelved at a source the branch has since left: its
-/// exhausted failure record is at the fingerprint it is still pending at, and
-/// it is pending at another source. A member that failed for another reason
-/// costs at most one more pilot attempt. Each repaired consumer advances its
-/// generation, so a writer holding the old snapshot is refused.
-pub(super) fn release_stale_source_failures(conn: &Connection) -> Result<(), OrbitError> {
-    release_failures(conn, |members, key, failed| {
-        Ok(shelved_by_source(members, key, failed))
-    })
-}
-
-/// The global step index `apply` held in `task_pilot_pipeline` until a step
-/// was inserted before it, and where the member host kept reading it.
-const MISREAD_APPLY_INDEX: u32 = 2;
-
-/// One-time repair [ORB-15197]. The member host read `task_pilot_pipeline`
-/// steps by position. Once a step was inserted before `apply`, it took the
-/// `pilots` fan-in output at the old apply position for the apply record,
-/// found no member evidence there and recorded every member failed, often
-/// while the real apply was still running, so no assessment was certified and
-/// a run that needed a repair apply lost its claim. Each such record names a
-/// task-pilot run whose checkpoint at that position is not its `apply`
-/// checkpoint; this releases those records so the members are observed afresh
-/// and the next pilot certifies them. A record whose run cannot be read, or
-/// whose run recorded `apply` at that position, stays. Each repaired consumer
-/// advances its generation, so a writer holding the old snapshot is refused.
-pub(super) fn release_misread_pilot_failures(conn: &Connection) -> Result<(), OrbitError> {
-    let states_exist = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_run_states')",
-            [],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(sqlite_store_error)?;
-    if !states_exist {
-        return Ok(());
-    }
-    release_failures(conn, |members, key, failed| {
-        if failed.kind != StateTriggerKind::PreparationEligible
-            || members
-                .active
-                .as_ref()
-                .is_some_and(|active| active.member_for(key).is_some())
-        {
-            return Ok(false);
-        }
-        let Some(run_id) = failed.action_id.as_deref() else {
-            return Ok(false);
-        };
-        misread_apply(conn, run_id)
-    })
-}
-
-/// Whether every stored state of the task-pilot run `run_id` holds a
-/// successful checkpoint at [`MISREAD_APPLY_INDEX`] that is not its `apply`
-/// output. An unreadable state proves nothing and answers `false`.
-fn misread_apply(conn: &Connection, run_id: &str) -> Result<bool, OrbitError> {
-    let states = {
-        let mut statement = conn
-            .prepare(
-                "SELECT s.pipeline_state_json FROM job_run_states s \
-                 JOIN job_runs r ON r.workspace_id = s.workspace_id AND r.run_id = s.run_id \
-                 WHERE s.run_id = ?1 AND r.job_id = 'task_pilot_pipeline'",
-            )
-            .map_err(sqlite_store_error)?;
-        statement
-            .query_map([run_id], |row| row.get::<_, String>(0))
-            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-            .map_err(sqlite_store_error)?
-    };
-    Ok(!states.is_empty()
-        && states.iter().all(|raw| {
-            decode::<PipelineState>(raw).is_ok_and(|state| {
-                state.step_states.get(&MISREAD_APPLY_INDEX) == Some(&JobRunState::Success)
-                    && state
-                        .step_output(MISREAD_APPLY_INDEX)
-                        .is_some_and(|output| state.pipeline.get("apply") != Some(output))
-            })
-        }))
-}
-
-/// Remove each failed record `release` selects, with the withheld reason it
-/// left, from every consumer this binary can read.
-fn release_failures(
-    conn: &Connection,
-    release: impl Fn(&MemberState, &str, &MemberAttempt) -> Result<bool, OrbitError>,
-) -> Result<(), OrbitError> {
-    let rows = {
-        let mut statement = conn
-            .prepare("SELECT consumer, generation, state_json FROM automation_consumers")
-            .map_err(sqlite_store_error)?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-            .map_err(sqlite_store_error)?
-    };
-
-    for (consumer, generation, raw) in rows {
-        // A record this binary cannot read is left for its own reader.
-        let Ok(mut state) = decode::<AutomationState>(&raw) else {
-            continue;
-        };
-        let Some(members) = state.members.as_mut() else {
-            continue;
-        };
-        let mut released = Vec::new();
-        for (key, failed) in &members.failed {
-            if release(members, key, failed)? {
-                released.push(key.clone());
-            }
-        }
-        if released.is_empty() {
-            continue;
-        }
-        for key in &released {
-            members.failed.remove(key);
-            members.withheld.remove(key);
-        }
-        state.generation = state
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| OrbitError::Store("automation generation overflow".into()))?;
-        conn.execute(
-            "UPDATE automation_consumers SET generation=?1, state_json=?2 WHERE consumer=?3 AND generation=?4",
-            params![state.generation, encode(&state)?, consumer, generation],
-        )
-        .map_err(sqlite_store_error)?;
-    }
-    Ok(())
-}
-
-fn shelved_by_source(members: &MemberState, key: &str, failed: &MemberAttempt) -> bool {
-    failed.kind == StateTriggerKind::PreparationEligible
-        && failed.exhausted
-        && members
-            .active
-            .as_ref()
-            .is_none_or(|active| active.member_for(key).is_none())
-        && failed.member_for(key).is_some_and(|retired| {
-            members.pending.get(key).is_some_and(|pending| {
-                pending.fingerprint == retired.fingerprint && pending.source != retired.source
-            })
         })
 }
