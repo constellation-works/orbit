@@ -300,6 +300,9 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
         "foreign-claim",
         "wrong-claim-task",
         "renamed",
+        "renamed-claim-carry",
+        "renamed-claim-carry-false",
+        "renamed-claim-carry-true",
         "no-flag",
         "false-flag",
         "wrong-rebase",
@@ -329,7 +332,13 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             log: Ok(None),
             inputs: Mutex::default(),
             worker_run: match case {
-                "claim" | "prevalidated" | "shipped-claim" | "wrong-claim-task" => Some(RUN),
+                "claim"
+                | "prevalidated"
+                | "shipped-claim"
+                | "wrong-claim-task"
+                | "renamed-claim-carry"
+                | "renamed-claim-carry-false"
+                | "renamed-claim-carry-true" => Some(RUN),
                 "foreign-claim" => Some("foreign-run"),
                 _ => None,
             },
@@ -382,7 +391,13 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             job.resolved_failure_activity = None;
             resume = Some(state);
         } else {
-            job.steps[0].id = if case == "renamed" {
+            job.steps[0].id = if matches!(
+                case,
+                "renamed"
+                    | "renamed-claim-carry"
+                    | "renamed-claim-carry-false"
+                    | "renamed-claim-carry-true"
+            ) {
                 "custom_sync"
             } else {
                 "sync_base"
@@ -416,7 +431,7 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             let mut validator = load_job_asset(&json!({
                 "schemaVersion": 2, "kind": "Job", "metadata": {"name": "validator"},
                 "spec": {"state": "enabled", "steps": [{
-                    "id": "validate", "spec": {"type": "deterministic", "action": if matches!(case, "claim" | "prevalidated" | "unbound-claim" | "foreign-claim" | "wrong-claim-task") {"claim_validate"} else {"candidate_validate"}, "config": {}},
+                    "id": "validate", "spec": {"type": "deterministic", "action": if matches!(case, "claim" | "prevalidated" | "unbound-claim" | "foreign-claim" | "wrong-claim-task" | "renamed-claim-carry" | "renamed-claim-carry-false" | "renamed-claim-carry-true") {"claim_validate"} else {"candidate_validate"}, "config": {}},
                     "default_input": {
                         "workspace_path": workspace_path, "job_run_id": RUN,
                         "completed_task_ids": ["fixture-task"],
@@ -437,6 +452,15 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             let JobV2StepBody::Target(target) = &mut validator.body else {
                 panic!("validator fixture")
             };
+            if case.starts_with("renamed-claim-carry") {
+                let input = target.default_input.as_mut().unwrap();
+                input["carry"] = json!({"decision": "passed", "candidate": {"commit": "prior"}});
+                if case.ends_with("-false") {
+                    input["revalidate"] = json!(false);
+                } else if case.ends_with("-true") {
+                    input["revalidate"] = json!(true);
+                }
+            }
             if case == "wrong-claim-task" {
                 target.default_input.as_mut().unwrap()["completed_task_ids"] =
                     json!(["another-task"]);
@@ -527,7 +551,13 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
             input["final_validation"] == true,
             matches!(
                 case,
-                "owner" | "claim" | "renamed" | "shared-guard" | "shipped-owner" | "shipped-claim"
+                "owner"
+                    | "claim"
+                    | "renamed"
+                    | "renamed-claim-carry-true"
+                    | "shared-guard"
+                    | "shipped-owner"
+                    | "shipped-claim"
             ),
             "{case}: only a proven active continuation owns the full gates"
         );
