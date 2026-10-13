@@ -15,7 +15,8 @@ use super::*;
 /// the read-only bind of `/` cannot stand for them.
 ///
 /// Every plan also hides the host account's well-known credential locations
-/// (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish tokens) behind an empty
+/// (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish tokens) and per-user
+/// runtime sockets (`/run/user/<uid>` and absolute `XDG_RUNTIME_DIR`) behind an empty
 /// stand-in, after every other mount — see `super::credentials`.
 ///
 /// The profile's globs are compiled once and every non-subtree rule is
@@ -197,10 +198,12 @@ pub(super) fn compile_plan_with_credentials(
     }
     // After every policy mount and alias bind, so none of them can expose a
     // masked location again.
-    append_credential_masks(&mut out, credentials, mounts)?;
     if let Some(mask) = mask {
         append_mask_mounts(&mut out, mask)?;
     }
+    // Include the caller's sentinel binds in the alias check too: a sentinel
+    // sourced inside a mandatory mask must never expose its host contents.
+    append_credential_masks(&mut out, credentials, mounts)?;
     if let Some(cwd) = cwd {
         // Keep the provider agent on the real worktree path. rustc cache-key
         // cwd normalization belongs in scripts/rustc-compiler-cache.sh, which
@@ -237,8 +240,8 @@ pub(super) fn compile_plan_with_credentials(
 /// `--bind-fd` sources for those grants; a missing matching bind fails
 /// closed because the runtime authority would otherwise be silently unused.
 ///
-/// `mask`, when given, is mounted after every other mount of the plan; a
-/// masked directory or file the child could also reach through another path
+/// `mask`, when given, follows policy mounts; mandatory credential and runtime
+/// masks follow it. A masked directory or file reachable through another path
 /// refuses the plan (see [`LinuxBwrapMask`]).
 pub fn compile_linux_bwrap_argv_with_authority(
     profile: &ResolvedFsProfile,

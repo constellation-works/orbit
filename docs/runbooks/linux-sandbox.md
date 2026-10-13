@@ -180,7 +180,14 @@ look ready.
 The Linux boundary enforces writes from the resolved policy. It leaves host filesystem
 reads and host network access available, so it does not provide worktree-only reads or
 policy-gated network egress. Well-known credential locations are masked inside the
-sandbox. See [policy-sandbox](../design/policy-sandbox/) for the design.
+sandbox. Existing per-user runtime directories (`/run/user/<uid>` and absolute
+`XDG_RUNTIME_DIR`) are also hidden, so session D-Bus, systemd user-manager,
+SSH-agent and GPG-agent sockets there cannot be reached by the worker or its
+children. Policy grants inside those directories refuse the launch. Providers
+cannot use the raw session bus for authentication. Abstract Unix sockets,
+network services and pathname sockets elsewhere remain accessible; see
+[SECURITY.md](../../SECURITY.md) for the IPC limits and
+[policy-sandbox](../design/policy-sandbox/) for the design.
 
 ## Verify the Bubblewrap boundary natively
 
@@ -189,14 +196,19 @@ Bubblewrap suite from the candidate checkout on the owning Linux host:
 
 ```sh
 cargo test -p orbit-exec --test sandbox linux_sandbox:: -- --include-ignored --nocapture
+cargo test -p orbit-exec --test sandbox linux_runtime_ipc:: -- --nocapture
 ```
 
 On Linux, the `linux_sandbox::` module in the `sandbox` integration-test target
 includes live children through `spawn_under_linux_bwrap` and checks
 credential masking, worktree writes, protected `.env` paths, Orbit store
 exceptions and Git metadata integrity. Tests that cannot create the namespace
-print `skipping real Bubblewrap test` and return early; the ignored ones fail
-instead. Confirm nonempty selection without spawning children first:
+print `DEFERRED: bubblewrap unavailable:` and return early; the ignored ones fail
+instead. The `linux_runtime_ipc::` fixture creates host Unix sockets and checks
+that the runtime mask hides them while a control socket remains reachable. It
+also checks inherited children, explicit bus-address queries and refusal of
+grants or caller-mask aliases that would reopen the runtime. Confirm nonempty
+selection without spawning children first:
 
 ```sh
 cargo test -p orbit-exec --test sandbox linux_sandbox:: -- --list

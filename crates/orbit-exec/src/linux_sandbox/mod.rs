@@ -3,12 +3,15 @@
 //! The backend deliberately keeps the host filesystem readable and materializes
 //! `ResolvedFsProfile::modify` as ordered bind mounts. It is therefore honest
 //! write confinement, not a general read-policy implementation. It has two
-//! read boundaries, both masks emitted after every other mount: the fixed
+//! read boundaries, both masks emitted after policy mounts: the fixed
 //! well-known credential locations (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo
 //! publish tokens, ...) that the macOS profile also denies, shared through
 //! [`crate::credential_paths`], and an explicit caller-named mask of
 //! directories hidden behind a read-only stand-in (see [`LinuxBwrapMask`]).
-//! Every other host read stays delegated.
+//! Linux additionally masks `/run/user/<uid>` and an absolute
+//! `XDG_RUNTIME_DIR`, hiding session-bus, systemd, SSH and GPG agent sockets
+//! from workers and their descendants. Every other host read stays delegated;
+//! sharing the network namespace also leaves abstract Unix sockets reachable.
 
 mod argv;
 mod credentials;

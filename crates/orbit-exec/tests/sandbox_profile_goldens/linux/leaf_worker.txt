@@ -41,12 +41,13 @@ wrapper: /usr/bin/bwrap
 --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
 --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
 --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
---tmpfs <HOME>/.aws
---ro-bind /dev/null <HOME>/.cargo/credentials.toml
---tmpfs <HOME>/.ssh
 --ro-bind <HOME>/.orbit/state/plugin-broker/masked <HOME>/.orbit/state/plugins
 --ro-bind <HOME>/.orbit/state/plugin-broker/masked <HOME>/.orbit/state/plugin-secrets
 --dev-bind /dev/null <HOME>/.orbit/clock.env
+--tmpfs <HOME>/.aws
+--ro-bind /dev/null <HOME>/.cargo/credentials.toml
+--tmpfs <HOME>/.ssh
+--tmpfs <ROOT>/runtime
 --chdir <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
 --
 /usr/bin/true

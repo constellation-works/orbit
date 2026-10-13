@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod linux_landlock;
+mod linux_runtime_ipc;
 mod linux_sandbox;
 mod macos_compile;
 mod macos_sandbox;
