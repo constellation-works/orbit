@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-12
+last_validated: 2026-10-13
 ---
 # Boundary-First Testing
 
@@ -80,6 +80,8 @@ Admitted unit tests:
 
 - `orbit-engine`'s `branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget` (criterion 2, fault injection). A stub Git stalls until the supervisor deadline, then succeeds, exhausts the budget, or completes with a refusal. It drives the branch lookup used by PR preparation and verifies the timeout class, elapsed time, bounded backoff and attempt count. The private Git budget guard scales the deadline; `pr_prepare` does not expose that guard through its public action boundary.
 
+The [orbit-config audit delivery](../reviews/unit-test-audit-orbit-config-delivery.md) maps the retired and relocated identities to their public boundaries. Config loading, compatibility warnings, environment projection, plugin toggles and store admission live in the existing crate-root integration binaries. The malformed-pool grammar table remains admitted under criterion 1; ordinary pool loading uses the public loader.
+
 - `crates/orbit-config/src/tests/seed.rs`: `every_family_combination_seeds_valid_defaults_pools_and_enabled_flags` (criterion 1, combinatorial seed rendering) checks all detected-family subsets in memory: defaults name enabled crews, pools parse and reference enabled crews, and each crew's enabled flag follows its provider availability. It avoids filesystem setup for every subset. `rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled` (criterion 2, fault injection) removes or disables a dynamically selected pool member in the private renderer's crew map; the public seeder always constructs that map itself. Neither test fixes crew choices, models or weights as policy.
 
 - `crates/orbit-web/src/log_format/tests/scan.rs`: `post_window_errors_do_not_consume_the_match_budget_or_advance_coverage` (criterion 1, combinatorial scan budgets and coverage). A table drives the existing segmented-reader seam with complete, capped and retention-limited windows and excess newer records. The HTTP boundary fixes the process scan budget at 50,000; this seam proves those cases with a handful of rows, while the HTTP month test covers endpoint wiring and agreement with stderr.
@@ -89,7 +91,8 @@ Admitted unit tests:
 - The [admissions-stop regressions](../../crates/orbit-core/src/application/job/run/tests/admissions_stop.rs) and `crates/orbit-core/src/application/job/run/tests/drain_cancel.rs`: initialization races (criterion 2, deterministic interleaving). One-shot seams after `NoState` force a worker's first checkpoint and child dispatch, or terminalization with and without that checkpoint, before control initialization. They verify preserved progress and lineage, a merged control for a live drain, and no new effective control for a terminal drain. Crate-root integration tests cannot force this transaction ordering [ORB-15611].
 - `crates/orbit-cli/src/tests/main.rs`: `every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions` (criterion 1). It walks the assembled command tree, including hidden and plugin-derived leaves that help goldens cannot enumerate, and asserts that every leaf accepts `--json`. The only exclusion is a plugin tool input named `json`.
 - `crates/orbit-cmd/src/doctor/tests/worker_token.rs`: `clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits` (criterion 1). It is a table over every pairing of clock-file credential names with the workspace's effective pass, asserting that the clock is ready only when an admitted credential is held, and that a held credential the pass omits is named and warned. The boundary needs an installed launchd or systemd clock to reach this classification. `absent_empty_refused_and_mismatched_clock_files_stay_distinct` (criterion 1) pins that absent, empty, refused and mismatched files stay distinct states.
-- `crates/orbit-core/src/runtime/host_resource/tests/platform.rs`: `missing_descendant_reports_its_existing_ancestor_filesystem` and `relative_path_is_refused_instead_of_resolved_against_the_working_directory` (criteria 3 and 4). The disk probe canonicalizes the nearest existing ancestor before statting it, and refuses relative paths so it never resolves against the process working directory. Platform statvfs on a missing worktrees directory has no integration test on any platform.
+- Orbit-core's missing-directory and relative-path disk cases now run through the exported native host-resource probe in `tests/runtime/admission_audit/disk_probe.rs`. The private platform tests retain the injected CPU counter/time/wait matrices below.
+
 - `crates/orbit-core/src/runtime/host_resource/tests/platform.rs`: `cpu_window_reuses_advancing_or_repeated_ticks_without_refreshing_the_baseline`, `cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window`, `cpu_window_native_failures_clock_reversal_and_stalls_remain_unknown`, and `cpu_window_handles_tick_wrap_and_the_freshness_boundary` (criteria 1 and 2). Injected counters, timestamps and waits cover XNU cache plateaus, expiry endpoints, failed reads, clock jumps and counter wrap deterministically without generating host load or waiting for a real wrap. The macOS CLI integration test covers actual cross-process history reuse and cold-start recovery.
 - `crates/orbit-store/src/driver/sqlite/task_registry/tests/mod.rs`: `fresh_open_through_symlinked_root_matches_reopen_by_canonical_root` (criterion 3). It guards symlink confinement of the registry root: a fresh open through a symlinked root and a later open of the canonical root must key one `workspaces_dir`, because the repair gate keys its attempt budget on that path. `workspaces_dir` is crate-private, so no public-surface test can observe the split.
 - `crates/orbit-store/src/repository/task/coordination/tests/admission.rs`: `a_grant_never_takes_a_footprint_the_owner_wave_admitted_before_its_section` and `an_owner_wave_after_a_grant_refuses_the_claimed_footprint` (criterion 2, deterministic interleaving). The first admits an owner drain wave through the crate-private `after_selection` seam, between a pull grant's selection and its exclusive section, and asserts the grant neither takes the admitted task nor one overlapping its footprint. The second commits the grant first and asserts the wave's section refuses the claimed footprint even though the wave's snapshot predates the claim. At the runtime boundary the claim's task is already `in-progress` before any later drain snapshot, and nothing can land a grant between a wave's snapshot and its section, so neither ordering is reachable there.
@@ -99,7 +102,7 @@ Admitted unit tests:
 - `crates/orbit-common/src/fs/generation/tests/handoff.rs`: `a_probe_that_times_out_is_retried_at_the_next_boundary` and `a_completed_refusal_is_not_probed_again` (criterion 2, fault injection). A candidate's first exec can be held past the probe bound by the OS, which the boundary cannot reproduce on demand, and the process-wide refusal cache is keyed by the replaced image of the running test binary. The first holds a probe past a short timeout against a script that stalls, asserts the timeout is not cached, then answers under a longer budget and asserts that answering call probes exactly once; the second asserts that wrong-contract, missing-capability and non-zero-exit answers are probed once. Both answering probes get the longer budget, so neither passing assertion waits on a short window.
 - `crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/tests/persist.rs`: `overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge` (criterion 2, deterministic interleaving). Two task-pilot applications whose proposed edges close a dependency cycle only together run on separate threads, ordered by a `#[cfg(test)]` seam at the two points of the apply lock protocol: the second discovers its graph before the first takes its locks and locks after. It asserts that neither waits out a file-lock timeout, the second rediscovers the grown graph, its edge is refused by the cycle check, and the persisted graph stays acyclic. The crate-root integration tests compile without `cfg(test)`, so they cannot reach the seam, and unforced timing would not choose this interleaving reliably [ORB-15408].
 
-- [The plugin workspace lifecycle test](../../crates/orbit-core/src/application/plugin/tests/lifecycle/workspace.rs): `failed_workspace_enable_keeps_the_previous_disabled_toggle` (criterion 2, fault injection). It makes the routine seed destination a file, calls the workspace enable entry point, and asserts the seed error preserves a prior `false` toggle; after removing the obstacle, it verifies a successful retry seeds both definitions and writes `true`. Reusing the isolated plugin fixture avoids duplicating its install and manifest setup in a crate-root test.
+- [The plugin workspace lifecycle case](../../crates/orbit-core/tests/runtime/admission_audit/plugin_workspace.rs) now uses the exported enable API at the crate-root boundary. Its existing destination-file fault proves that failed seeding preserves a prior disabled toggle and a successful retry seeds definitions before enabling the workspace. An ordinary hostile destination needs no private seam, and the integration target reuses the isolated plugin fixture.
 
 - `crates/orbit-engine/src/executor/automation/ci/` attribution tests: `nextest_regions_bind_only_complete_evidence_to_the_known_failed_step` (criteria 1 and 3). This table exercises private CI attribution with streamed nextest regions and incomplete selection/command flags. Public engine fixtures cannot provide scripted CI logs to this boundary; it prevents a partial or differently attributed block from becoming actionable evidence.
 
@@ -129,7 +132,7 @@ Admitted unit tests:
 - `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::store_schema_prefix_goldens` (criterion 3, persisted-schema safety): applies each shipped ledger prefix independently and compares its normalized SQLite schema with a lossless per-version golden. The public store-open boundary always applies the latest registry and cannot exercise historical prefixes without widening production visibility. The legacy recreation and actor data backfill cases use the public boundary in `tests/migration_freeze.rs`.
 - `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::task_registry_schema_prefix_goldens` (criterion 3, persisted-schema safety): the same per-prefix golden for the task registry's own ledger (`task_registry/tests/registry_schema.golden`), a separate SQLite file the store-open boundary never builds. Adoption, the `user_version` fence and newer-registry decisions use the public registry boundary in `tests/task_registry_ledger.rs`.
 
-- `crates/orbit-config/src/tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values` (criterion 3, fail-closed crafted input). Zero is rejected by the resolver with a message that names `machine.host_shutdown_hold_minutes`; a negative fails the integer read and names the same key. The default 180 and an uncapped 10080 are controls in the same test. The load helpers that write a global file and refuse a workspace `[machine]` table are `pub(super)` in this crate's existing machine tests, so the check stays beside them [ORB-15796].
+- `crates/orbit-config/src/tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values` (criterion 3, fail-closed crafted input). Zero is rejected by the resolver with a message that names `machine.host_shutdown_hold_minutes`; a negative fails the integer read and names the same key. The default 180 and an uncapped 10080 are controls in the same test. This admission [ORB-15796] was added after the pinned orbit-config audit and remains unchanged by that slice; the public workspace `[machine]` refusal now lives in the crate-root review-layer integration target.
 - `the_hold_includes_the_horizon_and_a_later_instant_admits` (criterion 1), beside `crates/orbit-core/src/runtime/host_signal.rs`. One table pins the horizon arithmetic: equality holds, one second later admits, and a past timestamp holds. The pull and local drain tests, and the sweep test below, place the schedule with `Utc::now()` at minute granularity, so they cannot pin the one-second boundary without a race [ORB-15796].
 - `crates/orbit-core/src/application/routines/tests/sweep.rs::a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires` (criterion 2). The public `test_support::run_sweep_at` hardcodes the default host-signal probe, so a crate-root test cannot place a shutdown on either side of the horizon. The test drives `pub(crate)` `run_sweep_at_with_providers_at` with an injected clock and a 30-minute horizon, and asserts the tick skips at the horizon and fires one minute past it. A hardcoded 180 would still hold that far side [ORB-15796].
 
@@ -171,6 +174,30 @@ provider controls use exported `apply_antigravity_print_timeout` in
 [`provider_limit.rs`](../../crates/orbit-agent/tests/provider_limit.rs). These
 cases do not earn unit admission because the public boundary costs the same.
 
+## Public types contract boundary
+
+`orbit-types`' plugin, task, tool and workflow cases live in
+[`tests/contracts/main.rs`](../../crates/orbit-types/tests/contracts/main.rs),
+with modules for each surface in one integration binary. Publication cases
+join the existing
+[`tests/workspace.rs`](../../crates/orbit-types/tests/workspace.rs) binary.
+The admission audit's 40 moved cases use the same inputs and assertions through
+exported helpers and types, including the vendored provider-resolution fixture;
+none needs a provider process or production visibility change.
+
+The two retired filesystem cases are covered by `orbit-policy`'s
+`tests::matrix::precedence_matrix` (later exclusion and allowed sibling) and
+`tests::matrix::newline_segment_request_matrix` (single-star grant followed by
+recursive deny, newline/ordinary siblings and positive recursive newline grants).
+The retired `only_a_won_start_grants_execution_authority` case merely enumerated
+`JobRunStartOutcome::owns_execution`, a getter excluded by this strategy.
+`orbit-store`'s `allocation_admission::removed_job_run_ids_are_never_reallocated`
+asserts a real store Start owns execution through its `finish` helper; it is
+not an exact duplicate of all three getter variants.
+
+The later `workflow/review/tests/gate_note.rs` admission was outside this audit
+slice and remains in its sibling unit location and baseline.
+
 ## Retiring a unit test
 
 You may delete a unit test when one of these holds:
@@ -185,6 +212,34 @@ Before deleting a test, check whether it is the only coverage of a security or i
 - **Do not pad a boundary test to reach an edge case it cannot express cleanly.** That case meets criterion 1 or 2, so write a small unit test.
 - **Do not add e2e tests for every branch.** E2E covers critical flows. Branches belong in integration tests or table-driven unit tests.
 - **Do not reach around this rule by widening visibility** so that an integration test can call internals. Test the public surface, or admit a unit test under the criteria.
+
+## orbit-tools admission audit reconciliation
+
+The 2026-10-12 audit's 18 moves now live in the existing crate-root `tools`
+integration binary. Artifact validation and managed domain controls dispatch
+through `ToolRegistry`; program symlink denial dispatches `proc.spawn`.
+Working-directory confinement uses the exported `confine_workspace_cwd`
+helper. `plugin_build` calls exported planning, environment and installation
+helpers directly, and `plugin_admission` calls exported backend profiles,
+child-environment construction and `PluginTool::execute`. Unsafe Git sources
+retain their isolated fake-Git child fixture under `plugin_source_admission`.
+No production access is widened for these tests.
+
+The rotation race retains its barrier, same-version updates, compare-and-swap
+store and winner/refusal assertions. Two tiny exec backend replies carry the
+existing updates through the public tool response boundary instead of calling
+private `apply_secret_updates`; no live provider or build sandbox is needed.
+The oversized-output fixture retains the production 256 MiB bound as a sparse
+file, because that private constant is not an exported API.
+
+Six unit identities remain on the pinned audit keep list: the Git config-write lexer table
+(criterion 1), forged callback descriptor identity (criterion 3), secret-valued
+update-name diagnostics before public masking (criterion 3), archive traversal
+refusal and decompression with lowered private limits (criterion 3), and the
+first-party Git-source spelling table (criterion 1). Their private fixtures and
+isolated diagnostic child entry point remain under `src`. The first-party
+classifier is currently exported; this slice preserves its pinned keep
+identity rather than expanding the audit's 18-move mandate.
 
 ## CLI admission audit reconciliation
 
@@ -347,3 +402,35 @@ The migration fixture inspects its temporary SQLite file to retain the
 existing obsolete-table and space-reclamation assertions. This public helper
 boundary costs no extra process or test-only visibility, so the source tests
 do not need a private `LexicalStore` or migration seam.
+
+## Orbit-core audit reconciliation
+
+The [delivery reconciliation](../reviews/unit-test-admission-orbit-core-2026-10-13.json)
+accounts for all 208 non-admitted identities in the pinned orbit-core audit:
+130 cases move to the existing crate-root runtime target, six retirements remove
+policy/redundant controls, four retired allowances were already absent, and 68
+decisions are corrected against the current private seams or renamed source.
+All 142 originally admitted cases remain intact, including the recovery-crew case
+that had already moved into its source test subdirectory on the delivery base.
+
+A `pub` function inside a private module is not an exported helper. The retained
+cases name the qualifying seam and explain why ordinary dispatch cannot inject
+their input, ordering or native observer state economically. For example,
+`RunResourceSampler` accepts fixture cgroup/proc counters and sample times; its
+concurrent-host-row control is retained for those injected observations, not
+merely for starting two threads. The public resource evaluator/cache cases have
+moved independently. Review gate cases use public policy views to prepare their
+fixture DTOs and public deterministic/ledger APIs to observe decisions; capture
+itself and the system-history writer remain at their private seams.
+
+## Orbit-policy admission audit reconciliation
+
+The 12 `orbit-policy` cases pinned by the 2026-10-12 audit now run in
+`crates/orbit-policy/tests/policy/admission.rs`. Their fixtures use the
+exported `PolicyEngine::from_def`, `check` and `check_resolved` methods and
+`PolicyDef::merged`; in-memory definitions and temporary directories reach the
+same validation, matching and symlink-resolution behavior without a private
+seam or an extra process. This applies to parent traversal, host exceptions,
+workspace exception validation, resolved symlinks, newline globs and rule
+precedence. No source-level unit-test identities remain admitted for
+`orbit-policy`, and no production visibility or behavior changed.

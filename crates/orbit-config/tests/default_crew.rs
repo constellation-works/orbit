@@ -1,5 +1,5 @@
-//! Default-crew admission and provenance through the public loaders. This
-//! binary re-executes in children because each case owns its environment.
+//! Crew admission, seed compatibility, layering and environment projection
+//! through public config APIs. Cases that own the environment run in children.
 #![allow(clippy::expect_used, missing_docs)]
 
 use std::path::Path;
@@ -173,3 +173,15 @@ fn default_crew_admission_and_provenance_do_not_depend_on_file_presence() {
         );
     }
 }
+
+#[path = "default_crew/crew_pools.rs"]
+mod crew_pools;
+
+#[path = "default_crew/layering.rs"]
+mod layering;
+
+#[path = "default_crew/seed.rs"]
+mod seed;
+
+#[path = "default_crew/execution_env.rs"]
+mod execution_env;

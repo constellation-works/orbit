@@ -251,7 +251,12 @@ fn exercise_child(case: &str) {
                 path.len()
             );
             if Path::new(path).is_relative() && case != "include-match" {
-                assert_eq!(record["cwd"].as_str().unwrap(), sockets.to_str().unwrap());
+                // macOS reports the child's cwd through /private/var while the
+                // temporary HOME is spelled /var, so compare canonical paths.
+                assert_eq!(
+                    fs::canonicalize(record["cwd"].as_str().unwrap()).unwrap(),
+                    fs::canonicalize(&sockets).unwrap()
+                );
                 assert_eq!(
                     path.len(),
                     40,

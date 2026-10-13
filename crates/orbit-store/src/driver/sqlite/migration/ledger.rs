@@ -512,12 +512,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_admission_forecasts,
     },
+    // The automation, review and local-pull feature ledgers, which features
+    // applied lazily on first open, run to completion here and freeze; later
+    // changes to their tables are store entries. Each feature keeps its
+    // `feature_schema_meta` rows and `feature.compat.<feature>` record, from
+    // which a binary without this entry decides the feature as before.
+    Migration {
+        version: 49,
+        name: "absorb_feature_ledgers",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_absorb_feature_ledgers,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 48;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 49;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

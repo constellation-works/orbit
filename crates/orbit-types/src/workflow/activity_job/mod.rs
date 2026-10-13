@@ -186,6 +186,3 @@ pub use trusted_host::{
     TrustedHostAdmission, run_input_declares_trusted_host, strip_trusted_host_admission,
     validate_trusted_host_activity,
 };
-
-#[cfg(test)]
-mod tests;

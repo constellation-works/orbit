@@ -5,6 +5,11 @@ use orbit_types::telemetry::InvocationTrace;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InvocationQuery {
+    /// Only successful job runs that committed a candidate, with this
+    /// invocation the final one inside a successful activity step's execution interval.
+    /// Missing outcome evidence, no-diff runs and earlier retry attempts are excluded.
+    #[serde(default)]
+    pub succeeded_candidate_only: bool,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     /// Workspace the invocations were recorded under. Run ids are minted per

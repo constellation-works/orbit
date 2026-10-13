@@ -164,6 +164,30 @@ impl Store {
 fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn ToSql>>) {
     let mut query = InvocationListQuery::default();
 
+    if filter.succeeded_candidate_only {
+        // Outcomes are workspace-qualified. EXISTS preserves one row per
+        // invocation even when an activity appears more than once in a job.
+        // A later successful retry must not relabel an earlier attempt.
+        query.conditions.push(
+            "EXISTS (SELECT 1 FROM job_runs jr
+             JOIN job_run_states js ON js.workspace_id = jr.workspace_id AND js.run_id = jr.run_id
+             WHERE jr.workspace_id = i.workspace_id AND jr.run_id = i.job_run_id
+               AND jr.state = 'success'
+               AND json_extract(js.pipeline_state_json, '$.pipeline.commit.decision') = 'performed'
+               AND json_extract(js.pipeline_state_json, '$.pipeline.commit.committed') = 1)
+             AND EXISTS (SELECT 1 FROM job_run_steps s
+             WHERE s.workspace_id = i.workspace_id AND s.run_id = i.job_run_id
+               AND s.target_type = 'activity' AND s.target_id = i.activity_id AND s.state = 'success'
+               AND julianday(i.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
+               AND NOT EXISTS (SELECT 1 FROM invocations later
+                 WHERE later.workspace_id = i.workspace_id AND later.job_run_id = i.job_run_id
+                   AND later.activity_id = i.activity_id
+                   AND julianday(later.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
+                   AND (julianday(later.ts), later.id) > (julianday(i.ts), i.id)))"
+                .to_string(),
+        );
+    }
+
     if let Some(since) = &filter.since {
         query.push_filter("i.ts >= ?", since.to_rfc3339());
     }

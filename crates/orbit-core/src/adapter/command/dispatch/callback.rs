@@ -24,11 +24,6 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-#[cfg(test)]
-thread_local! {
-    static TEST_ACTIVITY_TOOLS: RefCell<Option<ActivityToolPolicyEnv>> = const { RefCell::new(None) };
-}
-
 /// A managed agent's activity tool policy, as its inherited envelope states it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ActivityToolPolicyEnv {
@@ -36,44 +31,6 @@ pub(crate) struct ActivityToolPolicyEnv {
     pub(crate) allowed_tools: Vec<String>,
     /// Deny-mode disallow list; `None` in allowlist mode.
     pub(crate) deny_policy: Option<ActivityToolDenyPolicy>,
-}
-
-/// Restores a test-local activity-tool override when dropped.
-///
-/// The override is thread-local so tests never need to change process-global
-/// environment variables merely to isolate their temporary runtime from a
-/// managed executor's inherited activity allowlist.
-#[cfg(test)]
-pub(crate) struct TestActivityToolsGuard {
-    previous: Option<ActivityToolPolicyEnv>,
-}
-
-#[cfg(test)]
-impl Drop for TestActivityToolsGuard {
-    fn drop(&mut self) {
-        TEST_ACTIVITY_TOOLS.with(|tools| {
-            tools.replace(self.previous.take());
-        });
-    }
-}
-
-/// Override the effective managed-agent activity allowlist for this test
-/// thread. Production dispatch always reads the inherited activity envelope.
-#[cfg(test)]
-pub(crate) fn override_activity_tools_for_test(
-    allowed_tools: impl IntoIterator<Item = impl Into<String>>,
-) -> TestActivityToolsGuard {
-    override_activity_tool_policy_for_test(ActivityToolPolicyEnv {
-        allowed_tools: allowed_tools.into_iter().map(Into::into).collect(),
-        deny_policy: None,
-    })
-}
-
-/// Override the managed-agent activity tool policy for this test thread.
-#[cfg(test)]
-fn override_activity_tool_policy_for_test(policy: ActivityToolPolicyEnv) -> TestActivityToolsGuard {
-    let previous = TEST_ACTIVITY_TOOLS.with(|tools| tools.replace(Some(policy)));
-    TestActivityToolsGuard { previous }
 }
 
 /// A process launched as a plugin backend reaches Orbit only through
@@ -401,11 +358,6 @@ pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<Pro
 }
 
 pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
-    #[cfg(test)]
-    if let Some(policy) = TEST_ACTIVITY_TOOLS.with(|tools| tools.borrow().clone()) {
-        return policy;
-    }
-
     if std::env::var("ORBIT_TASK_ACTOR_KIND").ok().as_deref() != Some("agent") {
         return ActivityToolPolicyEnv::default();
     }

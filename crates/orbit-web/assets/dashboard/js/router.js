@@ -41,20 +41,20 @@ function markWorkspaceSelectorScope(fleetWide) {
 }
 
 // ORB-10444: the top-level nav is exactly these tabs plus the hash-only
-// `run-detail` route. A deprecated tab was retired outright and `scoreboard`,
-// being diagnostics-shaped, now routes as `#diagnostics/scoreboard`.
+// `run-detail` route. A deprecated tab was retired outright. Health › Cost
+// routes as `#diagnostics/cost`; `#diagnostics/scoreboard` rewrites to it.
 // Auto-drain is not a destination: its window card is the Tasks dock's Drain
 // mode (ORB-12898). The retired `#auto-drain` and older
 // `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
 const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
-const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "doctor", "reliability", "scoreboard"];
+const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "doctor", "reliability", "cost"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
   metrics: "diagnostics-metrics-main",
   doctor: "diagnostics-doctor-main",
-  scoreboard: "diagnostics-scoreboard-main",
+  cost: "diagnostics-cost-main",
   reliability: "diagnostics-reliability-main",
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
@@ -166,7 +166,7 @@ function setDiagSubtabImpl(ctx, name) {
     subIndicator.style.left = `${activeBtn.offsetLeft}px`;
   }
 
-  // ORB-10444/ORB-10588: Scoreboard, Reliability, Doctor and Metrics are
+  // ORB-10444/ORB-10588: Cost, Reliability, Doctor and Metrics are
   // diagnostics subtabs that render into their own full-width <main>, so the
   // list panel is swapped out for them while the subtab nav stays reachable.
   const fullWidthMain = DIAG_FULL_WIDTH_MAINS[name];
@@ -184,8 +184,8 @@ function setDiagSubtabImpl(ctx, name) {
     $("diag-body").style.display = "none";
     $("runs-body").style.display = "none";
     // Reliability aggregates across workspaces server-side, so it stays live
-    // in the aggregate view; the scoreboard is per-workspace and does not.
-    if (name === "scoreboard" && isAggregateView()) renderPanelPlaceholder("scoreboard-body");
+    // in the aggregate view; Cost is per-workspace and does not.
+    if (name === "cost" && isAggregateView()) renderPanelPlaceholder("scoreboard-orchestration");
     // Metrics reads as soon as it opens, not on the next refresh tick.
     if (name === "metrics" && ctx.fetchMetrics) {
       ctx.fetchMetrics();
@@ -262,12 +262,17 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let head = segments[0] || "tasks";
   // Legacy routes: auto-drain was a destination, and before that an
   // Operations subtab. Both open Tasks with the dock in Drain mode.
+  // Health › Scoreboard is Cost; the window query is preserved below.
   let legacyRoute = false;
   if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain")) {
     head = "tasks";
     segments.splice(1);
     legacyRoute = true;
     if (ctx.showDrainDock) ctx.showDrainDock();
+  }
+  if (head === "diagnostics" && segments[1] === "scoreboard") {
+    segments[1] = "cost";
+    legacyRoute = true;
   }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
@@ -376,6 +381,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     }
     setDiagSubtabImpl(ctx, sub);
     hash = `#diagnostics/${sub}?window=${encodeURIComponent(getWindow())}`;
+    if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
   } else if (top === "audit") {
     const sub = ["events", "codebase"].includes(segments[1]) ? segments[1] : ctx.getActiveAuditSubtab();
     ctx.applyAuditHashQuery(query, sub);

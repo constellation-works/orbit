@@ -73,7 +73,7 @@
               <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability<span class="rail-count" id="rail-count-diag-reliability"></span></button>
               <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
-              <button class="subtab" data-subtab="scoreboard" type="button">Scoreboard<span class="rail-count" id="rail-count-diag-scoreboard"></span></button>
+              <button class="subtab" data-subtab="cost" type="button">Cost<span class="rail-count" id="rail-count-diag-cost"></span></button>
             </nav>
           </div>
 
@@ -419,22 +419,19 @@
           <div class="body" id="reliability-activities" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);"></div>
         </section>
       </main>
-      <!-- Scoreboard is a diagnostics-shaped view, so it lives under the
-           Diagnostics tab as a subtab rather than a top-level nav entry. Its
-           markup (and every id scoreboard.js renders into) is unchanged by the
-           move; only the container and its visibility toggle are new. -->
-      <main id="diagnostics-scoreboard-main" style="grid-template-columns: 1fr; display: none;">
-        <section class="panel" id="scoreboard-panel">
+      <!-- Health › Cost. The retired family leaderboard lived here; only
+           managed-execution cost and token usage remain. #diagnostics/scoreboard
+           rewrites to #diagnostics/cost. -->
+      <main id="diagnostics-cost-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="scoreboard-orchestration-panel">
           <header>
-            <span>Scoreboard</span>
-            <span class="count" id="scoreboard-count">-</span>
+            <span>Managed execution cost &amp; token usage</span>
+            <span class="count" id="scoreboard-orchestration-count">—</span>
           </header>
           <div class="scoreboard-controls" id="scoreboard-controls">
             <div class="scoreboard-control-group">
               <span class="scoreboard-control-label">window</span>
-              <!-- Window selector — click a segment to refetch the
-                   scoreboard scoped to that window. Wired in ORB-00337. -->
-              <div class="scoreboard-window-selector" id="scoreboard-window-selector" role="tablist" aria-label="Scoreboard time window">
+              <div class="scoreboard-window-selector" id="scoreboard-window-selector" role="tablist" aria-label="Cost time window">
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
                 <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
@@ -442,33 +439,13 @@
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1">all</button>
               </div>
             </div>
-            <span class="scoreboard-controls-spacer"></span>
-            <span class="scoreboard-controls-meta" id="scoreboard-meta">-</span>
           </div>
-          <div id="scoreboard-narrative" class="scoreboard-narrative"></div>
-          <div id="scoreboard-agent-strip" class="scoreboard-agent-strip"></div>
-          <div class="body scoreboard-table-wrap" id="scoreboard-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-              <div class="skeleton skeleton-row"></div>
-              <div class="skeleton skeleton-row" style="width: 70%"></div>
-            </div>
-          </div>
-        </section>
-        <section class="panel" id="scoreboard-orchestration-panel">
-          <header>
-            <span>Managed execution cost &amp; token usage</span>
-            <span class="count" id="scoreboard-orchestration-count">—</span>
-          </header>
           <div class="body" id="scoreboard-orchestration">
             <div class="empty-state">
               <div class="icon">✧</div>
               <div class="text">No managed execution cost data yet.</div>
             </div>
           </div>
-        </section>
-        <section class="panel" id="scoreboard-insights-panel">
-          <header><span>Insights</span><span class="count" id="scoreboard-insights-count">—</span></header>
-          <div id="scoreboard-insights"></div>
         </section>
       </main>
     </section>

@@ -202,6 +202,8 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         // is open; the worker's own shutdown and Core's recovery handle it.
         intercept_signals: false,
         drain_budget: OUTPUT_DRAIN_BUDGET,
+        cap_drain_at_deadline: false,
+        require_eof: false,
         stopped_descendants: stopped_descendants
             .as_ref()
             .map(|reporter| reporter.threshold),

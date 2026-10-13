@@ -111,6 +111,8 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
     }
 
     let fixture = Fixture::new();
+    retarget(&fixture, &trigger());
+    toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
     for (name, schedule) in [
         ("hourly", AutoTaskSchedule::Interval { every_minutes: 60 }),
@@ -169,11 +171,38 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
     fs::write(&cursor, "{broken").unwrap();
     let page = bounded(&fixture);
     assert!(page["cursor_state_error"].is_string(), "{page}");
+    let delivery = named(&page["items"], CONSUMER);
+    assert_eq!(delivery["state"], "waiting", "{delivery}");
+    assert!(delivery["next_due"].is_null(), "{delivery}");
+    assert!(delivery["skip_reason"].is_null(), "{delivery}");
+    // Plain MCP and CLI records read the same effective state and skip decision.
+    let plain = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    let records = fixture.json(&["auto-task", "list", "--format", "json"]);
+    for rows in [&plain, &records] {
+        let delivery = named(rows, CONSUMER);
+        assert_eq!(delivery["effective_enabled"], true, "{delivery}");
+        assert!(delivery["skipped_reason"].is_null(), "{delivery}");
+    }
     let hourly = named(&page["items"], "hourly");
     assert_eq!(
         hourly["state"], "unavailable",
         "a corrupt cursor is not silently never observed: {hourly}"
     );
     assert!(hourly["next_due"].is_null(), "{hourly}");
+    assert_eq!(named(&page["items"], "never")["state"], "unavailable");
+    let mut elsewhere = trigger();
+    elsewhere["owner_machine"] = json!("hm_elsewhere");
+    retarget(&fixture, &elsewhere);
+    assert_eq!(
+        named(&bounded(&fixture)["items"], CONSUMER)["state"],
+        "unavailable"
+    );
+    toggle(&fixture, "off");
+    assert_eq!(
+        named(&bounded(&fixture)["items"], CONSUMER)["state"],
+        "disabled"
+    );
     assert_eq!(fs::read_to_string(&cursor).unwrap(), "{broken");
 }

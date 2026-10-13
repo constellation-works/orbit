@@ -20,30 +20,6 @@ use crate::contracts::{
     AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
     LocalPullMutation, LocalPullPhase, PullDestination, PullFailureStreak,
 };
-use crate::driver::sqlite::migration::FeatureMigration;
-
-/// This feature's schema ledger name.
-pub(crate) const FEATURE: &str = "local_pull";
-
-/// Append-only schema registry for this feature.
-pub(crate) const MIGRATIONS: &[FeatureMigration] = &[FeatureMigration::breaking(
-    1,
-    "pending_requests_and_unique_leaves",
-    |conn| {
-        conn.execute_batch("CREATE TABLE local_pull_admissions (
-            workspace_id TEXT NOT NULL, owner_machine TEXT NOT NULL,
-            owner_workspace TEXT NOT NULL, execution_machine TEXT NOT NULL,
-            request_id TEXT NOT NULL, claim_id TEXT, leaf_run_id TEXT, record_json TEXT NOT NULL,
-            PRIMARY KEY(workspace_id, owner_machine, owner_workspace, execution_machine, request_id),
-            UNIQUE(workspace_id, owner_machine, owner_workspace, claim_id),
-            UNIQUE(workspace_id, leaf_run_id));")
-            .map_err(sqlite_store_error)
-    },
-)];
-
-fn initialize(store: &Store) -> Result<(), OrbitError> {
-    store.apply_feature_migrations(FEATURE, MIGRATIONS)
-}
 
 fn codec_error(error: serde_json::Error) -> OrbitError {
     OrbitError::Store(error.to_string())
@@ -54,17 +30,6 @@ fn invalid(message: &str) -> OrbitError {
 fn decode(raw: String) -> Result<LocalPullAdmission, OrbitError> {
     serde_json::from_str(&raw).map_err(codec_error)
 }
-/// Whether the `local_pull` feature migration has ever run here. A reader must
-/// not create the feature schema merely to discover there are no admissions.
-fn admissions_table_exists(conn: &Connection) -> Result<bool, OrbitError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_pull_admissions')",
-        [],
-        |row| row.get(0),
-    )
-    .map_err(sqlite_store_error)
-}
-
 /// Serialized names (`LocalPullPhase` is `snake_case`) of the phases that no
 /// longer hold a drain slot: an idle poll, a settled claim, a refused request.
 /// SQL narrows reads to the rest so the occupancy check inside the writer
@@ -176,15 +141,14 @@ fn write(
     Ok(())
 }
 
-/// Existing generic workers/resume reads must neither create a feature schema
-/// nor scan all historical receipts merely to discover that a run is unclaimed.
+/// Existing generic workers/resume reads must not scan all historical receipts
+/// merely to discover that a run is unclaimed.
 pub(super) fn for_run(
     store: &Store,
     workspace: &str,
     run_id: &str,
 ) -> Result<Option<LocalPullAdmission>, OrbitError> {
     store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? { return Ok(None); }
         conn.query_row("SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 AND leaf_run_id=?2",
             params![workspace, run_id], |row| row.get::<_, String>(0))
             .optional().map_err(sqlite_store_error)?.map(decode).transpose()
@@ -192,27 +156,21 @@ pub(super) fn for_run(
 }
 
 pub(super) fn list(store: &Store, workspace: &str) -> Result<Vec<LocalPullAdmission>, OrbitError> {
-    initialize(store)?;
     store.with_read_connection(|conn| records(conn, workspace))
 }
 
-/// Admissions still holding a slot, without creating the feature schema: a
-/// settle-only pass runs from `orbit run cancel` and `orbit run auto --stop`
-/// in workspaces that may never have pulled [ORB-13663].
+/// Admissions still holding a slot. A settle-only pass reads them from
+/// `orbit run cancel` and `orbit run auto --stop` in workspaces that may never
+/// have pulled [ORB-13663].
 pub(super) fn unsettled(
     store: &Store,
     workspace: &str,
 ) -> Result<Vec<LocalPullAdmission>, OrbitError> {
-    store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? {
-            return Ok(Vec::new());
-        }
-        holding_records(conn, workspace)
-    })
+    store.with_read_connection(|conn| holding_records(conn, workspace))
 }
 
 /// `run_id`'s most recent settled claims against `destination` that failed
-/// in a row, without creating the feature schema.
+/// in a row.
 ///
 /// The breaker that stops a failing drain reads this on every pass, so it must
 /// not decode the whole table: SQL narrows to this drain's settled claims,
@@ -234,9 +192,6 @@ pub(super) fn consecutive_failed_settlements(
     run_id: &str,
 ) -> Result<PullFailureStreak, OrbitError> {
     store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? {
-            return Ok(PullFailureStreak::default());
-        }
         let mut stmt = conn
             .prepare(
                 "SELECT record_json FROM local_pull_admissions \
@@ -293,9 +248,6 @@ pub(super) fn claims_admitted_by(
     run_id: &str,
 ) -> Result<Vec<LocalPullAdmission>, OrbitError> {
     store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? {
-            return Ok(Vec::new());
-        }
         let mut stmt = conn
             .prepare(
                 "SELECT record_json FROM local_pull_admissions \
@@ -387,11 +339,7 @@ fn occupancy(
     // Admissions that still hold capacity. Read before the wrapper walk
     // because a wrapper whose lineage reaches one of their leaves is
     // represented by that admission, terminal leaf or not.
-    let pending = if admissions_table_exists(conn)? {
-        holding_records(conn, workspace)?
-    } else {
-        Vec::new()
-    };
+    let pending = holding_records(conn, workspace)?;
     let admitted_runs: BTreeSet<String> = pending
         .iter()
         .filter_map(|record| record.leaf_run_id.clone())
@@ -490,8 +438,7 @@ fn pull_admission_load(occupancy: &DrainLeafOccupancy, ceiling: usize) -> usize 
 
 /// The shared reading both admission paths allocate against [ORB-12617].
 ///
-/// Read-only and schema-neutral: a workspace that has never pulled has no
-/// `local_pull` feature schema, and asking how full it is must not create one.
+/// Read-only: asking how full a drain is never writes.
 pub(super) fn drain_occupancy(
     store: &Store,
     workspace: &str,
@@ -586,7 +533,6 @@ pub(super) fn allocate(
     request: &AdmissionRequest,
     ceiling: usize,
 ) -> Result<Option<LocalPullAdmission>, OrbitError> {
-    initialize(store)?;
     if [
         &destination.owner_machine_id,
         &destination.owner_workspace_id,
@@ -665,7 +611,6 @@ pub(super) fn mutate(
     request_id: &str,
     mutation: &LocalPullMutation,
 ) -> Result<LocalPullAdmission, OrbitError> {
-    initialize(store)?;
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
         let mut record = read(conn, workspace, destination, request_id)?.ok_or_else(|| invalid("local pull request missing"))?;

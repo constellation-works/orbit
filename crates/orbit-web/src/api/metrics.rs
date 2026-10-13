@@ -147,6 +147,7 @@ pub(super) async fn ingest_invocation(
 impl MetricsInvocationsQuery {
     fn into_invocation_query(self) -> Result<InvocationQuery, orbit_core::OrbitError> {
         Ok(InvocationQuery {
+            succeeded_candidate_only: false,
             since: parse_rfc3339_opt(self.since, "since")?,
             until: parse_rfc3339_opt(self.until, "until")?,
             workspace_id: None,

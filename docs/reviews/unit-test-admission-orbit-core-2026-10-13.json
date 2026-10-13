@@ -1,0 +1,2301 @@
+{
+  "schema_version": 1,
+  "audit": "docs/reviews/unit-test-audit-2026-10-12.json",
+  "audited_head": "dd268d0d5a1640b709bcac0d3759b04879f77a14",
+  "delivery_base": "1bac2703c56dc0defd8d10b3733ff814f78e0113",
+  "counts": {
+    "corrected_admission": 68,
+    "moved": 130,
+    "retired": 6,
+    "stale_allowance": 4
+  },
+  "entries": [
+    {
+      "identity": "adapter/command/dispatch/tests/brokered.rs::a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/command/dispatch/tests/brokered.rs::a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker",
+      "criterion": 3,
+      "qualifying_seam": "RunDispatch + PluginBroker::serve",
+      "evidence": "The socket listener is crate-private. This fixture pins a run-owned broker to a process ancestry anchor, executes a fake host gh/backend and reads its one audit row and secret CAS. A public plugin call bypasses the listener; a public pipeline would need a confined worker and real host authority instead of this bounded security harness.",
+      "current_source": "crates/orbit-core/src/adapter/command/dispatch/tests/brokered.rs",
+      "current_line": 422,
+      "body_sha256": "6ba9f0e48fd80b726030d5ef71c6f74742fc9ecfcf949b7360a16514ecadbf47"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/brokered.rs::a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/command/dispatch/tests/brokered.rs::a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
+      "criterion": 3,
+      "qualifying_seam": "RunDispatch + PluginBroker::serve",
+      "evidence": "The socket listener is crate-private. This fixture pins a run-owned broker to a process ancestry anchor, executes a fake host gh/backend and reads its one audit row and secret CAS. A public plugin call bypasses the listener; a public pipeline would need a confined worker and real host authority instead of this bounded security harness.",
+      "current_source": "crates/orbit-core/src/adapter/command/dispatch/tests/brokered.rs",
+      "current_line": 310,
+      "body_sha256": "375f6f5b6e2322c6feaa67b414a6166c3c05c75955b895459572176f759d9552"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/brokered.rs::the_broker_runs_the_github_reads_and_refuses_every_other_builtin",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/command/dispatch/tests/brokered.rs::the_broker_runs_the_github_reads_and_refuses_every_other_builtin",
+      "criterion": 3,
+      "qualifying_seam": "RunDispatch + PluginBroker::serve",
+      "evidence": "The socket listener is crate-private. This fixture pins a run-owned broker to a process ancestry anchor, executes a fake host gh/backend and reads its one audit row and secret CAS. A public plugin call bypasses the listener; a public pipeline would need a confined worker and real host authority instead of this bounded security harness.",
+      "current_source": "crates/orbit-core/src/adapter/command/dispatch/tests/brokered.rs",
+      "current_line": 366,
+      "body_sha256": "da63ed2ce208d60d0f60a67e504e0d10dc3e79f565eec50c9a04cd99c0a594b3"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/callback.rs::plugin_callback_allowlist_ignores_forged_or_unset_env",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/callback.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/callback.rs::plugin_callback_cannot_exceed_the_spawning_callers_ceiling",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/callback.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/callback.rs::plugin_callback_refuses_a_token_bound_to_another_process",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/callback.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_claim",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/command/dispatch/tests/claimed_owner.rs::every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_claim",
+      "criterion": 3,
+      "qualifying_seam": "RunDispatch + ClaimedOwnerRoute + recording claimed-review Fixture",
+      "evidence": "The public bridge cannot install the recording owner or select broker scope. The private run dispatcher reads the claim from durable admission, so this fixture can prove forwarding and the masked-sandbox route controls without SSH or a confined real follower.",
+      "current_source": "crates/orbit-core/src/adapter/command/dispatch/tests/claimed_owner.rs",
+      "current_line": 64,
+      "body_sha256": "6f3d35de1fff58bb5c9a28abea054d90dbac809bef559a1935ed86d5461099db"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/command/dispatch/tests/claimed_owner.rs::the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox",
+      "criterion": 3,
+      "qualifying_seam": "RunDispatch + ClaimedOwnerRoute + recording claimed-review Fixture",
+      "evidence": "The public bridge cannot install the recording owner or select broker scope. The private run dispatcher reads the claim from durable admission, so this fixture can prove forwarding and the masked-sandbox route controls without SSH or a confined real follower.",
+      "current_source": "crates/orbit-core/src/adapter/command/dispatch/tests/claimed_owner.rs",
+      "current_line": 269,
+      "body_sha256": "c64ecc7fae3ac7ab1d9561e66e3d76ed67532403c1d676715b28eafff108802f"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_recovery.rs::a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through_the_broker",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/command/dispatch/tests/claimed_recovery.rs::a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through_the_broker",
+      "criterion": 3,
+      "qualifying_seam": "RunDispatch + admitted Leaf + claimed-review recorder",
+      "evidence": "This fixture seeds the authoritative pull admission, worker binding and recovery checkpoint, then records only owner calls that pass broker scope. Public dispatch cannot fabricate that owner-bound worker authority or inject its recording owner; retain the broker security seam.",
+      "current_source": "crates/orbit-core/src/adapter/command/dispatch/tests/claimed_recovery.rs",
+      "current_line": 405,
+      "body_sha256": "84a0a42661f816c569f3918259d3f10719151ef32f458dce18bb644f981a80fc"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/dependabot/tests/filing.rs::dependabot_alert_ecosystems_match_open_pr_branch_names",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/dependabot.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/dependabot/tests/filing.rs::dependabot_bump_uses_low_pool_without_changing_identity_tag",
+      "disposition": "retired",
+      "evidence": "Pins dependency task complexity/crew routing chosen by configuration. The test strategy forbids policy pins; task identity tagging can remain as a control in the boundary filing fixture."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/dependabot/tests/filing.rs::sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/dependabot.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::a_finished_ci_sweep_stores_child_summaries_and_no_resume_state",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::a_finished_ci_sweep_stores_child_summaries_and_no_resume_state",
+      "criterion": 2,
+      "qualifying_seam": "invoke_and_wait_with",
+      "evidence": "Injected dispatch/wait closures return the recorded child entries without launching pilot workers. The public deterministic action supplies actual child submission/waits; it cannot inject these results. Retain the recorded-state compaction assertion alongside this fault/observer seam.",
+      "current_source": "crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs",
+      "current_line": 38,
+      "body_sha256": "fb23da235d927a2e82b5fabe49b2e6c19e8adb2217818322751f31da938f634c"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/tests/drain.rs::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/engine_host/v2_host/pull/tests/drain.rs::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
+      "criterion": 2,
+      "qualifying_seam": "PullDrain + PullPeer + PullLauncher",
+      "evidence": "The private pull harness injects owner receipts, launch intent and settlement while presenting a retained committed candidate. A public pull would dispatch actual owner-bound workers and cannot inject these receipt/launcher outcomes economically.",
+      "current_source": "crates/orbit-core/src/adapter/engine_host/v2_host/pull/tests/drain.rs",
+      "current_line": 472,
+      "body_sha256": "409d41392c8bf4ff5c3565e3226bdeaf3397cb5178b8373f9d4dd7411380af62"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/git_metadata.rs::macos_implementer_worktree_denies_registered_and_linked_git_metadata",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_git_metadata.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_resolve.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::linux_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/codex_side_roots.rs",
+      "boundary": "Existing exported RuntimeHost provider-config/resolution methods and public sandbox compilers; unchanged side-root matrix."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_resolve.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_child_profile_denies_registered_auto_task_definitions",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_child_profile_denies_registered_auto_task_definitions",
+      "criterion": 3,
+      "qualifying_seam": "append_codex_side_write_roots / append_orbit_child_runtime_write_roots / seed_default_executors_for_platform",
+      "evidence": "The child-profile case directly exercises private append/deny/root conversion before launching a native sandbox. Public ordinary resolution cannot isolate this raw child-root appender from the preceding registered-store denies. The two ordinary Codex resolver matrices moved through exported RuntimeHost methods independently.",
+      "current_source": "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/tests/resolve.rs",
+      "current_line": 123,
+      "body_sha256": "c1ac3ccdef47a881d1716909f5bfda574ca0b55f2bb9598a431deac3a15c4587"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/codex_side_roots.rs",
+      "boundary": "Existing exported RuntimeHost provider-config/resolution methods and public sandbox compilers; unchanged side-root matrix."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_reviewer_profile_grants_no_source_or_workspace_writes",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_resolve.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_resolve.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::registered_checkout_denies_live_orbit_versioned_stores",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_resolve.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/sandbox_resolve.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/drain_promotion.rs::rationale_cannot_forge_a_hold_marker_or_break_the_history_write",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/engine_host/v2_host/task_pilot/tests/drain_promotion.rs::a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one",
+      "criterion": 3,
+      "qualifying_seam": "approval_hook / typed held_classification",
+      "evidence": "The renamed case now proves typed drain-hold provenance and hostile rationale rejection through the private approval/history classifier, rather than relying on a prose hold marker. Preserve its stronger current security coverage.",
+      "current_source": "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/tests/drain_promotion.rs",
+      "current_line": 440,
+      "body_sha256": "0bf6621244e68ffeceff45841614c28b8655c639a11f0d3a0fb6803433fc6207"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/drain_promotion.rs::unchanged_task_gets_exactly_one_ordinary_approval",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_approval.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::configured_crew_and_dependency_meaning_drift_are_named",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::context_files_outside_freshness_stay_context_files_changed",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::malformed_component_map_fails_apply_without_writing",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::meaning_edits_name_the_drifted_component_and_write_nothing",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::proposed_to_backlog_still_applies",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::task_prepared_in_progress_is_not_rewritten",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/pilot_persist.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/source.rs::hung_origin_fetch_releases_the_fetch_lock_within_its_deadline",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/engine_host/v2_host/task_pilot/tests/source.rs::hung_origin_fetch_releases_the_fetch_lock_within_its_deadline",
+      "criterion": 2,
+      "qualifying_seam": "fetch_origin_branch + stub git + shared fetch lock",
+      "evidence": "The private pilot fetch entry point is driven by a hung executable and a second lock waiter to observe release at its deadline. Public prepare also performs branch/source preparation and does not expose this particular fetch/lock result; preserve the bounded fault harness and its isolated child.",
+      "current_source": "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/tests/source.rs",
+      "current_line": 25,
+      "body_sha256": "4afb95a9fdcb95ddc2d3ca925e69427936b9bcb10b1e124e82dc5d2291437906"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/tests/blocked_recovery.rs::only_the_envelope_result_reaches_the_decision_parser",
+      "disposition": "corrected_admission",
+      "current_identity": "adapter/engine_host/v2_host/tests/blocked_recovery.rs::only_the_envelope_result_reaches_the_decision_parser",
+      "criterion": 3,
+      "qualifying_seam": "decision_result",
+      "evidence": "Crafted merged agent invocation output is projected before the strict privileged decision parser. The private projection accepts malformed/absent/scalar/enveloped shapes that a normal typed agent delivery cannot supply; its boundary control prevents metadata from altering recovery decisions.",
+      "current_source": "crates/orbit-core/src/adapter/engine_host/v2_host/tests/blocked_recovery.rs",
+      "current_line": 11,
+      "body_sha256": "a407a0f8bf6e1f197e2226fd2bb3ceda9a21d0d4b3cafff901ea3b86e80247ac"
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::command_past_its_timeout_is_killed_with_its_process_group",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::managed_run_environment_denies_command_exec",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::secret_argv_reaches_child_but_is_redacted_in_the_audit_record",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::working_directory_in_a_sibling_checkout_is_refused",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::working_directory_symlink_that_escapes_is_refused",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/command_tools.rs::zero_timeout_is_refused_before_the_command_runs",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/command_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/state_tools.rs::state_get_rejects_absolute_state_dir_outside_current_workspace",
+      "disposition": "stale_allowance",
+      "evidence": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete."
+    },
+    {
+      "identity": "adapter/tool_host/tests/state_tools.rs::state_get_rejects_other_run_state_dir_in_current_workspace",
+      "disposition": "stale_allowance",
+      "evidence": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete."
+    },
+    {
+      "identity": "adapter/tool_host/tests/state_tools.rs::state_get_rejects_traversal_run_id",
+      "disposition": "stale_allowance",
+      "evidence": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete."
+    },
+    {
+      "identity": "adapter/tool_host/tests/state_tools.rs::state_get_rejects_traversal_state_dir",
+      "disposition": "stale_allowance",
+      "evidence": "Stale baseline identity: no matching admitted function exists in this checkout. Remove the unused allowance; no test body remains to delete."
+    },
+    {
+      "identity": "adapter/tool_host/tests/task_tools.rs::artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/task_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/task_tools.rs::svg_stays_a_download_and_is_never_classified_as_a_viewable_image",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/task_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/task_tools.rs::task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/task_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/task_tools.rs::traversal_and_absolute_paths_are_refused_before_any_read",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/task_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/workflow_tools.rs::managed_run_environment_denies_ship_and_resume_end_to_end",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/workflow_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/workflow_tools.rs::mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/workflow_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "adapter/tool_host/tests/workflow_tools.rs::mcp_run_show_reports_a_running_invocations_latest_message",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/workflow_tools.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/auto_tasks/tests/change_probe.rs::a_newer_full_review_chore_never_shadows_an_older_minted_sweep",
+      "disposition": "corrected_admission",
+      "current_identity": "application/auto_tasks/tests/change_probe.rs::a_newer_full_review_chore_never_shadows_an_older_minted_sweep",
+      "criterion": 1,
+      "qualifying_seam": "newest_completed_sweep",
+      "evidence": "The private selector table distinguishes minted provenance from newer general review chores and the fallback selector. Public mint/tick also runs source-change probing and task admission; it cannot expose just the candidate-cursor selection without those extra operations. Retain this focused provenance selection matrix.",
+      "current_source": "crates/orbit-core/src/application/auto_tasks/tests/change_probe.rs",
+      "current_line": 77,
+      "body_sha256": "bd8d7b14a21c9308627d25d12ba8bd77279836fec18431851d131c0b8dbfd5ab"
+    },
+    {
+      "identity": "application/auto_tasks/tests/crud.rs::show_and_mint_refuse_symlinked_auto_tasks_directory",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/auto_task_crud.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/auto_tasks/tests/crud.rs::show_and_mint_refuse_symlinked_definition_file",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/auto_task_crud.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/auto_tasks/tests/crud.rs::show_and_mint_reject_absolute_and_traversal_lookups",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/auto_task_crud.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/auto_tasks/tests/scheduler.rs::catch_up_collapses_downtime_to_one_task",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/auto_task_scheduler.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/automation/tests/provider.rs::only_the_exact_pull_request_identity_names_a_handoffs_task",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/provider.rs::only_the_exact_pull_request_identity_names_a_handoffs_task",
+      "criterion": 1,
+      "qualifying_seam": "handoff_tasks",
+      "evidence": "Five handoff identities table repository, landing branch, PR number and delivery kind through the private matching helper. Public delivery observation obtains provider identities and persisted evaluator state; the helper matrix is the cheaper way to prove exact cross-repository/branch association.",
+      "current_source": "crates/orbit-core/src/application/automation/tests/provider.rs",
+      "current_line": 56,
+      "body_sha256": "6a1e4bf61a9010303a916d8c4a1d33f4d57eacf887221802d48f6af03200e26e"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::admitted_replay_limit_completes_and_one_past_it_is_refused",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::admitted_replay_limit_completes_and_one_past_it_is_refused",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 400,
+      "body_sha256": "c68156634c076bd0ccb2f475520f5cb3cb82be151247dc1a3f347021e5d2779c"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::back_merge_with_a_different_first_parent_patch_is_not_mapped",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::back_merge_with_a_different_first_parent_patch_is_not_mapped",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 606,
+      "body_sha256": "496bde4b8f4477c0df6f0197e7a582ce865b8cefbc831f6df8356bc3225db321"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::back_merges_with_equal_orbit_trees_map_by_their_first_parent_patch",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::back_merges_with_equal_orbit_trees_map_by_their_first_parent_patch",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 578,
+      "body_sha256": "caaa86b2181e582f8e2b8742873d60b2cea9983cb79a8623717892e623712aed"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::held_fetch_lock_consumes_only_the_remaining_source_deadline",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::held_fetch_lock_consumes_only_the_remaining_source_deadline",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 893,
+      "body_sha256": "ae2daafd4610ac33ed1780a2ac228e2b731cf7e0c3b46fb4f27d2988109093eb"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 241,
+      "body_sha256": "2edc83ccd855f9cb15579b3af6a82ff19519c77aa06f58bda2343316722bcfa0"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::recorded_associations_survive_observation_and_missing_identities_back_off",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::recorded_associations_survive_observation_and_missing_identities_back_off",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 693,
+      "body_sha256": "37453dfe38807167b1eaa8d4029e88cbb8a0439de6e89eaa8da63ba70051a609"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::timed_out_source_reaps_its_leader_and_kills_the_grandchild",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/source.rs::timed_out_source_reaps_its_leader_and_kills_the_grandchild",
+      "criterion": 2,
+      "qualifying_seam": "Source + BudgetClock + canonical/revision deadline hooks",
+      "evidence": "Source is crate-private, and the tests construct first-parent replay state, typed operational errors and provider/clock faults without an automation run. Public evaluator dispatch fixes these inputs and owns its provider lookups. Preserve the injected source budget/provider fixtures and native group-reaping harness; first-parent mapping tables also qualify as combinatorial source matching (criterion 1).",
+      "current_source": "crates/orbit-core/src/application/automation/tests/source.rs",
+      "current_line": 840,
+      "body_sha256": "ed1221830afff0db43ed4e9386c1d785200b39249033245a932745f0c47a6ac6"
+    },
+    {
+      "identity": "application/automation/tests/stall.rs::retries_and_sibling_consumers_reuse_one_divergence_record",
+      "disposition": "corrected_admission",
+      "current_identity": "application/automation/tests/stall.rs::retries_and_sibling_consumers_reuse_one_divergence_record",
+      "criterion": 2,
+      "qualifying_seam": "stall::report + dedupe_miss_hook",
+      "evidence": "The retained sibling race forces reporters past the preliminary lookup before insertion, and this case supplies its ordinary replay/sibling-consumer controls through the same private reporting entry point. The public automation flow cannot inject that divergence-report boundary; keep the controls with its admitted interleaving harness.",
+      "current_source": "crates/orbit-core/src/application/automation/tests/stall.rs",
+      "current_line": 182,
+      "body_sha256": "08cfdd15803610c8db3643508a1b1ec211ea467f6ea83c2c1009461767d06f42"
+    },
+    {
+      "identity": "application/health/tests/artifact.rs::doctor_retirement_confines_linked_and_regular_skill_assets",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/artifact_health.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/health/tests/artifact.rs::retired_backend_repair_confines_links_cycles_and_special_files",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/artifact_health.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/delivery_class.rs::class_is_captured_once_per_delivery_and_survives_tag_edits",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/pipeline/worker/tests/delivery_class.rs::class_is_captured_once_per_delivery_and_survives_tag_edits",
+      "criterion": 2,
+      "qualifying_seam": "install_resource_class_admission + delivery_resource_class / RunResourceSampler",
+      "evidence": "Private admission can select inheritance/resume inputs before a worker is submitted; the no-scope case constructs a sampler with no worker cgroup and captures its diagnostic log. Public submission cannot choose these worker-scope/observer states without real detached workers. Preserve these admission and sampler controls.",
+      "current_source": "crates/orbit-core/src/application/job/pipeline/worker/tests/delivery_class.rs",
+      "current_line": 77,
+      "body_sha256": "5da82206984bdcf300bbfe3645f17592153108d2edce888d8a4cb709ffc2791c"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/delivery_class.rs::worker_without_a_scope_records_nothing_and_logs_nothing",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/pipeline/worker/tests/delivery_class.rs::worker_without_a_scope_records_nothing_and_logs_nothing",
+      "criterion": 2,
+      "qualifying_seam": "install_resource_class_admission + delivery_resource_class / RunResourceSampler",
+      "evidence": "Private admission can select inheritance/resume inputs before a worker is submitted; the no-scope case constructs a sampler with no worker cgroup and captures its diagnostic log. Public submission cannot choose these worker-scope/observer states without real detached workers. Preserve these admission and sampler controls.",
+      "current_source": "crates/orbit-core/src/application/job/pipeline/worker/tests/delivery_class.rs",
+      "current_line": 197,
+      "body_sha256": "a6c45666846c2f0129c4a20418544519b4d2d829ce3ab9e4c89f2a4568ff47e0"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/usage.rs::concurrent_workers_store_one_host_row_per_minute",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/pipeline/worker/tests/usage.rs::concurrent_workers_store_one_host_row_per_minute",
+      "criterion": 2,
+      "qualifying_seam": "RunResourceSampler + WorkerScopeCgroup::from_proc_cgroup",
+      "evidence": "A fixture cgroup/proc tree and explicit sample times drive the sampler to the same host minute in two workers. Public workers read real /proc and their real scopes; concurrent starts alone are not the admission reason. The injected counter roots and sample clock are the qualifying seams.",
+      "current_source": "crates/orbit-core/src/application/job/pipeline/worker/tests/usage.rs",
+      "current_line": 335,
+      "body_sha256": "2f382853c58de8b0905a398cdd385287e0735b6ec2f9cc5aaf8cf1edb0b98c45"
+    },
+    {
+      "identity": "application/job/run/tests/actions.rs::cancel_job_run_does_not_signal_reused_pid_identity_mismatch",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/cancel_identity.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/run/tests/actions.rs::cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/cancel_identity.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/run/tests/conflict.rs::success_after_a_false_interrupt_is_recorded_not_discarded",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/run_conflict.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/run/tests/drain_cancel.rs::cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child",
+      "criterion": 2,
+      "qualifying_seam": "cancel_job_run_with_options_and_signal + with_drain_owner_transport",
+      "evidence": "The private callback supplies stop outcomes and can create leaf progress precisely while its parent is stopped. The operator block/requeue controls remain alongside that injected stop/owner-transport harness; public cancellation cannot supply the stop callback or private owner transport.",
+      "current_source": "crates/orbit-core/src/application/job/run/tests/drain_cancel.rs",
+      "current_line": 902,
+      "body_sha256": "0400c2facf277d6f2885c85d87fd34447267ef03ffd5d2592fb5c3ac7b507647"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_always_releases_the_claim",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/run/tests/drain_cancel.rs::forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_always_releases_the_claim",
+      "criterion": 2,
+      "qualifying_seam": "cancel_job_run_with_options_and_signal + with_drain_owner_transport",
+      "evidence": "The private callback supplies stop outcomes and can create leaf progress precisely while its parent is stopped. The operator block/requeue controls remain alongside that injected stop/owner-transport harness; public cancellation cannot supply the stop callback or private owner transport.",
+      "current_source": "crates/orbit-core/src/application/job/run/tests/drain_cancel.rs",
+      "current_line": 823,
+      "body_sha256": "a4512c630ab51c93e49cb9c7370d66515cb862bbfd1f07122c99f095acd064cd"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_legacy_behavior",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/run/tests/drain_cancel.rs::operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_legacy_behavior",
+      "criterion": 2,
+      "qualifying_seam": "cancel_job_run_with_options_and_signal + with_drain_owner_transport",
+      "evidence": "The private callback supplies stop outcomes and can create leaf progress precisely while its parent is stopped. The operator block/requeue controls remain alongside that injected stop/owner-transport harness; public cancellation cannot supply the stop callback or private owner transport.",
+      "current_source": "crates/orbit-core/src/application/job/run/tests/drain_cancel.rs",
+      "current_line": 293,
+      "body_sha256": "8ded2e6fffe521ba6ce94f70b91f7c42d93fa1eeebc538fdc109f1b5727c1a09"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::signal_owner_after_exit_returns_already_exited",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/run/tests/owner.rs::signal_owner_after_exit_returns_already_exited",
+      "criterion": 3,
+      "qualifying_seam": "signal_run_owner_process + owner_run",
+      "evidence": "These cases invoke the private identity-bound signal primitive with a synthetic foreign namespace token or a genuinely reaped owner, checking the typed signal outcome. Public cancellation does not expose the primitive outcome for a raw supplied JobRun. Keep the controls beside the admitted identity replacement/probe harness.",
+      "current_source": "crates/orbit-core/src/application/job/run/tests/owner.rs",
+      "current_line": 143,
+      "body_sha256": "c522439ec41b80cc119381622e71614adf445d50d2473029f4a74e21c28916a7"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::signal_owner_in_foreign_pid_namespace_never_signals_the_local_process",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/run/tests/owner.rs::signal_owner_in_foreign_pid_namespace_never_signals_the_local_process",
+      "criterion": 3,
+      "qualifying_seam": "signal_run_owner_process + owner_run",
+      "evidence": "These cases invoke the private identity-bound signal primitive with a synthetic foreign namespace token or a genuinely reaped owner, checking the typed signal outcome. Public cancellation does not expose the primitive outcome for a raw supplied JobRun. Keep the controls beside the admitted identity replacement/probe harness.",
+      "current_source": "crates/orbit-core/src/application/job/run/tests/owner.rs",
+      "current_line": 125,
+      "body_sha256": "744c072c94763dd04147166ce14ca4212e35260ab16d7be876efe31c97e11d08"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::signal_owner_without_pid_returns_no_pid",
+      "disposition": "retired",
+      "evidence": "Single no-pid branch/getter-like outcome adds no combinatorial invariant or fault ordering; use it as a control in the owner identity table, rather than a separate unit test."
+    },
+    {
+      "identity": "application/job/tests/agent_invoke.rs::a_foreground_job_run_cannot_carry_a_trusted_host_admission",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/agent_invoke.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/tests/agent_invoke.rs::a_runs_own_runner_grant_cannot_admit_an_invocation",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/agent_invoke.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/tests/agent_invoke.rs::an_admitted_run_cannot_be_resumed",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/agent_invoke.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/tests/agent_invoke.rs::an_unauthorized_keyed_submission_claims_nothing",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/agent_invoke.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/tests/agent_invoke.rs::ordinary_job_input_cannot_carry_a_trusted_host_admission",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/agent_invoke.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/job/tests/crew_pools.rs::a_limited_pool_member_is_never_drawn_until_its_reading_resets",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/tests/crew_pools/admission.rs::a_limited_pool_member_is_never_drawn_until_its_reading_resets",
+      "criterion": 2,
+      "qualifying_seam": "final_recovery_crew / install_auto_crew_admission with injected random tickets",
+      "evidence": "The old source identity has drifted to the named current test. The crew table injects deterministic RNG tickets to prove allowlist/exhaustion/reset behavior without probabilistic sampling.",
+      "current_source": "crates/orbit-core/src/application/job/tests/crew_pools/admission.rs",
+      "current_line": 7,
+      "body_sha256": "cbaff1faa30c58339969eec587343a4cad40fa1aabb8d8141abfe784aafb2ad4"
+    },
+    {
+      "identity": "application/job/tests/crew_pools.rs::empty_final_recovery_pool_refuses_to_draw",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/tests/crew_pools/activity.rs::empty_final_recovery_pool_refuses_to_draw",
+      "criterion": 2,
+      "qualifying_seam": "final_recovery_crew / install_auto_crew_admission with injected random tickets",
+      "evidence": "The old source identity has drifted to the named current test. The crew table injects deterministic RNG tickets to prove allowlist/exhaustion/reset behavior without probabilistic sampling.",
+      "current_source": "crates/orbit-core/src/application/job/tests/crew_pools/activity.rs",
+      "current_line": 161,
+      "body_sha256": "cc652fda0a9c82a908c01d56c17f67a436c87555fb9dc55783f08d54292ebca1"
+    },
+    {
+      "identity": "application/job/tests/crew_pools.rs::final_recovery_crew_draw_honours_the_run_allowlist",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/tests/crew_pools/activity.rs::final_recovery_crew_draw_honours_the_run_allowlist",
+      "criterion": 2,
+      "qualifying_seam": "final_recovery_crew / install_auto_crew_admission with injected random tickets",
+      "evidence": "The old source identity has drifted to the named current test. The crew table injects deterministic RNG tickets to prove allowlist/exhaustion/reset behavior without probabilistic sampling.",
+      "current_source": "crates/orbit-core/src/application/job/tests/crew_pools/activity.rs",
+      "current_line": 138,
+      "body_sha256": "fb97c8b74e7904e1a1b7595d53aa025f0cf633319c590f5dd732b5e2fc1147af"
+    },
+    {
+      "identity": "application/job/tests/exec.rs::a_claimed_leaf_provider_limit_holds_and_records_a_deferral",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/tests/exec.rs::a_claimed_leaf_provider_limit_holds_and_records_a_deferral",
+      "criterion": 3,
+      "qualifying_seam": "V2RunFinalizationOptions + shared private finalizer",
+      "evidence": "Only an owner-bound worker may execute a claimed leaf through the public surface. The private finalizer permits both result/error branches and fabricated provider-limit output without inventing a trusted worker binding; it guards the claimed-leaf deferral/hold incident.",
+      "current_source": "crates/orbit-core/src/application/job/tests/exec.rs",
+      "current_line": 218,
+      "body_sha256": "12a1977752e7ec11e7f8c050047db5c02d1130525d517b67474b4db5313bd7d9"
+    },
+    {
+      "identity": "application/job/tests/pipeline/admission.rs::definition_snapshot_refuses_external_internal_and_dangling_symlinks",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/tests/pipeline/admission.rs::definition_snapshot_refuses_external_internal_and_dangling_symlinks",
+      "criterion": 2,
+      "qualifying_seam": "read_run_definition_snapshot / submit_automation_pipeline_run",
+      "evidence": "The raw snapshot reader is private and accepts a planted snapshot path before catalog fallback (security criterion 3). The keyed automation submit entry point is crate-private; a rejecting SQLite trigger detects even an identical state rewrite across pending/running/terminal replay. Keep that fault and snapshot security harness, including its child isolation.",
+      "current_source": "crates/orbit-core/src/application/job/tests/pipeline/admission.rs",
+      "current_line": 19,
+      "body_sha256": "e3907eb878dc64828682beced8e4838c24b0d810843d5bc3a86c0293f00f18a3"
+    },
+    {
+      "identity": "application/job/tests/pipeline/admission.rs::repeated_automation_admission_preserves_pending_running_and_terminal_state",
+      "disposition": "corrected_admission",
+      "current_identity": "application/job/tests/pipeline/admission.rs::repeated_automation_admission_preserves_pending_running_and_terminal_state",
+      "criterion": 2,
+      "qualifying_seam": "read_run_definition_snapshot / submit_automation_pipeline_run",
+      "evidence": "The raw snapshot reader is private and accepts a planted snapshot path before catalog fallback (security criterion 3). The keyed automation submit entry point is crate-private; a rejecting SQLite trigger detects even an identical state rewrite across pending/running/terminal replay. Keep that fault and snapshot security harness, including its child isolation.",
+      "current_source": "crates/orbit-core/src/application/job/tests/pipeline/admission.rs",
+      "current_line": 302,
+      "body_sha256": "470b241f595ea908646273bd3ec357475b48156fc63f31596fccf44024b9efae"
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_building_source_is_refused_without_consent",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_consented_build_installs_its_output_with_a_record",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_consented_build_with_a_different_pinned_digest_is_not_installed",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_drifted_pin_still_applies_enabled_false",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_fetch_phase_is_refused_on_macos",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_fresh_install_that_does_not_satisfy_its_pin_is_not_enabled",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_non_commit_source_needs_its_outputs_prebuilt",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::a_pin_never_starts_a_build",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::an_installed_build_record_is_checked_at_load_and_by_doctor",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::consent_is_refused_inside_a_managed_run",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/build.rs::reinstall_and_upgrade_require_fresh_build_consent",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/conformance.rs::a_config_templated_write_root_outside_scratch_needs_fs_consent",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_conformance.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/conformance.rs::a_golden_supplying_an_undeclared_secret_is_refused",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_conformance.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/conformance.rs::goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_conformance.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/install.rs::add_from_a_git_source_excludes_the_clone_metadata",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_install.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/install.rs::an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_install.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/install.rs::upgrade_broadens_a_templated_fs_default_only_when_the_resolved_root_grows",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_install.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/lifecycle/remove.rs::purge_refuses_a_symlinked_state_prefix_before_changing_the_install",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_remove.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/lifecycle/workspace.rs::failed_workspace_enable_keeps_the_previous_disabled_toggle",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_workspace.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/secrets.rs::a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_secrets.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/secrets.rs::a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_secrets.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/plugin/tests/skills.rs::disabling_preserves_links_that_resolve_outside_the_namespace",
+      "disposition": "corrected_admission",
+      "criterion": 3,
+      "evidence": "unlink_plugin_skills_from and dangling_plugin_skill_links_in are declared pub inside application::plugin::skills, but skills is pub(crate) with no re-export. The hostile matrix includes dangling version-family links and arbitrary discovery roots without an installed plugin; public disable performs installation validation first and cannot reach this raw namespace-confinement seam.",
+      "current_identity": "application/plugin/tests/skills.rs::disabling_preserves_links_that_resolve_outside_the_namespace",
+      "current_source": "crates/orbit-core/src/application/plugin/tests/skills.rs",
+      "current_line": 49,
+      "body_sha256": "8615107f1b1b880c96b4571c8ae325dbfca91ffe82bf47d9f03b43510e82a595"
+    },
+    {
+      "identity": "application/review/gate/tests/admit.rs::a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_admit.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/admit.rs::a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_admit.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/admit.rs::before_pr_is_captured_at_submission_and_an_in_flight_run_keeps_it",
+      "disposition": "corrected_admission",
+      "criterion": 3,
+      "evidence": "Private install_review_admission is the capture seam: this test changes configuration after capture and proves the admitted run retains its policy. Gate fixtures constructed from public policy views cannot prove submission capture.",
+      "current_identity": "application/review/gate/tests/admit.rs::before_pr_is_captured_at_submission_and_an_in_flight_run_keeps_it",
+      "current_source": "crates/orbit-core/src/application/review/gate/tests/admit.rs",
+      "current_line": 5,
+      "body_sha256": "5ad05d54a587463d039a6c49c8e34daf03ebd65d436a8b19e159d976ec4a747b"
+    },
+    {
+      "identity": "application/review/gate/tests/admit.rs::each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_admit.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/admit.rs::reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_admit.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/admit.rs::review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_admit.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/correction.rs::a_defect_in_what_the_checks_observed_is_left_to_settlement",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_correction.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/correction.rs::a_host_required_command_recorded_excluded_after_correction_is_refused",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_correction.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/correction.rs::a_not_run_diagnostic_that_survives_the_correction_is_refused_at_settlement",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_correction.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/correction.rs::a_skipped_baseline_command_filed_as_diagnostic_is_returned_and_settles_excluded",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_correction.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/correction.rs::an_absolute_mutation_target_is_returned_for_correction",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_correction.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/correction.rs::an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_correction.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/judgement.rs::system_writes_cannot_borrow_the_operator_for_history",
+      "disposition": "corrected_admission",
+      "criterion": 3,
+      "evidence": "Private update_task_as_system forces a history-producing system edit while the runtime actor is human; ordinary settlement emits no such edit. This isolates the ORB-13916 false-human-attribution security invariant.",
+      "current_identity": "application/review/gate/tests/judgement.rs::system_writes_cannot_borrow_the_operator_for_history",
+      "current_source": "crates/orbit-core/src/application/review/gate/tests/judgement.rs",
+      "current_line": 5,
+      "body_sha256": "1f4a5b7fdbfbb50d0b228efa2bf3bc962f6976acd99094dc0a35ce0cb3aa9338"
+    },
+    {
+      "identity": "application/review/gate/tests/judgement.rs::the_minutes_limit_refuses_new_starts_but_not_an_admitted_reviewer",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_judgement.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::a_drifted_report_on_a_later_bundle_task_still_settles",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::an_unfixable_finding_rejects_and_preserves_both_commits",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::no_findings_accepts_without_a_reviewer_commit",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::the_most_severe_bundle_report_decides_and_refuses_without_retry",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/gate/tests/settle.rs::widening_selectors_reports_the_reviewers_consumed_time",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/review_settle.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/review/tests/handoff.rs::refusal_kinds_map_to_console_codes_regardless_of_wording",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/handoff.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/routines/clock/tests/install.rs::installed_systemd_unit_has_recovery_settings_that_pass_inspection",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/clock/tests/install.rs::installed_systemd_unit_has_recovery_settings_that_pass_inspection",
+      "criterion": 2,
+      "qualifying_seam": "install_clock_with + inspect_clock_unit_at + validated_sweep_log_path",
+      "evidence": "Injected ClockPlatform/MockRunner and a fixture home install a nonnative unit without touching the host service manager. The private log validator reaches hostile links before activation; public install selects native platform/home/manager and cannot make these chosen states safely. Retain the no-activation safety controls with the platform seam.",
+      "current_source": "crates/orbit-core/src/application/routines/clock/tests/install.rs",
+      "current_line": 10,
+      "body_sha256": "e56dc7b1228bf319503c4333dfe97230267a7643d3eae5b32016620f78c274eb"
+    },
+    {
+      "identity": "application/routines/clock/tests/install.rs::launchd_install_rejects_dangling_log_symlink_before_activation",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/clock/tests/install.rs::launchd_install_rejects_dangling_log_symlink_before_activation",
+      "criterion": 2,
+      "qualifying_seam": "install_clock_with + inspect_clock_unit_at + validated_sweep_log_path",
+      "evidence": "Injected ClockPlatform/MockRunner and a fixture home install a nonnative unit without touching the host service manager. The private log validator reaches hostile links before activation; public install selects native platform/home/manager and cannot make these chosen states safely. Retain the no-activation safety controls with the platform seam.",
+      "current_source": "crates/orbit-core/src/application/routines/clock/tests/install.rs",
+      "current_line": 83,
+      "body_sha256": "e383bae3e3909dc43e45c15f70bc24a0c0db7569128e1e3322523cd0660aa365"
+    },
+    {
+      "identity": "application/routines/clock/tests/install.rs::sweep_log_path_rejects_symlinked_directory",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/clock/tests/install.rs::sweep_log_path_rejects_symlinked_directory",
+      "criterion": 2,
+      "qualifying_seam": "install_clock_with + inspect_clock_unit_at + validated_sweep_log_path",
+      "evidence": "Injected ClockPlatform/MockRunner and a fixture home install a nonnative unit without touching the host service manager. The private log validator reaches hostile links before activation; public install selects native platform/home/manager and cannot make these chosen states safely. Retain the no-activation safety controls with the platform seam.",
+      "current_source": "crates/orbit-core/src/application/routines/clock/tests/install.rs",
+      "current_line": 44,
+      "body_sha256": "f61ecf0bf883703ed48b8d1e38b0609e42284a50a733154bb643ffe510072f0c"
+    },
+    {
+      "identity": "application/routines/clock/tests/install.rs::sweep_log_path_rejects_symlinked_file",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/clock/tests/install.rs::sweep_log_path_rejects_symlinked_file",
+      "criterion": 2,
+      "qualifying_seam": "install_clock_with + inspect_clock_unit_at + validated_sweep_log_path",
+      "evidence": "Injected ClockPlatform/MockRunner and a fixture home install a nonnative unit without touching the host service manager. The private log validator reaches hostile links before activation; public install selects native platform/home/manager and cannot make these chosen states safely. Retain the no-activation safety controls with the platform seam.",
+      "current_source": "crates/orbit-core/src/application/routines/clock/tests/install.rs",
+      "current_line": 62,
+      "body_sha256": "659b5e79b4ba611167726ce4997e9b447a7e9dea65a55fc597f0d76106fbffc8"
+    },
+    {
+      "identity": "application/routines/clock/tests/manager.rs::hanging_manager_probe_times_out_naming_the_command",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/clock/tests/manager.rs::hanging_manager_probe_times_out_naming_the_command",
+      "criterion": 4,
+      "qualifying_seam": "NativeClockCommandRunner::execute + ManagerCommand",
+      "evidence": "The bounded native runner is private and takes a chosen executable/deadline. Public clock operations fix launchctl/systemctl and the command budget; they cannot force a 300 ms hung-manager or nonexistent-program result without replacing host manager behavior. This harness exercises supervised native process failure.",
+      "current_source": "crates/orbit-core/src/application/routines/clock/tests/manager.rs",
+      "current_line": 9,
+      "body_sha256": "19c0b0ebf9130ebf9643fbb6e701aca00b7dc0f866525a78a5e08c56f00741be"
+    },
+    {
+      "identity": "application/routines/clock/tests/manager.rs::missing_manager_program_names_the_command",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/clock/tests/manager.rs::missing_manager_program_names_the_command",
+      "criterion": 4,
+      "qualifying_seam": "NativeClockCommandRunner::execute + ManagerCommand",
+      "evidence": "The bounded native runner is private and takes a chosen executable/deadline. Public clock operations fix launchctl/systemctl and the command budget; they cannot force a 300 ms hung-manager or nonexistent-program result without replacing host manager behavior. This harness exercises supervised native process failure.",
+      "current_source": "crates/orbit-core/src/application/routines/clock/tests/manager.rs",
+      "current_line": 35,
+      "body_sha256": "a1e85e3272fe889f5dde48dba5ae53b76216cba6362cafbc6acc93412f9842e7"
+    },
+    {
+      "identity": "application/routines/clock/tests/settings.rs::clock_settings_reject_symlink_escape",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/clock_settings.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/routines/tests/materialize.rs::confined_writer_refuses_links",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/tests/materialize.rs::confined_writer_refuses_links",
+      "criterion": 3,
+      "qualifying_seam": "write_confined_routine + catalog reconciliation/provenance",
+      "evidence": "The private confined writer is tested even when callers skip inspection, including an open old reader across atomic replacement. Retirement fixtures craft historical provenance and linked preservation routes; public routine transports validate definitions before reaching this raw write/retire seam. Preserve these confinement controls.",
+      "current_source": "crates/orbit-core/src/application/routines/tests/materialize.rs",
+      "current_line": 314,
+      "body_sha256": "63cd31704403463c527dadda78decd81c7fcf1f53f6896cd0728c517fc4ef026"
+    },
+    {
+      "identity": "application/routines/tests/materialize.rs::confined_writer_replaces_the_file_without_changing_an_open_readers_content",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/tests/materialize.rs::confined_writer_replaces_the_file_without_changing_an_open_readers_content",
+      "criterion": 3,
+      "qualifying_seam": "write_confined_routine + catalog reconciliation/provenance",
+      "evidence": "The private confined writer is tested even when callers skip inspection, including an open old reader across atomic replacement. Retirement fixtures craft historical provenance and linked preservation routes; public routine transports validate definitions before reaching this raw write/retire seam. Preserve these confinement controls.",
+      "current_source": "crates/orbit-core/src/application/routines/tests/materialize.rs",
+      "current_line": 81,
+      "body_sha256": "824a792e44f9dcf43997e4ae98fbdb249676f1f63168773008c46773a4d92c7a"
+    },
+    {
+      "identity": "application/routines/tests/materialize.rs::dangling_definition_link_is_refused_not_recreated_outside",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/tests/materialize.rs::dangling_definition_link_is_refused_not_recreated_outside",
+      "criterion": 3,
+      "qualifying_seam": "write_confined_routine + catalog reconciliation/provenance",
+      "evidence": "The private confined writer is tested even when callers skip inspection, including an open old reader across atomic replacement. Retirement fixtures craft historical provenance and linked preservation routes; public routine transports validate definitions before reaching this raw write/retire seam. Preserve these confinement controls.",
+      "current_source": "crates/orbit-core/src/application/routines/tests/materialize.rs",
+      "current_line": 258,
+      "body_sha256": "f3f5457e54ab94c3d8ec61d8a79f6db3650f07763803cf057b9a8ed06ba488a1"
+    },
+    {
+      "identity": "application/routines/tests/materialize.rs::retirement_is_confined_to_the_catalog_and_its_preservation_route",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/tests/materialize.rs::retirement_is_confined_to_the_catalog_and_its_preservation_route",
+      "criterion": 3,
+      "qualifying_seam": "write_confined_routine + catalog reconciliation/provenance",
+      "evidence": "The private confined writer is tested even when callers skip inspection, including an open old reader across atomic replacement. Retirement fixtures craft historical provenance and linked preservation routes; public routine transports validate definitions before reaching this raw write/retire seam. Preserve these confinement controls.",
+      "current_source": "crates/orbit-core/src/application/routines/tests/materialize.rs",
+      "current_line": 352,
+      "body_sha256": "6adbdc94b3214aed2193cb647b59f2f043eae65f54c54c0fa5da193267bdc38f"
+    },
+    {
+      "identity": "application/routines/tests/seed.rs::shipped_ship_sweep_leaves_slack_past_its_drain_window",
+      "disposition": "retired",
+      "evidence": "Pins shipped routine job name, overlap policy and schedule/time budget relationships owned by YAML configuration. This is policy, not an admitted code invariant."
+    },
+    {
+      "identity": "application/routines/tests/sweep.rs::blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces",
+      "disposition": "corrected_admission",
+      "current_identity": "application/routines/tests/sweep.rs::blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces",
+      "criterion": 2,
+      "qualifying_seam": "run_sweep_at_with_providers_at + BlockedWorkspace",
+      "evidence": "The injected workspace provider accepts the shared deadline and returns its first workspace just after expiration. The public native tick cannot force that discovery/open ordering; preserve the deterministic deadline-expiration fixture without host load.",
+      "current_source": "crates/orbit-core/src/application/routines/tests/sweep.rs",
+      "current_line": 36,
+      "body_sha256": "a96844cecc68b4197fae3519f79c552e77a1f4be0dbeef7ed32bf2403312e200"
+    },
+    {
+      "identity": "application/task/desktop/tests/authorization.rs::desktop_status_receipt_does_not_grant_authority",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/desktop_authorization.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/desktop/tests/write.rs::desktop_legacy_edit_receipt_survives_status_contract_extension",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/desktop_write.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/desktop/tests/write.rs::desktop_redacts_before_receipt_and_preserves_retries",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/desktop_write.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/add.rs::keyed_creation_lost_reply_replays_without_history_or_events",
+      "disposition": "corrected_admission",
+      "criterion": 2,
+      "evidence": "Private add_task_admitted_guarded accepts both mint and desktop keys/digests, and event_log checks that a lost-reply replay emits only one TaskAdded. Public task-add does not expose this keyed replay seam; retain deterministic replay admission (criterion 2).",
+      "current_identity": "application/task/tests/add.rs::keyed_creation_lost_reply_replays_without_history_or_events",
+      "current_source": "crates/orbit-core/src/application/task/tests/add.rs",
+      "current_line": 86,
+      "body_sha256": "59c3cfec713d78542bc2f77ede023135f3f5254b3ab600265705383736013366"
+    },
+    {
+      "identity": "application/task/tests/add.rs::task_add_redacts_secrets_in_stored_fields",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/task_add.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::a_human_field_edit_after_the_block_is_never_overridden",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::a_human_field_edit_after_the_block_is_never_overridden",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 420,
+      "body_sha256": "4e4e3b682894de64c1ab2874c889206c89741af569bd3453c86b23e13c7f7f56"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::a_legacy_unattributed_field_edit_after_the_block_is_never_overridden",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::a_legacy_unattributed_field_edit_after_the_block_is_never_overridden",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 460,
+      "body_sha256": "fb7176ac917cf1d27f3a1b1f2de1ee448801d6aff5d68f976e640bda18d8f20e"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::a_recovery_applies_one_decision_recorded_with_its_run_id",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::a_recovery_applies_one_decision_recorded_with_its_run_id",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 583,
+      "body_sha256": "98897934461d5a99cb657b257808be89c0c86e3266deb869271738dff6a8d0f2"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::a_recovery_checkout_never_resolves_outside_its_directory",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::a_recovery_checkout_never_resolves_outside_its_directory",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 974,
+      "body_sha256": "66861a4dbdbd133f4bf5745c66e7e0f60428818a67036f31a31ad1e9fd0f5bb8"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::a_recovery_run_that_ends_without_a_decision_is_escalated_once",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::a_recovery_run_that_ends_without_a_decision_is_escalated_once",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 847,
+      "body_sha256": "10ab4fb76851b03cd4ff572bef131facfec4fe8714d258beb1e28ff005b8790d"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::activity_by_a_human_after_the_block_suppresses_recovery",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::activity_by_a_human_after_the_block_suppresses_recovery",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 344,
+      "body_sha256": "936e9821f53aba548ec0d44091497450f43c3b8d2971c275ca9432bfb09c69b5"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::an_empty_crew_pool_turns_the_backstop_off",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::an_empty_crew_pool_turns_the_backstop_off",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 956,
+      "body_sha256": "6e0cd66ef842a6deb4be23f2d3f77e9989e200f512a73e8d7590c36b3bdab29a"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::complete_no_diff_needs_a_covering_commit_on_the_base",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::complete_no_diff_needs_a_covering_commit_on_the_base",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 1191,
+      "body_sha256": "87bf22812fcf661a6eb931fa943ec246c59dfc182c4abbfa502cd2a3c6901555"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::every_owned_block_source_gets_exactly_one_recovery_within_the_concurrency_bound",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::every_owned_block_source_gets_exactly_one_recovery_within_the_concurrency_bound",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 230,
+      "body_sha256": "21db302ab36e52a9146d13cb48fd99b83d2529654829cad6ce1ca5639df61e02"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::requeues_share_the_final_recovery_bound_across_episodes",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::requeues_share_the_final_recovery_bound_across_episodes",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 903,
+      "body_sha256": "01b2928bb4b8c3d51bffdbae5f9bc6db77631b1a3a80ae9ac3a39d8f34e71207"
+    },
+    {
+      "identity": "application/task/tests/blocked_recovery.rs::the_backstop_offers_only_its_decisions_and_names_the_retained_candidate",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/blocked_recovery.rs::the_backstop_offers_only_its_decisions_and_names_the_retained_candidate",
+      "criterion": 2,
+      "qualifying_seam": "run_blocked_task_recovery_tick_with + prepare/apply/checkouts",
+      "evidence": "The private tick takes a dispatch closure that records inputs and creates chosen runs without providers. Prepare/apply and checkout helpers accept chosen episode revisions, decision output and retained candidate paths; public tick cannot inject those recovery completions or the exact human/legacy attribution window. Keep the chosen-time dispatch/security fixtures and their native child checks.",
+      "current_source": "crates/orbit-core/src/application/task/tests/blocked_recovery.rs",
+      "current_line": 1024,
+      "body_sha256": "ae6e025a33ff4388d60b3dcc039f8ceba0baf1121a70ff2c9c7256c294056ade"
+    },
+    {
+      "identity": "application/task/tests/contention.rs::contention_follows_selector_containment_not_string_equality",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/contention.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::a_task_changed_after_the_failure_or_already_settled_is_refused",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/final_recovery.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::complete_no_diff_completes_only_on_a_commit_reachable_from_base",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/final_recovery.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/final_recovery.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::malformed_output_escalates_and_resume_writes_nothing",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/final_recovery.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::reject_archive_and_escalate_record_the_decision_with_the_run_id",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/final_recovery.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::requeue_returns_to_backlog_until_the_window_bound_then_escalates",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/final_recovery.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::shipped_final_recovery_activity_offers_exactly_the_typed_decisions",
+      "disposition": "retired",
+      "evidence": "Pins the shipped final-recovery activity tool policy/typed-decision prompt contract. Validate behavior at action admission rather than maintaining a separate policy-asset unit test."
+    },
+    {
+      "identity": "application/task/tests/lifecycle.rs::guarded_update_writes_every_legal_edge_and_refuses_every_other_one",
+      "disposition": "corrected_admission",
+      "current_identity": "application/task/tests/lifecycle.rs::guarded_update_writes_every_legal_edge_and_refuses_every_other_one",
+      "criterion": 1,
+      "qualifying_seam": "task_status_transition_allowed + unguarded status seeding",
+      "evidence": "The 81-edge matrix consults the private transition table and seeds otherwise unreachable starting statuses before calling the guarded writer. A public-only copy would duplicate that policy table or use legal transition chains that change the measured history. Keep this single combinatorial legal-edge invariant.",
+      "current_source": "crates/orbit-core/src/application/task/tests/lifecycle.rs",
+      "current_line": 78,
+      "body_sha256": "7c9e001af5acbc7979db2080411db3f519d85328bbd410e59ab87c42343c7893"
+    },
+    {
+      "identity": "application/task/tests/paths.rs::a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
+      "disposition": "corrected_admission",
+      "criterion": 2,
+      "evidence": "Private context admission accepts a root without cwd binding and returns ContextCreationAuthorization for a screened write. Public task write cannot force the grant revocation between screening and write; retain crafted authorization and deterministic interleaving (criteria 2/3).",
+      "current_identity": "application/task/tests/paths.rs::a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
+      "current_source": "crates/orbit-core/src/application/task/tests/paths.rs",
+      "current_line": 85,
+      "body_sha256": "aaeb251ad139df637e1b1b941e103742ea101e81033bdedcdfc255eee427de9e"
+    },
+    {
+      "identity": "application/task/tests/paths.rs::explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
+      "disposition": "corrected_admission",
+      "criterion": 2,
+      "evidence": "Private context admission accepts a root without cwd binding and returns ContextCreationAuthorization for a screened write. Public task write cannot force the grant revocation between screening and write; retain crafted authorization and deterministic interleaving (criteria 2/3).",
+      "current_identity": "application/task/tests/paths.rs::explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
+      "current_source": "crates/orbit-core/src/application/task/tests/paths.rs",
+      "current_line": 62,
+      "body_sha256": "ef3e109402133c21e35656eeea27610f8770a6b1f9b1a872bfd7c01991b7f4de"
+    },
+    {
+      "identity": "application/tests/managed_assets.rs::removal_rejects_escaping_paths_and_does_not_follow_symlinks",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/managed_assets.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "bootstrap/tests/activity.rs::owner_delivery_jobs_validate_the_candidate_before_it_leaves_the_worktree",
+      "disposition": "retired",
+      "evidence": "Pins seeded delivery job step order/arguments by inspecting YAML rather than executing delivery admission. Contract ordering should be exercised by existing workflow boundary checks; policy assets do not justify an independent unit admission."
+    },
+    {
+      "identity": "bootstrap/tests/activity.rs::step_failure_recovery_cannot_write_persistent_git_configuration",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/recovery_git.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "bootstrap/tests/activity.rs::the_claimed_pr_leaf_validates_before_it_publishes",
+      "disposition": "retired",
+      "evidence": "Pins seeded delivery job step order/arguments by inspecting YAML rather than executing delivery admission. Contract ordering should be exercised by existing workflow boundary checks; policy assets do not justify an independent unit admission."
+    },
+    {
+      "identity": "bootstrap/tests/global_defaults.rs::stamp_rejects_a_symlinked_resources_directory",
+      "disposition": "corrected_admission",
+      "current_identity": "bootstrap/tests/global_defaults.rs::stamp_rejects_a_symlinked_resources_directory",
+      "criterion": 3,
+      "qualifying_seam": "record_global_defaults_reconciled + global_defaults_are_current",
+      "evidence": "The private reconciliation-stamp writer is reached directly with a symlinked resources directory. Public init first validates/materializes managed directories and cannot reach the isolated stamp write against that hostile path. Preserve refusal before writing outside the global root.",
+      "current_source": "crates/orbit-core/src/bootstrap/tests/global_defaults.rs",
+      "current_line": 27,
+      "body_sha256": "689503cd8b7c8c13540a8ccfc6b6892e2c984fef008d3cd786ad1905fdd35423"
+    },
+    {
+      "identity": "bootstrap/tests/init.rs::global_and_workspace_init_create_private_directory_trees_under_permissive_umask",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/init.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "bootstrap/tests/init.rs::refresh_defaults_preserves_a_user_authored_terra_crew",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/init.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "bootstrap/tests/init.rs::unlink_skills_does_not_follow_a_symlinked_discovery_directory",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/init.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/platform.rs::missing_descendant_reports_its_existing_ancestor_filesystem",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/disk_probe.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/platform.rs::relative_path_is_refused_instead_of_resolved_against_the_working_directory",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/disk_probe.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/pressure.rs::config_admission_rejects_invalid_thresholds_and_exposes_overrides",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/resource_pressure.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/pressure.rs::disk_aggregation_keeps_all_path_hysteresis_but_reports_one_held_disk",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/resource_pressure.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/pressure.rs::stale_invalid_disabled_and_observation_gaps_fail_open",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/resource_pressure.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/pressure.rs::sustained_pressure_holds_until_below_resume_for_each_resource",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/resource_pressure.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/host_resource/tests/probe.rs::overlapping_callers_reuse_one_sample_including_unknown",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/resource_probe.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/plugin/tests/host.rs::a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_active_tool",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_host.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/plugin/tests/host.rs::fs_write_covering_the_plugin_root_is_refused_at_registration",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_host.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/plugin/tests/host.rs::fs_write_traversal_to_a_protected_global_path_is_refused_at_registration",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/plugin_host.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/plugin/tests/secrets.rs::a_symlinked_store_directory_is_refused",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/secret_store.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/plugin/tests/secrets.rs::concurrent_swaps_from_one_version_apply_exactly_once",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/secret_store.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/plugin/tests/secrets.rs::the_store_is_private_to_the_host_user",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/secret_store.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/task/locks/tests/commands.rs::files_shape_reservations_reject_outside_workspace_before_persisting",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/lock_commands.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/task/locks/tests/index.rs::task_lock_conflicts_use_selector_anchor_overlap",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/lock_overlap.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/task/tests/block_on_run_failure.rs::a_red_base_failure_holds_the_task_until_the_command_passes",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/run_failure.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/task/tests/block_on_run_failure.rs::failure_cleanup_leaves_a_newer_human_withdrawal_alone",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/run_failure.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/task/tests/block_on_run_failure.rs::re_running_terminalization_is_idempotent_and_respects_human_recovery",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/run_failure.rs",
+      "boundary": "Existing public runtime/helper; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/tests/authorization.rs::an_agent_session_cannot_delete_a_task_through_any_tool_path",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/authorization.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/tests/config_path.rs::config_path_rejects_a_symlink_without_reading_its_external_target",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/config_path.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    },
+    {
+      "identity": "runtime/tests/config_path.rs::root_path_tilde_expansion_uses_home_and_only_one_prefix",
+      "disposition": "corrected_admission",
+      "criterion": 1,
+      "evidence": "Private paths::resolve_path_value pure parser; current public runtime roots do not accept the raw malformed tilde spellings. Retain the single table covering expansion/rejection (criterion 1); config_path symlink refusal moves independently.",
+      "current_identity": "runtime/tests/config_path.rs::root_path_tilde_expansion_uses_home_and_only_one_prefix",
+      "current_source": "crates/orbit-core/src/runtime/tests/config_path.rs",
+      "current_line": 6,
+      "body_sha256": "18d807bd4f2e19e0f005f61eae307f791ed7b917f4450d7c73fe1dfd42c93ead"
+    },
+    {
+      "identity": "runtime/tests/tool_exec.rs::root_resolution_uses_owned_inspection_slot_and_rejects_planted_checkouts",
+      "disposition": "corrected_admission",
+      "current_identity": "runtime/tests/tool_exec.rs::root_resolution_uses_owned_inspection_slot_and_rejects_planted_checkouts",
+      "criterion": 3,
+      "qualifying_seam": "populate_filesystem_policy_context",
+      "evidence": "The private policy-context builder is supplied the caller cwd for an owned inspection slot and planted repositories. Public tool execution consumes the resulting policy context and does not expose its root selection; retain this focused authority/root-confinement seam instead of spawning a filesystem tool just to inspect hidden context.",
+      "current_source": "crates/orbit-core/src/runtime/tests/tool_exec.rs",
+      "current_line": 49,
+      "body_sha256": "7f1a9b7112eeeb785179e26c65afa7aa82c291ba16cfeda74af1482c4a16e681"
+    },
+    {
+      "identity": "runtime/workspace/tests/claim.rs::a_refused_dispatch_is_recorded_as_denied_without_the_holders_token",
+      "disposition": "moved",
+      "destination": "crates/orbit-core/tests/runtime/admission_audit/workspace_claim.rs",
+      "boundary": "Existing exported helper or OrbitRuntime API; original cases and assertions preserved."
+    }
+  ],
+  "admitted_identities": [
+    {
+      "identity": "adapter/command/dispatch/tests/brokered.rs::a_request_outside_the_run_is_refused_before_the_backend_runs",
+      "state": "preserved",
+      "body_sha256": "8f31ba8081f33e6441cc9d5a5a4dd0ae5ed66d4868bfcc50f3fd235a7a02b254"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::a_local_claimed_task_read_stays_on_the_claimed_task",
+      "state": "preserved",
+      "body_sha256": "b12b366b05f5e96b69b84b493b3276026c6f243fb51ba08d9f4d52f7f1c3eba0"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::a_review_artifact_path_in_any_spelling_is_refused_to_a_non_reviewer_without_reaching_the_owner",
+      "state": "preserved",
+      "body_sha256": "f00a8a12fde8c829f2b021e9240aecad44d1549d5f8d258322f3beacafa5c7ef"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::a_source_the_nested_orbit_may_not_read_is_refused_before_the_broker",
+      "state": "preserved",
+      "body_sha256": "10a4350fd5c33e209ae21efce705bd22a82b49bc57c4367616c4771a0b37f84b"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::inside_a_masked_sandbox_no_owner_call_falls_back_to_ssh",
+      "state": "preserved",
+      "body_sha256": "ada5fb9641e5a6bec2b3ac5cb3c08adb9469d5e52009800710436429cc9e290c"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner",
+      "state": "preserved",
+      "body_sha256": "29688866c0c3827522a8e3eb77688a90f0ac9244daa64408f12c5589053de7b4"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_owner.rs::the_reviewer_scope_decides_on_and_forwards_the_canonical_path",
+      "state": "preserved",
+      "body_sha256": "061f92c8d6fa24ee1e4d625546ed2c3b6a94f4a6126f5e4072d29218b691cb39"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_recovery.rs::a_claimed_worker_reads_the_delivery_of_its_own_leaf_only",
+      "state": "preserved",
+      "body_sha256": "0d7a93d4fccb976dfbad6ccbae95d1d0ed00c9770d90d63e020e95852fef816d"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_recovery.rs::final_recovery_attaches_no_review_artifact",
+      "state": "preserved",
+      "body_sha256": "72868de8a6793bbf83a9145ada791d118287118bf783fbfb819db8352145ca01"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_recovery.rs::final_recovery_reads_nothing_of_another_task_or_workspace",
+      "state": "preserved",
+      "body_sha256": "8724a1c5d9e9772e0f08f9f7fb721635f616517db35510ceedbedd360d542443"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_recovery.rs::final_recovery_reads_only_the_named_review_artifacts_spelled_exactly",
+      "state": "preserved",
+      "body_sha256": "a3065cf43e1bfa5c839b3dfa936a227cd31f838e3dd6b566c8677619583e426f"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_recovery.rs::final_recovery_reads_only_while_its_leaf_and_recovery_are_live",
+      "state": "preserved",
+      "body_sha256": "e0c09de3f3a709d5631a2f9da37e8f3096befdad1dc37f29684af23332cd4df8"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_review.rs::a_reviewer_past_its_deadline_without_finishing_reaches_nothing",
+      "state": "preserved",
+      "body_sha256": "5f5168413602752c2ca04af77f6c094a8f2ffa792b8e5f80bc0561f230060a70"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_review.rs::a_run_two_open_attempts_name_reaches_nothing",
+      "state": "preserved",
+      "body_sha256": "b6b1b3ca4339b00c21c0d3cd02f64efb104f25db07aadc412d153af1932d6de6"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_review.rs::claimed_review_normalizes_request_and_hold_paths_before_guarding_reads",
+      "state": "preserved",
+      "body_sha256": "ef44e3fee0bf3be80772d3ef42727a9d519d55a8b615759dd73e9deb9a7c8374"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_review.rs::the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner",
+      "state": "preserved",
+      "body_sha256": "e0de3a514dbc195bb9c53bc66927993cc78f2b024346908655e8ec8ce1ea514a"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_review.rs::the_reviewer_reads_the_prior_evidence_the_owners_hold_names",
+      "state": "preserved",
+      "body_sha256": "6518191620b2e24cb6c81d5464dc058990aef714c65d8591f7343fba77e4e82e"
+    },
+    {
+      "identity": "adapter/command/dispatch/tests/claimed_review.rs::the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_broker",
+      "state": "preserved",
+      "body_sha256": "0f88185f14708196da44e74ce1ec5f55e7c77581a9dd075cc315897bfe5b1f05"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::a_child_that_finishes_as_the_wait_expires_reports_its_own_outcome",
+      "state": "preserved",
+      "body_sha256": "bcad55acc4fe3d575447c1f7c7e30c15cc3ff23bebb18c101f39b881d03f469a"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pipeline_actions/tests/invoke.rs::an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate",
+      "state": "preserved",
+      "body_sha256": "41f830c65af3b03ff95271c1bbc36c4ade22fe93425b8404fa08a206aae85f78"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/drain/tests/breaker.rs::a_half_open_breaker_admits_one_probe_and_only_once_nothing_is_unsettled",
+      "state": "preserved",
+      "body_sha256": "9c1615cf785c9d68e67a130420da68bc6e224784c589e05178907976970e2db4"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/drain/tests/breaker.rs::an_open_breaker_half_opens_after_its_cooldown_and_a_failed_probe_doubles_it",
+      "state": "preserved",
+      "body_sha256": "82ce96c417a879d247ba7584865c84314c2ef6126663ccd61d563203293c7ed5"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/tests/drain.rs::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
+      "state": "preserved",
+      "body_sha256": "0e7309c413ef24dd26ef530a2a766174e8f32521e9e57143b39100a25c15030f"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/tests/drain.rs::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
+      "state": "preserved",
+      "body_sha256": "e903252d68c7f7ebdb1cdf5435be75c5c6e9bdfe8f25aba660700a7b2466479b"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/tests/drain.rs::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
+      "state": "preserved",
+      "body_sha256": "7a568d57d64fc280840f1f7bb7478afa5f708f2c61b49edc71967a038d52f93b"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/pull/tests/drain.rs::pull_lost_request_and_binding_responses_recover_the_same_leaf",
+      "state": "preserved",
+      "body_sha256": "eba64703124c6bc2ffa802697bd2e2fe443c6de5e5b25de99a430710c6e26345"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/provider_state.rs::rejects_a_symlinked_root_that_resolves_into_the_home_directory",
+      "state": "preserved",
+      "body_sha256": "aa39516a53dfe1bd334c6fa2466f90909f02db66454ab6a39c56e56853085e86"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/provider_state.rs::rejects_relative_and_traversal_paths",
+      "state": "preserved",
+      "body_sha256": "be9d6a75675fb6ec3bd674ccf3b3d27fb009d0f187bc5064f65bb2d24c9dcdfb"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/provider_state.rs::rejects_root_and_home_wide_targets",
+      "state": "preserved",
+      "body_sha256": "bec86e9add77facc633d3ad52916b7587325f2341e98b39c396b3d158cd944aa"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::codex_side_roots_compile_to_store_subpaths_only",
+      "state": "preserved",
+      "body_sha256": "5a6355736d823c207cb9ce409f6cf0c1c11c2ddc376d43825d38015fa00c48ca"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::explicit_off_still_resolves_on_a_host_without_a_backend",
+      "state": "preserved",
+      "body_sha256": "fbaa6e55974c416116dacd66eb741911290df5d6c8e3b6917de47de82204ba7b"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::linux_worktree_sandbox_preparation_revalidates_disappearing_git_entries",
+      "state": "preserved",
+      "body_sha256": "0792e0fc8cbeae1a6b2763a3fa7730a13a319b5e61baae385486fee501a0bbd6"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::shipped_agent_executor_without_a_host_backend_is_refused_with_remedies",
+      "state": "preserved",
+      "body_sha256": "837575ba7d035dbb98d5fca258e1e906d982ff17e7859e3f26128c54cbb12c92"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::undeclared_sandbox_still_resolves_to_none_on_every_os",
+      "state": "preserved",
+      "body_sha256": "30bb60d5eafbaeaae8e8cf5ac976d826cfbadddf159b208c6a22918ad5295e6f"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/runtime_grants.rs::directory_creation_rejects_parent_replaced_after_validation",
+      "state": "preserved",
+      "body_sha256": "ce5ec90198e004e14eccfe99941acb18a0f5fc65b7f127527ec41fba05f00b0c"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/runtime_grants.rs::rejects_a_store_that_traverses_or_escapes_the_root",
+      "state": "preserved",
+      "body_sha256": "e8a1b517f8979032ba7fd17e48f5e74be589440e31a1203f1680fdcc22db3c30"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/runtime_grants.rs::sidecar_grant_skips_a_sidecar_symlinked_outside_the_root",
+      "state": "preserved",
+      "body_sha256": "dc0ddd8a39ba261b7f0f9fc2d01878a8ab781d53ed3d588c0c1084b49800b048"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/sandbox/tests/runtime_grants.rs::sqlite_grants_reject_an_escaping_alias_without_touching_its_target",
+      "state": "preserved",
+      "body_sha256": "2893f783876c641de361bce2d0beb9a479d3f87d82398e27618eebfe6e7c4087"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/drain_promotion.rs::material_edit_after_the_pilot_write_is_held_for_revalidation",
+      "state": "preserved",
+      "body_sha256": "05fbcfb885bdf14a851d476dc5dba76ee4e92ee598cf012e34ca6b9d3f9ad675"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/drain_promotion.rs::opt_out_landing_before_the_approval_lock_keeps_the_task_proposed",
+      "state": "preserved",
+      "body_sha256": "186b39e0f2594550c6407a9440144cfac85ec905ab072bfd62ed736d2340f7a1"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge",
+      "state": "preserved",
+      "body_sha256": "6312251087ce1dac429f01ec0191353ed0fc79a6e7c881a8e1d77d7bdb195e9c"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/prepare.rs::automatic_admission_between_selection_and_hydration_settles_superseded",
+      "state": "preserved",
+      "body_sha256": "161fea9199586adf2a2a070d0b668baa00f161feac7fc2de730ae01607beb994"
+    },
+    {
+      "identity": "adapter/engine_host/v2_host/task_pilot/tests/prepare.rs::explicit_admission_between_selection_and_hydration_settles_superseded",
+      "state": "preserved",
+      "body_sha256": "4a297ed2dbd703c146373bc2bee118d73778dcb94e73d78bb6e7c1a58114986e"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::canonical_signature_deadline_propagates",
+      "state": "preserved",
+      "body_sha256": "5a481a75a95039cd30c0e6e35ca128859a3d28532a9fe93b2d610a5cef458345"
+    },
+    {
+      "identity": "application/automation/tests/source.rs::replay_provider_lookups_use_a_fresh_source_after_the_initial_head",
+      "state": "preserved",
+      "body_sha256": "935484c39d8db28327a74c55cb848394dc2c5be802506f2ab245d6209a10a664"
+    },
+    {
+      "identity": "application/automation/tests/stall.rs::concurrent_reporters_for_one_divergence_persist_one_friction",
+      "state": "preserved",
+      "body_sha256": "938453304934e842d1b73c31b4ebcdc9dd373b841cd17b4acca2c5de1d75a59b"
+    },
+    {
+      "identity": "application/gc/tests/tmp.rs::preview_skips_entries_removed_after_the_listing",
+      "state": "preserved",
+      "body_sha256": "4e18b65c9d09c5f691789d0c6bd4ccd5ee1ae8b2ab39be287cd7cd6f59fc35eb"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/delivery_class.rs::work_class_prefers_template_then_no_diff_then_change",
+      "state": "preserved",
+      "body_sha256": "1555bab0f7f6a55cffc989ba5838ce204e98af96e2183a5c5579115051bb1b6e"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/log.rs::appends_after_the_size_snapshot_are_excluded_from_the_bounded_read",
+      "state": "preserved",
+      "body_sha256": "a846ce15180b6c058fabbcf9a3295b0f1d6309a53d1ab0df9ab005ac0d3aa1dd"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/log.rs::empty_short_and_exact_limit_logs_keep_their_expected_content",
+      "state": "preserved",
+      "body_sha256": "9017ee2e7bbb32b161a460fe84bb83fca534d9c4462ae8be50010d01df52d432"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/log.rs::long_logs_report_the_snapshot_window_and_return_only_its_tail",
+      "state": "preserved",
+      "body_sha256": "9f1a20a02bcc80047f294277d074af8a73b3aa4170fc3b5e6484cd00326b9265"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/log.rs::shrink_after_the_size_snapshot_reports_only_bytes_still_available",
+      "state": "preserved",
+      "body_sha256": "7d2553d74760707900209a9920a4c79b58bbbe8db8f8e308f8ffae141187f4a0"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/scope.rs::admitted_credentials_reach_the_scoped_worker_environment_and_stay_off_argv",
+      "state": "preserved",
+      "body_sha256": "ff9874eb4533cdecc662f842a73b08c8290e971da006f9ec704e8a5edafa77bf"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/scope.rs::enabled_containment_always_yields_limits",
+      "state": "preserved",
+      "body_sha256": "d0eb0ae1fa934e7f193cb816c47ad6056b4eaa0468ed3ee470c61ae81573013b"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/scope.rs::every_worker_launch_outranks_the_user_manager_as_an_oom_victim",
+      "state": "preserved",
+      "body_sha256": "ad3098dcb54970b9aeeac59fa9ac4f5c5365599c5968fac103d3ba2bb669f709"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/scope.rs::scope_launch_carries_allowlisted_environment_and_honors_edits",
+      "state": "preserved",
+      "body_sha256": "3bf6548e1c6baebced35d0f0595e5a1f9fcffaf4a1cb491783c94c70b75253da"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/supervisor.rs::a_closed_observer_channel_stops_and_reaps_the_spawned_child",
+      "state": "preserved",
+      "body_sha256": "c2b8567159c991eee0d648b68a03557ed0b39527db3ca8d166c698e45fdda68a"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/supervisor.rs::store_read_faults_retain_supervision_and_reap_in_a_live_parent",
+      "state": "preserved",
+      "body_sha256": "42d72bb5586d7e43d277655da8f02545c6932238fb0388e6f2fb60bb59729986"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/usage.rs::memory_counts_shmem_but_not_page_cache",
+      "state": "preserved",
+      "body_sha256": "25edf1933a6adbee222cb74df023c6bf46c0ad9d32529866d3aca3440ae8abaa"
+    },
+    {
+      "identity": "application/job/pipeline/worker/tests/usage.rs::sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory",
+      "state": "preserved",
+      "body_sha256": "6dfc9608b6e09736d085f5aa5e81a82bd145a62a3088e4ff44e16cbef26cdabb"
+    },
+    {
+      "identity": "application/job/run/tests/actions.rs::cancellation_writes_preserve_interleaved_worker_checkpoints_and_lineage",
+      "state": "preserved",
+      "body_sha256": "19f8de25126fca0905e23a90b9cd44c952f593b75a1becde1e0e11d58f1e5aea"
+    },
+    {
+      "identity": "application/job/run/tests/admissions_stop.rs::admissions_stop_initialization_preserves_worker_checkpoint_and_merges_control",
+      "state": "preserved",
+      "body_sha256": "f92c3264ace0a800d63bc3e7fec250455de1dcaf5eb85672e7bd610bf0624c7d"
+    },
+    {
+      "identity": "application/job/run/tests/admissions_stop.rs::admissions_stop_initialization_refuses_concurrent_terminalization",
+      "state": "preserved",
+      "body_sha256": "9c0ddcfaeee53c527ad58e15a99d62653c9be33ff2855d6b97c4be4987e809aa"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::cancellation_policy_is_durable_before_the_owner_is_signalled",
+      "state": "preserved",
+      "body_sha256": "07cbd67fcae127ad2167272e16890afbf694531a4c75582d7c03fb4a875a88c8"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::forced_local_cancel_handles_children_persisted_during_stop_and_preserves_other_drains",
+      "state": "preserved",
+      "body_sha256": "e9498cd453a49fc0b1aa7d5256e6d8a1fca3fbad68e9d7a52c5689065143d96b"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::forced_pull_cancel_releases_admissions_persisted_during_stop_and_keeps_inherited_work",
+      "state": "preserved",
+      "body_sha256": "68344f9bf15cf0cff579ed9403c7b1f1cdc23debab0db5d6ddd78828bdac6fca"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::forced_pull_cancel_stops_a_late_launch_without_touching_another_live_drains_admission",
+      "state": "preserved",
+      "body_sha256": "aabad4fa56ab188f3981e5abc4b64d9fc1a4fee5fdfcde6e6b4475b31b39ae99"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control",
+      "state": "preserved",
+      "body_sha256": "b4064c6d2b86b16b4e889958cd66c93429d7fd381bc1cbd8eec5c79051ee1ce8"
+    },
+    {
+      "identity": "application/job/run/tests/drain_cancel.rs::graceful_cancel_initialization_refuses_concurrent_terminalization",
+      "state": "preserved",
+      "body_sha256": "f62693a4d8d5f05babfd81c9fda3a9eba04713b6417b7d71e0bdf65177b7f542"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::foreign_pid_namespace_never_condemns_a_live_owner",
+      "state": "preserved",
+      "body_sha256": "8c7b95a112e64391fd032f0dfbaaaa6c8efb12991e94e09627c20dc70055befe"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::owner_and_provider_never_escalate_against_a_replacement_identity",
+      "state": "preserved",
+      "body_sha256": "dc7d9c0deb989339273af4cc3a681c1ab339ef90224e0756ec5c4b87fc4218dd"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::provider_signalling_requires_a_verified_live_identity",
+      "state": "preserved",
+      "body_sha256": "cf642cbb27be1cc9e85d00f7494078e6f72ca0522c36a81b39eec996a78d7a43"
+    },
+    {
+      "identity": "application/job/run/tests/owner.rs::same_pid_namespace_still_detects_a_genuinely_dead_owner",
+      "state": "preserved",
+      "body_sha256": "89049ad7de7a047f18021ddddc022ca85f0306d135e02b00e41fafa0e844666f"
+    },
+    {
+      "identity": "application/job/tests/agent_invoke.rs::invocation_audit_failure_preserves_admission_retry_and_original_error",
+      "state": "preserved",
+      "body_sha256": "850f69217cb388086611a15ade1bbce1671c38119265e35380ea8b8c967dc03d"
+    },
+    {
+      "identity": "application/job/tests/crew_pools.rs::final_recovery_crew_is_drawn_once_and_frozen_for_the_run",
+      "state": "preserved",
+      "body_sha256": "cdd64b9f94a2221792d11f3c78c9ddbda2c89609a91c56164e17bfb9d1574662"
+    },
+    {
+      "identity": "application/job/tests/exec.rs::held_and_unsuccessful_runs_finalize_despite_summary_store_faults",
+      "state": "preserved",
+      "body_sha256": "631ef81e365ea240c8b30f4e089fe80ecb7c960ebb3745cda14f5c68841b7b24"
+    },
+    {
+      "identity": "application/job/tests/pipeline/admission.rs::audit_failure_preserves_admitted_runs_and_submission_errors",
+      "state": "preserved",
+      "body_sha256": "baba7cfcf5d55531aff7914db7529a0c0a0522e0f169eaadd0019a1bf88ed033"
+    },
+    {
+      "identity": "application/job/tests/pipeline/admission.rs::failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic",
+      "state": "preserved",
+      "body_sha256": "872b6f5a3bbe1998f7c260850925d5d38db3d29c46a90e85a4cce65e173be399"
+    },
+    {
+      "identity": "application/job/tests/pipeline/admission.rs::trigger_recording_preserves_a_competing_checkpoint_and_drain_controls",
+      "state": "preserved",
+      "body_sha256": "5792df321c74364c3af5a1de504122af34d2202728b9bf17a89a751384dffe77"
+    },
+    {
+      "identity": "application/plugin/tests/lifecycle/remove.rs::a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it",
+      "state": "preserved",
+      "body_sha256": "1668f10ae9351b9fe077007f0f1192b4fdcee8c05d7f9e9415cff2a5046c6541"
+    },
+    {
+      "identity": "application/routines/clock/tests/converge.rs::same_binary_with_unsafe_recovery_settings_is_rewritten_and_stays_paused",
+      "state": "preserved",
+      "body_sha256": "bf5b654a725c381772305131f8b258bce42bdc42c5b48a44332c6dd88f4d1841"
+    },
+    {
+      "identity": "application/routines/clock/tests/converge.rs::unqueryable_manager_leaves_follow_up_and_recognized_pause_does_not",
+      "state": "preserved",
+      "body_sha256": "41880922b59fa513af2c5120aa00d74332a82a966e0dda36dd8a81919b93afd4"
+    },
+    {
+      "identity": "application/routines/clock/tests/enable.rs::launchd_pause_unloads_loaded_agents_and_leaves_paused_agents_alone",
+      "state": "preserved",
+      "body_sha256": "dcbb2ec6064c51fd65e62f01bcb74ff69d3729ce97cacc5272c534e717a2e50c"
+    },
+    {
+      "identity": "application/routines/clock/tests/enable.rs::loaded_healthy_launchd_keeps_its_plist_and_is_not_reloaded",
+      "state": "preserved",
+      "body_sha256": "2488ccb7fe711570f7063d4f9daa7239c68cf061aa55eb8be9d06a23ebb56342"
+    },
+    {
+      "identity": "application/routines/clock/tests/enable.rs::loaded_unhealthy_launchd_is_rewritten_and_reloaded_or_reports_load_failure",
+      "state": "preserved",
+      "body_sha256": "5712ab571446c5b1a491f5b74429ed5df55570ab831438aca1277347f269a398"
+    },
+    {
+      "identity": "application/routines/clock/tests/inspect.rs::inspection_rejects_missing_unbounded_and_parent_only_recovery_settings",
+      "state": "preserved",
+      "body_sha256": "b3a41369dfb5d57270440742f10eebc7f819b5edcc7b5c7b3eba03d95fad5696"
+    },
+    {
+      "identity": "application/routines/clock/tests/status.rs::active_timer_does_not_hide_an_overdue_tick_or_a_failed_tick",
+      "state": "preserved",
+      "body_sha256": "0f5c4b500e1825049d913dbfdbc253482b015de6f5c89319ddc9aae338f96b37"
+    },
+    {
+      "identity": "application/routines/clock/tests/status.rs::active_timer_with_infinite_next_elapse_waits_for_the_service_tick",
+      "state": "preserved",
+      "body_sha256": "c61bf7c9df239906ab309247ea6097861cab6490edb8e262a3b16fd6e877e843"
+    },
+    {
+      "identity": "application/routines/tests/materialize.rs::confined_writer_preserves_the_previous_file_when_staging_write_fails",
+      "state": "preserved",
+      "body_sha256": "0132ae5c6e8b6f23fc741c29d572fe9fde9b9207918758aa6f8b37fcdcab730e"
+    },
+    {
+      "identity": "application/routines/tests/materialize.rs::staging_write_failure_child",
+      "state": "preserved",
+      "body_sha256": "eafe72d4ddb6a2ee84c0ceb723c6d9f38dbc5a18285f7a036d2b91f6c0f68982"
+    },
+    {
+      "identity": "application/task/desktop/tests/write.rs::completion_replay_finishes_side_effects_after_a_post_lock_read_failure",
+      "state": "preserved",
+      "body_sha256": "1ce8fd6e7c7a891bbd067ad6b3e5d0199e849c8c096b295d7832fc737e05cf85"
+    },
+    {
+      "identity": "application/task/tests/add.rs::creation_provenance_failure_keeps_one_task_and_its_event",
+      "state": "preserved",
+      "body_sha256": "c1fedc825456e08c598ed62c45d11186d1478714b45c0c18e455a4e5e716fac8"
+    },
+    {
+      "identity": "application/task/tests/final_recovery.rs::terminal_replay_finishes_side_effects_after_a_post_lock_read_failure",
+      "state": "preserved",
+      "body_sha256": "84cc8be6e3eb76559d21c89e86d48e41598135e4ba60f5131e1f2043179499a6"
+    },
+    {
+      "identity": "application/task/tests/transitions.rs::approve_does_not_overwrite_a_status_changed_after_its_read",
+      "state": "preserved",
+      "body_sha256": "acafa498ae1d5ddb48fac1120c8285e9846bc8e810e6f8784722e91694cac9e8"
+    },
+    {
+      "identity": "application/task/tests/transitions.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force",
+      "state": "preserved",
+      "body_sha256": "bf2f9e5350afc156a725d42abe51b0631b07f5993cc5fa24298e71c7747401c8"
+    },
+    {
+      "identity": "application/tests/executor.rs::custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration",
+      "state": "preserved",
+      "body_sha256": "95c8685724d8ee5832bcea7035fb5201ef256fb5c927460e0e79c3add555674b"
+    },
+    {
+      "identity": "application/tests/executor.rs::migrated_default_executor_realigns_platform_mismatched_sandbox_on_linux",
+      "state": "preserved",
+      "body_sha256": "bc5d8a817dcb516b589d5ff6f7921dc58f077d4e544cf928046a8648dea48f94"
+    },
+    {
+      "identity": "application/tests/executor.rs::seed_default_executors_heals_leftover_macos_sandbox_on_linux",
+      "state": "preserved",
+      "body_sha256": "83f2556ef462c9723240044cccde63c56fff1ea7b4340bbf7c9d0056febe9a28"
+    },
+    {
+      "identity": "application/tests/executor.rs::seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform",
+      "state": "preserved",
+      "body_sha256": "f36a30bc55014bd70d30252c4602412c1900e339e4bc90bfd988926b8c928880"
+    },
+    {
+      "identity": "application/tests/executor.rs::seed_default_executors_upgrades_old_unsandboxed_linux_default",
+      "state": "preserved",
+      "body_sha256": "fb4ddb498db4e71d3665fa58b230fa2f5c00ee54da324b761725181ea041dcb2"
+    },
+    {
+      "identity": "application/tests/executor.rs::seed_on_macos_keeps_sandbox_exec_and_existing_choices",
+      "state": "preserved",
+      "body_sha256": "bf2d60ee4dabf03bb207c9d8174edabe44e84ec369ba80dfefaddb43a1021750"
+    },
+    {
+      "identity": "application/tests/executor.rs::seed_without_a_host_backend_keeps_the_declared_sandbox",
+      "state": "preserved",
+      "body_sha256": "05c1d5a11632b9aceb42c8e9dda43aeb2d4ed9e32bdd9398254c42347b2903a3"
+    },
+    {
+      "identity": "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority",
+      "state": "preserved",
+      "body_sha256": "f2a846b8824dbf23b560c5018ece952ac2f4af9051cc07989c5145bbe4b3ae01"
+    },
+    {
+      "identity": "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects",
+      "state": "preserved",
+      "body_sha256": "e0ec99c4f5b6fe8ea91078b36c4ed989be12c2953b22526d43a07b070d936a1c"
+    },
+    {
+      "identity": "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_rejects_symlinked_log_directory",
+      "state": "preserved",
+      "body_sha256": "02e833302f829464fa80b10a1502babc531bdd5494926b707e1898f39e57f24b"
+    },
+    {
+      "identity": "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_rejects_traversal_in_log_directory",
+      "state": "preserved",
+      "body_sha256": "c2ea40fc3165965b20f7106e583955032a31ab798a668348d69d6850c6413f95"
+    },
+    {
+      "identity": "application/tests/managed_assets.rs::create_only_write_failure_child",
+      "state": "preserved",
+      "body_sha256": "a133094333ad751bca16e757194c93a9584f39fd996e4bfa8c09280a7fc30cbf"
+    },
+    {
+      "identity": "application/tests/managed_assets.rs::failed_create_only_write_is_retried_on_the_next_reconcile",
+      "state": "preserved",
+      "body_sha256": "3ce787dd3c92d5697be522c1d3392f8c92e09f782fb3db6b11c2ea0a82c94812"
+    },
+    {
+      "identity": "runtime/host_resource/tests/platform.rs::cpu_window_handles_tick_wrap_and_the_freshness_boundary",
+      "state": "preserved",
+      "body_sha256": "27bf7ce7687e5ad32cf4b488f5cb4760b0fe2db68e7ab27540db4eeb95cae23b"
+    },
+    {
+      "identity": "runtime/host_resource/tests/platform.rs::cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window",
+      "state": "preserved",
+      "body_sha256": "fac9b7aa137d3af5df22e7e5a61d45d84d20f7e177f4183fcd098c6692dcda87"
+    },
+    {
+      "identity": "runtime/host_resource/tests/platform.rs::cpu_window_native_failures_clock_reversal_and_stalls_remain_unknown",
+      "state": "preserved",
+      "body_sha256": "c77bacdddbb9251c99c4dee4f3d21574d23403eea5c8f77e6ec6b9c437d7a342"
+    },
+    {
+      "identity": "runtime/host_resource/tests/platform.rs::cpu_window_reuses_advancing_or_repeated_ticks_without_refreshing_the_baseline",
+      "state": "preserved",
+      "body_sha256": "7a07b5ab231eecf7093b987a8f75ad9e3439519bbe92df3265977aa84ff146be"
+    },
+    {
+      "identity": "runtime/host_resource/tests/usage.rs::host_usage_is_tick_utilization_in_cores_and_unavailable_memory",
+      "state": "preserved",
+      "body_sha256": "b2cd034ae7898a67995effe4eda90176cb2b7c99e4926f90458bae63c5c577d8"
+    },
+    {
+      "identity": "runtime/host_resource/tests/usage.rs::malformed_proc_files_read_as_unknown",
+      "state": "preserved",
+      "body_sha256": "7ea5c54894047b848b925215e70c5c53b157061d2a3e4bbdbbcc52062467605d"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/client.rs::a_different_server_uid_is_refused",
+      "state": "preserved",
+      "body_sha256": "5ec0ef73da879817639b7e6b6c27054ffabbdd24abfcb51011044e55ce0d6644"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/peer.rs::a_process_that_does_not_descend_from_the_anchor_is_refused",
+      "state": "preserved",
+      "body_sha256": "73fa889f624e5c7e854370bda93b18b5c54785a622aac79209971b4e2f19694a"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/peer.rs::an_anchor_whose_pid_was_reused_is_refused",
+      "state": "preserved",
+      "body_sha256": "8fe56245025608d2d2d8ea462bcf7d09575a09258be3cc800e03f73307dae394"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/protocol.rs::an_oversized_frame_is_refused_before_its_body_is_read",
+      "state": "preserved",
+      "body_sha256": "4bc5c941fa64b3cd429e785ed161b616fe4a82b3bfe9bced5873ab04b6285f61"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/sandbox.rs::another_runs_sandbox_and_the_host_are_refused_without_a_reply",
+      "state": "preserved",
+      "body_sha256": "7df463008e659fb7067fd7515fe59ef73722e1f99b15956ffe18c30444f62442"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/sandbox.rs::broker_client",
+      "state": "preserved",
+      "body_sha256": "7bbb32c3883da548e6a5d2ca5448a30a69d90a7e14aa02ab792097d31312daf4"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/server.rs::a_trickling_header_cannot_extend_the_request_deadline",
+      "state": "preserved",
+      "body_sha256": "32decb4f136e3ae701eb85ec50d4e3a22b6da9dc14e3a96f0b7609eb1f6d1645"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/socket.rs::a_symlinked_broker_directory_is_refused",
+      "state": "preserved",
+      "body_sha256": "07d8b241ff4c104eda174af142d40f148b37fb893775d8d36ca760a0a4268771"
+    },
+    {
+      "identity": "runtime/plugin/broker/tests/socket.rs::a_symlinked_state_directory_is_refused",
+      "state": "preserved",
+      "body_sha256": "4377404bea5f8dcd311b484883c09f44792dc98f65a89d989dabd82b8f917149"
+    },
+    {
+      "identity": "runtime/plugin/tests/definitions.rs::provenance_read_rejects_paths_that_leave_the_definition_directory",
+      "state": "preserved",
+      "body_sha256": "88bfcb56a22a290cc630901d9b0e9326da4fd29771708ec77052260f2f5c1ab6"
+    },
+    {
+      "identity": "runtime/plugin/tests/grants.rs::an_invalid_namespace_cannot_select_or_read_a_grant_witness_path",
+      "state": "preserved",
+      "body_sha256": "85303b6da80a075c1bae14e9ce5acc0528af919a44ad8433d356481d8402e1ae"
+    },
+    {
+      "identity": "runtime/plugin/tests/paths.rs::read_pin_file_does_not_follow_a_symlinked_leaf",
+      "state": "preserved",
+      "body_sha256": "676cd645b26d27103cadd0809f2de07677a084eead69c4d605b8eb34ec2d0ef6"
+    },
+    {
+      "identity": "runtime/plugin/tests/sandbox_mask.rs::prepare_refuses_a_linked_tree_or_sentinel",
+      "state": "preserved",
+      "body_sha256": "ee167c6d1ac5aafbca1173596e2f911612d09fb4223f9eac74983b49b4ffe958"
+    },
+    {
+      "identity": "runtime/plugin/tests/secrets.rs::invalid_names_and_values_are_refused_without_echoing_the_value",
+      "state": "preserved",
+      "body_sha256": "c2d701f2772f29614b049e6dc9505a42c20d637596f86553c595192710bc353b"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/certificate.rs::a_later_recovery_attempt_certifies_beside_the_earlier_one",
+      "state": "preserved",
+      "body_sha256": "4f7e75414756080a693a213d26ccb297247d4341e9ec7b2bf7f2541a525468a6"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/certificate.rs::a_pre_attempt_certificate_verifies_until_a_new_attempt_is_certified",
+      "state": "preserved",
+      "body_sha256": "b028f673bc724cb9a78b7d79d3270956ba2e029a5625a0e6658472d78f4e46be"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/certificate.rs::an_accepted_certificate_cannot_be_replaced",
+      "state": "preserved",
+      "body_sha256": "e8dad62bd663377fe433eeee0c3ac02aa417f445acfc8776bd39f479108e9aa0"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/certificate.rs::certified_evidence_verifies_and_every_leaf_edit_does_not",
+      "state": "preserved",
+      "body_sha256": "868bb95125a6155a42135b8486797ac2958bff4119669cb6b8d854962c9dfb88"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/certificate.rs::concurrent_issuance_and_reservation_stay_consistent",
+      "state": "preserved",
+      "body_sha256": "b1a4003e0004aeefbd04cb8990f6c976c057d439ab0e7cc69db51bbb11d4d2e3"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/certificate.rs::interrupted_attempts_survive_restart_without_trusting_stale_evidence",
+      "state": "preserved",
+      "body_sha256": "fa2d06724660bf5e099ca5952d6f3f8ec9290930f05787cb9f1eb5dcbe1b503f"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/root.rs::a_symlink_below_the_trusted_root_is_refused_before_anything_is_created",
+      "state": "preserved",
+      "body_sha256": "183ebf8ea10088c59e533cebf16fc12e001cc13cab36c64b7d03d3a1ea32f1bc"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/root.rs::a_symlinked_authority_database_is_refused",
+      "state": "preserved",
+      "body_sha256": "2f050874c196b5dd66f276723eb97251e112c4f63c5b6c05ab3b83b5e551cafd"
+    },
+    {
+      "identity": "runtime/recovery_authority/tests/worker.rs::worker_process_binding_survives_descendants_and_forged_environment",
+      "state": "preserved",
+      "body_sha256": "938279cc4034b99328267c22aa0a01d5252a68027ad59b21f02fdd0480a12afb"
+    },
+    {
+      "identity": "runtime/task/tests/block_on_run_failure.rs::terminal_run_publication_precedes_coupled_task_cleanup",
+      "state": "preserved",
+      "body_sha256": "7699e7f4c6a5de97a1982e42b11a0c9627a8b001c20c6176b18c8530d52c65e7"
+    },
+    {
+      "identity": "runtime/tests/git_sandbox.rs::git_scan_revalidation_denies_unsafe_replacements",
+      "state": "preserved",
+      "body_sha256": "ca60f41574c1262f87b001ef55aad8f4a53b0231265201b29746855af15b2363"
+    },
+    {
+      "identity": "runtime/tests/git_sandbox.rs::metadata_aliases_and_invalid_pointers_fail_closed",
+      "state": "preserved",
+      "body_sha256": "18fb1f2babd822cd7d3511fbae20c4d166e40c607b53b5195c006b28067d95be"
+    },
+    {
+      "identity": "runtime/tests/run_input.rs::managed_workspace_selector_requires_the_full_trust_boundary",
+      "state": "preserved",
+      "body_sha256": "13e7ebc925db97b662c742bdbf57e4099e3484d51ab0be2c50dfd733c572cedc"
+    },
+    {
+      "identity": "runtime/tests/tool_exec.rs::corrupted_drain_identities_are_detected_in_nested_replies",
+      "state": "preserved",
+      "body_sha256": "b2acf79f57b4deae14c765bdad8c79dd9b6b9ce060bd88a1dd95a55c73eb6b47"
+    }
+  ],
+  "deviations": [
+    "Removed the recovery activity instruction substring assertions while moving its executable proc.spawn security control: AGENTS.md forbids wording-pinning tests. The persistent git configuration denial, unchanged remotes and read-only inspection control remain.",
+    "Current source visibility and private observer/capture/kernel seams correct the generic boundary-economics assumption for the named retained entries; none is admitted merely for being private."
+  ]
+}

@@ -27,6 +27,3 @@ pub use execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 
 pub(crate) use compatibility::warn_compatibility_keys;
 pub(crate) use crew::{crews_from_raw, default_crews};
-
-#[cfg(test)]
-mod tests;

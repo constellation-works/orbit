@@ -74,6 +74,8 @@ pub(crate) fn supervise(
         cancelled: run.cancelled,
         intercept_signals: true,
         drain_budget: DRAIN_BUDGET,
+        cap_drain_at_deadline: false,
+        require_eof: false,
         stopped_descendants: Some(stopped_descendant_threshold()),
         on_stopped_descendant: None,
         on_spawn: None,

@@ -439,9 +439,7 @@ fn prepare_workspace_root_layout(
     Ok(layout)
 }
 
-/// `pub(super)` so `bootstrap/tests/init.rs` can assert the seeded layout
-/// against the same path derivation `init` itself uses.
-pub(super) fn orbit_layout_paths(orbit_root: &Path) -> WorkspacePaths {
+fn orbit_layout_paths(orbit_root: &Path) -> WorkspacePaths {
     let repo_root = orbit_root.parent().unwrap_or(orbit_root).to_path_buf();
     WorkspacePaths::new(
         repo_root,

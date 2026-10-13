@@ -44,6 +44,8 @@ Record five bearings as orbit's north star. This is an **incremental bearing, no
 
 **Adoption model.** Incremental and opportunistic: when a new surface is added or an existing command group is touched for other reasons, move that slice to request/response + registry then. Future decisions should cite this bearing when steering by it, or supersede it if the bearing itself changes.
 
+**Amended for bearing 1:** [Migrate the remaining nouns on a plan, not on contact](../operations-as-data/4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact) replaces the opportunistic adoption model with a planned noun-by-noun migration for operations as data only. Bearings 2–5 are unaffected.
+
 **Alternatives rejected.** (a) *Status quo as the implicit bearing*: keeps charging up to 4× adapter wiring per operation and guarantees the next boundary refactor hits the same inherent-impl/orphan-rule wall with no recorded direction — the cost that motivated this ADR. (b) *Big-bang registry rewrite*: months of churn across every surface with no incremental payoff and high regression risk in a codebase that ships continuously; rejected in favor of the touch-it-move-it model.
 
 ### Consequences

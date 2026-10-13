@@ -1,5 +1,4 @@
-//! Admitted unit tests: deterministic fault injection/cache concurrency and
-//! combinatorial pure hysteresis. No mutable Orbit state or ambient host pressure.
+//! Fixed-time samples for the retained shared-pressure history fixtures.
 use super::super::{DiskSample, HostResourceSample};
 use chrono::{TimeZone, Utc};
 use std::path::PathBuf;

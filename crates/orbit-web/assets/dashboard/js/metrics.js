@@ -46,9 +46,11 @@ const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
 const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"]];
 const MODES = [["chart", "Chart"], ["table", "Table"]];
+const OUTCOMES = [["succeeded", "Succeeded"], ["all", "All"]];
 const PROVIDERS = new Set(["claude", "codex", "gemini", "grok"]);
 
 const view = {
+  outcome: "succeeded",
   trend: "duration",
   stat: "avg",
   mode: "chart",
@@ -80,15 +82,18 @@ export function placeholdMetricsAggregate() {
 }
 
 export function fetchAndRenderMetrics() {
+  const hashQuery = new URLSearchParams(window.location.hash.split("?")[1] || "");
+  view.outcome = hashQuery.get("outcome") === "all" ? "all" : "succeeded";
   wireMetricsWindowSelector();
   if (isAggregateView()) {
     placeholdMetricsAggregate();
     return Promise.resolve();
   }
   const selectedWindow = getWindow();
+  const selectedOutcome = view.outcome;
   const revision = getWorkspaceRevision();
   const since = `since=${encodeURIComponent(selectedWindow)}`;
-  const scope = `/api/diagnostics/implement_one?${since}`;
+  const scope = `/api/diagnostics/implement_one?${since}&outcome=${selectedOutcome}`;
   if (metricsRequestScope !== `${revision}\0${scope}`) {
     metricsRequestScope = `${revision}\0${scope}`;
     clearMetrics();
@@ -98,8 +103,8 @@ export function fetchAndRenderMetrics() {
     fetchJson(`/api/diagnostics/completions?${since}`),
     fetchJson("/api/tasks/completion-by-complexity"),
   ]), ([durations, completions, outcome]) => {
-    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow) return;
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow) {
+    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
@@ -148,7 +153,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.trend, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions],
+    [state.outcome, state.trend, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -336,6 +341,13 @@ function trendSection() {
   const isDuration = view.trend === "duration";
   const model = isDuration ? durationModel() : completedModel();
   const tools = el("div", { class: "mx-trend-tools" }, [
+    isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
+      if (key === view.outcome) return;
+      const query = new URLSearchParams(window.location.hash.split("?")[1] || "");
+      query.set("outcome", key);
+      view.hover = null;
+      window.location.hash = `#diagnostics/metrics?${query}`;
+    }) : null,
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
   ]);
@@ -343,6 +355,9 @@ function trendSection() {
     el("p", { class: "mx-blurb", text: model.blurb }),
     seriesCards(model.cards),
     model.empty ? emptyTrend(model.empty) : (view.mode === "table" ? trendTable(model.table) : trendChart(model.chart)),
+    isDuration ? el("p", { class: "mx-notes", text: view.outcome === "succeeded"
+      ? "Counted: final implement_one attempts in successful runs with a committed candidate. Failed, cancelled, no-diff and unknown outcomes are excluded."
+      : "Counted: all implement_one invocations, including failed, cancelled, no-diff and unknown outcomes." }) : null,
   ]);
   return el("section", { class: "mx-card mx-trends", "aria-label": "Trends" }, [
     el("div", { class: "mx-trend-head" }, [trendTabs(), tools]),

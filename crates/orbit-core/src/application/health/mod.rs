@@ -4,6 +4,3 @@
 pub(crate) mod activity_catalog;
 pub mod artifact;
 mod artifact_diagnosis;
-
-#[cfg(test)]
-mod tests;

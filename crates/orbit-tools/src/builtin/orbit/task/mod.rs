@@ -12,6 +12,3 @@ pub mod reject;
 pub mod review_reset;
 pub mod show;
 pub mod update;
-
-#[cfg(test)]
-mod tests;

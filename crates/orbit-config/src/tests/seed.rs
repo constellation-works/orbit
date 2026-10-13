@@ -2,7 +2,7 @@
 //! flags and valid pool references across detected-family combinations [ORB-14671].
 //! No system lane is seeded: system work draws from the pools [ORB-15663].
 
-use crate::{ConfigSeed, seed_default_config};
+use crate::ConfigSeed;
 use toml::Table;
 
 const POOL_KEYS: [&str; 4] = [
@@ -11,17 +11,6 @@ const POOL_KEYS: [&str; 4] = [
     "hard_complexity_crews",
     "xhard_complexity_crews",
 ];
-
-fn seeded(families: &[&str]) -> Table {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("config.toml");
-    let seed = ConfigSeed::from_families(families);
-    assert!(seed_default_config(&path, Some(&seed)).expect("seed"));
-    std::fs::read_to_string(&path)
-        .expect("read config")
-        .parse()
-        .expect("seeded config is valid TOML")
-}
 
 fn workflow_pool(config: &Table, key: &str) -> Vec<String> {
     config["workflow"][key]
@@ -40,21 +29,6 @@ fn lane(config: &Table, key: &str) -> Option<String> {
     config["workflow"]
         .get(key)
         .map(|value| value.as_str().expect("lane is a string").to_string())
-}
-
-#[test]
-fn host_with_no_cli_seeds_all_crews_disabled_and_no_lane_keys() {
-    let config = seeded(&[]);
-    assert!(pools(&config).iter().all(Vec::is_empty));
-    assert_eq!(lane(&config, "default_crew"), None);
-    assert_eq!(
-        lane(&config, "system_crew"),
-        None,
-        "ORB-15663: fresh seeds never write the retired system lane"
-    );
-    for (name, crew) in config["crews"].as_table().expect("crews table") {
-        assert_eq!(crew["enabled"].as_bool(), Some(false), "crew `{name}`");
-    }
 }
 
 #[test]
@@ -162,47 +136,4 @@ fn rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled() {
             "error names the offending crew: {error}"
         );
     }
-}
-
-#[test]
-fn seeded_and_builtin_configs_load_valid_crew_registries() {
-    let global = tempfile::tempdir().expect("global tempdir");
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-
-    // Built-in registry: no `[crews]` table at all.
-    super::write_config(workspace.path(), "[workflow]\n");
-    let config = crate::ResolvedConfig::load(&super::roots(global.path(), workspace.path()))
-        .expect("config without crews loads");
-    assert!(!config.crews.is_empty());
-    for (name, crew) in &config.crews {
-        assert!(!name.trim().is_empty());
-        assert!(!crew.assignment.model.trim().is_empty());
-        assert!(!crew.assignment.provider.trim().is_empty());
-    }
-    assert!(
-        !config.crews.contains_key("terra"),
-        "ORB-14672 keeps the retired terra crew out of the built-in registry"
-    );
-    assert!(
-        !config.crews.contains_key("system"),
-        "ORB-15663 keeps the retired system crew out of the built-in registry"
-    );
-
-    // A seeded file, pools included, passes the same load-time validation.
-    let seeded = tempfile::tempdir().expect("seeded tempdir");
-    let path = seeded.path().join("config.toml");
-    seed_default_config(
-        &path,
-        Some(&ConfigSeed::from_families(["codex", "claude", "grok"])),
-    )
-    .expect("seed");
-    let seeded_body = std::fs::read_to_string(&path).expect("read");
-    let seeded_config: Table = seeded_body.parse().expect("seeded config is valid TOML");
-    assert!(
-        seeded_config["crews"].get("terra").is_none(),
-        "ORB-14672 keeps terra out of fresh init crew tables"
-    );
-    super::write_config(workspace.path(), &seeded_body);
-    crate::ResolvedConfig::load(&super::roots(global.path(), workspace.path()))
-        .expect("seeded config loads with its pools");
 }
