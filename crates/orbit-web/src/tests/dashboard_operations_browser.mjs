@@ -69,7 +69,8 @@ try {
     const { initRouter, initTabs } = await import('/js/router.js');
     const { setDockMode } = await import('/js/log-tail.js');
     let tab = 'operations';
-    let diag = 'runs';
+    let diag = 'incidents';
+    let jobs = 'live';
     let operations = 'routines';
     let knowledge = 'frictions';
     let incidentsView = 'incidents';
@@ -80,6 +81,7 @@ try {
     let runSubtab = 'steps';
     initRouter({
       getTab: () => tab, setTab: (value) => { tab = value; },
+      getJobsSubtab: () => jobs, setJobsSubtab: (value) => { jobs = value; },
       getDiagSubtab: () => diag, setDiagSubtab: (value) => { diag = value; },
       getOperationsSubtab: () => operations, setOperationsSubtab: (value) => { operations = value; },
       getKnowledgeSubtab: () => knowledge, setKnowledgeSubtab: (value) => { knowledge = value; },
@@ -205,13 +207,15 @@ try {
     await page.evaluate(() => {
       document.querySelectorAll('.operation-details').forEach((node) => { node.open = false; });
     });
-    for (const tab of ['routines', 'auto-tasks', 'jobs']) {
-      const selector = `#operations-subtabs .subtab[data-subtab="${tab}"]`;
+    for (const tab of ['routines', 'auto-tasks', 'live', 'history', 'catalogue']) {
+      const group = ['routines', 'auto-tasks'].includes(tab) ? 'operations' : 'jobs';
+      await page.click(`.tab[data-tab="${group}"]`);
+      const selector = `#${group}-subtabs .subtab[data-subtab="${tab}"]`;
       await page.click(selector);
       await page.waitForTimeout(200);
-      const reachable = await page.evaluate(([name, selector]) => {
+      const reachable = await page.evaluate(([name, selector, group]) => {
         const button = document.querySelector(selector);
-        const panel = document.getElementById(`operations-${name}-main`);
+        const panel = document.getElementById(`${group}-${name}-main`);
         const workspace = document.getElementById('workspace-select');
         const bounds = (node) => node.getBoundingClientRect();
         const onscreen = (node) => {
@@ -228,7 +232,7 @@ try {
           workspace: workspace && onscreen(workspace),
           clipped,
         };
-      }, [tab, selector]);
+      }, [tab, selector, group]);
       if (!reachable.subtab) throw new Error(`${tab} subtab not reachable at ${viewport.name}`);
       if (!reachable.panel) throw new Error(`${tab} panel hidden at ${viewport.name}`);
       if (!reachable.workspace) throw new Error(`workspace selector not reachable at ${viewport.name} / ${tab}`);
@@ -238,15 +242,45 @@ try {
     }
   }
 
+  const menus = await page.evaluate(() => ({
+    work: [...document.querySelector('.rail-group').querySelectorAll('.tab')].map(button => button.dataset.tab),
+    automation: [...document.querySelectorAll('#operations-subtabs .subtab')].map(button => button.dataset.subtab),
+  }));
+  if (menus.work.join() !== 'tasks,jobs' || menus.automation.join() !== 'routines,auto-tasks') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
+  const jobsNavigation = [];
+  for (const subtab of ['live', 'history', 'catalogue']) {
+    await page.click(`.tab[data-tab="jobs"]`);
+    await page.click(`#jobs-subtabs [data-subtab="${subtab}"]`);
+    const state = await page.evaluate(() => ({
+      hash: location.hash,
+      mains: [...document.querySelectorAll('.tab-pane[data-tab="jobs"] > main')].filter(main => getComputedStyle(main).display !== 'none').map(main => main.id),
+      filters: [...document.querySelectorAll('#runs-body .runs-filter button')].map(button => button.textContent),
+      selected: document.querySelector('.rail .tab.active')?.dataset.tab,
+    }));
+    if (state.hash.split("?")[0] !== `#jobs/${subtab}` || state.selected !== 'jobs' || state.mains.join() !== `jobs-${subtab}-main`) throw new Error(`Jobs navigation: ${JSON.stringify(state)}`);
+    if (subtab === 'history' && state.filters.join() !== 'All,Failed') throw new Error(`History filters: ${state.filters}`);
+    jobsNavigation.push(state);
+  }
+  const routine = page.locator('#jobs-body a.operation-chip[href="#operations/routines"]').first();
+  if (!await routine.isVisible()) throw new Error('Catalogue has no scheduling routine link');
+  await routine.click();
+  await page.waitForFunction(() => location.hash === '#operations/routines');
+  for (const retired of ['runs', 'diagnostics/runs', 'operations/jobs']) {
+    await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), retired);
+    if (await page.locator('.tab-pane[data-tab="jobs"]').evaluate(pane => pane.classList.contains('active'))) throw new Error(`Retired route opens Jobs: ${retired}`);
+  }
+  fs.writeFileSync(path.join(evidence, 'jobs-navigation.json'), JSON.stringify({ passed: true, menus, tabs: jobsNavigation, routineLink: '#operations/routines', retiredRoutes: ['runs', 'diagnostics/runs', 'operations/jobs'] }, null, 2));
+
   // ORB-15361: a task's running run with an unbreakable job id wraps inside its
   // Running now card at the grid's 280px minimum. The grouped card keeps its
   // task and run links, and an untasked card still fits its own layout.
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.click('#operations-subtabs .subtab[data-subtab="jobs"]');
+  await page.click('.tab[data-tab="jobs"]');
+  await page.click('#jobs-subtabs .subtab[data-subtab="live"]');
   await page.waitForTimeout(200);
   const longTaskJobId = 'task_' + 'a'.repeat(58);
   const runningLayout = await page.evaluate((longJobId) => {
-    const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+    const grid = document.querySelector('#jobs-live-main .operation-running-grid');
     grid.style.gridTemplateColumns = '280px';
     const lineCount = (node) => {
       const range = document.createRange();
@@ -286,14 +320,14 @@ try {
   if (untasked.overflowing || !untasked.runLinked) {
     throw new Error(`untasked Running now card changed at 280px: ${JSON.stringify(untasked)}`);
   }
-  await page.locator('#operations-jobs-main .operation-running').screenshot({ path: path.join(evidence, 'running-now-280.png') });
+  await page.locator('#jobs-live-main .operation-running').screenshot({ path: path.join(evidence, 'running-now-280.png') });
 
   // The task ID shares a flex row with its title. Across each generated grid
   // column count, the ID stays one line while the title consumes and clips to
   // the remaining width. Then repeat at a real 375px viewport.
   const assertRunningTaskHeader = async (label, expectedColumns = null) => {
     const layout = await page.evaluate(() => {
-      const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+      const grid = document.querySelector('#jobs-live-main .operation-running-grid');
       const grouped = grid.querySelector('.operation-running-task[data-task="ORB-15001"]');
       const head = grouped.querySelector('.operation-running-head');
       const id = head.querySelector('.operation-task-link');
@@ -329,7 +363,7 @@ try {
   };
   for (const { width, columns } of [{ width: 280, columns: 1 }, { width: 576, columns: 2 }, { width: 872, columns: 3 }]) {
     await page.evaluate((gridWidth) => {
-      const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+      const grid = document.querySelector('#jobs-live-main .operation-running-grid');
       grid.style.width = `${gridWidth}px`;
       grid.style.gridTemplateColumns = '';
     }, width);
@@ -337,12 +371,12 @@ try {
   }
   await page.setViewportSize({ width: 375, height: 812 });
   await page.evaluate(() => {
-    const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+    const grid = document.querySelector('#jobs-live-main .operation-running-grid');
     grid.style.width = '';
     grid.style.gridTemplateColumns = '';
   });
   await assertRunningTaskHeader('375px viewport', 1);
-  await page.evaluate(() => { document.querySelector('#operations-jobs-main .operation-running-grid').style.gridTemplateColumns = ''; });
+  await page.evaluate(() => { document.querySelector('#jobs-live-main .operation-running-grid').style.gridTemplateColumns = ''; });
 
   // ORB-12898: the retired #auto-drain destination opens Tasks with the Drain
   // dock, and the card fits the dock at its 336px minimum (and the narrower
@@ -576,7 +610,7 @@ try {
   await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
   const logDrainState = await page.locator('#dock-tab-drain').getAttribute('aria-label');
   if (!logDrainState.includes('Draining')) throw new Error(`Drain tab loses its accessible live state while Log is selected: ${logDrainState}`);
-  await page.click('.tab[data-tab="runs"]');
+  await page.click('.tab[data-tab="jobs"]');
   await page.click('#global-drain-state');
   if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -840,13 +874,13 @@ try {
       'rail-count-diag-incidents': '3',
       'rail-count-ops-routines': '4/5',
       'rail-count-ops-auto-tasks': '8/16',
-      'rail-count-ops-jobs': '33 running',
+      'rail-count-jobs': '33 running',
     })) document.getElementById(id).textContent = value;
   });
   const mobileEvidence = { routes: [], navigation: [], counts: [] };
   for (const [route, panel] of [
     ['tasks', 'tasks-panel'],
-    ['diagnostics/runs', 'diagnostics-panel'],
+    ['jobs/history', 'runs-panel'],
     ['runs/jrun-dashboard-fixture', 'run-detail-panel'],
     ['diagnostics/incidents', 'diagnostics-panel'],
   ]) {
@@ -970,7 +1004,8 @@ try {
   await page.evaluate(async () => {
     const { initRouter, initTabs } = await import('/js/router.js');
     let tab = 'tasks';
-    let diag = 'runs';
+    let diag = 'incidents';
+    let jobs = 'live';
     let operations = 'routines';
     let knowledge = 'frictions';
     let incidentsView = 'incidents';
@@ -978,6 +1013,7 @@ try {
     let reliabilityView = 'pipeline';
     initRouter({
       getTab: () => tab, setTab: (value) => { tab = value; },
+      getJobsSubtab: () => jobs, setJobsSubtab: (value) => { jobs = value; },
       getDiagSubtab: () => diag, setDiagSubtab: (value) => { diag = value; },
       getOperationsSubtab: () => operations, setOperationsSubtab: (value) => { operations = value; },
       getKnowledgeSubtab: () => knowledge, setKnowledgeSubtab: (value) => { knowledge = value; },

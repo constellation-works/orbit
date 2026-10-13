@@ -1,4 +1,4 @@
-/* Automation tab: routines, the clock, auto-tasks, and jobs. */
+/* Automation routines and auto-tasks; shared Jobs catalogue and live cards. */
 
 /* ORB-10875 / ORB-10876: routine, clock, and auto-task cards stay
    visually separate so one state cannot read as another. */
@@ -98,8 +98,8 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
    a group with a tone dot, a column header, and rows laid on the same
    grid (per pane via --ops-columns) with a switch or a button at the
    edge. Below 720px the header row goes and each cell labels itself. */
-.operations-routines-layout, .operations-jobs-layout { grid-template-columns: minmax(0, 1fr); }
-#jobs-body { padding: 12px; background: var(--bg); }
+.operations-routines-layout, .jobs-layout { grid-template-columns: minmax(0, 1fr); }
+#jobs-body, #jobs-live-body { padding: 12px; background: var(--bg); }
 .operation-clock-panel .body { padding: 10px 12px; }
 .operation-clock-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; min-width: 0; }
 .operation-clock-bar .operation-clock-summary { margin-bottom: 0; }

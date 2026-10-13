@@ -87,6 +87,7 @@ function fixture(url) {
       tasks: [],
     };
     case '/api/job-runs': {
+      if (url.searchParams.get('state') === 'active') return list(['pending', 'running'].map(state => ({ run_id: `live-${state}`, job_id: 'fixture', state })));
       runQueries.push(url.searchParams.get('state'));
       runRequests.push(url.search);
       if (!terminalRunFixture) return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
@@ -354,7 +355,7 @@ await settle();
 
 const surfaces = [
   { route: 'tasks', body: 'tasks-body', path: '/api/tasks', empty: list([]), emptyText: 'No tasks' },
-  { route: 'diagnostics/runs', body: 'runs-body', path: '/api/job-runs', empty: list([]), emptyText: 'No job runs' },
+  { route: 'jobs/history', body: 'runs-body', path: '/api/job-runs', empty: list([]), emptyText: 'No job runs' },
   { route: 'diagnostics/incidents/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: { items: [], since: null, coverage_since: null }, emptyText: 'No error events' },
   { route: 'operations/routines', body: 'routines-body', path: '/api/routines', empty: { routines: [], clock: {} }, emptyText: 'No routines' },
 ];
@@ -432,43 +433,26 @@ heldPath = null;
 terminalRunFixture = true;
 setActiveTab('tasks');
 refresh(); await settle();
-check(text('rail-count-diag-runs') === '3', 'the Runs rail count covers all three failure outcomes');
-check(node('rail-count-diag-runs').classList.contains('alert'), 'a failed-run count reads as an alert on the rail');
-setActiveTab('diagnostics/runs'); await settle();
+check(text('rail-count-jobs') === '2' && !node('rail-count-jobs').classList.contains('alert'), 'Jobs counts pending and running work in flight');
+click(node('rail-count-jobs')); await settle();
+check(window.location.hash === '#jobs/live' && text('jobs-live-body').includes('live-pending') && text('jobs-live-body').includes('live-running'), 'the in-flight badge opens Live with both active states');
+setActiveTab('jobs/history'); await settle();
 click(Array.from(node('runs-body').querySelectorAll('.runs-filter-button')).find(button => button.textContent === 'Failed')); await settle();
 check(runQueries.at(-1) === 'failed', 'the Failed filter requests the server failure group');
 check(new URL(window.location.href).searchParams.get('run_state') === 'failed', 'the Failed filter is kept in the address');
 const failureRows = Array.from(node('runs-body').children).filter(row => row.dataset.key?.startsWith('run-'));
-check(failureRows.length === Number(text('rail-count-diag-runs')), 'the Runs rail count equals the rendered failed run count');
+check(failureRows.length === 3, 'History includes every failure outcome');
 for (const state of ['failed', 'timeout', 'interrupted']) {
   check(failureRows.some(row => row.textContent.includes(`terminal-${state}`)), `${state} run remains visible under the Failed filter`);
 }
 check(!text('runs-body').includes('terminal-success') && !text('runs-body').includes('terminal-cancelled'), 'Failed filter excludes successful and cancelled runs');
-// The rail badge counts every failed run in its window, so opening it from a
-// task or job search must drop that search; otherwise the list can narrow below
-// the number clicked. The Failed-selected case covers a toolbar that is not rebuilt.
 const runsSearch = () => node('runs-body').querySelector('.runs-query');
-for (const [kind, value, param, startFilter] of [['task', 'ORB-15159', 'task_id', 'All'], ['job', 'ci_failure_sweep_pipeline', 'job_id', 'Failed']]) {
-  setActiveTab('diagnostics/runs'); await settle();
-  click(Array.from(node('runs-body').querySelectorAll('.runs-filter-button')).find(button => button.textContent === startFilter)); await settle();
-  runsSearch().value = value;
-  runsSearch().dispatchEvent(new Event('input')); await settle();
-  check(new URL(window.location.href).searchParams.get(param) === value, `${kind} search is kept in the address before the badge click`);
-  const badgeWindow = node('rail-count-diag-runs').dataset.window;
-  click(node('rail-count-diag-runs')); await settle();
-  const address = new URL(window.location.href).searchParams;
-  const request = new URLSearchParams(runRequests.at(-1));
-  check(address.get('run_state') === 'failed' && !address.has('task_id') && !address.has('job_id'), `${kind} badge click opens the failure scope without the ${kind} search in the address`);
-  check(request.get('state') === 'failed' && !request.has('task_id') && !request.has('job_id'), `${kind} badge click requests every failed run without the ${kind} search`);
-  check(request.get('since') === badgeWindow, `${kind} badge click requests the badge's counted window`);
-  check(runsSearch().value === '', `${kind} badge click clears the search field`);
-}
-// Ordinary Runs-label navigation keeps the search on screen.
-setActiveTab('diagnostics/runs'); await settle();
+// Ordinary Jobs navigation keeps the search on screen.
+setActiveTab('jobs/history'); await settle();
 runsSearch().value = 'ORB-15159';
 runsSearch().dispatchEvent(new Event('input')); await settle();
-click(document.querySelector('.tab[data-tab="runs"]')); await settle();
-check(new URL(window.location.href).searchParams.get('task_id') === 'ORB-15159' && runsSearch().value === 'ORB-15159', 'the Runs label keeps the task search');
+click(document.querySelector('.tab[data-tab="jobs"]')); await settle();
+check(new URL(window.location.href).searchParams.get('task_id') === 'ORB-15159' && runsSearch().value === 'ORB-15159', 'the Jobs label keeps the task search');
 runsSearch().value = '';
 runsSearch().dispatchEvent(new Event('input')); await settle();
 terminalRunFixture = false;

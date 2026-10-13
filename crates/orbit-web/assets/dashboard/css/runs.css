@@ -274,7 +274,7 @@
    Workspace column. Pin State and fade the scroll edges while the card is
    narrower than that by more than the 1px overflow tolerance. A card that
    can hold the tracks keeps the plain grid. */
-#diagnostics-panel { container: runs-card / inline-size; }
+#runs-panel { container: runs-card / inline-size; }
 @container runs-card (max-width: 1154px) {
   /* The grid's tracks overflow the row's auto-sized box at these widths.
      Give the row its table width so its sticky State cell stays pinned for

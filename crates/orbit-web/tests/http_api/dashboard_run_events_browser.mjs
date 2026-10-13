@@ -135,7 +135,7 @@ try {
   };
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture#diagnostics/runs`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture#jobs/history`);
   await page.locator('#runs-body [data-key^="run-"]').first().waitFor();
   await page.evaluate(async () => (await import('/static/js/router.js')).navigateToRun('jrun-events-fixture'));
   await page.locator('#run-steps-body .skeleton-state').waitFor({ state: 'attached' });

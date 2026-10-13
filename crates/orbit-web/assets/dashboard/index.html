@@ -26,8 +26,8 @@
           <!-- Live readings for the selected host: load relative to cores, memory
                and disk. The group names that host. Each chip is sized for its
                widest usual reading, so a new reading or a throttle verdict does
-               not move the bar. The windowed counts sit on the rail (failed runs
-               on Runs, denials on Health). -->
+               not move the bar. The counts sit on the rail (live runs
+               on Jobs, denials on Health). -->
           <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
             <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
             <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
@@ -58,7 +58,7 @@
           <div class="rail-group">
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
-          <button class="tab" data-tab="runs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Runs</span><span class="rail-count" id="rail-count-diag-runs"></span></button>
+          <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span></button>
           </div>
 
           <div class="rail-group">
@@ -83,7 +83,6 @@
             <nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Automation views">
               <button class="subtab active" data-subtab="routines" type="button">Routines<span class="rail-count" id="rail-count-ops-routines"></span></button>
               <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks<span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
-              <button class="subtab" data-subtab="jobs" type="button">Jobs<span class="rail-count" id="rail-count-ops-jobs"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
@@ -234,6 +233,44 @@
         </section>
       </main>
     </section>
+    <section class="tab-pane" data-tab="jobs" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <nav class="subtabs view-tabs" id="jobs-subtabs" aria-label="Jobs views">
+        <button class="subtab active" data-subtab="live" type="button">Live</button>
+        <button class="subtab" data-subtab="history" type="button">History</button>
+        <button class="subtab" data-subtab="catalogue" type="button">Catalogue</button>
+      </nav>
+      <main class="operations-layout jobs-layout" id="jobs-live-main">
+        <section class="panel">
+          <header><span>Live</span><span class="count" id="jobs-live-count">-</span></header>
+          <div class="body" id="jobs-live-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
+      </main>
+      <main class="jobs-layout" id="jobs-history-main" hidden>
+        <section class="panel" id="runs-panel">
+          <header><span>History</span><span class="count" id="runs-count">-</span></header>
+          <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <main class="operations-layout jobs-layout" id="jobs-catalogue-main" hidden>
+        <section class="panel" id="jobs-panel">
+          <header>
+            <span>Catalogue</span>
+            <span class="count" id="jobs-count">-</span>
+          </header>
+          <div class="operation-feedback" id="job-operation-feedback" role="status" aria-live="polite"></div>
+          <div class="body" id="jobs-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
+      </main>
+    </section>
     <section class="tab-pane" data-tab="diagnostics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- Health answers "what is broken now". Incidents has three views:
            incident signatures, the raw audit event log and the error feed.
@@ -254,12 +291,6 @@
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 75%"></div>
-              </div>
-            </div>
-            <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
-              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row" style="width: 80%"></div>
               </div>
             </div>
           </section>
@@ -492,18 +523,6 @@
           </header>
           <div class="operation-feedback" id="auto-task-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="auto-tasks-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
-      </main>
-      <main class="operations-layout operations-jobs-layout" id="operations-jobs-main" hidden>
-        <section class="panel" id="jobs-panel">
-          <header>
-            <span>Jobs</span>
-            <span class="count" id="jobs-count">-</span>
-          </header>
-          <div class="operation-feedback" id="job-operation-feedback" role="status" aria-live="polite"></div>
-          <div class="body" id="jobs-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
