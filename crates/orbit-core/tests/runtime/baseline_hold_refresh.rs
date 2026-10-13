@@ -22,7 +22,7 @@ case "$selection" in
             inconclusive) exit 127 ;;
             no-summary) echo 'test suite::broken ... FAILED'; exit 1 ;;
         esac
-        printf '{"schema_version":1,"selection":%s,"tests_run":%s}' "$selection" "$tests" > "$ORBIT_VALIDATION_SUMMARY"
+        printf '{"schema_version":1,"selection":%s,"tests_run":%s,"executed_tests":["suite::broken"]}' "$selection" "$tests" > "$ORBIT_VALIDATION_SUMMARY"
         case "$mode" in
             red|ignored|zero) echo 'test suite::broken ... FAILED'; exit 1 ;;
             *) exit 0 ;;

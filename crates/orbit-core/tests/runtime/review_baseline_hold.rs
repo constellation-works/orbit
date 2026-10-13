@@ -665,7 +665,7 @@ fn affected_check(honours_selection: bool, fails_where: &str, failure: &str) -> 
          elif git diff --quiet main -- candidate.txt; then selection='{{\"packages\":[]}}'\n\
          else selection='{{\"packages\":[\"suite\"]}}'; fi\n\
          case \"$selection\" in *suite*) tests=1 ;; *) tests=0 ;; esac\n\
-         printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":%s}}' \"$selection\" \"$tests\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         printf '{{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":%s}}' \"$selection\" \"$tests\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
          [ \"$tests\" = 0 ] && exit 0\n\
          if grep -q '{fails_where}' candidate.txt; then {failure}; exit 1; fi\n\
          exit 0\n",
@@ -724,7 +724,7 @@ const REPLAYING_GATE: &str = "#!/bin/sh\n\
     selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
     [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
     case \"$selection\" in *failing_tests*) echo replay >> \"$log\" ;; *) echo full >> \"$log\" ;; esac\n\
-    printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+    printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
     echo 'test suite::broken ... FAILED'\n\
     exit 1\n";
 const CHECK_RUNS_LOG: &str = "check-runs.log";

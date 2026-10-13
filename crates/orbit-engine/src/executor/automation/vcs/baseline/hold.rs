@@ -135,7 +135,7 @@ fn recorded_moved_base_status(
     tip: &str,
 ) -> Option<BaselineHoldStatus> {
     let result = match cache_paths(repo, tip, &hold.command, hold.selection.as_ref()) {
-        Ok(cache) => match read_cached(&cache.result) {
+        Ok(cache) => match read_cached(&cache.result, hold.selection.as_ref()) {
             Some(result) => Ok(result),
             None => {
                 if let Some(selection) = hold_failing_tests_selection(hold)

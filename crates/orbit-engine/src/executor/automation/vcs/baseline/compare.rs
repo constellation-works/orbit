@@ -1,9 +1,11 @@
+use super::super::base_claim::{failing_tests_selection, replay_coverage};
 use super::super::required_command::{
     MAX_VALIDATION_MESSAGE_BYTES, RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS,
     ValidationSummary, bounded_validation_text,
 };
 use super::cache::{
-    CACHE_SCHEMA_VERSION, cache_paths, read_cached, remove_legacy_checkouts, run_on_base,
+    CACHE_SCHEMA_VERSION, cache_paths, cached_base_check, read_cached, remove_legacy_checkouts,
+    run_on_base,
 };
 use crate::context::RuntimeHost;
 use chrono::Utc;
@@ -80,6 +82,14 @@ pub(super) fn not_comparable(
                 summary.selection
             ));
         }
+        if replays_failures {
+            if base.host_coverage_refused || base.timed_out {
+                return Some("the failing-test replay refused host coverage or timed out".into());
+            }
+            if let Some(reason) = replay_coverage(selection, summary) {
+                return Some(reason);
+            }
+        }
     }
     match summary.map(|summary| summary.tests_run) {
         Some(Some(0)) if base.passed => {
@@ -98,6 +108,37 @@ pub(super) fn not_comparable(
     }
 }
 
+/// Prefer a conclusive comparable full cache, otherwise replay only fully
+/// identified test failures. The original candidate command stays complete;
+/// unknown, compiler, timeout and host-refused outcomes retain full comparison.
+pub(in super::super) fn compare_candidate_with_base<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    base_sha: &str,
+    run: &RequiredCommandRun,
+) -> BaselineCheck {
+    if let Some(check) = cached_base_check(workspace_path, base_sha, &run.command, run.selection())
+        .filter(BaselineCheck::conclusive)
+    {
+        return check;
+    }
+    let narrowed = (!run.timed_out
+        && run.host_output_refusal.is_none()
+        && run.deferred_notice.is_none()
+        && run.infrastructure_failure.is_none()
+        && run.missing_tool.is_none()
+        && run.network_evidence.is_none())
+    .then(|| failing_tests_selection(run.selection(), &run.failures, &[]))
+    .flatten();
+    compare_with_base(
+        host,
+        workspace_path,
+        base_sha,
+        &run.command,
+        narrowed.as_ref().or(run.selection()),
+    )
+}
+
 /// What rerunning a failed command on the candidate's base showed.
 pub(in super::super) struct BaselineCheck {
     pub(in super::super) base_sha: String,
@@ -108,11 +149,21 @@ pub(in super::super) struct BaselineCheck {
     /// Why the base result does not show what the candidate's would
     /// ([`not_comparable`]), when it does not.
     pub(in super::super) not_comparable: Option<String>,
+    /// Whether Orbit requested an exact test replay, rather than a full run.
+    pub(super) exact_replay: bool,
 }
 
 impl BaselineCheck {
+    pub(in super::super) fn conclusive(&self) -> bool {
+        self.not_comparable.is_none()
+            && self
+                .result
+                .as_ref()
+                .is_ok_and(|base| !base.timed_out && !base.host_coverage_refused)
+    }
     /// Whether a comparable completed base run confirms every failure the
-    /// candidate names, with the same exit status. Missing identities or a
+    /// candidate names. Full replays require the same exit status; exact test
+    /// replays can differ because they run only part of the selection. Missing identities or a
     /// timeout cannot establish reproduction. A base result that
     /// is itself a missing tool or a network failure was never cached and
     /// never gets here.
@@ -124,7 +175,7 @@ impl BaselineCheck {
             && self.result.as_ref().is_ok_and(|base| {
                 !base.passed
                     && !base.timed_out
-                    && base.exit_code == run.exit_code
+                    && (self.exact_replay || base.exit_code == run.exit_code)
                     && run.failures.is_subset(&base.failures)
             })
     }
@@ -374,18 +425,20 @@ fn compare_base<H: RuntimeHost + ?Sized>(
         result: Err(reason),
         cached: false,
         not_comparable: None,
+        exact_replay: false,
     };
     let judged = |result: BaseCommandResult, cached: bool| BaselineCheck {
         base_sha: base_sha.to_string(),
         not_comparable: not_comparable(selection, &result),
         result: Ok(result),
         cached,
+        exact_replay: selection.is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some()),
     };
     let cache = match cache_paths(workspace_path, base_sha, command, selection) {
         Ok(cache) => cache,
         Err(error) => return inconclusive(format!("locate the base result cache: {error}")),
     };
-    if let Some(result) = read_cached(&cache.result) {
+    if let Some(result) = read_cached(&cache.result, selection) {
         return judged(result, true);
     }
     if retain_inconclusive && let Some(reason) = read_claim_inconclusive(&cache.claim_inconclusive)
@@ -411,7 +464,7 @@ fn compare_base<H: RuntimeHost + ?Sized>(
     };
     // Another candidate may have finished the same base run while this one
     // waited for the lock.
-    if let Some(result) = read_cached(&cache.result) {
+    if let Some(result) = read_cached(&cache.result, selection) {
         return judged(result, true);
     }
     if retain_inconclusive && let Some(reason) = read_claim_inconclusive(&cache.claim_inconclusive)

@@ -216,6 +216,10 @@ pub struct ValidationSummary {
     pub selection: Value,
     /// Tests executed, or `None` when the command could not count them.
     pub tests_run: Option<u64>,
+    /// Normalized identities actually executed, from the runner's report.
+    /// Older summaries and runners without identity evidence leave this absent.
+    #[serde(default)]
+    pub executed_tests: Option<BTreeSet<String>>,
 }
 
 impl ValidationSummary {
@@ -225,6 +229,8 @@ impl ValidationSummary {
             schema_version: u32,
             selection: Value,
             tests_run: Option<u64>,
+            #[serde(default)]
+            executed_tests: Option<BTreeSet<String>>,
         }
         let bytes = std::fs::read(path).ok()?;
         match serde_json::from_slice::<Recorded>(&bytes) {
@@ -232,6 +238,7 @@ impl ValidationSummary {
                 Some(Self {
                     selection: recorded.selection,
                     tests_run: recorded.tests_run,
+                    executed_tests: recorded.executed_tests,
                 })
             }
             Ok(_) | Err(_) => {

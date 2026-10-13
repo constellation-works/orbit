@@ -10,6 +10,7 @@ const COMMAND: &str = "python3 test_gate.py";
 const GATE: &str = r#"import json, os
 from pathlib import Path
 mode = Path('mode').read_text().strip()
+base_mode = __MODE__
 selection = json.loads(os.environ.get('ORBIT_VALIDATION_SELECTION', 'null'))
 replay = selection is not None and 'failing_tests' in selection
 with Path(__RUNS__).open('a') as runs:
@@ -17,21 +18,37 @@ with Path(__RUNS__).open('a') as runs:
 if not replay:
     selection = {'packages': ['orbit-core'], 'target_flags': ['--lib', '--tests'], 'doctest_packages': []}
 count = __COUNT__ if not replay else len(selection['failing_tests'])
+executed = [f'orbit-core::runtime suite::test_{index}' for index in range(count)]
 failed = mode != 'base' and (not replay or mode == 'deterministic')
-if mode == 'zero' and replay:
+if mode == 'base' and base_mode in ('inherited', 'subset', 'cache_old', 'cache_malformed', 'cache_partial', 'full_cache'):
+    failed = True
+if mode == 'zero' and replay or mode == 'base' and base_mode == 'base_zero':
     count = 0
-if mode == 'partial' and replay:
+    executed = []
+if mode == 'partial' and replay or mode == 'base' and base_mode == 'base_partial':
     count -= 1
+    executed = executed[:-1]
+if mode == 'base' and base_mode == 'base_missing':
+    executed = None
+if mode == 'base' and base_mode == 'base_malformed':
+    executed = ['not a test identity']
+if mode == 'base' and base_mode == 'base_wrong':
+    # Plausible count, wrong third identity: counts cannot prove coverage.
+    executed[-1] = 'orbit-core::other suite::test_2'
+if mode == 'base' and base_mode == 'base_compile':
+    count, executed, failed = None, None, True
 if mode == 'mismatch' and replay:
     selection = dict(selection, packages=['other'])
 Path(os.environ['ORBIT_VALIDATION_SUMMARY']).write_text(json.dumps({
-    'schema_version': 1, 'selection': selection, 'tests_run': count
+    'schema_version': 1, 'selection': selection, 'tests_run': count, 'executed_tests': executed
 }))
 if failed:
-    for index in range(__COUNT__):
+    for index in range(2 if mode == 'base' and base_mode == 'subset' else __COUNT__):
         print(f'FAIL [ 0.001s] (1/1) orbit-core::runtime suite::test_{index}')
     # libtest's echoed bare identity must not inflate the bound.
     print('test suite::test_0 ... FAILED')
+    if mode == 'base' and base_mode == 'base_compile':
+        print('error: compile failed\n  --> src/lib.rs:1:1')
 else:
     print(f'PASS: {count} isolated tests')
     if mode == 'skip':
@@ -45,6 +62,7 @@ fn fixture(sandbox: &Path, mode: &str, count: usize) -> (Fixture, PathBuf) {
     let fx = Fixture::new(sandbox);
     let runs = fx._root.path().join("gate-runs.jsonl");
     let gate = GATE
+        .replace("__MODE__", &serde_json::to_string(mode).unwrap())
         .replace("__RUNS__", &serde_json::to_string(&runs).unwrap())
         .replace("__COUNT__", &count.to_string())
         .replace(
@@ -77,6 +95,18 @@ fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
                 ("partial", 2, false, true),
                 ("mismatch", 1, false, true),
                 ("skip", 1, false, true),
+                ("inherited", 3, true, false),
+                ("subset", 3, false, false),
+                ("base_zero", 3, false, false),
+                ("base_partial", 3, false, false),
+                ("base_missing", 3, false, false),
+                ("base_malformed", 3, false, false),
+                ("base_wrong", 3, false, false),
+                ("base_compile", 3, false, false),
+                ("cache_old", 3, true, false),
+                ("cache_malformed", 3, true, false),
+                ("cache_partial", 3, true, false),
+                ("full_cache", 3, true, false),
             ]
             .into_iter()
             .filter(|row| selected.contains(&row.0))
@@ -104,7 +134,19 @@ fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
                     "{route}/{mode}: {calls:?}"
                 );
                 assert_eq!(calls[0]["mode"], mode);
+                assert_eq!(
+                    calls[0]["replay"], false,
+                    "the required candidate gate stays full"
+                );
                 assert_eq!(calls[1]["mode"], "base");
+                assert_eq!(calls[1]["replay"], true, "one exact diagnostic base replay");
+                assert_eq!(
+                    calls[1]["selection"]["failing_tests"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    count
+                );
                 if reruns {
                     assert_eq!(calls[2]["mode"], mode);
                     assert_eq!(
@@ -143,6 +185,80 @@ fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
                     continue;
                 }
                 let output = outcome.expect("all isolated tests passed");
+                if matches!(
+                    mode,
+                    "inherited" | "cache_old" | "cache_malformed" | "cache_partial" | "full_cache"
+                ) {
+                    assert_eq!(output["decision"], "passed_with_known_red");
+                    if mode != "inherited" {
+                        let common = orbit_common::fs::git::git_common_dir(&fx.repo).unwrap();
+                        let cache_dir = common.join("orbit-baseline");
+                        let path = fs::read_dir(&cache_dir)
+                            .unwrap()
+                            .map(|entry| entry.unwrap().path())
+                            .find(|path| {
+                                path.extension()
+                                    .is_some_and(|extension| extension == "json")
+                            })
+                            .unwrap();
+                        let mut cached: Value =
+                            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                        let destination = if mode == "full_cache" {
+                            // A compatible full cache predating identity proof
+                            // remains authoritative and avoids a base process.
+                            cached["summary"]["selection"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("failing_tests");
+                            cached["summary"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("executed_tests");
+                            let key = orbit_common::security::release::sha256_hex(
+                                format!(
+                                    "{}\0{}\0{}\0{}",
+                                    cached["schema_version"],
+                                    fx.base_sha,
+                                    COMMAND,
+                                    cached["summary"]["selection"]
+                                )
+                                .as_bytes(),
+                            );
+                            cache_dir.join(format!("{key}.json"))
+                        } else {
+                            match mode {
+                                "cache_old" => {
+                                    cached["summary"]
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .remove("executed_tests");
+                                }
+                                "cache_malformed" => {
+                                    cached["summary"]["executed_tests"] = json!([42]);
+                                }
+                                "cache_partial" => {
+                                    cached["summary"]["executed_tests"]
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .pop();
+                                }
+                                _ => unreachable!(),
+                            }
+                            path
+                        };
+                        fs::write(destination, serde_json::to_vec(&cached).unwrap()).unwrap();
+                        assert_eq!(
+                            action(&host, route, &input).unwrap()["decision"],
+                            "passed_with_known_red"
+                        );
+                        assert_eq!(
+                            fs::read_to_string(&runs).unwrap().lines().count(),
+                            if mode == "full_cache" { 3 } else { 4 },
+                            "compatible full cache skips base; invalid narrow proof reruns it"
+                        );
+                    }
+                    continue;
+                }
                 assert_eq!(output["decision"], "passed_with_flaky_tests");
                 let activity = orbit_engine::activity_job::load_activity_asset(
                     &fs::read_to_string(
@@ -222,7 +338,18 @@ fn candidate_validate_verdicts() {
     candidate_replay_rows(
         "flaky::candidate_validate_verdicts",
         "candidate_validate",
-        &["flake", "deterministic", "over_bound", "base_skip"],
+        &[
+            "flake",
+            "deterministic",
+            "over_bound",
+            "base_skip",
+            "inherited",
+            "subset",
+            "cache_old",
+            "cache_malformed",
+            "cache_partial",
+            "full_cache",
+        ],
     );
 }
 
@@ -231,7 +358,18 @@ fn candidate_validate_coverage() {
     candidate_replay_rows(
         "flaky::candidate_validate_coverage",
         "candidate_validate",
-        &["zero", "partial", "mismatch", "skip"],
+        &[
+            "zero",
+            "partial",
+            "mismatch",
+            "skip",
+            "base_zero",
+            "base_partial",
+            "base_missing",
+            "base_malformed",
+            "base_wrong",
+            "base_compile",
+        ],
     );
 }
 
@@ -240,7 +378,18 @@ fn claim_validate_verdicts() {
     candidate_replay_rows(
         "flaky::claim_validate_verdicts",
         "claim_validate",
-        &["flake", "deterministic", "over_bound", "base_skip"],
+        &[
+            "flake",
+            "deterministic",
+            "over_bound",
+            "base_skip",
+            "inherited",
+            "subset",
+            "cache_old",
+            "cache_malformed",
+            "cache_partial",
+            "full_cache",
+        ],
     );
 }
 
@@ -249,6 +398,17 @@ fn claim_validate_coverage() {
     candidate_replay_rows(
         "flaky::claim_validate_coverage",
         "claim_validate",
-        &["zero", "partial", "mismatch", "skip"],
+        &[
+            "zero",
+            "partial",
+            "mismatch",
+            "skip",
+            "base_zero",
+            "base_partial",
+            "base_missing",
+            "base_malformed",
+            "base_wrong",
+            "base_compile",
+        ],
     );
 }

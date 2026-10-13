@@ -151,7 +151,9 @@ else:
         config = arguments[arguments.index("--tool-config-file") + 1].split(":", 1)[1]
         junit = json.loads(open(config).read().split("path = ", 1)[1])
         with open(junit, "w") as report:
-            if os.environ.get("GUARD_TEST_TIMINGS"):
+            if os.environ.get("GUARD_TEST_JUNIT"):
+                report.write(os.environ["GUARD_TEST_JUNIT"])
+            elif os.environ.get("GUARD_TEST_TIMINGS"):
                 seconds_for = {"orbit-cli": "0.01", "orbit-cmd": "0.02", "orbit-core": "0.03", "orbit-web": "0.04",
                                "orbit-engine": "0.05", "orbit-tools": "0.06"}
                 suites = []
@@ -160,7 +162,8 @@ else:
                     suites.append('<testsuite name="%s" tests="1" time="%s"><testcase name="a" classname="%s" time="%s"/></testsuite>' % (name, seconds, name, seconds))
                 report.write('<testsuites name="nextest-run" tests="%d">%s</testsuites>' % (len(selected), "".join(suites)))
             else:
-                report.write(f'<testsuites name="nextest-run" tests="{len(selected)}"/>')
+                suites = ''.join('<testsuite name="%s"><testcase name="a"/></testsuite>' % name for name in selected)
+                report.write(f'<testsuites name="nextest-run" tests="{len(selected)}">{suites}</testsuites>')
     if os.environ.get("GUARD_TEST_NOTICE") and arguments[:2] == ["nextest", "run"]:
         print("    " + os.environ["GUARD_TEST_NOTICE"], flush=True)
         print("ordinary output", flush=True)
@@ -432,7 +435,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.touch_core()
         result, summary = self.summarized()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), selection=dict(
+        self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), executed_tests=[f"{name} a" for name in self.core_dependents], selection=dict(
             packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"],
             doctest_packages=self.core_dependents), command=None, base=self.base, exit_code=0, notices=[],
             compile_ms=None, test_ms=None, package_timings=None))
@@ -584,7 +587,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.log.write_text("")
         result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(handed), GUARD_TEST_EXIT="100")
         self.assertEqual(result.returncode, 100, result.stderr)
-        self.assertEqual(replay, dict(schema_version=1, selection=handed, tests_run=2, command=None,
+        self.assertEqual(replay, dict(schema_version=1, selection=handed, tests_run=2, executed_tests=["orbit-cli a", "orbit-core a"], command=None,
                                       base=None, exit_code=100, notices=[],
                                       compile_ms=None, test_ms=None, package_timings=None))
         [run] = [call for call in self.calls() if call[:2] == ["nextest", "run"]]
@@ -596,6 +599,22 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertEqual(run[run.index("--test-threads") + 1], "1")
         self.assertEqual(run[run.index("--retries") + 1], "0")
         self.assertFalse(any("--doc" in call for call in self.calls()))
+        # The echoed selection and count remain identical even when the
+        # actual report contains only a subset, skipped cases or invalid XML.
+        for junit, executed in (
+                ('<testsuites tests="2"><testsuite name="orbit-core::runtime">'
+                 '<testcase name="suite::broken"/><testcase name="suite::ignored"><skipped/></testcase>'
+                 '</testsuite></testsuites>', ["orbit-core::runtime suite::broken"]),
+                ('<testsuites tests="2"><testsuite><testcase name="suite::broken"/>'
+                 '</testsuite></testsuites>', None),
+                ('malformed XML', None)):
+            with self.subTest(junit=junit):
+                result, proof = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(handed),
+                                                GUARD_TEST_JUNIT=junit)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(proof["selection"], handed)
+                self.assertEqual(proof["executed_tests"], executed)
+
         # A bare test name could be in any package, so the whole selection builds;
         # cargo test filters by exact name.
         self.log.write_text("")
@@ -737,7 +756,7 @@ class NextestOutputTransportTests(unittest.TestCase):
         handed = dict(self.summary["selection"], failing_tests=["suite::fixture inner::also_broken"])
         output = self.run_gate(body, returncode=100, selection=handed)
         timings = {key: self.summary.pop(key) for key in ("compile_ms", "test_ms", "package_timings")}
-        self.assertEqual(self.summary, dict(schema_version=1, selection=handed, tests_run=1, command=None,
+        self.assertEqual(self.summary, dict(schema_version=1, selection=handed, tests_run=1, executed_tests=["suite::fixture inner::also_broken"], command=None,
                                             base=None, exit_code=100, notices=[]), output)
         assert_phase_sums(self, timings)
         self.assertIn("suite", {entry["package"] for entry in timings["package_timings"]})

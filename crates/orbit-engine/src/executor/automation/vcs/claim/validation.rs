@@ -16,7 +16,7 @@ use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::baseline::{
-    baseline_red_failure, candidate_failure, compare_with_base, run_validation_command,
+    baseline_red_failure, candidate_failure, compare_candidate_with_base, run_validation_command,
 };
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::flaky::rerun_failed_tests;
@@ -472,15 +472,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     let commit = &candidate.candidate.commit;
     let workspace_path = required_workspace(input)?;
     let check = (!run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none())
-        .then(|| {
-            compare_with_base(
-                host,
-                &workspace_path,
-                &candidate.base.commit,
-                &run.command,
-                run.selection(),
-            )
-        });
+        .then(|| compare_candidate_with_base(host, &workspace_path, &candidate.base.commit, run));
     let coverage_failure = run.coverage_failure(commit, replay);
     if let Some(check) = check.as_ref().filter(|_| coverage_failure.is_none())
         && let Some(failures) = check.known_red(run)

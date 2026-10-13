@@ -329,7 +329,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         .is_none()
         .then(|| cached_base_check(workspace_path, base_sha, command, full.as_ref()))
         .flatten()
-        .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
+        .filter(super::baseline::BaselineCheck::conclusive);
     // A timed-out run is compared whole for evidence, never confirmed.
     let narrowed = (!run.timed_out || cut.is_some())
         .then(|| failing_tests_selection(full.as_ref(), &on_candidate, claimed_failures))
@@ -555,7 +555,7 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
     }
     on_owner_base(workspace_path, base_branch, base_sync, base_sha).map_err(Inconclusive)?;
     let cached = cached_base_check(workspace_path, base_sha, command, selection)
-        .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
+        .filter(super::baseline::BaselineCheck::conclusive);
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
         (Some(check), _) => (check, true),
         (None, Some(narrowed)) => (
@@ -711,6 +711,44 @@ fn test_id(name: &str) -> bool {
         })
         .as_ref()
         .is_some_and(|pattern| pattern.is_match(name))
+}
+
+/// A narrowed replay must prove every requested identity actually executed.
+/// Qualified requests match the binary as well as the test; bare libtest
+/// requests match that exact test path in any binary. Counts alone cannot
+/// distinguish a missing requested test from an unrelated executed one.
+pub(super) fn replay_coverage(selection: &Value, summary: &ValidationSummary) -> Option<String> {
+    let requested = selection.get(FAILING_TESTS_KEY)?;
+    let Some(tests) = requested.as_array().filter(|tests| !tests.is_empty()) else {
+        return Some("the failing-test selection is malformed or empty".into());
+    };
+    let Some(executed) = &summary.executed_tests else {
+        return Some("the replay reported no executed-test identity proof".into());
+    };
+    if executed.is_empty()
+        || executed.iter().any(|test| !test_id(test))
+        || summary
+            .tests_run
+            .is_none_or(|count| count < executed.len() as u64)
+    {
+        return Some("the replay's executed-test identity proof is empty or malformed".into());
+    }
+    for test in tests {
+        let Some(test) = test.as_str().filter(|test| test_id(test)) else {
+            return Some("the failing-test selection contains a malformed identity".into());
+        };
+        if !executed.contains(test)
+            && (test.contains(' ')
+                || !executed
+                    .iter()
+                    .any(|ran| ran.split_once(' ').is_some_and(|(_, name)| name == test)))
+        {
+            return Some(format!(
+                "the replay did not execute requested test `{test}`"
+            ));
+        }
+    }
+    None
 }
 
 /// Why a passing run shows nothing about the disputed check, when it does
