@@ -5,7 +5,7 @@ tags: [operations, performance, dashboard]
 paths: ["crates/orbit-web/**", "scripts/web-memory-soak.py", "Makefile"]
 related_features: [orbit-web]
 related_artifacts: [ORB-14723]
-last_validated: 2026-10-08
+last_validated: 2026-10-13
 ---
 
 # Soak-Test Dashboard Memory
