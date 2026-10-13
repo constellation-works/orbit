@@ -137,6 +137,9 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
+      - name: Install ripgrep
+        run: brew install ripgrep
+
       - name: Run workspace Clippy gates
         run: make ci-lint
 
