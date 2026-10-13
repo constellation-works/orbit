@@ -81,10 +81,10 @@ impl FinalRecoveryBudget {
 }
 
 /// The failed run's worktree, as its earliest step reported it.
-struct RunWorktree {
-    workspace_path: String,
+pub(super) struct RunWorktree {
+    pub(super) workspace_path: String,
     base_ref: Option<String>,
-    base_sha: Option<String>,
+    pub(super) base_sha: Option<String>,
 }
 
 /// Run the job's final recovery for the failure of top-level step
@@ -242,6 +242,14 @@ pub(super) fn attempt_final_recovery(
         &["rev-parse", "--verify", "HEAD^{commit}"],
     )
     .ok();
+    let root_before = std::path::Path::new(&worktree.workspace_path)
+        .canonicalize()
+        .ok();
+    let branch_before = git_output(
+        std::path::Path::new(&worktree.workspace_path),
+        &["symbolic-ref", "--quiet", "HEAD"],
+    )
+    .ok();
     let dispatch = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message)
         .map(|mut input| {
             if let Some(refusal) = &absorbed_refusal {
@@ -263,18 +271,46 @@ pub(super) fn attempt_final_recovery(
         },
     };
     let (mut decision, mut resume_index, downgrade) = admit_resume_step(job, step_index, decision);
+    let commit_index = job.steps[1..=step_index]
+        .iter()
+        .position(|step| {
+            matches!(&step.body, JobV2StepBody::Target(target)
+            if matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
+                if spec.action == "git_commit"))
+        })
+        .map(|index| index + 1);
+    if resume_index.is_some()
+        && let Some(index) = commit_index
+        && let Err(refusal) = recovery::commit_final_recovery_repair(
+            ctx,
+            step,
+            activity,
+            &job.steps[index],
+            &task_id,
+            &worktree,
+            root_before
+                .as_deref()
+                .zip(head_before.as_deref())
+                .zip(branch_before.as_deref())
+                .map(|((root, head), branch)| (root, head, branch)),
+        )
+    {
+        decision = FinalRecoveryDecision::Escalate {
+            diagnosis: format!("{refusal}; original error before recovery: {error_message}"),
+            human_action:
+                "Inspect the refused repair and its candidate ownership before resuming the run."
+                    .into(),
+        };
+        resume_index = None;
+    }
     let repair_commit = resume_index
         .and_then(|_| observe_repair_commit(&worktree.workspace_path, head_before.as_deref()));
     if repair_commit.is_some()
-        && let Some(commit_index) = job.steps[1..=step_index].iter().position(|step| {
-            matches!(&step.body, JobV2StepBody::Target(target)
-                if matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
-                    if spec.action == "git_commit"))
-        })
+        && let Some(commit_index) = commit_index
     {
         // A repair is a new candidate. Even a request to resume settlement
         // must rerun commit, validation, admission and review first.
-        let index = resume_index.unwrap_or(step_index).min(commit_index + 1);
+        let index = resume_index.unwrap_or(step_index).min(commit_index);
         if let FinalRecoveryDecision::Resume { step_id, .. } = &mut decision {
             *step_id = job.steps[index].id.clone();
         }

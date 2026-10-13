@@ -245,6 +245,13 @@ it. The commit guard accepts only the recorded repair HEAD in the same
 worktree, descended from the pinned base. Any later unrecorded HEAD change
 still fails with `worktree_head_changed`.
 
+For file repairs made before review, final recovery's resume uses the host's
+guarded recovery commit path before rewinding delivery. The agent's Git metadata
+stays read-only. Adoption refuses protected or non-regular paths, a no-diff route,
+source or branch drift, and file edits on a head already admitted to or settled
+by review. Such a refusal escalates without retrying validation and preserves
+the files for inspection; it does not authorize a commit on a reviewed head.
+
 An evidence hold applies only when every remaining requirement is a named
 unavailable external check and the report contains no open defect or failed
 required check. A reviewer names a check its host cannot run as that external
