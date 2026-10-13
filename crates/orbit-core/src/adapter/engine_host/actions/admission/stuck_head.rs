@@ -26,8 +26,10 @@ const FRICTION_TAG: &str = "automation";
 const FALLBACK_TAG: &str = "other";
 
 /// File the friction for `head` once its stall is stuck and none is
-/// recorded, and record its id on the stall. Best effort: a drain that
-/// cannot file it still admits as it would and reports the head from its
+/// recorded, and record its id on the stall. The caller must first persist
+/// the pass with this stall's start, so retries have the same dedupe key even
+/// at threshold one or after progress resets the stall. Best effort: a drain
+/// that cannot file it still admits as it would and reports the head from its
 /// run state; the next pass tries again.
 pub(in crate::adapter::engine_host::actions) fn report_stuck_head(
     runtime: &OrbitRuntime,

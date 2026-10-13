@@ -6,6 +6,7 @@ use orbit_store::contracts::{AdmissionForecastRecord, OwnerWaveCandidate};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
     DrainAdmissionForecast, DrainAdmissionPass, DrainCapacity, DrainWaitingTask, GapFitHead,
+    RunStateUpdate,
 };
 use serde_json::{Value, json};
 
@@ -262,7 +263,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         GapFitMode::from_setting(&runtime.context.settings().auto_concurrency().mode);
     let GapFitPass {
         mut selection,
-        record: mut admission_forecast,
+        record: admission_forecast,
         forecast,
     } = match gap_fit_mode {
         None => GapFitPass {
@@ -276,21 +277,6 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         }
     };
     admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)?;
-    // Only `enforce` idles the drain behind a stuck head, so only it files;
-    // `shadow` records the stall as what `enforce` would have reported.
-    if let (Some(GapFitMode::Enforce), Some(run_id), Some(head)) = (
-        gap_fit_mode,
-        drain_run_id(input),
-        admission_forecast
-            .as_mut()
-            .and_then(|record| record.head.as_mut()),
-    ) {
-        let title = snapshot
-            .task_lookup
-            .get(&head.task_id)
-            .map(|task| task.title.clone());
-        report_stuck_head(runtime, run_id, head, title.as_deref());
-    }
     if let (Some(forecast), Some(record)) = (forecast, admission_forecast.as_ref()) {
         record_admission_forecast(
             runtime,
@@ -349,49 +335,81 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         poll_sleep_seconds
     };
 
-    record_last_pass(
-        runtime,
-        input,
-        DrainAdmissionPass {
-            recorded_at: Utc::now(),
-            capacity: occupancy.inherited.map(|inherited| DrainCapacity {
-                active_leaf_runs: occupancy.occupied as u64,
-                inherited_leaf_runs: inherited as u64,
-                max_active_leaf_runs,
-            }),
-            queued: (pending.len() - admitted.len()) as u64,
-            deferred: selection
-                .deferred
-                .iter()
-                .map(|deferred| {
-                    let blocked_by = deferred.blocking_task_ids();
-                    DrainWaitingTask {
-                        task_id: deferred.task_id.clone(),
-                        reason: (deferred.reason != DeferralReason::Conflict)
-                            .then(|| deferred.reason.as_str().to_string()),
-                        detail: deferred.detail.clone().or_else(|| {
-                            claim_holders.detail_for(blocked_by.iter().map(String::as_str))
-                        }),
-                        blocked_by,
-                    }
-                })
-                .chain(gap_fit_waiting.iter().cloned())
-                .collect(),
-            deferred_total: (selection.deferred.len() + gap_fit_waiting.len()) as u64,
-            excluded: waiting_excluded(&snapshot.excluded, &claim_holders),
-            excluded_total: snapshot.excluded.len() as u64,
-            waiting_recorded_at: None,
-            waiting_by_reason: BTreeMap::new(),
-            consecutive_idle_passes: 0,
-            resource_throttle: resource.throttle.clone(),
-            admission_refusal: None,
-            last_pass_error_code: None,
-            last_pass_error: None,
-            consecutive_pass_failures: 0,
-            degraded: false,
-            admission_forecast: admission_forecast.clone(),
-        },
-    );
+    let mut pass = DrainAdmissionPass {
+        recorded_at: Utc::now(),
+        capacity: occupancy.inherited.map(|inherited| DrainCapacity {
+            active_leaf_runs: occupancy.occupied as u64,
+            inherited_leaf_runs: inherited as u64,
+            max_active_leaf_runs,
+        }),
+        queued: (pending.len() - admitted.len()) as u64,
+        deferred: selection
+            .deferred
+            .iter()
+            .map(|deferred| {
+                let blocked_by = deferred.blocking_task_ids();
+                DrainWaitingTask {
+                    task_id: deferred.task_id.clone(),
+                    reason: (deferred.reason != DeferralReason::Conflict)
+                        .then(|| deferred.reason.as_str().to_string()),
+                    detail: deferred.detail.clone().or_else(|| {
+                        claim_holders.detail_for(blocked_by.iter().map(String::as_str))
+                    }),
+                    blocked_by,
+                }
+            })
+            .chain(gap_fit_waiting.iter().cloned())
+            .collect(),
+        deferred_total: (selection.deferred.len() + gap_fit_waiting.len()) as u64,
+        excluded: waiting_excluded(&snapshot.excluded, &claim_holders),
+        excluded_total: snapshot.excluded.len() as u64,
+        waiting_recorded_at: None,
+        waiting_by_reason: BTreeMap::new(),
+        consecutive_idle_passes: 0,
+        resource_throttle: resource.throttle.clone(),
+        admission_refusal: None,
+        last_pass_error_code: None,
+        last_pass_error: None,
+        consecutive_pass_failures: 0,
+        degraded: false,
+        admission_forecast,
+    };
+    // Persist the stall's identity before its external friction effect. At
+    // threshold one, a first protected pass or a progress reset creates the
+    // identity now; losing it after filing would give a retry a different key.
+    let pass_recorded = record_last_pass(runtime, input, pass.clone());
+    // Only `enforce` idles the drain behind a stuck head, so only it files;
+    // `shadow` records the stall as what `enforce` would have reported.
+    let friction_recorded = if let (true, Some(GapFitMode::Enforce), Some(run_id), Some(head)) = (
+        pass_recorded,
+        gap_fit_mode,
+        drain_run_id(input),
+        pass.admission_forecast
+            .as_mut()
+            .and_then(|record| record.head.as_mut()),
+    ) {
+        let title = snapshot
+            .task_lookup
+            .get(&head.task_id)
+            .map(|task| task.title.as_str());
+        let unreported = head
+            .stall
+            .as_ref()
+            .is_some_and(|stall| stall.friction_id.is_none());
+        report_stuck_head(runtime, run_id, head, title);
+        unreported
+            && head
+                .stall
+                .as_ref()
+                .is_some_and(|stall| stall.friction_id.is_some())
+    } else {
+        false
+    };
+    if friction_recorded {
+        // Best effort: even if this id write fails, the durable stall start
+        // makes the next pass reuse the friction that was just filed.
+        record_last_pass(runtime, input, pass.clone());
+    }
 
     Ok(json!({
         "loose_task_ids": admitted,
@@ -406,7 +424,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         // empty backlog.
         "deferred_conflicts": selection.deferred_json(),
         // Gap fit's decisions under `shadow` or `enforce`; absent with `off`.
-        "admission_forecast": admission_forecast,
+        "admission_forecast": pass.admission_forecast,
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": occupancy.occupied,
@@ -690,13 +708,14 @@ fn drain_run_id(input: &Value) -> Option<&str> {
 
 /// Persist what this pass left waiting on the drain's own run state, so
 /// `orbit run show` can report it after the drain ends. Best effort: a run
-/// that cannot record it must still admit work.
-fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionPass) {
+/// that cannot record it must still admit work. Returns whether the pass
+/// was persisted, so an external report can rely on its durable identity.
+fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionPass) -> bool {
     let Some(run_id) = drain_run_id(input) else {
-        return;
+        return false;
     };
     let mut pass = Some(pass);
-    if let Err(error) = runtime
+    match runtime
         .stores()
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
@@ -704,14 +723,18 @@ fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionP
                 state.pull_drain.record_admission_pass(pass);
             }
             Ok(())
-        })
-    {
-        tracing::warn!(
-            target: "orbit.core.job_run",
-            run_id,
-            %error,
-            "drain could not record its admission pass; run show will not list what it left waiting"
-        );
+        }) {
+        Ok(RunStateUpdate::Updated) => true,
+        Ok(RunStateUpdate::NotFound | RunStateUpdate::NoState) => false,
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.job_run",
+                run_id,
+                %error,
+                "drain could not record its admission pass; run show will not list what it left waiting"
+            );
+            false
+        }
     }
 }
 
