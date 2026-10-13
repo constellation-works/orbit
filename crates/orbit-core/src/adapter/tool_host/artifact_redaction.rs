@@ -5,7 +5,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
-use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
@@ -122,7 +122,7 @@ pub(super) fn sanitize_tool_input(
                     sanitize_string_field(&mut object, field, field, mode, &mut report)?
                 }
                 // An object's free text is the action policy's `nested_objects`.
-                ParamType::Object => {}
+                ParamType::Object | ParamType::Array => {}
             }
         }
     }
@@ -226,26 +226,12 @@ const NO_REDACTION: ActionPolicy = ActionPolicy {
     nested_objects: &[],
 };
 
-const TASK_ADD_NESTED: &[NestedArrayPolicy] = &[
-    NestedArrayPolicy {
-        array_key: "external_refs",
-        field_key: "url",
-        field_alias: None,
-        mode: TextMode::PathOnly,
-    },
-    NestedArrayPolicy {
-        array_key: "externalRefs",
-        field_key: "url",
-        field_alias: None,
-        mode: TextMode::PathOnly,
-    },
-    NestedArrayPolicy {
-        array_key: "external-refs",
-        field_key: "url",
-        field_alias: None,
-        mode: TextMode::PathOnly,
-    },
-];
+/// The free text among `orbit task add`'s CLI options.
+const TASK_ADD_CLI_OPTIONS: &[NestedObjectPolicy] = &[NestedObjectPolicy {
+    object_key: TASK_CLI_OPTIONS_PARAM,
+    free_text_fields: &["plan"],
+    free_text_arrays: &[],
+}];
 
 /// A template replacement and a field-scoped template edit carry the same
 /// free-text fields.
@@ -269,31 +255,9 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[
 /// for read-only actions and mutations that only persist structural values.
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
-        OrbitBuiltinAction::TaskAdd => ActionPolicy {
-            declared: &[],
-            free_text_fields: &["title", "description", "plan", "comment"],
-            free_text_arrays: &["acceptance_criteria"],
-            path_fields: &[],
-            path_arrays: &["context_files", "context"],
-            nested_arrays: TASK_ADD_NESTED,
-            nested_objects: &[],
-        },
-        OrbitBuiltinAction::TaskUpdate => ActionPolicy {
-            declared: &[],
-            free_text_fields: &[
-                "title",
-                "description",
-                "plan",
-                "execution_summary",
-                "note",
-                "comment",
-            ],
-            free_text_arrays: &["acceptance_criteria"],
-            path_fields: &[],
-            path_arrays: &["context_files", "context"],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
+        // An artifact payload is stored as given; only its path is
+        // structural, and the store screens it.
+        OrbitBuiltinAction::TaskArtifactPut => NO_REDACTION,
         OrbitBuiltinAction::TaskReconcileReview => ActionPolicy {
             // `command` selects an already-authorized stored command. Preserve
             // it byte-for-byte for exact evidence matching, then redact only
@@ -341,14 +305,24 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
         },
-        // The task reads persist nothing; lint writes only recorded selectors.
         OrbitBuiltinAction::Task(verb) => match verb {
-            TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => {
-                ActionPolicy {
-                    declared: verb.spec().params,
-                    ..NO_REDACTION
-                }
-            }
+            // The plan `orbit task add` carries among its CLI options is free
+            // text too.
+            TaskVerb::Add => ActionPolicy {
+                declared: verb.spec().params,
+                nested_objects: TASK_ADD_CLI_OPTIONS,
+                ..NO_REDACTION
+            },
+            // Each parameter redacts per its declared class; the task reads
+            // persist nothing, and lint writes only recorded selectors.
+            TaskVerb::Update
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
         },
         OrbitBuiltinAction::AutoTask(verb) => match verb {
             AutoTaskVerb::Add | AutoTaskVerb::Update => ActionPolicy {
@@ -423,12 +397,12 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | WorkspaceClaimVerb::Show => false,
         },
         OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::Add | TaskVerb::Update => true,
             TaskVerb::List | TaskVerb::Eligible | TaskVerb::Show | TaskVerb::Lint => false,
         },
         action => matches!(
             action,
-            OrbitBuiltinAction::TaskAdd
-                | OrbitBuiltinAction::TaskUpdate
+            OrbitBuiltinAction::TaskArtifactPut
                 | OrbitBuiltinAction::TaskReject
                 | OrbitBuiltinAction::TaskReconcileReview
                 | OrbitBuiltinAction::TaskReviewReset
@@ -726,8 +700,8 @@ fn artifact_target<'a>(
     persisted_task_id: Option<&'a str>,
 ) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
-        OrbitBuiltinAction::TaskAdd
-        | OrbitBuiltinAction::TaskUpdate
+        OrbitBuiltinAction::Task(TaskVerb::Add | TaskVerb::Update)
+        | OrbitBuiltinAction::TaskArtifactPut
         | OrbitBuiltinAction::TaskReject
         | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset => {
@@ -804,11 +778,11 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::TaskAdd => "orbit.task.add",
-        OrbitBuiltinAction::TaskUpdate => "orbit.task.update",
+        OrbitBuiltinAction::TaskArtifactPut => "orbit.task.artifact.put",
         OrbitBuiltinAction::TaskReject => "orbit.task.reject",
         OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
         OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
+        OrbitBuiltinAction::Task(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
         OrbitBuiltinAction::Drain(verb) => match verb {

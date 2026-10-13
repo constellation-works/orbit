@@ -5,8 +5,10 @@
 //! not yet migrated stay hand-wired beside them.
 
 pub mod operations;
+mod write_operations;
 
 pub use operations::{
     TASK, TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_OPERATIONS, TASK_PRIORITY_VALUES,
     TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskOperation, TaskVerb,
 };
+pub use write_operations::TASK_CLI_OPTIONS_PARAM;

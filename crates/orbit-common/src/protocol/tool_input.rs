@@ -2,17 +2,6 @@ use serde_json::Value;
 
 use crate::OrbitError;
 
-pub const RETIRED_TASK_ADD_INPUT_FIELDS: &[&str] = &[
-    "plan",
-    "status",
-    "parent_id",
-    "source_task_id",
-    "external_refs",
-    "context",
-    "comment",
-    "dependencies",
-];
-
 /// Top-level keys that are transport/session wrappers, not tool arguments.
 ///
 /// MCP `_meta` and the workspace routing selector may appear beside the
@@ -62,27 +51,6 @@ pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(),
             .map(|name| vec![name.to_string()])
             .unwrap_or_default(),
     ))
-}
-
-/// Refuse retired `orbit.task.add` fields that used to be stripped silently.
-///
-/// These names are not misspellings of add parameters; they belong on
-/// `orbit.task.update` (or a later follow-up). The error names the field and
-/// the tool that accepts it.
-pub fn reject_retired_task_add_input_fields(input: &Value) -> Result<(), OrbitError> {
-    let Some(object) = input.as_object() else {
-        return Ok(());
-    };
-
-    for field in RETIRED_TASK_ADD_INPUT_FIELDS {
-        if object.contains_key(*field) {
-            return Err(OrbitError::InvalidInput(format!(
-                "unknown field '{field}' (orbit.task.add does not accept '{field}'; \
-                 set it with orbit.task.update)"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn unknown_tool_field_message(unknown: &[String], suggestion: Option<&str>) -> String {

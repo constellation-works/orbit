@@ -11,11 +11,35 @@ use super::operation::GuardedModes;
 use crate::ToolContext;
 
 impl GuardedModes for WorkspaceClaimVerb {
+    fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
+        match self {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => None,
+        }
+    }
+
     fn guarded_mode(
         self,
         _ctx: &ToolContext,
         _input: &OperationInput,
     ) -> Option<Result<Value, OrbitError>> {
+        match self {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => None,
+        }
+    }
+
+    fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
+        match self {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => Ok(()),
+        }
+    }
+
+    fn schema_extension(self) -> Option<fn(&mut Value)> {
         match self {
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release

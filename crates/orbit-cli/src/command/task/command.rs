@@ -6,7 +6,6 @@ use super::super::operation_args::Invocation;
 use crate::command::locks::LocksCommand;
 use crate::command::{CommandOut, Execute};
 
-use super::add::TaskAddArgs;
 use super::archive::TaskArchiveArgs;
 use super::artifact::TaskArtifactCommand;
 use super::export::TaskExportArgs;
@@ -17,7 +16,6 @@ use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reconcile_review::TaskReconcileReviewCommand;
 use super::reindex::TaskReindexArgs;
 use super::review_reset::TaskReviewResetArgs;
-use super::update::TaskUpdateArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
 /// command render theirs: a hand-rolled template, because clap's derive has no
@@ -94,17 +92,12 @@ impl Execute for TaskCommand {
 
 #[derive(Subcommand)]
 pub enum TaskSubcommand {
-    /// Create a new task
-    Add(TaskAddArgs),
-    /// Update task fields, or take the next approval step with `--approve`
-    /// (proposed -> backlog, review -> done)
-    Update(TaskUpdateArgs),
-    /// Archive a task
-    Archive(TaskArchiveArgs),
-    // `list`, `eligible`, `show` and `lint`, derived from the task operation
-    // registry.
+    // `add`, `update`, `list`, `eligible`, `show` and `lint`, derived from
+    // the task operation registry.
     #[command(flatten)]
     Operation(Invocation<TaskVerb>),
+    /// Archive a task
+    Archive(TaskArchiveArgs),
     /// Manage task artifact files
     Artifact(TaskArtifactCommand),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
@@ -132,8 +125,6 @@ pub enum TaskSubcommand {
 impl Execute for TaskSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
-            TaskSubcommand::Add(args) => args.execute(runtime),
-            TaskSubcommand::Update(args) => args.execute(runtime),
             TaskSubcommand::Archive(args) => args.execute(runtime),
             TaskSubcommand::Operation(invocation) => super::operation::execute(invocation, runtime),
             TaskSubcommand::Artifact(cmd) => cmd.execute(runtime),

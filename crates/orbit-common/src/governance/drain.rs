@@ -5,7 +5,7 @@
 
 use crate::governance::operation::{
     CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
-    ToolOnlyRegistration, operation_registry,
+    ToolOnlyRegistration, UnknownFields, operation_registry,
 };
 
 operation_registry! {
@@ -92,6 +92,7 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -125,6 +126,7 @@ const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -206,6 +208,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -239,6 +242,7 @@ const CLAIM_BIND: OperationSpec<DrainVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -277,6 +281,7 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -291,6 +296,7 @@ const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
     params: &[&[]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 

@@ -188,7 +188,7 @@ impl ToolRegistry {
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
         {
-            validate_task_arguments(&input, &tool.tool.schema())?;
+            validate_task_arguments(&input, &tool.tool.schema(), cli_fields(name, ctx))?;
         }
         tool.tool.execute(ctx, input)
     }
@@ -295,10 +295,27 @@ fn is_preloaded_artifact_payload(name: &str, input: &Value) -> bool {
     name == "orbit.task.artifact.put" && input.get("artifacts").is_some()
 }
 
+/// Fields beyond the public schema a call may carry: the CLI options of a
+/// task write the operator command built. Only an MCP session carries an
+/// origin session, so an MCP caller is refused them as unknown fields.
+fn cli_fields(name: &str, ctx: &ToolContext) -> &'static [&'static str] {
+    const CLI_OPTIONS: &[&str] = &[orbit_common::governance::task::TASK_CLI_OPTIONS_PARAM];
+    let task_write = name == "orbit.task.add" || name == "orbit.task.update";
+    if task_write && ctx.session_context.origin_session_id.is_none() {
+        CLI_OPTIONS
+    } else {
+        &[]
+    }
+}
+
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
 /// guarded modes remain the handler's responsibility.
-fn validate_task_arguments(input: &Value, schema: &ToolSchema) -> Result<(), OrbitError> {
+fn validate_task_arguments(
+    input: &Value,
+    schema: &ToolSchema,
+    cli_fields: &[&str],
+) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
     use orbit_common::protocol::tool_schema::tool_parameter_schema;
 
@@ -309,6 +326,7 @@ fn validate_task_arguments(input: &Value, schema: &ToolSchema) -> Result<(), Orb
         .parameters
         .iter()
         .map(|param| param.name.as_str())
+        .chain(cli_fields.iter().copied())
         .collect::<Vec<_>>();
     reject_unknown_tool_fields(input, &allowed)?;
     for parameter in &schema.parameters {

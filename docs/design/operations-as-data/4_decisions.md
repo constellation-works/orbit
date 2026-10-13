@@ -11,7 +11,7 @@ summary: Decision log for the operations-as-data registry — the split spec/han
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938]
 ---
 
 # Operations as Data — Decisions
@@ -407,7 +407,7 @@ drift the tool entry does not.
 - MCP, the CLI, the dashboard and the dispatcher get the same refusal, with the
   same did-you-mean hint, for the same bad input.
 - Retiring an alias under the compatibility window is deleting one array entry.
-- `rejects_agent_field` and `reject_retired_task_add_input_fields` become
+- `rejects_agent_field` and task `add`'s retired creation-time fields became
   `retired_fields` entries.
 - Cost: refusing unknown fields is a wire change for callers that send extra
   fields today, and each noun spends a 30-day window in which a mistyped field is
@@ -422,8 +422,8 @@ drift the tool entry does not.
 
 ## Migrated CLI verbs execute through the tool path
 
-**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935] and the task reads in [ORB-15937]
-**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs`, `crates/orbit-cli/src/command/task/add.rs`, `crates/orbit-core/src/adapter/tool_host/task_tools.rs`
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935], the task reads in [ORB-15937] and the task writes in [ORB-15938]
+**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs`, `crates/orbit-cli/src/command/task/operation.rs`, `crates/orbit-core/src/adapter/tool_host/task_write_tools.rs`
 
 ### Context
 
@@ -548,6 +548,49 @@ differences:
   `external_ref` and `has_ref` filters and the `priority` wording). The
   inactive `orbit.task.lint` schema now matches its spec.
 
+**Task writes outcome ([ORB-15938]).** `add` and `update` execute through
+`run_tool`, and one core handler assembles their parameters on every surface.
+The operator command's options that MCP does not have travel in a hidden
+`cli_options` object that only a caller without an MCP session may send
+([2_design.md §9](./2_design.md#phase-3b-task-writes-implemented)). Neither
+tool is governed anew. The Step 0 baseline ran 59 argv cases (every `add` and
+`update` flag, the environment identities and the refusals) and the audit
+list on a fixture each binary built, comparing standard output, standard
+error and exit codes after normalising timestamps, paths, hashes and randomly
+drawn crews. `update --host` routing is covered by the existing replica
+routing tests, which pass unchanged. Every case matched except these, all
+reviewed:
+
+- **Redaction.** `add` and `update` now redact credential-shaped text in
+  free-text fields (title, description, comment and the other `redact`
+  parameters) before it is stored, as the tool always did; the old CLI
+  stored it verbatim. The JSON gains `redactions_applied` and `redactions`,
+  and each redaction writes an `artifact_redaction` audit row.
+- **Usage errors.** `update --note` without `--approve`, `--approve` with a
+  field edit or status, `--force` without `--status`, and an unknown
+  `--pr-status` were clap usage errors (exit 2, `usage_error`, no audit row). The handler or `prepare` table now refuses them
+  (exit 1, `invalid input`, a failed audit row): "`note` is recorded on an
+  approval; pass it with `approve`", "`approve` takes the task's next approval
+  step and cannot be combined with field edits or a status: <fields>",
+  "`force` applies a status change; pass it with `status`", and "unknown PR
+  status '<value>': expected `approve` or `request-changes` (empty string
+  clears)".
+- **Input.** Optional strings and list items are trimmed, as for every
+  registry-derived CLI. An explicit JSON `null` is absent, except `update`'s
+  `crew: null`, which is still refused.
+- **Attribution.** The CLI passes `--model`, else the environment's agent
+  model or name, as the tool's `model`, so attribution goes through tool
+  identity resolution. The baseline's `created_by`, `updated_by` and history
+  actors are unchanged.
+- **Unknown and retired fields.** Unchanged on every surface: the tool
+  registry's schema check refuses them first with "unknown field '<name>'".
+  The specs keep the tools' own retired-field messages for a direct handler
+  call, and both writes refuse unknown fields rather than warn (§4).
+- **Schemas and help.** The MCP snapshot and the `add` and `update` help
+  goldens are byte-identical.
+- **Not migrated.** The dashboard's task create and update routes still
+  call the runtime directly.
+
 ## Migrate the remaining nouns on a plan, not on contact
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
@@ -655,6 +698,8 @@ without leaving a second home behind.
   destructive CLI-only verbs.
 - [ORB-15937] — migrated the task read verbs through the tool path and kept ID
   routing keyed by tool name.
+- [ORB-15938] — migrated task `add` and `update` through the tool path, with
+  the operator command's options in a hidden `cli_options` object.
 - [ORB-12263] — made `orbit tool run` and `orbit task artifact get` share the
   owner-workspace list with MCP instead of keeping their own.
 

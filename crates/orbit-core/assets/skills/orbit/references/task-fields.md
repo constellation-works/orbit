@@ -13,9 +13,9 @@ The connected tool schema is authoritative for supported fields.
   alone (`awaiting_exclusive_slot`). Declared selectors keep their existing
   conflict checks; undeclared edit conflicts surface at landing.
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first. Not an `orbit.task.add` input: it is refused with the other
-  `RETIRED_TASK_ADD_INPUT_FIELDS`, so set it with `orbit.task.update` after
-  creation. Unlike `resolves`, task IDs are global: a prerequisite owned by
+  status first. Not an `orbit.task.add` input: it is refused as an unknown
+  field, like the other creation-time fields below, so set it with
+  `orbit.task.update` after creation. Unlike `resolves`, task IDs are global: a prerequisite owned by
   another workspace registered on this machine is read from its owner, and
   completing it there satisfies the dependency here. A prerequisite this
   machine has never registered stays explicitly unverifiable — it is never
@@ -36,8 +36,8 @@ The connected tool schema is authoritative for supported fields.
   also accepts GitHub PR external keys as described below. The remaining
   relation types require a task ID. A dangling target (unknown in every
   workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
-- `parent_id` is a retired `orbit.task.add` input and is refused with the
-  other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
+- `parent_id` is not an `orbit.task.add` input and is refused as an unknown
+  field, like `plan`, `status` and `dependencies`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired
   from `orbit.task.add`; for bug tasks, set it after creation with
   `orbit.task.update` (which accepts the field), and use an empty string there

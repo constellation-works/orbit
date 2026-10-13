@@ -1,7 +1,8 @@
 //! Handlers for the task verbs declared in the task operation registry.
 //!
 //! The other task tools keep their hand-wired handlers in
-//! [`super::task_tools`]; these take the input the spec already parsed.
+//! [`super::task_tools`]; these take the input the spec already parsed. The
+//! write verbs' handlers live in [`super::task_write_tools`].
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
@@ -15,24 +16,44 @@ use serde_json::{Map, Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskEligibilityQuery, TaskListFilter, TaskListQuery};
 
+use super::dispatch::ToolCaller;
 use super::input::{parse_task_priority, parse_task_status, parse_task_type};
 use super::json::{
     serialize_error, serialize_task_lint_report, serialize_task_show, task_fields_to_json,
 };
+use super::task_tools::TaskWriteOutput;
 
-/// Run one migrated task verb.
+/// Run one migrated task verb. A write also answers the id it persisted, for
+/// the redaction audit.
 pub(super) fn dispatch(
     runtime: &OrbitRuntime,
+    caller: ToolCaller<'_>,
+    operator: bool,
     verb: TaskVerb,
     input: Value,
-) -> Result<Value, OrbitError> {
+) -> Result<(Value, Option<String>), OrbitError> {
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
     let input = verb.spec().parse_input(input)?;
+    let read = |value: Result<Value, OrbitError>| value.map(|value| (value, None));
+    let written = |output: Result<TaskWriteOutput, OrbitError>| {
+        output.map(|output| (output.response, Some(output.persisted_id)))
+    };
     match verb {
-        TaskVerb::List => list(runtime, &input),
-        TaskVerb::Eligible => eligible(runtime, &input),
-        TaskVerb::Show => show(runtime, &input),
-        TaskVerb::Lint => lint(runtime, &input),
+        TaskVerb::Add => written(super::task_write_tools::add(
+            runtime,
+            caller,
+            input.as_value(),
+        )),
+        TaskVerb::Update => written(super::task_write_tools::update(
+            runtime,
+            caller,
+            input.as_value(),
+            operator,
+        )),
+        TaskVerb::List => read(list(runtime, &input)),
+        TaskVerb::Eligible => read(eligible(runtime, &input)),
+        TaskVerb::Show => read(show(runtime, &input)),
+        TaskVerb::Lint => read(lint(runtime, &input)),
     }
 }
 

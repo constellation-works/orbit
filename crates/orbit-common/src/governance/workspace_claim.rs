@@ -5,7 +5,7 @@
 
 use crate::governance::operation::{
     CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
-    ToolOnlyRegistration, operation_registry,
+    ToolOnlyRegistration, UnknownFields, operation_registry,
 };
 
 operation_registry! {
@@ -85,6 +85,7 @@ const ACQUIRE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -124,6 +125,7 @@ const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 
@@ -139,6 +141,7 @@ const SHOW: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     params: &[&[]],
     at_least_one_of: &[],
     retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
 };
 

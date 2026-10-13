@@ -47,7 +47,8 @@ use serde_json::{Map, Value};
 use crate::OrbitError;
 use crate::protocol::tool_input::{
     TOOL_INPUT_IDENTITY_KEYS, TOOL_INPUT_TRANSPORT_WRAPPER_KEYS, missing_tool_field,
-    optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
+    optional_csv_or_string_list_alias, optional_raw_string, optional_string,
+    reject_unknown_tool_fields, required_string,
 };
 
 /// Wire type of an operation parameter.
@@ -78,6 +79,9 @@ pub enum ParamType {
     EnumList(&'static [EnumValue]),
     /// A JSON object, for structured input such as a schedule.
     Object,
+    /// A JSON array of structured entries, such as typed relations. The
+    /// handler owns the entries' shape.
+    Array,
 }
 
 /// One allowed value of a [`ParamType::Enum`] parameter.
@@ -125,6 +129,7 @@ impl ParamType {
             // migrated enum is wire-identical to the string it replaced.
             ParamType::Enum(_) => "string",
             ParamType::Object => "object",
+            ParamType::Array => "array",
         }
     }
 }
@@ -202,6 +207,9 @@ pub struct CliBinding {
     /// Help text shown by `--help`. Frequently differs from the MCP description
     /// because the audiences differ; both are contract once shipped.
     pub help: Description,
+    /// Whether the CLI requires the flag although the wire does not, as for
+    /// a field only another mode of the operation may omit.
+    pub required: bool,
 }
 
 /// A verb's `--help` beyond its summary and its parameters' help.
@@ -313,30 +321,87 @@ pub enum Effect {
     Write,
 }
 
-/// A field an operation used to accept and now refuses.
+/// A field an operation used to accept, or never accepted, and refuses by name.
 #[derive(Debug, Clone, Copy)]
 pub struct RetiredField {
-    /// The retired wire field name.
+    /// The refused wire field name.
     pub name: &'static str,
-    /// What to send instead; the refusal ends with it.
+    /// What to send instead; the refusal ends with it, or is it, per
+    /// [`Self::wording`].
     pub replacement: &'static str,
+    /// How the refusal is phrased. Shipped refusals keep their wording.
+    pub wording: RetiredWording,
+}
+
+/// The phrasing of a [`RetiredField`] refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetiredWording {
+    /// ``{tool} no longer accepts `{name}`; {replacement}``.
+    NoLongerAccepts,
+    /// `unknown field '{name}' ({tool} does not accept '{name}'; {replacement})`.
+    UnknownField,
+    /// The replacement is the whole refusal.
+    Verbatim,
 }
 
 impl RetiredField {
+    /// A field the operation no longer accepts, refused with its replacement.
+    pub const fn no_longer_accepts(name: &'static str, replacement: &'static str) -> Self {
+        Self {
+            name,
+            replacement,
+            wording: RetiredWording::NoLongerAccepts,
+        }
+    }
+
+    /// A field refused as unknown to this operation, naming where it belongs.
+    pub const fn unknown_field(name: &'static str, replacement: &'static str) -> Self {
+        Self {
+            name,
+            replacement,
+            wording: RetiredWording::UnknownField,
+        }
+    }
+
+    /// A field refused with a message of its own.
+    pub const fn verbatim(name: &'static str, refusal: &'static str) -> Self {
+        Self {
+            name,
+            replacement: refusal,
+            wording: RetiredWording::Verbatim,
+        }
+    }
+
     fn refusal(&self, tool_name: &str) -> OrbitError {
-        OrbitError::InvalidInput(format!(
-            "{tool_name} no longer accepts `{}`; {}",
-            self.name, self.replacement
-        ))
+        let name = self.name;
+        let replacement = self.replacement;
+        OrbitError::InvalidInput(match self.wording {
+            RetiredWording::NoLongerAccepts => {
+                format!("{tool_name} no longer accepts `{name}`; {replacement}")
+            }
+            RetiredWording::UnknownField => format!(
+                "unknown field '{name}' ({tool_name} does not accept '{name}'; {replacement})"
+            ),
+            RetiredWording::Verbatim => replacement.to_string(),
+        })
     }
 }
 
 /// The legacy top-level `agent` field: attribution was consolidated to
 /// `model`-only.
-pub const RETIRED_AGENT_FIELD: RetiredField = RetiredField {
-    name: "agent",
-    replacement: "use `model` with the agent family for attribution",
-};
+pub const RETIRED_AGENT_FIELD: RetiredField =
+    RetiredField::no_longer_accepts("agent", "use `model` with the agent family for attribution");
+
+/// What an operation does with an input field it does not declare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnknownFields {
+    /// Report the field and proceed: the compatibility window for an
+    /// operation that used to ignore extras.
+    Warn,
+    /// Refuse the call, suggesting a declared field when one is close: an
+    /// operation that already refused extras before it migrated.
+    Refuse,
+}
 
 /// One verb on one noun, declared once.
 ///
@@ -372,6 +437,8 @@ pub struct OperationSpec<V: 'static> {
     /// Fields the operation used to accept and now refuses, naming where each
     /// went.
     pub retired_fields: &'static [RetiredField],
+    /// What a call that carries an undeclared field gets.
+    pub unknown_fields: UnknownFields,
     /// MCP scope when advertised. `None` keeps the operation off MCP while it
     /// remains reachable through its other registered surfaces.
     ///
@@ -452,6 +519,35 @@ impl<V: 'static> OperationSpec<V> {
                 .any(|param| param.name == field || param.aliases.contains(&field))
     }
 
+    /// The refusal for input carrying undeclared fields, under
+    /// [`UnknownFields::Refuse`].
+    ///
+    /// A suggestion is drawn from the MCP parameters first, in schema order,
+    /// then from the other wire parameters, so it names what the caller was
+    /// shown.
+    fn unknown_field_refusal(&self, object: &Map<String, Value>) -> OrbitError {
+        let mut declared = self
+            .mcp_params()
+            .map(|(param, _)| param.name)
+            .collect::<Vec<_>>();
+        for param in self.wire_params() {
+            for name in std::iter::once(&param.name).chain(param.aliases) {
+                if !declared.contains(name) {
+                    declared.push(name);
+                }
+            }
+        }
+        declared.extend(TOOL_INPUT_IDENTITY_KEYS);
+        declared.extend(self.retired_fields.iter().map(|retired| retired.name));
+        match reject_unknown_tool_fields(&Value::Object(object.clone()), &declared) {
+            Err(error) => error,
+            Ok(()) => OrbitError::InvalidInput(format!(
+                "{} input carries an undeclared field",
+                self.tool_name
+            )),
+        }
+    }
+
     /// Whether canonical `input` sets none of [`Self::at_least_one_of`].
     /// Always false for an operation that declares no such rule.
     pub fn misses_at_least_one_of(&self, input: &Map<String, Value>) -> bool {
@@ -467,8 +563,9 @@ impl<V: 'static> OperationSpec<V> {
     /// In order: the input must be a JSON object (`null` reads as `{}`);
     /// declared aliases are renamed to their parameter, refusing input that
     /// sets both; retired fields are refused with their replacement;
-    /// undeclared fields are reported on [`OperationInput::unknown_fields`]
-    /// and left in place; each present value must match its [`ParamType`],
+    /// undeclared fields are refused under [`UnknownFields::Refuse`], and
+    /// otherwise reported on [`OperationInput::unknown_fields`] and left in
+    /// place; each present value must match its [`ParamType`],
     /// where an explicit `null` means absent; required parameters must be
     /// present, and so must one of [`Self::at_least_one_of`].
     ///
@@ -516,11 +613,14 @@ impl<V: 'static> OperationSpec<V> {
 
         // Warn mode: the tool entry reports these and the call proceeds.
         // Handlers read declared names only, so the fields have no effect.
-        let unknown_fields = object
+        let unknown_fields: Vec<String> = object
             .keys()
             .filter(|field| self.is_undeclared_field(field))
             .cloned()
             .collect();
+        if self.unknown_fields == UnknownFields::Refuse && !unknown_fields.is_empty() {
+            return Err(self.unknown_field_refusal(&object));
+        }
 
         for param in self.wire_params() {
             match object.get(param.name) {
@@ -594,6 +694,7 @@ fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> 
         ParamType::Boolean | ParamType::Switch => (value.is_boolean(), "a boolean"),
         ParamType::Enum(_) => (value.is_string(), "a string"),
         ParamType::Object => (value.is_object(), "an object"),
+        ParamType::Array => (value.is_array(), "an array"),
     };
     if valid {
         return Ok(());
@@ -763,6 +864,7 @@ pub(crate) const fn both(
     param.cli = Some(CliBinding {
         kind,
         help: Description::Static(cli_help),
+        required: false,
     });
     param
 }
@@ -805,6 +907,7 @@ pub(crate) const fn cli_only(
         cli: Some(CliBinding {
             kind,
             help: Description::Static(help),
+            required: false,
         }),
     }
 }
@@ -812,6 +915,14 @@ pub(crate) const fn cli_only(
 /// Mark a parameter required.
 pub(crate) const fn required(mut param: ParamSpec) -> ParamSpec {
     param.required = true;
+    param
+}
+
+/// Require a parameter's CLI flag although the wire leaves it optional.
+pub(crate) const fn cli_required(mut param: ParamSpec) -> ParamSpec {
+    if let Some(binding) = &mut param.cli {
+        binding.required = true;
+    }
     param
 }
 

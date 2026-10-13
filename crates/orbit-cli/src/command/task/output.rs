@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::application::task::{ScreenedTaskWrite, task_record_json};
+use orbit_core::application::task::task_record_json;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::TaskHistoryEntry;
 use serde_json::{Value, json};
@@ -52,35 +52,59 @@ pub(super) fn warn_unresolved_crew(doc: &serde_json::Map<String, Value>) {
     }
 }
 
-/// A screened write's task document, carrying the write's `warnings` and
-/// `context_files_unverified` selectors when there are any. Each warning is
-/// also printed to stderr so a text-mode caller sees it.
-pub(super) fn screened_write_json(
+/// A task write's document: the stored task's full record, carrying the
+/// write's `warnings` and `context_files_unverified` selectors from the
+/// tool's answer when there are any, and its redactions when it applied
+/// any. Each warning is also printed to stderr so a text-mode caller sees it.
+pub(super) fn task_write_json(
     runtime: &OrbitRuntime,
-    written: &ScreenedTaskWrite,
-) -> Result<Value, OrbitError> {
-    let mut document = task_to_json_for_runtime(runtime, &written.task)?;
-    for warning in &written.warnings {
+    answer: &Value,
+) -> Result<(Value, orbit_core::Task), OrbitError> {
+    let id = answer.get("id").and_then(Value::as_str).ok_or_else(|| {
+        OrbitError::Execution("task write answer did not name the task".to_string())
+    })?;
+    let task = runtime.get_task(id)?;
+    let mut document = task_to_json_for_runtime(runtime, &task)?;
+    let strings = |key: &str| {
+        answer
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let warnings = strings("warnings");
+    let unverified = strings("context_files_unverified");
+    for warning in &warnings {
         eprintln!("warning: {warning}");
     }
-    if !written.context_files_unverified.is_empty() {
+    if !unverified.is_empty() {
         eprintln!(
             "warning: context selectors stored without a verified target: {}",
-            written.context_files_unverified.join(", ")
+            unverified.join(", ")
         );
     }
     if let Some(object) = document.as_object_mut() {
-        if !written.context_files_unverified.is_empty() {
+        if !unverified.is_empty() {
+            object.insert("context_files_unverified".to_string(), json!(unverified));
+        }
+        if !warnings.is_empty() {
+            object.insert("warnings".to_string(), json!(warnings));
+        }
+        if answer.get("redactions_applied") == Some(&Value::Bool(true)) {
+            object.insert("redactions_applied".to_string(), Value::Bool(true));
             object.insert(
-                "context_files_unverified".to_string(),
-                json!(written.context_files_unverified),
+                "redactions".to_string(),
+                answer.get("redactions").cloned().unwrap_or(Value::Null),
             );
         }
-        if !written.warnings.is_empty() {
-            object.insert("warnings".to_string(), json!(written.warnings));
-        }
     }
-    Ok(document)
+    Ok((document, task))
 }
 
 /// Which columns the caller filtered on, and so must keep even when the filter

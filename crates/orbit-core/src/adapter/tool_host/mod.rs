@@ -14,6 +14,7 @@ mod pipeline_tools;
 mod search_tools;
 mod task_operation_tools;
 mod task_tools;
+mod task_write_tools;
 pub(crate) mod worker_tools;
 mod workflow_tools;
 mod workspace_claim_tools;
