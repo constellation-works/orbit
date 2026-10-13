@@ -94,7 +94,11 @@ orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","
 Follow the plan, inspecting files with the provider-native file-read tool.
 Verify transitive impact with `rg` or by reading callers directly. Run the
 repo-approved verification commands, honoring repo instructions if tests are
-forbidden. For a task tagged `no-diff-expected`, in owner or claimed mode,
+forbidden. When the envelope lists `task.final_validation_commands`, the
+delivery pipeline runs those on the final candidate after base
+synchronization; for a diff, leave them to it and run focused checks plus every
+required check the list omits. A clean no-op or already-landed handoff skips
+that validation, so it still runs every required check. For a task tagged `no-diff-expected`, in owner or claimed mode,
 run no workspace gates or required validation commands and attach no
 `no-diff.json`, `already-landed.json`, or workspace validation logs. Run only
 commands the task's own brief requires: a QA sweep may build and run the

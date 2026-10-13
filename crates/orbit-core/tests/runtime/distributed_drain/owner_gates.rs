@@ -5,6 +5,10 @@
 //! deferral of a gate the owner lists. A claim an older owner admitted
 //! captured no gates, so the replica's configuration stands in for them, and
 //! a drain records the owner's probe report so a difference is reported.
+//!
+//! The implementer's envelope lists the same captured gates as the commands
+//! the pipeline's final validation runs, so a managed implementer leaves only
+//! those to it [ORB-15963].
 
 use orbit_types::workflow::{
     BUBBLEWRAP_NAMESPACE_PROBE, BUBBLEWRAP_NAMESPACE_REFUSAL, DeferredSandboxValidation,
@@ -31,6 +35,16 @@ fn replica_gates() -> ValidationGates {
         required_validation_commands: vec!["make replica-check".into()],
         baseline_commands: vec![],
     }
+}
+
+/// The commands `host`'s implementer envelope for `task` leaves to final
+/// validation, with or without the pipeline's `final_validation` input.
+fn final_validation_commands(host: &OrbitRuntime, task: &str, final_validation: bool) -> Value {
+    let input = json!({"task_id": task, "final_validation": final_validation});
+    RuntimeHost::task_context_for_agent_input(host, &input)
+        .expect("the envelope builds")
+        .expect("a task envelope")["final_validation_commands"]
+        .clone()
 }
 
 /// The validation summary a gate writes for a passing run of `command` on
@@ -105,6 +119,25 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
         RuntimeHost::validation_gates(&leaf.pair.wire.owner).source,
         ValidationGateSource::LocalConfig
     );
+
+    // The envelope hands over exactly the captured list, partial as it is:
+    // the baseline gate and every workspace check it omits stay with the
+    // implementer, and nothing is handed over outside a pipeline that runs
+    // final validation.
+    assert_eq!(
+        final_validation_commands(&leaf.bound, &leaf.task, true),
+        json!(["make owner-check"]),
+        "a claimed implementer leaves only the captured commands to `claim_validate`"
+    );
+    assert_eq!(
+        final_validation_commands(&leaf.bound, &leaf.task, false),
+        Value::Null
+    );
+    assert_eq!(
+        final_validation_commands(&leaf.pair.wire.owner, &leaf.task, true),
+        json!(["make owner-check"]),
+        "an owner's implementer leaves its own configured commands to `candidate_validate`"
+    );
 }
 
 /// A claim an older owner admitted captured no gates: the leaf falls back to
@@ -132,6 +165,55 @@ fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
     assert!(
         refusal.contains("[`make replica-check`] from this replica's local configuration"),
         "{refusal}"
+    );
+    // The replica's list is not the owner's, so the implementer keeps every
+    // check rather than leaving any to it.
+    assert_eq!(
+        final_validation_commands(&leaf.bound, &leaf.task, true),
+        Value::Null
+    );
+}
+
+/// An implementer may leave the required commands to final validation only
+/// in a pipeline that runs it: every shipped job whose `agent_implement` step
+/// sets `final_validation` validates the candidate in a later step.
+#[test]
+fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
+    let jobs = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs");
+    let mut handing_over = Vec::new();
+    for entry in std::fs::read_dir(&jobs).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|ext| ext != "yaml") {
+            continue;
+        }
+        let job: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let steps = job["spec"]["steps"].as_array().cloned().unwrap_or_default();
+        let hands_over = |step: &Value| {
+            step["target"] == "activity:agent_implement"
+                && step["default_input"]["final_validation"] == true
+        };
+        let Some(implement) = steps.iter().position(|step| {
+            hands_over(step)
+                || step["loop"]["steps"]
+                    .as_array()
+                    .is_some_and(|nested| nested.iter().any(hands_over))
+        }) else {
+            continue;
+        };
+        handing_over.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        assert!(
+            steps[implement + 1..].iter().any(|step| matches!(
+                step["target"].as_str(),
+                Some("activity:candidate_validate" | "activity:claim_validate")
+            )),
+            "{} lets its implementer skip the required commands but never runs them; \
+             a delivery would drop its checks",
+            path.display()
+        );
+    }
+    assert!(
+        !handing_over.is_empty(),
+        "no delivery pipeline hands over its gates"
     );
 }
 
