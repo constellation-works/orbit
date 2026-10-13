@@ -129,12 +129,17 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         lines.push(throttle.hold_reason());
     }
     let forecast = &capacity["admission_forecast"];
-    if let Some(line) = super::admission_forecast::admission_line(forecast, |id| {
-        forecast["task_titles"][id].as_str().map(str::to_string)
-    }) {
-        lines.push(line);
-        lines.extend(super::admission_forecast::peak_lines(forecast));
-    }
+    let last_forecast = &capacity["last_admission_forecast"];
+    lines.extend(super::admission_forecast::admission_lines(
+        forecast,
+        last_forecast,
+        |id| {
+            forecast["task_titles"][id]
+                .as_str()
+                .or_else(|| last_forecast["task_titles"][id].as_str())
+                .map(str::to_string)
+        },
+    ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
     if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
         lines.push(budget);

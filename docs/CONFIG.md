@@ -128,6 +128,15 @@ limits. JSON adds `capacity.admission_forecast`, with the recorded fields,
 `task_titles`, and `headroom` (`cpu_percent`, `memory_percent`,
 `admit_cpu_percent`, `admit_memory_percent`). An unknown host capacity has
 unknown headroom; negative headroom means the peak exceeds the limit.
+A pass that builds a forecast also retains it in
+`pipeline_state.drain_last_forecast`; readiness exposes the same observation
+as `capacity.last_admission_forecast`, with titles and current-limit headroom.
+When later passes build none, both commands say so and show the retained
+forecast's timestamp, admitted and skipped candidate titles, and CPU and memory
+peaks. These historical decisions never change current task eligibility.
+The current-pass keys keep their meaning; the retained forecast survives idle
+passes and terminalization until another built forecast replaces it.
+
 Each candidate the pass judged carries `tasks[].admission_forecast`, including
 its profile source, mode, forecast time, and `decision` (`admitted` or
 `skipped`); skipped candidates also carry the recorded resource, minute,

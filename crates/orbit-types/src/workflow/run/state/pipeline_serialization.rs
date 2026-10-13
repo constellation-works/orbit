@@ -55,6 +55,7 @@ impl Serialize for PipelineState {
             pull_breaker: &self.pull_drain.pull_breaker => self.pull_drain.pull_breaker.is_none(),
             pull_admission_fit: &self.pull_drain.pull_admission_fit => self.pull_drain.pull_admission_fit.is_none(),
             drain_last_pass: &self.pull_drain.drain_last_pass => self.pull_drain.drain_last_pass.is_none(),
+            drain_last_forecast: &self.pull_drain.drain_last_forecast => self.pull_drain.drain_last_forecast.is_none(),
             drain_approvals: &self.pull_drain.drain_approvals => self.pull_drain.drain_approvals.is_none(),
             failure_activity_checkpoint: &self.failure_activity_checkpoint => self.failure_activity_checkpoint.is_none(),
             rebase_recovery_checkpoints: &self.rebase_recovery_checkpoints => self.rebase_recovery_checkpoints.is_empty(),

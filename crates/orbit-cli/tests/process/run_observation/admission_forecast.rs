@@ -94,18 +94,19 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
             "head": {"task_id": ids[0], "failing_since": now, "protected": true},
         });
         let forecast = serde_json::from_value::<DrainAdmissionForecast>(block).unwrap();
-        state
-            .pull_drain
-            .drain_last_pass
-            .as_mut()
-            .unwrap()
-            .admission_forecast = Some(forecast.clone());
+        let mut pass = state.pull_drain.drain_last_pass.clone().unwrap();
+        pass.admission_forecast = Some(forecast.clone());
+        state.pull_drain.record_admission_pass(pass);
         runtime.write_run_state(id, &state).unwrap();
         let before = fixture.snapshot();
         let before_state = json!(runtime.read_run_state(id).unwrap());
         let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
         assert_eq!(
             shown["pipeline_state"]["drain_last_pass"]["admission_forecast"],
+            json!(forecast)
+        );
+        assert_eq!(
+            shown["pipeline_state"]["drain_last_forecast"],
             json!(forecast)
         );
         let show_text = text(&fixture, &["run", "show", id, "--no-reconcile"]);
@@ -193,7 +194,110 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         );
     }
 
-    // A protected head can be carried through a pass that builds no forecast.
+    // Idle passes must preserve the last built forecast through the same
+    // state transition the drain uses, without turning old skips into holds.
+    let mut retained = state.pull_drain.drain_last_forecast.clone().unwrap();
+    retained.mode = "enforce".into();
+    let mut built = state.pull_drain.drain_last_pass.clone().unwrap();
+    built.admission_forecast = Some(retained.clone());
+    state.pull_drain.record_admission_pass(built);
+    for with_head in [false, true, true] {
+        let mut idle = state.pull_drain.drain_last_pass.clone().unwrap();
+        idle.recorded_at = now + chrono::Duration::minutes(1);
+        idle.admission_forecast = if with_head {
+            let mut forecast = retained.clone();
+            forecast.forecast_at = None;
+            forecast.cpu_peak = None;
+            forecast.memory_peak = None;
+            forecast.admitted.clear();
+            forecast.skipped.clear();
+            Some(forecast)
+        } else {
+            None
+        };
+        state.pull_drain.record_admission_pass(idle);
+        runtime.write_run_state(id, &state).unwrap();
+        let before_state = json!(runtime.read_run_state(id).unwrap());
+        let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+        assert_eq!(
+            shown["pipeline_state"]["drain_last_forecast"],
+            json!(retained)
+        );
+        assert!(
+            shown["pipeline_state"]["drain_last_pass"]["admission_forecast"]["forecast_at"]
+                .is_null()
+        );
+        let readiness = fixture.json(&["run", "readiness", "--json"]);
+        let last = &readiness["capacity"]["last_admission_forecast"];
+        for key in [
+            "forecast_at",
+            "cpu_peak",
+            "memory_peak",
+            "admitted",
+            "skipped",
+            "head",
+        ] {
+            assert_eq!(last[key], json!(retained)[key], "{key}");
+        }
+        assert!(readiness["capacity"]["admission_forecast"]["forecast_at"].is_null());
+        for task in readiness["tasks"].as_array().unwrap() {
+            assert_eq!(
+                task["reason"], "ready",
+                "historical skips must not hold tasks"
+            );
+            assert!(task["admission_forecast"].is_null());
+        }
+        for args in [
+            vec!["run", "readiness"],
+            vec!["run", "show", id, "--no-reconcile"],
+        ] {
+            let rendered = text(&fixture, &args);
+            assert!(
+                rendered.contains("no forecast built this pass"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains(last["forecast_at"].as_str().unwrap()),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("admitted fitting candidate"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("skipped heavy candidate (cpu 94% at +6m)"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("cpu 7.2 cores (90.0%) at +6m"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("memory 1024.0 bytes (40.0%) at +2m"),
+                "{rendered}"
+            );
+            let forecast_lines = rendered
+                .lines()
+                .filter(|line| {
+                    line.starts_with("Admission:")
+                        || line.starts_with("Last forecast ")
+                        || line.starts_with("Forecast peak:")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for task_id in &ids {
+                assert!(
+                    !forecast_lines.contains(task_id),
+                    "internal ID leaked in forecast: {forecast_lines}"
+                );
+            }
+        }
+        assert_eq!(json!(runtime.read_run_state(id).unwrap()), before_state);
+        assert_eq!(fixture.snapshot(), snapshot);
+    }
+
+    // Without retained history a protected head is still observed on its own.
+    state.pull_drain.drain_last_forecast = None;
     let forecast = state
         .pull_drain
         .drain_last_pass
@@ -229,6 +333,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         .admission_forecast
         .as_mut()
         .unwrap();
+    forecast.forecast_at = Some(now);
     forecast.cpu_peak = Some(orbit_types::workflow::ForecastPeak {
         minute: 0,
         value: 1.5,

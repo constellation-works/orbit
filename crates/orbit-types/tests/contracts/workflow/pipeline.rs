@@ -79,6 +79,10 @@ fn pre_grouping_state_files_keep_their_exact_bytes() {
             "populated",
             include_str!("fixtures/pipeline-populated-before-grouping.json"),
         ),
+        (
+            "populated-with-forecast",
+            include_str!("fixtures/pipeline-populated-with-forecast.json"),
+        ),
     ] {
         let state: PipelineState = serde_json::from_str(bytes).unwrap();
         if name == "sparse" {
@@ -91,6 +95,17 @@ fn pre_grouping_state_files_keep_their_exact_bytes() {
             assert_eq!(state.pull_drain.pull_auth_recovery.len(), 1);
             assert_eq!(state.pull_drain.forge_hold.as_ref().unwrap().attempts, 2);
             assert!(state.pull_drain.forge_hold_expired_at.is_some());
+        }
+        if name == "populated-with-forecast" {
+            assert!(
+                state
+                    .pull_drain
+                    .drain_last_forecast
+                    .as_ref()
+                    .unwrap()
+                    .forecast_at
+                    .is_some()
+            );
         }
         assert_eq!(
             serde_json::to_string_pretty(&state).unwrap().as_bytes(),
