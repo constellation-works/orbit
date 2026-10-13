@@ -40,7 +40,7 @@ fn run_show_names_a_capacity_backoff_and_the_reviewer_hold_it_lifts() {
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.pull_crew_preflight = Some(PullCrewPreflight {
+    state.pull_drain.pull_crew_preflight = Some(PullCrewPreflight {
         checked_at: at,
         runnable: vec!["sol".into()],
         default_crew: Some("sol".into()),
@@ -57,7 +57,7 @@ fn run_show_names_a_capacity_backoff_and_the_reviewer_hold_it_lifts() {
         .expect("the backed-off reviewer cannot run");
     let refusal =
         format!("before_pr_reviewer_unavailable: the owner's before-landing review {reason}");
-    state.drain_last_pass = Some(
+    state.pull_drain.drain_last_pass = Some(
         serde_json::from_value::<DrainAdmissionPass>(serde_json::json!({
             "recorded_at": at,
             "queued": 0,

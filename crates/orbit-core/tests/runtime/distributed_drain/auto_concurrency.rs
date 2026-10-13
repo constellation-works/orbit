@@ -112,6 +112,7 @@ fn admission_fit(pair: &Pair, drain: &str) -> Option<PullAdmissionFit> {
         .read_run_state(drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_admission_fit
 }
 

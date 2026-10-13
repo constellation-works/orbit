@@ -269,7 +269,7 @@ impl OrbitRuntime {
         let state = self.read_run_state(run_id)?.ok_or_else(|| {
             OrbitError::JobValidation(format!("job run '{run_id}' has no cancellation state"))
         })?;
-        let cancel = state.drain_cancel.ok_or_else(|| {
+        let cancel = state.pull_drain.drain_cancel.ok_or_else(|| {
             OrbitError::JobValidation(format!("job run '{run_id}' is not being cancelled"))
         })?;
         let (actor, source) = (cancel.actor.as_str(), cancel.source.as_str());

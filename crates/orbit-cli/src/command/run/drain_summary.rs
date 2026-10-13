@@ -474,8 +474,9 @@ pub(super) fn summarize_drain_leaves(
     let state = state?;
     let mut summary = DrainLeafSummary {
         waiting: last_pass_waiting(state),
-        approvals: state.drain_approvals.clone(),
+        approvals: state.pull_drain.drain_approvals.clone(),
         capacity: state
+            .pull_drain
             .drain_last_pass
             .as_ref()
             .and_then(|pass| pass.capacity.clone()),
@@ -530,6 +531,7 @@ pub(super) fn summarize_drain_leaves(
 /// on its own run state.
 fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
     state
+        .pull_drain
         .drain_last_pass
         .as_ref()
         .map(|pass| waiting_backlog(pass, true))

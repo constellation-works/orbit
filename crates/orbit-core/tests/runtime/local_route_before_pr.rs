@@ -171,6 +171,7 @@ fn assert_held(runtime: &OrbitRuntime, task: &str, source: &str) {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let waiting = pass

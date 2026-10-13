@@ -4,6 +4,7 @@
 mod drain;
 mod failure;
 mod pipeline;
+mod pipeline_serialization;
 mod recovery;
 
 pub use drain::{
@@ -11,8 +12,8 @@ pub use drain::{
     DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask,
     DrainWindowExtension, DrainWorkerLimit, ForecastPeak, GapFitAdmission, GapFitHead, GapFitSkip,
     PullAdmissionFit, PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight,
-    PullSinglePass, PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle,
-    TaskCancellationPolicy,
+    PullDrainState, PullSinglePass, PullUnfitWork, PullWindowClose, ResourcePressure,
+    ResourceThrottle, TaskCancellationPolicy,
 };
 pub use failure::{
     CONTRACT_REFUSAL_MARKER, ClaimFailureClass, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,

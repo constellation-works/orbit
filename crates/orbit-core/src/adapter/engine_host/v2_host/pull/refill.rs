@@ -210,11 +210,11 @@ pub(crate) fn pull_refill(
     let state = read_pass_state()?;
     let degraded = state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
         .is_some_and(|pass| pass.degraded);
     if let Some(pass) = state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
         && pass.degraded
         && (pass.last_pass_error_code.as_deref() == Some("protocol_skew")
             || pass
@@ -236,7 +236,7 @@ pub(crate) fn pull_refill(
     let pass_state = read_pass_state()?;
     if let Some(cancel) = pass_state
         .as_ref()
-        .and_then(|state| state.drain_cancel.as_ref())
+        .and_then(|state| state.pull_drain.drain_cancel.as_ref())
     {
         return cancelling_pass(runtime, &drain, &run_id, &destination, cancel, poll)
             .map_err(|error| failed(error.to_string()));
@@ -288,7 +288,7 @@ pub(crate) fn pull_refill(
     // tries again next iteration.
     let previous_breaker = pass_state
         .as_ref()
-        .and_then(|state| state.pull_breaker.clone());
+        .and_then(|state| state.pull_drain.pull_breaker.clone());
     let mut streak = match drain.consecutive_failed_settlements(&destination, &run_id) {
         Ok(streak) => Some(streak),
         Err(failure) => {
@@ -400,7 +400,8 @@ pub(crate) fn pull_refill(
                 let probed = Cell::new(false);
                 let still_admitting = || {
                     let stopped = runtime.read_run_state(&run_id)?.is_some_and(|state| {
-                        state.drain_admissions_stop.is_some() || state.drain_cancel.is_some()
+                        state.pull_drain.drain_admissions_stop.is_some()
+                            || state.pull_drain.drain_cancel.is_some()
                     });
                     if stopped {
                         return Ok(false);
@@ -743,7 +744,7 @@ fn record_breaker(
         .stores()
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
-            state.pull_breaker = breaker.cloned();
+            state.pull_drain.pull_breaker = breaker.cloned();
             Ok(())
         })
         .map(|_| ())
@@ -760,7 +761,7 @@ fn record_admission_fit(
         .stores()
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
-            state.pull_admission_fit = fit.cloned();
+            state.pull_drain.pull_admission_fit = fit.cloned();
             Ok(())
         })
         .map(|_| ())
@@ -910,7 +911,7 @@ fn cancelling_pass(
 fn crew_window(runtime: &OrbitRuntime, run_id: &str) -> Result<PullCrewWindow, OrbitError> {
     let stored = runtime
         .read_run_state(run_id)?
-        .and_then(|state| state.pull_crew_preflight);
+        .and_then(|state| state.pull_drain.pull_crew_preflight);
     let preflight = match stored {
         Some(preflight) => preflight,
         None => {
@@ -921,8 +922,8 @@ fn crew_window(runtime: &OrbitRuntime, run_id: &str) -> Result<PullCrewWindow, O
                     .stores()
                     .jobs()
                     .update_run_state(run_id, &mut |_, state| {
-                        if state.pull_crew_preflight.is_none() {
-                            state.pull_crew_preflight = pending.take();
+                        if state.pull_drain.pull_crew_preflight.is_none() {
+                            state.pull_drain.pull_crew_preflight = pending.take();
                         }
                         Ok(())
                     })

@@ -236,7 +236,7 @@ impl ForgeHost {
             state.record_step(*index, JobRunState::Success, Some(output.clone()), None);
         }
         state.sync_pipeline(outcome.pipeline.clone());
-        state.forge_hold = outcome.forge_hold.clone();
+        state.pull_drain.forge_hold = outcome.forge_hold.clone();
         state
     }
 }
@@ -486,7 +486,8 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
             // The forge is still down when the clock first resumes: the resumed run
             // holds again and keeps the lineage's first hold time.
             let mut state = held.persisted_state(&outcome);
-            state.forge_hold.as_mut().unwrap().held_since = hold.held_at - TimeDelta::minutes(30);
+            state.pull_drain.forge_hold.as_mut().unwrap().held_since =
+                hold.held_at - TimeDelta::minutes(30);
             fixture.refuse(ALWAYS);
             let still_down = ForgeHost::default();
             let again = execute(&job, &still_down, Some(&state));

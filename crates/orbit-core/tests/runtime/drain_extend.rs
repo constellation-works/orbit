@@ -186,6 +186,7 @@ fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never
         assert_eq!(
             drains
                 .state(&drain)
+                .pull_drain
                 .drain_window_extension
                 .unwrap()
                 .deadline,
@@ -207,7 +208,7 @@ fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never
         .unwrap()
         .into_iter()
         .map(|run| drains.state(&run.run_id))
-        .find_map(|state| state.drain_window_extension)
+        .find_map(|state| state.pull_drain.drain_window_extension)
         .unwrap();
     assert_eq!(
         readiness["capacity"]["ends_at"],
@@ -244,9 +245,9 @@ fn a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_dra
         .to_string();
     assert!(error.contains("closed its window"), "{error}");
     let state = drains.state(&owner);
-    assert!(state.drain_window_extension.is_none());
+    assert!(state.pull_drain.drain_window_extension.is_none());
     assert!(
-        state.drain_worker_limit.is_none(),
+        state.pull_drain.drain_worker_limit.is_none(),
         "a refused extension retunes nothing"
     );
 }
@@ -268,11 +269,11 @@ fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() 
         assert_eq!(limit.previous_max_active_leaf_runs, 2);
         assert_eq!(limit.max_active_leaf_runs, 5);
         let state = drains.state(&drain);
-        let persisted = state.drain_worker_limit.unwrap();
+        let persisted = state.pull_drain.drain_worker_limit.unwrap();
         assert_eq!(persisted.max_active_leaf_runs, 5);
         assert_eq!(persisted.actor, "operator");
         assert_eq!(
-            state.drain_window_extension.unwrap().deadline,
+            state.pull_drain.drain_window_extension.unwrap().deadline,
             change.deadline
         );
 
@@ -307,8 +308,8 @@ fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_s
         assert_eq!(answer["expired"], true, "{job}: the stop still holds");
         assert_eq!(answer["expired_reason"], "admissions_stopped");
         let state = drains.state(&stopped);
-        assert!(state.drain_window_extension.is_none());
-        assert!(state.drain_worker_limit.is_none());
+        assert!(state.pull_drain.drain_window_extension.is_none());
+        assert!(state.pull_drain.drain_worker_limit.is_none());
 
         let cancelling = drains.running(job, 3600, open, |state| {
             state.set_drain_cancel("operator".into(), "fixture".into(), None);
@@ -326,7 +327,13 @@ fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_s
             .unwrap_err()
             .to_string();
         assert!(error.contains("single-pass mode"), "{job}: {error}");
-        assert!(drains.state(&single_pass).drain_window_extension.is_none());
+        assert!(
+            drains
+                .state(&single_pass)
+                .pull_drain
+                .drain_window_extension
+                .is_none()
+        );
         let rejected = drains.completions(&single_pass, AuditEventStatus::Failure);
         assert_eq!(rejected.len(), 1, "{job}: {rejected:?}");
         assert_eq!(rejected[0]["outcome"], "rejected");
@@ -403,8 +410,11 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
             after_state, before_state,
             "{job}: state must remain unchanged"
         );
-        assert!(after_state.drain_window_extension.is_none(), "{job}");
-        assert!(after_state.drain_worker_limit.is_none(), "{job}");
+        assert!(
+            after_state.pull_drain.drain_window_extension.is_none(),
+            "{job}"
+        );
+        assert!(after_state.pull_drain.drain_worker_limit.is_none(), "{job}");
 
         let answer = drains.window(&drain, stamped);
         assert_eq!(

@@ -347,6 +347,7 @@ fn record_report(
                     }
                 }
                 let report = state
+                    .pull_drain
                     .drain_approvals
                     .get_or_insert_with(DrainApprovalReport::default);
                 report.recorded_at = Some(Utc::now());
@@ -575,7 +576,7 @@ pub(super) fn readiness_approvals(
         .stores()
         .jobs()
         .read_run_state(run_id)?
-        .and_then(|state| state.drain_approvals)
+        .and_then(|state| state.pull_drain.drain_approvals)
         .unwrap_or_default();
     let snapshot = approval_snapshot(runtime, &pilot_children(runtime, run_id)?, false)?;
     let mut value = held_json(&snapshot);

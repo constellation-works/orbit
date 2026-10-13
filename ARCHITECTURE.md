@@ -36,6 +36,14 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-web` | internal | cmd, common, core, registry, types (dev: engine, store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 
+`PipelineState` exposes drain controls, pull admission checkpoints and forge
+hold records through `pull_drain: PullDrainState`. The general cancellation
+policy remains on the run. Serde flattens the group for reading; an explicit
+serializer retains the historical top-level names, field order and omission
+rules when writing `state.json`. Changes to this persisted contract must update
+both the serializer and the compatibility fixtures in the types integration
+suite.
+
 Core uses `git2` (vendored libgit2, network features disabled) to read local
 refs, config and trees in process: routine status's branch inspection, and the
 instruction and selector-object reads behind the preparation fingerprint. A

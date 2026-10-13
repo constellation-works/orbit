@@ -45,7 +45,7 @@ pub(super) fn live_admissions_stop(
     runtime: &OrbitRuntime,
     input: &Value,
 ) -> Option<DrainAdmissionsStop> {
-    live_drain_state(runtime, input).and_then(|state| state.drain_admissions_stop)
+    live_drain_state(runtime, input).and_then(|state| state.pull_drain.drain_admissions_stop)
 }
 
 /// The executing drain's own run state, read through the engine-injected run
@@ -138,8 +138,8 @@ pub(super) fn workspace_drains(
             .flatten();
         let limit = state
             .as_ref()
-            .and_then(|state| state.drain_worker_limit.clone());
-        let stop = state.and_then(|state| state.drain_admissions_stop);
+            .and_then(|state| state.pull_drain.drain_worker_limit.clone());
+        let stop = state.and_then(|state| state.pull_drain.drain_admissions_stop);
         active = Some(ActiveDrain {
             run_id: run.run_id,
             input,
@@ -180,11 +180,11 @@ pub(super) fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullD
                 .flatten();
             let refusal = state
                 .as_ref()
-                .and_then(|state| state.drain_last_pass.as_ref())
+                .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
                 .and_then(|pass| pass.admission_refusal.clone());
             LivePullDrain {
                 run_id: run.run_id,
-                stop: state.and_then(|state| state.drain_admissions_stop),
+                stop: state.and_then(|state| state.pull_drain.drain_admissions_stop),
                 refusal,
             }
         }))
@@ -197,7 +197,7 @@ fn read_drain_worker_limit(runtime: &OrbitRuntime, run_id: &str) -> Option<Drain
         .read_run_state(run_id)
         .ok()
         .flatten()
-        .and_then(|state| state.drain_worker_limit)
+        .and_then(|state| state.pull_drain.drain_worker_limit)
 }
 
 /// A durable run-input ceiling. The generic job surface persists every

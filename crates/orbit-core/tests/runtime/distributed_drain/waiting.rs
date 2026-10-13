@@ -93,6 +93,7 @@ fn an_idle_pull_drain_records_what_its_owner_kept_off_this_host() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
 
@@ -171,6 +172,7 @@ fn an_idle_pull_drain_records_what_its_owner_kept_off_this_host() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .unwrap();
     assert_eq!(kept.queued, 3, "{kept:#?}");
@@ -192,6 +194,7 @@ fn an_idle_pull_drain_records_what_its_owner_kept_off_this_host() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .unwrap();
     assert_eq!(counted.consecutive_idle_passes, 3, "{counted:#?}");

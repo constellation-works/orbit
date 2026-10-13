@@ -268,7 +268,7 @@ fn lineage_forge_hold(
     resume: Option<&PipelineState>,
 ) -> orbit_types::workflow::ForgeUnavailableHold {
     step_id.clone_into(&mut hold.step_id);
-    if let Some(earlier) = resume.and_then(|state| state.forge_hold.as_ref()) {
+    if let Some(earlier) = resume.and_then(|state| state.pull_drain.forge_hold.as_ref()) {
         hold.held_since = hold.held_since.min(earlier.held_since);
     }
     hold

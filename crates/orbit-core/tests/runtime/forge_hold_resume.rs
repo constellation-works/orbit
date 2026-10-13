@@ -204,7 +204,7 @@ impl Fixture {
             .unwrap_or_else(|| {
                 PipelineState::new(run.run_id.clone(), run.job_id, run.input.unwrap())
             });
-        state.forge_hold = held_since.map(|held_since| ForgeUnavailableHold {
+        state.pull_drain.forge_hold = held_since.map(|held_since| ForgeUnavailableHold {
             target_ref: "refs/heads/orbit/candidate".to_string(),
             head_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
             attempts: 6,
@@ -390,7 +390,7 @@ fn past_the_window_the_clock_blocks_the_task_and_a_manual_resume_readmits_it() {
     );
     let resumed_state = fx.jobs.read_run_state(&invoke.run_id).unwrap().unwrap();
     assert!(
-        resumed_state.forge_hold_expired_at.is_none(),
+        resumed_state.pull_drain.forge_hold_expired_at.is_none(),
         "expiry belongs to the source hold"
     );
 
@@ -496,7 +496,7 @@ fn expired_hold_does_not_block_or_log_again_after_readmission() {
             // the run acknowledgement: history must still prevent a second block.
             fx.jobs
                 .update_run_state(&run, &mut |_, state| {
-                    state.forge_hold_expired_at = None;
+                    state.pull_drain.forge_hold_expired_at = None;
                     Ok(())
                 })
                 .unwrap();
@@ -515,6 +515,7 @@ fn expired_hold_does_not_block_or_log_again_after_readmission() {
                     .read_run_state(&run)
                     .unwrap()
                     .unwrap()
+                    .pull_drain
                     .forge_hold_expired_at
                     .is_some()
             );
@@ -557,6 +558,7 @@ fn expiry_leaves_a_task_admitted_under_an_unrelated_run_alone() {
             .read_run_state(&held_run)
             .unwrap()
             .unwrap()
+            .pull_drain
             .forge_hold_expired_at
             .is_some()
     );

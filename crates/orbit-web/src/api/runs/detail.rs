@@ -66,7 +66,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     full["drain_last_pass"] = serde_json::to_value(
         state
             .as_ref()
-            .and_then(|state| state.drain_last_pass.as_ref()),
+            .and_then(|state| state.pull_drain.drain_last_pass.as_ref()),
     )
     .unwrap_or(Value::Null);
     // The failure chain and the cancel record are detail-only. One response

@@ -342,6 +342,7 @@ impl crate::OrbitRuntime {
                 self.read_run_state(&run.run_id)
                     .ok()
                     .flatten()?
+                    .pull_drain
                     .drain_last_pass
             })
             .filter(|pass| pass.recorded_at >= cutoff)

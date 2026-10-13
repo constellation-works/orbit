@@ -288,6 +288,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_approvals
         .unwrap();
     assert_eq!(report.approved_total, 2);

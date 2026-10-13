@@ -1,0 +1,124 @@
+{
+  "run_id": "jrun-parent",
+  "job_id": "workspace_auto_pipeline",
+  "initial_input": {},
+  "pipeline": {},
+  "step_outputs": {},
+  "pipeline_patches": {},
+  "step_states": {},
+  "next_step_index": 0,
+  "previous_step_state": null,
+  "iteration": 0,
+  "drain_worker_limit": {
+    "max_active_leaf_runs": 3,
+    "previous_max_active_leaf_runs": 2,
+    "revision": 1,
+    "actor": "operator",
+    "reason": "capacity",
+    "updated_at": "2026-10-11T00:00:00Z"
+  },
+  "drain_admissions_stop": {
+    "actor": "operator",
+    "reason": "maintenance",
+    "stopped_at": "2026-10-11T00:00:00Z"
+  },
+  "drain_window_extension": {
+    "deadline": "2026-10-11T02:00:00Z",
+    "previous_deadline": "2026-10-11T01:00:00Z",
+    "revision": 1,
+    "actor": "operator",
+    "extended_at": "2026-10-11T00:00:00Z"
+  },
+  "drain_cancel": {
+    "actor": "operator",
+    "source": "cli",
+    "reason": "maintenance",
+    "requested_at": "2026-10-11T00:00:00Z"
+  },
+  "task_cancellation_policy": {
+    "block": false,
+    "note": "operator cancel"
+  },
+  "pull_crew_preflight": {
+    "checked_at": "2026-10-11T00:00:00Z",
+    "runnable": [
+      "available"
+    ],
+    "default_crew": "available"
+  },
+  "pull_auth_recovery": {
+    "incident": {
+      "exclusion": {
+        "provider": "provider",
+        "host": "host",
+        "excluded_at": "2026-10-11T00:00:00Z",
+        "error_class": "auth",
+        "relogin_hint": "login",
+        "credential_source": "native",
+        "attempts": 1
+      },
+      "recovered_at": "2026-10-11T00:00:00Z",
+      "recovery_source": "probe"
+    }
+  },
+  "pull_single_pass": {
+    "consumed_at": "2026-10-11T00:00:00Z"
+  },
+  "pull_window_close": {
+    "closed_at": "2026-10-11T00:00:00Z"
+  },
+  "pull_breaker": {
+    "failures": 3,
+    "failure_classes": [
+      "provider"
+    ],
+    "opened_at": "2026-10-11T00:00:00Z",
+    "half_open_at": "2026-10-11T00:01:00Z"
+  },
+  "pull_admission_fit": {
+    "mode": "shadow",
+    "computed_at": "2026-10-11T00:00:00Z",
+    "sent": true,
+    "admissible": [
+      "task"
+    ]
+  },
+  "drain_last_pass": {
+    "recorded_at": "2026-10-11T00:00:00Z",
+    "queued": 1,
+    "deferred_total": 0,
+    "excluded_total": 0,
+    "consecutive_idle_passes": 0,
+    "consecutive_pass_failures": 0,
+    "degraded": false
+  },
+  "drain_approvals": {
+    "recorded_at": "2026-10-11T00:00:00Z",
+    "approved_total": 1,
+    "approved": [
+      "task"
+    ],
+    "closed_total": 0,
+    "held_total": 0
+  },
+  "rebase_recovery_checkpoints": {
+    "step": {
+      "head": "candidate"
+    }
+  },
+  "forge_hold": {
+    "target_ref": "refs/heads/candidate",
+    "head_sha": "head",
+    "attempts": 2,
+    "waited_ms": 1000,
+    "diagnostic": "refused",
+    "step_id": "push",
+    "held_at": "2026-10-11T00:00:00Z",
+    "held_since": "2026-10-11T00:00:00Z"
+  },
+  "forge_hold_expired_at": "2026-10-11T00:00:00Z",
+  "env_pass_unset": [
+    "OPTIONAL_VAR"
+  ],
+  "updated_at": "2026-10-11T00:00:00Z"
+}

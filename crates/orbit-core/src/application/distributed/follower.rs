@@ -105,7 +105,7 @@ impl crate::OrbitRuntime {
         self.stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
-                let previous = state.drain_last_pass.as_ref();
+                let previous = state.pull_drain.drain_last_pass.as_ref();
                 let now = chrono::Utc::now();
                 let was_degraded = previous.is_some_and(|pass| pass.degraded);
                 let previous_count = previous.map_or(0, |pass| pass.consecutive_pass_failures);
@@ -166,7 +166,7 @@ impl crate::OrbitRuntime {
                         || consecutive_pass_failures >= PASS_FAILURE_THRESHOLD,
                     admission_forecast: None,
                 };
-                state.drain_last_pass = Some(pass.clone());
+                state.pull_drain.drain_last_pass = Some(pass.clone());
                 recorded = Some(pass);
                 Ok(())
             })?;
@@ -196,11 +196,11 @@ impl crate::OrbitRuntime {
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 taken = !retry_run
-                    && state.pull_single_pass.is_none()
-                    && state.drain_admissions_stop.is_none()
-                    && state.drain_cancel.is_none();
+                    && state.pull_drain.pull_single_pass.is_none()
+                    && state.pull_drain.drain_admissions_stop.is_none()
+                    && state.pull_drain.drain_cancel.is_none();
                 if taken {
-                    state.pull_single_pass = Some(PullSinglePass {
+                    state.pull_drain.pull_single_pass = Some(PullSinglePass {
                         consumed_at: chrono::Utc::now(),
                     });
                 }

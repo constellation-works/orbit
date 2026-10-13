@@ -326,11 +326,11 @@ fn run_json_enriched(
     // [ORB-13901] A drain's last admission pass, including the host resource
     // throttle that held it; null for every run that is not a drain.
     value["drain_last_pass"] =
-        serde_json::to_value(state.and_then(|state| state.drain_last_pass.as_ref()))
+        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_last_pass.as_ref()))
             .map_err(serialize_error("serialize drain last pass"))?;
     // [ORB-14117] What an `--approve-proposed` drain approved and held.
     value["drain_approvals"] =
-        serde_json::to_value(state.and_then(|state| state.drain_approvals.as_ref()))
+        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_approvals.as_ref()))
             .map_err(serialize_error("serialize drain approvals"))?;
     // Recovery evidence remains separate from the run and step errors above:
     // a successful or failed recovery attempt never rewrites the original

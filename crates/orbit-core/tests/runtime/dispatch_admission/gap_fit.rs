@@ -261,6 +261,7 @@ fn recorded(runtime: &OrbitRuntime, drain: &str, output: &Value) -> DrainAdmissi
         .read_run_state(drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass")
         .admission_forecast
@@ -330,6 +331,7 @@ fn enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .unwrap();
     let waiting = pass_record
@@ -403,6 +405,7 @@ fn shadow_admits_as_off_and_records_what_enforce_would_do() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .unwrap();
     assert!(off_pass.admission_forecast.is_none());
@@ -425,6 +428,7 @@ fn shadow_admits_as_off_and_records_what_enforce_would_do() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .unwrap();
     assert!(

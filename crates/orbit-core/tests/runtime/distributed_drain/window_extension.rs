@@ -93,7 +93,7 @@ fn an_extension_after_the_window_answer_keeps_the_drain_requesting() {
     assert!(!pair.wire.calls("orbit.drain.probe").is_empty(), "{pass}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1, "{pass}");
     assert_eq!(pair.run_state(&drain), JobRunState::Running);
-    assert!(state(&pair, &drain).pull_window_close.is_none());
+    assert!(state(&pair, &drain).pull_drain.pull_window_close.is_none());
 }
 
 /// The extension lands while the pass that read the window closed is
@@ -133,7 +133,7 @@ fn an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive() {
     assert_eq!(pass["done"], false, "{pass}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1, "{pass}");
     assert_eq!(pair.run_state(&drain), JobRunState::Running);
-    assert!(state(&pair, &drain).pull_window_close.is_none());
+    assert!(state(&pair, &drain).pull_drain.pull_window_close.is_none());
 
     let next = pair.pass_over(&drain, stale_expired());
     assert_eq!(next["done"], false, "{next}");
@@ -159,16 +159,16 @@ fn a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension() {
     assert_eq!(pass["admitting"], false, "{pass}");
     assert!(pair.wire.calls("orbit.drain.probe").is_empty());
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
-    assert!(state(&pair, &drain).pull_window_close.is_some());
+    assert!(state(&pair, &drain).pull_drain.pull_window_close.is_some());
 
     let error = extend(&pair.follower, &drain, Some(4))
         .unwrap_err()
         .to_string();
     assert!(error.contains("closed its window"), "{error}");
     let closed = state(&pair, &drain);
-    assert!(closed.drain_window_extension.is_none());
+    assert!(closed.pull_drain.drain_window_extension.is_none());
     assert!(
-        closed.drain_worker_limit.is_none(),
+        closed.pull_drain.drain_worker_limit.is_none(),
         "a refused extension retunes nothing"
     );
 

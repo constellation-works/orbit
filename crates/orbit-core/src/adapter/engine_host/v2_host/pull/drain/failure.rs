@@ -426,7 +426,7 @@ fn forge_hold(
     state: Option<&PipelineState>,
 ) -> Option<ForgeUnavailableHold> {
     state
-        .and_then(|state| state.forge_hold.clone())
+        .and_then(|state| state.pull_drain.forge_hold.clone())
         .or_else(|| {
             run.steps
                 .iter()

@@ -163,7 +163,7 @@ pub(crate) fn format_waiting_line_with_holders(
 /// admitting under the `max_active_leaf_runs` its input already shows, so a
 /// line restating it would be noise.
 pub(crate) fn format_worker_limit_line(state: Option<&PipelineState>) -> Option<String> {
-    let limit = state?.drain_worker_limit.as_ref()?;
+    let limit = state?.pull_drain.drain_worker_limit.as_ref()?;
     let mut line = format!(
         "Workers: {} (was {}, revision {}, set by {})",
         limit.max_active_leaf_runs,
@@ -182,7 +182,7 @@ pub(crate) fn format_worker_limit_line(state: Option<&PipelineState>) -> Option<
 /// Printed only once an extension moved the deadline: an unextended drain
 /// still runs to the deadline its own window step stamped.
 pub(crate) fn format_window_extension_line(state: Option<&PipelineState>) -> Option<String> {
-    let extension = state?.drain_window_extension.as_ref()?;
+    let extension = state?.pull_drain.drain_window_extension.as_ref()?;
     let mut line = format!(
         "Window: extended to {} (was {}, revision {}, by {})",
         extension.deadline.format("%Y-%m-%dT%H:%M:%SZ"),
@@ -202,7 +202,7 @@ pub(crate) fn format_window_extension_line(state: Option<&PipelineState>) -> Opt
 /// is how an operator distinguishes a drain that wound down after `--stop`
 /// from one that was cancelled.
 pub(crate) fn format_admissions_stop_line(state: Option<&PipelineState>) -> Option<String> {
-    let stop = state?.drain_admissions_stop.as_ref()?;
+    let stop = state?.pull_drain.drain_admissions_stop.as_ref()?;
     let mut line = format!(
         "Admissions: stopped by {} at {}",
         stop.actor,

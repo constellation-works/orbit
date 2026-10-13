@@ -80,7 +80,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
         assert!(!result.signal_attempted);
         let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
         assert!(state.admissions_stopped());
-        let control = state.drain_cancel.as_ref().unwrap();
+        let control = state.pull_drain.drain_cancel.as_ref().unwrap();
         assert_eq!(control.actor, "operator");
         assert_eq!(control.source, "fixture");
         assert_eq!(control.reason.as_deref(), Some("finish admitted work"));

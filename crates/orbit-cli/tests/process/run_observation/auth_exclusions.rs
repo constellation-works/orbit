@@ -36,7 +36,7 @@ fn doctor_and_run_show_report_active_auth_exclusions_without_launching_a_probe()
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.pull_crew_preflight = Some(PullCrewPreflight {
+    state.pull_drain.pull_crew_preflight = Some(PullCrewPreflight {
         checked_at: at,
         runnable: vec!["opus".into()],
         default_crew: Some("opus".into()),
@@ -88,6 +88,7 @@ fn doctor_and_run_show_report_active_auth_exclusions_without_launching_a_probe()
             .read_run_state(drain)
             .unwrap()
             .unwrap()
+            .pull_drain
             .pull_auth_recovery
             .is_empty(),
         "read-only diagnostics do not reserve probes or rewrite state"

@@ -516,6 +516,7 @@ fn previous_head(runtime: &OrbitRuntime, input: &Value) -> Option<GapFitHead> {
         .read_run_state(run_id)
         .ok()
         .flatten()?
+        .pull_drain
         .drain_last_pass?
         .admission_forecast?
         .head
@@ -681,7 +682,7 @@ fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionP
         .stores()
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
-            state.drain_last_pass = pass.take();
+            state.pull_drain.drain_last_pass = pass.take();
             Ok(())
         })
     {
