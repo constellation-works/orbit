@@ -70,28 +70,6 @@ pub struct AuditEventFilter {
     pub offset: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditToolCallCountsByRole {
-    pub role: String,
-    pub total: u64,
-    pub failed: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditToolCallCountsBySurfaceAndRole {
-    pub surface: String,
-    pub role: String,
-    pub total: u64,
-    pub failed: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditTopToolCall {
-    pub role: String,
-    pub tool_name: String,
-    pub total: u64,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuditToolAggregate {
     pub tool_name: String,
@@ -206,8 +184,7 @@ pub struct AuditAttributionAggregate {
     /// traffic Orbit could authenticate some of the time.
     pub actor: String,
     pub total: u64,
-    /// Non-`success` rows (`failure` + `denied`), matching
-    /// [`AuditToolCallCountsByRole::failed`].
+    /// Non-`success` rows (`failure` + `denied`).
     pub failed: u64,
     /// Tool invocations via MCP (`subcommand = 'run-mcp'`).
     pub mcp: u64,

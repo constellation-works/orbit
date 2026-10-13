@@ -285,12 +285,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "scoring.enabled": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
     "security_alert_sweep.min_severity": {
       "scope": "built-in",
       "state": "default",

@@ -383,7 +383,6 @@ impl OrbitPolicyContext {
 pub(crate) struct OrbitRuntimeSettings {
     persistence: PersistenceConfig,
     actor: ActorIdentity,
-    scoring_enabled: bool,
     /// Minutes a deferred delivery-automation reason may persist before the
     /// evaluator escalates it (`[automation] stall_window_minutes`).
     automation_stall_window_minutes: u32,
@@ -442,7 +441,6 @@ impl OrbitRuntimeSettings {
     pub(crate) fn new(
         persistence: PersistenceConfig,
         actor: ActorIdentity,
-        scoring_enabled: bool,
         automation_stall_window_minutes: u32,
         pr_config: PrConfig,
         pr_settings: orbit_config::PrSettings,
@@ -470,7 +468,6 @@ impl OrbitRuntimeSettings {
         Self {
             persistence,
             actor,
-            scoring_enabled,
             automation_stall_window_minutes,
             pr_config,
             pr_settings,
@@ -697,10 +694,6 @@ impl OrbitContext {
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
         self.runtime.set_host_shutdown_hold_minutes(minutes);
-    }
-
-    pub(crate) fn scoring_enabled(&self) -> bool {
-        self.runtime.scoring_enabled
     }
 
     pub(crate) fn settings(&self) -> &OrbitRuntimeSettings {

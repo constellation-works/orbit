@@ -1,6 +1,6 @@
 // Analytics › Cost: managed-execution cost and token usage.
 // The family leaderboard, narrative, agent cards and insights panel are gone.
-// The page still reads GET /api/scoreboard for summary.orchestration.
+// The page reads GET /api/cost: { window, orchestration }.
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
@@ -48,7 +48,7 @@ export function fetchAndRenderScoreboard() {
   }
   const selectedWindow = getWindow();
   const revision = getWorkspaceRevision();
-  const path = `/api/scoreboard?window=${encodeURIComponent(selectedWindow)}`;
+  const path = `/api/cost?window=${encodeURIComponent(selectedWindow)}`;
   const scope = `${revision}\0${path}`;
   if (scoreboardRequestScope !== scope) {
     scoreboardRequestScope = scope;
@@ -58,7 +58,7 @@ export function fetchAndRenderScoreboard() {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow) return;
     if (!payloadHonorsWindow(summary, selectedWindow)) {
       console.error(
-        `scoreboard payload window ${summary && summary.window} rejected under ${selectedWindow} selection`,
+        `cost payload window ${summary && summary.window} rejected under ${selectedWindow} selection`,
       );
       return;
     }
@@ -262,14 +262,12 @@ function renderScoreboard(summary) {
   // The fetch path also guards this; keep the renderer honest.
   if (summary && !payloadHonorsWindow(summary, getWindow())) {
     console.error(
-      `scoreboard payload window ${summary.window} rejected under ${getWindow()} selection`,
+      `cost payload window ${summary.window} rejected under ${getWindow()} selection`,
     );
     return;
   }
 
-  // Cost reads summary.orchestration on its own. An empty agents map used to
-  // hide orchestration buckets; a window with no family rows and a cost
-  // payload now still paints those dollars and tokens.
+  // Cost reads summary.orchestration; the payload carries nothing else.
   const orchestrationHost = $("scoreboard-orchestration");
   const orchestrationCount = $("scoreboard-orchestration-count");
   if (orchestrationHost) {

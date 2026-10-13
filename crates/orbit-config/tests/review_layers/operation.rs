@@ -191,6 +191,22 @@ review_minutes = 120
     }
 }
 
+/// A config written before the scoreboard was retired keeps loading until the
+/// key's sunset: `[scoring]` is warned and ignored, and edits are refused.
+#[test]
+fn retired_scoring_table_loads_with_a_warning_and_refuses_edits() {
+    let (_config, logs) = load_workspace("[scoring]\nenabled = false\n");
+    assert!(
+        warned_removed(&logs, "scoring.enabled"),
+        "scoring.enabled ignored with a warning: {logs}"
+    );
+    let error = admit_settable_config_key("scoring.enabled").expect_err("retired key refused");
+    assert!(
+        error.to_string().contains("scoreboard was retired"),
+        "the refusal says why: {error}"
+    );
+}
+
 #[test]
 fn retired_review_keys_are_not_settable() {
     for key in [

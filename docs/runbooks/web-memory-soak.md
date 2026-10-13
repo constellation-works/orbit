@@ -59,7 +59,7 @@ The fixture holds 4,000 tasks, 25,000 job runs, 300,000 audit rows in each audit
 5,000 invocations, 750 frictions, 11,000 routine fires and a 40,000-line process log.
 
 1. **Fresh-server growth.** A new server answers a warm-up request, then one
-   `/api/scoreboard` request; a second new server does the same for `/api/routines`. The
+   `/api/cost` request; a second new server does the same for `/api/routines`. The
    delta is VmRSS two seconds after the request minus VmRSS before it.
 2. **Soak.** One server answers the whole dashboard GET mix concurrently each round.
    VmRSS, VmHWM, the thread count and the number of 64 MiB-aligned anonymous mappings

@@ -43,7 +43,7 @@ pub(super) struct AuditQuery {
     pub(super) status: Option<String>,
     #[serde(default)]
     pub(super) role: Option<String>,
-    /// Matches recorded roles using the scoreboard's agent-family fold.
+    /// Matches recorded roles using the shared agent-family fold.
     #[serde(default)]
     pub(super) agent_family: Option<String>,
     #[serde(default)]

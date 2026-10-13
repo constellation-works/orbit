@@ -3,10 +3,6 @@
 use super::OrbitRuntime;
 
 impl OrbitRuntime {
-    pub fn scoring_enabled(&self) -> bool {
-        self.context.scoring_enabled()
-    }
-
     /// Minutes a deferred delivery-automation reason may persist before the
     /// evaluator escalates it to a warning and one friction record.
     pub fn automation_stall_window_minutes(&self) -> u32 {

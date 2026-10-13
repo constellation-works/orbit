@@ -16,15 +16,6 @@ use crate::contracts::{
 };
 
 impl Store {
-    /// Cheap insert-only watermark for the token scoreboard skip path.
-    pub fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, OrbitError> {
-        let conn = self.read()?;
-        let max_id: Option<i64> = conn
-            .query_row("SELECT MAX(id) FROM invocations", [], |row| row.get(0))
-            .map_err(sqlite_store_error)?;
-        Ok(Some(max_id.unwrap_or(0) as u64))
-    }
-
     pub fn list_invocation_records(
         &self,
         filter: &InvocationQuery,

@@ -477,12 +477,6 @@ define_config_settings! {
         section: ConfigSection::Housekeeping, order: 30,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().retention_days)),
     },
-    scoring_enabled: bool => bool {
-        key: "scoring.enabled", value_type: "bool",
-        description: "Whether scoreboard metrics are recorded for task runs.",
-        section: ConfigSection::Housekeeping, order: 10,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
-    },
     tasks_id_start: Option<u32> => u32 {
         key: "tasks.id_start", value_type: "integer",
         description: "Floor for the local task-id allocator on this machine (forward-only; lets machines hold disjoint id ranges).",

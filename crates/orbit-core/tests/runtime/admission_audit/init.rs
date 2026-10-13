@@ -116,7 +116,6 @@ fn global_and_workspace_init_create_private_directory_trees_under_permissive_uma
             &workspace.audit_dir,
             &workspace.job_runs_dir,
             &workspace.logs_dir,
-            &workspace.scoreboard_dir,
             &workspace.worktrees_dir,
         ]
         .into_iter()

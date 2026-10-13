@@ -141,13 +141,6 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         self.store.get_audit_event_hourly_buckets(since)
     }
 
-    fn get_audit_denials_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<(String, i64)>, OrbitError> {
-        self.store.get_audit_denials_by_role(since)
-    }
-
     fn get_audit_denials_by_operation(
         &self,
         since: Option<&DateTime<Utc>>,
@@ -155,34 +148,11 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         self.store.get_audit_denials_by_operation(since)
     }
 
-    fn get_audit_tool_call_counts_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<crate::AuditToolCallCountsByRole>, OrbitError> {
-        self.store.get_audit_tool_call_counts_by_role(since)
-    }
-
-    fn get_audit_tool_call_counts_by_surface_and_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<crate::AuditToolCallCountsBySurfaceAndRole>, OrbitError> {
-        self.store
-            .get_audit_tool_call_counts_by_surface_and_role(since)
-    }
-
     fn get_audit_tool_call_counts_by_attribution(
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<crate::AuditAttributionAggregate>, OrbitError> {
         self.store.get_audit_tool_call_counts_by_attribution(since)
-    }
-
-    fn get_audit_top_tool_calls(
-        &self,
-        since: Option<&DateTime<Utc>>,
-        limit: usize,
-    ) -> Result<Vec<crate::AuditTopToolCall>, OrbitError> {
-        self.store.get_audit_top_tool_calls(since, limit)
     }
 
     fn get_audit_event_aggregates_by_tool(

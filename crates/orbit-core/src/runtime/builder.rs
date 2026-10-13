@@ -255,7 +255,6 @@ pub(crate) fn build_context_from_roots(
     ) * 60_000;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
-    let scoring_enabled = runtime_config.scoring_enabled;
     let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
@@ -314,7 +313,6 @@ pub(crate) fn build_context_from_roots(
         OrbitRuntimeSettings::new(
             persistence,
             actor,
-            scoring_enabled,
             automation_stall_window_minutes,
             pr_config,
             runtime_config.pr.clone(),

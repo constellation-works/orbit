@@ -4,7 +4,6 @@ use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
 use orbit_core::V2AuditEventInsertParams;
-use orbit_core::application::task::TaskAddParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
@@ -159,9 +158,9 @@ fn friction_polls_reuse_projection_without_mixing_months_or_limits() {
 }
 
 #[test]
-fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
+fn cost_and_metrics_windows_scope_rows_and_timestamp_arithmetic() {
     isolated(
-        "projections::scoreboard_windows_scope_metrics_and_timestamp_arithmetic",
+        "projections::cost_and_metrics_windows_scope_rows_and_timestamp_arithmetic",
         || {
             let fixture = Fixture::new();
             let now = Utc::now();
@@ -182,7 +181,7 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     .join(ts.format("%Y-%m").to_string());
                 fs::create_dir_all(&dir).unwrap();
                 fs::write(dir.join(format!("row-{index}.jsonl")), format!("{}\n", json!({
-                "ts":ts.to_rfc3339(),"job_run":"jrun-scoreboard","step":"implement",
+                "ts":ts.to_rfc3339(),"job_run":"jrun-windows","step":"implement",
                 "actor_identity":"http-metrics-fixture","step_duration_ms":100,"retry_count":retries,
                 "tool_invocations":1,"token_usage":10,
             }))).unwrap();
@@ -197,7 +196,7 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
             ] {
                 let before = Utc::now();
                 let result = json_ok(server.get(&format!(
-                    "/api/scoreboard?window={window}&workspace=ws_http_fixture"
+                    "/api/cost?window={window}&workspace=ws_http_fixture"
                 )));
                 let after = Utc::now();
                 let metrics = json_ok(server.get(&format!(
@@ -214,10 +213,6 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     "metrics must filter all month partitions before limiting: {window}"
                 );
                 assert_eq!(result["window"], window);
-                assert_eq!(
-                    result["agents"]["http-metrics-fixture"]["retries"], expected,
-                    "scoreboard {window} must use only its own population"
-                );
                 if let Some(duration) = duration {
                     let since =
                         DateTime::parse_from_rfc3339(result["window_since"].as_str().unwrap())
@@ -265,15 +260,23 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     .as_u16(),
                 400
             );
-            let default = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
+            let default = json_ok(server.get("/api/cost?workspace=ws_http_fixture"));
             assert_eq!(default["window"], "all");
             assert_eq!(
                 server
-                    .get("/api/scoreboard?window=bogus&workspace=ws_http_fixture")
+                    .get("/api/cost?window=bogus&workspace=ws_http_fixture")
                     .status()
                     .as_u16(),
                 400
             );
+            // The retired scoreboard route answers with the cost body until
+            // its sunset, and says so in the response headers.
+            let alias = server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture");
+            assert_eq!(alias.headers()["deprecation"], "true");
+            assert!(alias.headers().contains_key("sunset"));
+            let alias = json_ok(alias);
+            assert_eq!(alias["window"], "24h");
+            assert!(alias["orchestration"].is_object());
         },
     );
 }
@@ -718,92 +721,6 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
 }
 
 #[test]
-fn scoreboard_notable_completion_excerpts_the_done_task_summary() {
-    isolated(
-        "projections::scoreboard_notable_completion_excerpts_the_done_task_summary",
-        || {
-            let fixture = Fixture::new();
-            let task = fixture
-                .runtime
-                .add_task(TaskAddParams {
-                    title: "Notable fixture".into(),
-                    description: "Scoreboard excerpt fixture".into(),
-                    priority: TaskPriority::High,
-                    status: Some(TaskStatus::Done),
-                    ..Default::default()
-                })
-                .unwrap();
-            let server = fixture.server(false);
-            json_ok(server.send(
-                "PATCH",
-                &format!("/api/tasks/{}?workspace=ws_http_fixture", task.id),
-                json!({"execution_summary": "Shipped   the\nfixture."}),
-            ));
-            let board = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
-            let items = board["notable_completions"]["items"].as_array().unwrap();
-            let item = items
-                .iter()
-                .find(|item| item["task_id"] == task.id.as_str())
-                .expect("the done task is a notable completion");
-            assert_eq!(item["summary_excerpt"], "Shipped the fixture.");
-        },
-    );
-}
-
-#[test]
-fn scoreboard_polls_reuse_window_memo_without_writing_summary() {
-    isolated(
-        "projections::scoreboard_polls_reuse_window_memo_without_writing_summary",
-        || {
-            let fixture = Fixture::new();
-            let summary_path = fixture.runtime.paths().scoreboard_dir.join("summary.json");
-            assert!(!summary_path.exists());
-            let server = fixture.server(false);
-            let first = json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
-            assert!(
-                !summary_path.exists(),
-                "scoreboard GET must not create summary.json"
-            );
-            let now = Utc::now();
-            let metrics_dir = fixture
-                .runtime
-                .data_root()
-                .join("state/diagnostics/metrics")
-                .join(now.format("%Y-%m").to_string());
-            fs::create_dir_all(&metrics_dir).unwrap();
-            fs::write(metrics_dir.join("memo.jsonl"), format!("{}\n", json!({
-                "ts":now.to_rfc3339(), "job_run":"memo-fixture", "step":"implement",
-                "actor_identity":"http-memo-fixture", "step_duration_ms":100, "retry_count":7,
-                "tool_invocations":1, "token_usage":10,
-            }))).unwrap();
-            let repeated =
-                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
-            assert_eq!(
-                repeated, first,
-                "same-window poll must return the cached computation"
-            );
-            let other = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
-            assert_eq!(other["agents"]["http-memo-fixture"]["retries"], 7);
-            assert!(!summary_path.exists(), "a memo miss must also be read-only");
-
-            // Explicit persistence remains available, and a GET for another
-            // window must not replace that durable lifetime document.
-            fixture.runtime.generate_scoreboard_summary(None).unwrap();
-            let persisted = fs::read(&summary_path).unwrap();
-            let finite = json_ok(server.get("/api/scoreboard?window=7d&workspace=ws_http_fixture"));
-            assert_eq!(finite["window"], "7d");
-            assert_eq!(fs::read(&summary_path).unwrap(), persisted);
-            let lifetime = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
-            assert_eq!(
-                lifetime,
-                json_ok(server.get("/api/scoreboard?window=all&workspace=ws_http_fixture")),
-                "omitted window and all share the canonical memo key"
-            );
-        },
-    );
-}
-
-#[test]
 fn dashboard_memo_polls_report_payload_age() {
     isolated(
         "projections::dashboard_memo_polls_report_payload_age",
@@ -812,7 +729,7 @@ fn dashboard_memo_polls_report_payload_age() {
             let server = fixture.server(false);
             for path in [
                 "/api/audit/summary?since=24h&workspace=ws_http_fixture",
-                "/api/scoreboard?window=1h&workspace=ws_http_fixture",
+                "/api/cost?window=1h&workspace=ws_http_fixture",
                 "/api/diagnostics/errors?since=24h&workspace=ws_http_fixture",
                 "/api/diagnostics/friction?month=2026-04&workspace=ws_http_fixture",
             ] {

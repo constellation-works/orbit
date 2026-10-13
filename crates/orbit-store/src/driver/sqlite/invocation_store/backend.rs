@@ -38,12 +38,6 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         Self::list_activity_invocation_metrics(self)
     }
 
-    fn list_agent_invocation_metrics(
-        &self,
-    ) -> Result<Vec<crate::contracts::AgentInvocationMetrics>, orbit_common::OrbitError> {
-        Self::list_agent_invocation_metrics(self)
-    }
-
     fn get_task_invocation_metrics(
         &self,
         task_id: &str,
@@ -51,20 +45,9 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         Self::get_task_invocation_metrics(self, task_id)
     }
 
-    fn list_top_task_invocation_metrics(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<crate::contracts::TaskInvocationMetrics>, orbit_common::OrbitError> {
-        Self::list_top_task_invocation_metrics(self, limit)
-    }
-
     fn list_tool_invocation_metrics(
         &self,
     ) -> Result<Vec<crate::contracts::ToolInvocationMetrics>, orbit_common::OrbitError> {
         Self::list_tool_invocation_metrics(self)
-    }
-
-    fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, orbit_common::OrbitError> {
-        Self::invocation_scoreboard_watermark(self)
     }
 }

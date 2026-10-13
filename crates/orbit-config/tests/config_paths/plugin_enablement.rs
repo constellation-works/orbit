@@ -61,7 +61,7 @@ fn a_toggle_only_workspace_file_keeps_the_security_keys_inherited() {
     // Any real setting makes the file a policy layer again, and a file with
     // no toggle table stays one however little it holds.
     for body in [
-        "[scoring]\nenabled = false\n[plugin_enablement]\ngraph = false\n",
+        "[workflow]\nauto_ship = true\n[plugin_enablement]\ngraph = false\n",
         "# operator notes\n",
     ] {
         write_config(workspace.path(), body);

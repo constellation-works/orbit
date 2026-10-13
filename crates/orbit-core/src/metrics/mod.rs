@@ -11,6 +11,7 @@
 //! no longer creates knowledge metrics from new traces. Dashboard aggregation
 //! still reads historical `double_read_rate` values from persisted job runs.
 
+pub mod cost;
 mod ingest;
 pub mod reliability;
 mod summary;

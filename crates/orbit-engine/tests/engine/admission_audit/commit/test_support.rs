@@ -20,7 +20,6 @@ pub struct CommitTestHost {
     tasks: Mutex<Vec<Task>>,
     repo_root: PathBuf,
     data_root: PathBuf,
-    scoreboard_dir: PathBuf,
     /// The trusted claim binding a claimed leaf's host carries, if any.
     worker: Option<WorkerInvocation>,
     /// Task history, including the selector widenings this host recorded.
@@ -30,12 +29,10 @@ pub struct CommitTestHost {
 impl CommitTestHost {
     pub fn new(tasks: Vec<Task>, repo_root: PathBuf) -> Self {
         let data_root = repo_root.join(".orbit-test-data");
-        let scoreboard_dir = data_root.join("scoreboard");
         Self {
             tasks: Mutex::new(tasks),
             repo_root,
             data_root,
-            scoreboard_dir,
             worker: None,
             history: Mutex::new(Vec::new()),
         }
@@ -186,10 +183,6 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
 
     fn data_root(&self) -> &Path {
         &self.data_root
-    }
-
-    fn scoreboard_dir(&self) -> &Path {
-        &self.scoreboard_dir
     }
 
     fn worker_invocation(&self) -> Option<WorkerInvocation> {

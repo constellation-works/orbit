@@ -12,7 +12,7 @@ use orbit_types::workflow::{
 };
 
 use super::state::write_state_json_conn;
-use crate::contracts::{JobRunCompletion, JobRunOrder, JobRunQuery};
+use crate::contracts::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
 
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.
@@ -206,37 +206,6 @@ impl Store {
             .map_err(sqlite_store_error)?;
         rows.map(|row| row.map(|value| value.max(0) as u64))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(sqlite_store_error)
-    }
-
-    /// Job and completion time of every run matching the filter, ignoring
-    /// `limit`. Selects two columns, so a rollup over all history never
-    /// decodes run inputs.
-    pub fn list_job_run_completions_for_workspace(
-        &self,
-        workspace_id: &str,
-        query: &JobRunQuery,
-    ) -> Result<Vec<JobRunCompletion>, OrbitError> {
-        let (where_clause, params) = job_run_filter_sql(workspace_id, query);
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|b| b.as_ref()).collect();
-        let conn = self.read()?;
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT job_id, COALESCE(finished_at, created_at) FROM job_runs \
-                 WHERE {where_clause}"
-            ))
-            .map_err(sqlite_store_error)?;
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                let completed_raw: String = row.get(1)?;
-                Ok(JobRunCompletion {
-                    job_id: row.get(0)?,
-                    completed_at: parse_timestamp(&completed_raw)?,
-                })
-            })
-            .map_err(sqlite_store_error)?;
-        rows.collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)
     }
 

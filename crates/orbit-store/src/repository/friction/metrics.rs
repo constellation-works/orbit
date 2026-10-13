@@ -1,8 +1,8 @@
-//! Friction family and rate metrics for the scoreboard and stats projection.
+//! Friction family and rate metrics for the stats projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{Datelike, TimeZone, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::{
     all_agent_families, infer_agent_family_from_model, normalize_optional_attribution_label,
@@ -10,19 +10,9 @@ use orbit_types::identity::{
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use super::{FrictionReportedCount, FrictionStore, stats};
+use super::{FrictionStore, stats};
 
 impl FrictionStore {
-    /// Friction counts by reporting model over an optional window, for the
-    /// scoreboard. Bounded by distinct model labels.
-    pub fn reported_by_model(
-        &self,
-        since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<FrictionReportedCount>, OrbitError> {
-        self.store
-            .with_read_connection(|conn| stats::counts_by_model(conn, &self.workspace_id, since))
-    }
-
     /// The `orbit.friction.stats` projection, computed entirely from SQL
     /// aggregates plus the caller's task attribution.
     pub fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError> {
@@ -51,7 +41,7 @@ impl FrictionStore {
                         month_start,
                         next_month_start,
                     )?,
-                    stats::counts_by_model(conn, &self.workspace_id, None)?,
+                    stats::counts_by_model(conn, &self.workspace_id)?,
                     stats::counts_by_tag_and_model(conn, &self.workspace_id)?,
                 ))
             })?;

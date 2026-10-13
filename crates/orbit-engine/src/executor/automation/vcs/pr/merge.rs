@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::pr_scoreboard;
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus};
+use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -211,14 +210,6 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     // already be gone — ignore errors.
     let _ = git_command_success(&workspace_path, &["push", "origin", "--delete", &head]);
 
-    let batch_requires_revision = batch_tasks
-        .iter()
-        .map(|task| task_required_revision(host, task))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .any(|requires_revision| requires_revision);
-    let batch_author = batch_tasks.iter().find_map(ship_done_attribution);
-
     // Preserve ship attribution per task across the Review -> Done transition.
     // The source of truth is task.implemented_by -> task.created_by -> system
     // fallback (see `ship_done_attribution`).
@@ -236,26 +227,6 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
                 ..TaskAutomationUpdate::default()
             },
         )?;
-    }
-
-    if host.scoring_enabled()
-        && let Some(model) = batch_author
-    {
-        // The PR is already merged, so a scoreboard failure must not fail the
-        // step; it is reported instead of silently dropping the count.
-        let recorded = if batch_requires_revision {
-            pr_scoreboard::record_pr_count_with_revision(host.scoreboard_dir(), &model)
-        } else {
-            pr_scoreboard::record_pr_count_without_revision(host.scoreboard_dir(), &model)
-        };
-        if let Err(error) = recorded {
-            tracing::warn!(
-                target: "orbit.engine.pr_merge",
-                pr = %pr_number,
-                error = %error,
-                "failed to record the merged PR in the scoreboard",
-            );
-        }
     }
 
     Ok(json!({
@@ -276,19 +247,4 @@ fn resolve_batch_workspace_path<H: RuntimeHost + ?Sized>(
             super::super::worktree::resolve_shared_worktree_path(Path::new(&repo_root), batch_id)
         }
     }
-}
-
-fn task_required_revision<H: RuntimeHost + ?Sized>(
-    host: &H,
-    task: &Task,
-) -> Result<bool, OrbitError> {
-    let history = host.get_task_history(&task.id)?;
-    Ok(history.iter().any(|entry| {
-        entry.event == "status_changed"
-            && entry.from_status == Some(TaskStatus::Review)
-            && matches!(
-                entry.to_status,
-                Some(TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Rejected)
-            )
-    }))
 }

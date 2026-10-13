@@ -11,8 +11,6 @@
 //! view and its exports stay the authority on evidence; nothing here filters,
 //! rewrites, or hides a row.
 
-use std::collections::BTreeMap;
-
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
@@ -346,47 +344,13 @@ fn propagation_to_json(link: &PropagationLink) -> Value {
     })
 }
 
-/// Incident counts per agent family, plus the raw failed-event total they
-/// collapsed. Both are needed: the scoreboard renders them as a labeled pair
-/// rather than a bare failure number.
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct ActorFailureRollup {
-    pub(super) incidents: i64,
-    pub(super) events: i64,
-    pub(super) unexpected_incidents: i64,
-}
-
-/// Rolls a report up by agent family, using the same label normalization the
-/// scoreboard's own audit overlays use, so the incident counts land on the
-/// same row as `tool_calls` / `failed_tool_calls` instead of on a parallel
-/// model-named key. Kept here (rather than in `scoreboard.rs`) so the incident
-/// contract has one owner.
-pub(super) fn rollup_by_actor(
-    report: &FailureIncidentReport,
-) -> BTreeMap<String, ActorFailureRollup> {
-    let mut out: BTreeMap<String, ActorFailureRollup> = BTreeMap::new();
-    for incident in &report.incidents {
-        let family = agent_family_key(&incident.role);
-        if family.is_empty() {
-            continue;
-        }
-        let entry = out.entry(family).or_default();
-        entry.incidents += 1;
-        entry.events += incident.event_count as i64;
-        if incident.class == FailureClass::Unexpected {
-            entry.unexpected_incidents += 1;
-        }
-    }
-    out
-}
-
 /// Maps a free-form audit `role` onto a canonical agent family.
 pub(super) fn agent_family_key(role: &str) -> String {
     let normalized = normalize_attribution_label(role, None);
     infer_agent_family_from_model(&normalized).unwrap_or(normalized)
 }
 
-/// Scan cap for the summary/scoreboard rollups, which only need counts. Held
+/// Scan cap for the audit-summary rollups, which only need counts. Held
 /// well below the store default so a header tile can never become the slowest
 /// query on the page.
 pub(super) const ROLLUP_SCAN_LIMIT: usize = HISTORY_MAX_LIMIT * 50;

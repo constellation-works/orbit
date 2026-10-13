@@ -42,23 +42,6 @@ pub(crate) struct RuntimeDispatch<'a> {
     source_cache: SourceCache,
 }
 
-/// Refresh each discovered workspace's read-side token projection once per
-/// successful sweep. The writer skips the rewrite when no invocation has
-/// landed since the last stamp. A stale projection must not stop routine
-/// evaluation.
-pub(crate) fn refresh_discovered_token_scoreboards(workspaces: &[(Workspace, OrbitRuntime)]) {
-    for (workspace, runtime) in workspaces {
-        if let Err(error) = runtime.refresh_token_scoreboard() {
-            tracing::warn!(
-                target: "orbit.core.scoreboard",
-                workspace = %workspace.name,
-                error = %error,
-                "failed to refresh tokens scoreboard during routine sweep",
-            );
-        }
-    }
-}
-
 impl RoutineDispatch for RuntimeDispatch<'_> {
     fn live_workspace_drain(&self, source_orbit_dir: &Path) -> Result<Option<String>, OrbitError> {
         let runtime = self.runtimes.get(source_orbit_dir).ok_or_else(|| {
@@ -256,11 +239,6 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let mut discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
     let mut skipped_workspaces: BTreeSet<String> =
         discovered.skipped_workspaces.iter().cloned().collect();
-    for entry in &discovered.entries {
-        if tick_allows_workspace(deadline, &entry.0, &mut skipped_workspaces) {
-            refresh_discovered_token_scoreboards(std::slice::from_ref(entry));
-        }
-    }
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
     let no_workspace_loaded = no_workspace_loaded_row(&discovered);
 

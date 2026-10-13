@@ -187,7 +187,6 @@ pub struct WorkspacePaths {
     pub audit_dir: PathBuf,
     pub job_runs_dir: PathBuf,
     pub logs_dir: PathBuf,
-    pub scoreboard_dir: PathBuf,
     pub worktrees_dir: PathBuf,
 }
 
@@ -215,7 +214,6 @@ impl WorkspacePaths {
             audit_dir: state_dir.join("audit"),
             job_runs_dir: state_dir.join("job-runs"),
             logs_dir: state_dir.join("logs"),
-            scoreboard_dir: state_dir.join("scoreboard"),
             worktrees_dir: state_dir.join("worktrees"),
             repo_root,
             orbit_dir,

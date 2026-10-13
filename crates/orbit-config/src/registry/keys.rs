@@ -74,6 +74,15 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
         "each candidate gets one review, so reviewer starts are no longer counted; \
      review.minutes bounds that review",
     ),
+    // [ORB-15922] The agent-family scoreboard was retired on 2026-10-13 and
+    // nothing records scoreboard metrics any more. Drop this entry after
+    // 2026-11-12, when the key becomes an ordinary unknown setting.
+    (
+        "scoring.enabled",
+        "deprecated and ignored: the agent-family scoreboard was retired and nothing records \
+     scoreboard metrics; delete the [scoring] table. This key stops being recognised after \
+     2026-11-12",
+    ),
 ];
 
 const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review settings live in \

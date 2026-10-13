@@ -108,7 +108,7 @@ fn a_store_opened_before_another_save_refuses_to_replace_it() {
 
     let mut first = open(&path);
     let mut second = open(&path);
-    set_key(&mut first, global, "scoring.enabled", "false");
+    set_key(&mut first, global, "workflow.auto_ship", "true");
     set_key(&mut second, global, "workflow.base_branch", "agent-main");
 
     first.save().expect("first save lands");
@@ -127,7 +127,7 @@ fn a_store_opened_before_another_save_refuses_to_replace_it() {
     );
 
     let config = roots.load();
-    assert!(!config.scoring_enabled, "first edit survives");
+    assert!(config.workflow_auto_ship, "first edit survives");
     assert_eq!(config.workflow_base_branch, "main");
 
     // Reapplied to the current file, the second edit keeps the first.
@@ -135,7 +135,7 @@ fn a_store_opened_before_another_save_refuses_to_replace_it() {
     set_key(&mut reopened, global, "workflow.base_branch", "agent-main");
     reopened.save().expect("reapplied save lands");
     let config = roots.load();
-    assert!(!config.scoring_enabled, "first edit still holds");
+    assert!(config.workflow_auto_ship, "first edit still holds");
     assert_eq!(config.workflow_base_branch, "agent-main");
 }
 
@@ -146,7 +146,7 @@ fn a_store_saves_again_after_its_own_save() {
     let global = roots.global.path();
 
     let mut store = open(&path);
-    set_key(&mut store, global, "scoring.enabled", "false");
+    set_key(&mut store, global, "workflow.auto_ship", "true");
     store.save().expect("first save");
     set_key(&mut store, global, "workflow.base_branch", "agent-main");
     store
@@ -154,7 +154,7 @@ fn a_store_saves_again_after_its_own_save() {
         .expect("its own earlier save is not someone else's edit");
 
     let config = roots.load();
-    assert!(!config.scoring_enabled);
+    assert!(config.workflow_auto_ship);
     assert_eq!(config.workflow_base_branch, "agent-main");
 }
 
@@ -167,7 +167,7 @@ fn plugin_toggle_and_config_writers_refuse_each_others_stale_saves() {
     // A config edit opened before a toggle write is refused...
     let mut config_writer = open(&path);
     let mut toggle_writer = open(&path);
-    set_key(&mut config_writer, global, "scoring.enabled", "false");
+    set_key(&mut config_writer, global, "workflow.auto_ship", "true");
     set_toggle(&mut toggle_writer, global, "alpha", false);
     toggle_writer.save().expect("toggle save lands");
     config_writer
@@ -192,7 +192,7 @@ fn plugin_toggle_and_config_writers_refuse_each_others_stale_saves() {
 
     let config = roots.load();
     assert_eq!(config.workflow_base_branch, "agent-main");
-    assert!(config.scoring_enabled, "the refused edit never landed");
+    assert!(!config.workflow_auto_ship, "the refused edit never landed");
     assert_eq!(roots.toggles().get("alpha"), Some(&false));
     assert_eq!(roots.toggles().get("beta"), None);
 }
@@ -209,7 +209,7 @@ fn writers_under_the_write_lock_serialize_and_keep_both_edits() {
     let (started_tx, started_rx) = mpsc::channel();
     let second = ConfigStore::with_write_lock(&path, || {
         let mut store = open(&path);
-        set_key(&mut store, &global, "scoring.enabled", "false");
+        set_key(&mut store, &global, "workflow.auto_ship", "true");
 
         let second = std::thread::spawn({
             let path = path.clone();
@@ -236,7 +236,7 @@ fn writers_under_the_write_lock_serialize_and_keep_both_edits() {
         .expect("second writer reads the first's save and lands");
 
     let config = roots.load();
-    assert!(!config.scoring_enabled, "first edit survives");
+    assert!(config.workflow_auto_ship, "first edit survives");
     assert_eq!(config.workflow_base_branch, "agent-main");
     assert_eq!(roots.toggles().get("alpha"), Some(&false));
 }

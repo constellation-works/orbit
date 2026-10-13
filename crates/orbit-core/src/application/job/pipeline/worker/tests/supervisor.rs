@@ -113,13 +113,6 @@ impl JobRunStoreBackend for ReadFaultStore {
         self.inner.list_job_run_durations_filtered(query)
     }
 
-    fn list_job_run_completions_filtered(
-        &self,
-        query: &JobRunQuery,
-    ) -> Result<Vec<JobRunCompletion>, OrbitError> {
-        self.inner.list_job_run_completions_filtered(query)
-    }
-
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         self.inner.list_pending_or_running_job_runs(job_id)
     }

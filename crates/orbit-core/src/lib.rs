@@ -117,8 +117,6 @@ pub mod test_support {
     }
 }
 
-// Store metric/scoreboard projections consumed by the dashboard's JSON API.
-pub use orbit_store::scoreboard_summary;
 pub use orbit_store::skill_store as skill_catalog;
 pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
 
@@ -166,7 +164,7 @@ pub use orbit_types::workflow::{
 };
 pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
-// the dashboard's incident, audit-summary, and scoreboard surfaces.
+// the dashboard's incident and audit-summary surfaces.
 pub use orbit_store::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
     FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,

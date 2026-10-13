@@ -1,5 +1,5 @@
-//! Audit-event aggregates: denials, tool-call counts, and per-tool, per-role
-//! and per-actor rollups.
+//! Audit-event aggregates: denials, tool-call attribution counts, and
+//! per-tool, per-role and per-actor rollups.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -10,50 +10,11 @@ use rusqlite::params;
 use crate::Store;
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate, AuditToolAggregate,
-    AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall,
 };
 
 use super::row::invalid_text;
 
 impl Store {
-    /// Returns `(role, denied_count)` for audit events with status='denied' and
-    /// `timestamp >= since`, ordered desc by count. Used to join SQLite-level
-    /// CLI denials onto the per-agent scoreboard.
-    pub fn get_audit_denials_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<(String, i64)>, OrbitError> {
-        let conn = self.read()?;
-
-        let sql = if since.is_some() {
-            "SELECT role, COUNT(*) FROM audit_events \
-             WHERE status = 'denied' AND timestamp >= ?1 \
-             GROUP BY role ORDER BY COUNT(*) DESC"
-        } else {
-            "SELECT role, COUNT(*) FROM audit_events \
-             WHERE status = 'denied' \
-             GROUP BY role ORDER BY COUNT(*) DESC"
-        };
-
-        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
-
-        let rows = if let Some(s) = since {
-            stmt.query_map(params![s.to_rfc3339()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(sqlite_store_error)?
-            .collect::<Result<Vec<_>, _>>()
-        } else {
-            stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(sqlite_store_error)?
-            .collect::<Result<Vec<_>, _>>()
-        };
-
-        rows.map_err(sqlite_store_error)
-    }
-
     /// Capability and policy decisions, counted once per invocation and operation.
     ///
     /// Authorization rows are the canonical capability decisions. Legacy tool
@@ -98,43 +59,8 @@ impl Store {
         .map_err(sqlite_store_error)
     }
 
-    pub fn get_audit_tool_call_counts_by_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<AuditToolCallCountsByRole>, OrbitError> {
-        let conn = self.read()?;
-
-        let sql = tool_call_counts_by_role_sql(since.is_some());
-
-        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
-
-        let rows = if let Some(s) = since {
-            stmt.query_map(params![s.to_rfc3339()], |row| {
-                Ok(AuditToolCallCountsByRole {
-                    role: row.get(0)?,
-                    total: row.get::<_, i64>(1)? as u64,
-                    failed: row.get::<_, i64>(2)? as u64,
-                })
-            })
-            .map_err(sqlite_store_error)?
-            .collect::<Result<Vec<_>, _>>()
-        } else {
-            stmt.query_map([], |row| {
-                Ok(AuditToolCallCountsByRole {
-                    role: row.get(0)?,
-                    total: row.get::<_, i64>(1)? as u64,
-                    failed: row.get::<_, i64>(2)? as u64,
-                })
-            })
-            .map_err(sqlite_store_error)?
-            .collect::<Result<Vec<_>, _>>()
-        };
-
-        rows.map_err(sqlite_store_error)
-    }
-
-    /// Per-(actor, attribution) counts for audited tool invocations, over the
-    /// same rows as [`Self::get_audit_tool_call_counts_by_role`] [ORB-10890].
+    /// Per-(actor, attribution) counts for audited tool invocations
+    /// (`command = 'tool'`, `run` or `run-mcp`, named tool) [ORB-10890].
     ///
     /// Each row is classified once, into exactly one of three disjoint
     /// buckets, so the three denominators the caller needs are all readable
@@ -216,96 +142,6 @@ impl Store {
             stmt.query_map([], map_row)
                 .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
-        };
-
-        rows.map_err(sqlite_store_error)
-    }
-
-    /// Per-(surface, role) tool call counts where `tool_name` matches
-    /// `orbit.<surface>.<verb>`. The surface segment is extracted with
-    /// SQLite string functions so we don't need a regex extension.
-    /// `failed` counts every non-`success` row (failure + denied) like
-    /// [`Self::get_audit_tool_call_counts_by_role`].
-    pub fn get_audit_tool_call_counts_by_surface_and_role(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<AuditToolCallCountsBySurfaceAndRole>, OrbitError> {
-        let conn = self.read()?;
-
-        let sql = tool_call_counts_by_surface_and_role_sql(since.is_some());
-
-        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
-
-        let rows = if let Some(s) = since {
-            stmt.query_map(params![s.to_rfc3339()], |row| {
-                Ok(AuditToolCallCountsBySurfaceAndRole {
-                    surface: row.get(0)?,
-                    role: row.get(1)?,
-                    total: row.get::<_, i64>(2)? as u64,
-                    failed: row.get::<_, i64>(3)? as u64,
-                })
-            })
-            .map_err(sqlite_store_error)?
-            .collect::<Result<Vec<_>, _>>()
-        } else {
-            stmt.query_map([], |row| {
-                Ok(AuditToolCallCountsBySurfaceAndRole {
-                    surface: row.get(0)?,
-                    role: row.get(1)?,
-                    total: row.get::<_, i64>(2)? as u64,
-                    failed: row.get::<_, i64>(3)? as u64,
-                })
-            })
-            .map_err(sqlite_store_error)?
-            .collect::<Result<Vec<_>, _>>()
-        };
-
-        rows.map_err(sqlite_store_error)
-    }
-
-    /// Top (role, tool_name) pairs by call count across the audit log,
-    /// limited to `orbit.*` tool names. The optional `since` filter, when
-    /// supplied, scopes the query to events at-or-after that timestamp.
-    /// `limit` caps the row count after sorting; `0` means no cap.
-    ///
-    /// Sort key: total DESC, then tool_name ASC, then role ASC for stable
-    /// output across runs.
-    pub fn get_audit_top_tool_calls(
-        &self,
-        since: Option<&DateTime<Utc>>,
-        limit: usize,
-    ) -> Result<Vec<AuditTopToolCall>, OrbitError> {
-        let conn = self.read()?;
-
-        let sql = top_tool_calls_sql(since.is_some(), limit > 0);
-
-        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
-
-        let map_row = |row: &rusqlite::Row<'_>| {
-            Ok(AuditTopToolCall {
-                tool_name: row.get(0)?,
-                role: row.get(1)?,
-                total: row.get::<_, i64>(2)? as u64,
-            })
-        };
-
-        let rows = match (since, limit) {
-            (Some(s), 0) => stmt
-                .query_map(params![s.to_rfc3339()], map_row)
-                .map_err(sqlite_store_error)?
-                .collect::<Result<Vec<_>, _>>(),
-            (Some(s), n) => stmt
-                .query_map(params![s.to_rfc3339(), n as i64], map_row)
-                .map_err(sqlite_store_error)?
-                .collect::<Result<Vec<_>, _>>(),
-            (None, 0) => stmt
-                .query_map([], map_row)
-                .map_err(sqlite_store_error)?
-                .collect::<Result<Vec<_>, _>>(),
-            (None, n) => stmt
-                .query_map(params![n as i64], map_row)
-                .map_err(sqlite_store_error)?
-                .collect::<Result<Vec<_>, _>>(),
         };
 
         rows.map_err(sqlite_store_error)
@@ -461,77 +297,3 @@ impl Store {
             .map_err(sqlite_store_error)
     }
 }
-
-fn tool_call_counts_by_role_sql(windowed: bool) -> &'static str {
-    if windowed {
-        "SELECT role, COUNT(*), \
-             COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-             FROM audit_events \
-             WHERE command = 'tool' \
-               AND subcommand IN ('run', 'run-mcp') \
-               AND tool_name IS NOT NULL \
-               AND timestamp >= ?1 \
-             GROUP BY role ORDER BY COUNT(*) DESC, role ASC"
-    } else {
-        "SELECT role, COUNT(*), \
-             COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-             FROM audit_events \
-             WHERE command = 'tool' \
-               AND subcommand IN ('run', 'run-mcp') \
-               AND tool_name IS NOT NULL \
-             GROUP BY role ORDER BY COUNT(*) DESC, role ASC"
-    }
-}
-
-fn tool_call_counts_by_surface_and_role_sql(windowed: bool) -> String {
-    // SUBSTR(tool_name, 7) strips the literal "orbit." prefix; the
-    // appended "." in the inner SUBSTR ensures INSTR finds a delimiter
-    // even for names with no third segment (e.g. "orbit.task" → surface
-    // "task"). The outer LIKE filter discards anything that does not
-    // start with "orbit." entirely.
-    let extract = "SUBSTR(tool_name, 7, INSTR(SUBSTR(tool_name, 7) || '.', '.') - 1)";
-    if windowed {
-        format!(
-            "SELECT {extract} AS surface, role, COUNT(*), \
-                 COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-                 FROM audit_events \
-                 WHERE command = 'tool' \
-                   AND subcommand IN ('run', 'run-mcp') \
-                   AND tool_name LIKE 'orbit.%' \
-                   AND timestamp >= ?1 \
-                 GROUP BY surface, role \
-                 ORDER BY surface ASC, COUNT(*) DESC, role ASC"
-        )
-    } else {
-        format!(
-            "SELECT {extract} AS surface, role, COUNT(*), \
-                 COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-                 FROM audit_events \
-                 WHERE command = 'tool' \
-                   AND subcommand IN ('run', 'run-mcp') \
-                   AND tool_name LIKE 'orbit.%' \
-                 GROUP BY surface, role \
-                 ORDER BY surface ASC, COUNT(*) DESC, role ASC"
-        )
-    }
-}
-
-fn top_tool_calls_sql(windowed: bool, limited: bool) -> String {
-    let base = "SELECT tool_name, role, COUNT(*) \
-                    FROM audit_events \
-                    WHERE command = 'tool' \
-                      AND subcommand IN ('run', 'run-mcp') \
-                      AND tool_name LIKE 'orbit.%'";
-    let order = "GROUP BY tool_name, role \
-                     ORDER BY COUNT(*) DESC, tool_name ASC, role ASC";
-    match (windowed, limited) {
-        (true, true) => format!("{base} AND timestamp >= ?1 {order} LIMIT ?2"),
-        (true, false) => format!("{base} AND timestamp >= ?1 {order}"),
-        (false, true) => format!("{base} {order} LIMIT ?1"),
-        (false, false) => format!("{base} {order}"),
-    }
-}
-
-#[cfg(test)]
-#[path = "tests/aggregates.rs"]
-mod tests;

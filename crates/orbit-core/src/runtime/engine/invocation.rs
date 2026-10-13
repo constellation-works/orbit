@@ -9,13 +9,13 @@ use orbit_store::contracts::{
     InvocationInsertParams, InvocationQuery, InvocationRecord, InvocationStoreBackend,
     ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
-use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
 use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::metrics::cost::{NormalizedTokenSummary, OrchestrationModelSummary};
 
-pub use orbit_store::scoreboard_summary::{
+pub use crate::metrics::cost::{
     OrchestrationBucketKind as OrchestratorMetricsBucketKind,
     OrchestrationBucketSummary as OrchestratorInvocationMetricsBucket,
 };
@@ -309,17 +309,6 @@ impl OrbitRuntime {
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
         open_invocation_store(self)?.list_provider_ledger_entries(provider_names, since)
-    }
-
-    /// Refreshes the read-side token scoreboard from persisted invocation telemetry.
-    ///
-    /// No-op when the invocation watermark matches the last successful write.
-    pub(crate) fn refresh_token_scoreboard(&self) -> Result<(), OrbitError> {
-        let store = open_invocation_store(self)?;
-        orbit_store::token_scoreboard::write_token_scoreboard(
-            &self.context.paths().scoreboard_dir,
-            store.as_ref(),
-        )
     }
 
     /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.

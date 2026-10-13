@@ -305,7 +305,6 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `ci_failure.operator_suppression_hours` | integer · **Default:** `6`<br>Hours an archived/rejected CI sweep finding without `covered_by` holds its exact failure key (0–720). Explicit task/PR covers hold while open or until a failing checkout contains the landed fix; operator holds report their owner and reason. |
 | `automation.stall_window_minutes` | integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
-| `scoring.enabled` | bool · **Default:** `true`<br>Record scoreboard metrics for task runs. |
 | `pr.close_on_terminal` | bool · **Default:** `true`<br>Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
 | `pr.delivery_authors` | array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal`. Empty means the login the forge CLI is authenticated as on this machine. |
 | `pr.task_url_template` | string · **Default:** Unset<br>URL template that links a task ID in PR descriptions. |

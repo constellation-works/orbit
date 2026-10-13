@@ -21,8 +21,8 @@ use super::queries::{
 use super::state::{compact_finished_state_conn, write_state_json_conn};
 use crate::Store;
 use crate::contracts::{
-    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunCompletion, JobRunFinalization,
-    JobRunQuery, JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
+    JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -355,14 +355,6 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError> {
         self.store
             .list_job_run_durations_for_workspace(&self.workspace_id, query)
-    }
-
-    fn list_job_run_completions_filtered(
-        &self,
-        query: &JobRunQuery,
-    ) -> Result<Vec<JobRunCompletion>, OrbitError> {
-        self.store
-            .list_job_run_completions_for_workspace(&self.workspace_id, query)
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
