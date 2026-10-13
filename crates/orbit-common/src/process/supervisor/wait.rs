@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::super::OwnedChild;
 use super::super::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
-use super::drain::{DrainStop, PipeFd, StopWatch, spawn_sink_drain, spawn_stdin_write};
+use super::drain::{DrainEvent, DrainStop, PipeFd, StopWatch, spawn_sink_drain, spawn_stdin_write};
 use super::seam;
 #[cfg(unix)]
 use super::signal_guard::SignalHandlerGuard;
@@ -20,6 +20,7 @@ const DEADLINE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 type StdinResultReceiver = Receiver<std::io::Result<()>>;
 type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
+type OutputWorker = Option<JoinHandle<std::io::Result<Vec<u8>>>>;
 
 /// A child under supervision, owned from the first setup operation until it
 /// is reaped. Dropping it unsupervised kills and reaps its process group.
@@ -168,9 +169,10 @@ impl SupervisedChild {
     /// its pipes within the drain budget, and report what happened.
     ///
     /// # Errors
-    /// Returns pipe, handler or wait setup failures and stdin write failures
-    /// other than a broken pipe. The child's group is killed, the child
-    /// reaped and every pipe worker finished before any error returns.
+    /// Returns pipe setup/read failures, handler or wait failures, output worker
+    /// panics and stdin write failures other than a broken pipe. The child's
+    /// group is killed, the child reaped and every pipe worker finished before
+    /// any error returns.
     pub fn supervise(mut self, run: Supervision<'_>) -> Result<Outcome, OrbitError> {
         let Supervision {
             stdin,
@@ -236,19 +238,27 @@ impl SupervisedChild {
         // on a full pipe buffer (which would prevent it from exiting).
         let (stdin_result_rx, stdin_thread) =
             spawn_stdin_thread(child.process.child_mut(), stdin, || drain_stop.watch())?;
-        // Each of the two drain threads reports a sink stop at most once.
-        let (sink_stop_tx, sink_stop_rx) = mpsc::sync_channel(2);
+        // Each drain reports either a sink stop or a capture failure once.
+        let (drain_event_tx, drain_event_rx) = mpsc::sync_channel(2);
+        #[cfg(all(test, unix))]
+        let pid = child.process.pid();
+        let output_watch = || {
+            let watch = drain_stop.watch();
+            #[cfg(all(test, unix))]
+            let watch = watch.with_output_failure(pid);
+            watch
+        };
         let stdout_thread = attach_stream(
             child.process.child_mut().stdout.take(),
             stdout,
-            sink_stop_tx.clone(),
-            || drain_stop.watch(),
+            drain_event_tx.clone(),
+            output_watch,
         );
         let stderr_thread = attach_stream(
             child.process.child_mut().stderr.take(),
             stderr,
-            sink_stop_tx,
-            || drain_stop.watch(),
+            drain_event_tx,
+            output_watch,
         );
 
         let mut next_periodic = every
@@ -266,11 +276,6 @@ impl SupervisedChild {
         // An error leaves the child to the cleanup below, so the pipe
         // workers are finished before it returns.
         let waited: Result<(bool, Option<i32>, bool, Option<i32>), OrbitError> = (|| loop {
-            #[cfg(all(test, unix))]
-            seam::inject_supervision_failure(
-                seam::SupervisionFailure::PipeRead,
-                child.process.pid(),
-            )?;
             // Check before waiting or another cancellation cause: registration
             // may have raced a signal before the handler could fan it out.
             #[cfg(unix)]
@@ -283,10 +288,19 @@ impl SupervisedChild {
                 child.process.kill_and_reap();
                 return Ok((false, None, false, None));
             }
-            if let Ok(cause) = sink_stop_rx.try_recv() {
-                end_group(&mut child.process, termination, termination_signal())?;
-                sink_stopped = Some(cause);
-                return Ok((false, None, false, None));
+            match drain_event_rx.try_recv() {
+                Ok(DrainEvent::SinkStop(cause)) => {
+                    end_group(&mut child.process, termination, termination_signal())?;
+                    sink_stopped = Some(cause);
+                    return Ok((false, None, false, None));
+                }
+                Ok(DrainEvent::CaptureFailed) => {
+                    // The joined worker below supplies the original I/O error.
+                    return Err(OrbitError::Execution(
+                        "process output capture failed".to_string(),
+                    ));
+                }
+                Err(_) => {}
             }
 
             if let Some(rx) = stdin_result_rx.as_ref() {
@@ -427,14 +441,13 @@ impl SupervisedChild {
             drain_budget
         };
         let drain_stopped = drain_stop.settle(drain_budget);
-        let stdout = stdout_thread
-            .map(|h| h.join().unwrap_or_default())
-            .unwrap_or_default();
-        let stderr = stderr_thread
-            .map(|h| h.join().unwrap_or_default())
-            .unwrap_or_default();
+        // Join all workers before propagating any of their errors.
+        let stdout = join_output(stdout_thread, "stdout");
+        let stderr = join_output(stderr_thread, "stderr");
         let stdin_thread_panicked = stdin_thread.map(|h| h.join().is_err()).unwrap_or(false);
 
+        let stdout = stdout?;
+        let stderr = stderr?;
         let (timed_out, interrupted_signal, mut success, exit_code) = waited?;
         if stdin_thread_panicked {
             return Err(OrbitError::Execution(
@@ -472,11 +485,12 @@ impl SupervisedChild {
         // stops sent while the child was exiting or the pipes were settling.
         // Truncated output must fail even if the child itself exited
         // successfully.
-        for cause in check_stopped
-            .into_iter()
-            .chain(sink_stopped)
-            .chain(sink_stop_rx.try_iter())
-        {
+        for cause in check_stopped.into_iter().chain(sink_stopped).chain(
+            drain_event_rx.try_iter().filter_map(|event| match event {
+                DrainEvent::SinkStop(cause) => Some(cause),
+                DrainEvent::CaptureFailed => None, // The joined result already checked this.
+            }),
+        ) {
             success = false;
             stop_causes.push(cause);
         }
@@ -589,10 +603,7 @@ impl<'a> Deadline<'a> {
     }
 }
 
-fn streams_finished(
-    stdout: &Option<JoinHandle<Vec<u8>>>,
-    stderr: &Option<JoinHandle<Vec<u8>>>,
-) -> bool {
+fn streams_finished(stdout: &OutputWorker, stderr: &OutputWorker) -> bool {
     stdout.as_ref().is_none_or(JoinHandle::is_finished)
         && stderr.as_ref().is_none_or(JoinHandle::is_finished)
 }
@@ -600,9 +611,9 @@ fn streams_finished(
 fn attach_stream<R>(
     pipe: Option<R>,
     stream: Stream,
-    stop_tx: mpsc::SyncSender<ProcessStopCause>,
+    event_tx: mpsc::SyncSender<DrainEvent>,
     watch: impl FnOnce() -> StopWatch,
-) -> Option<JoinHandle<Vec<u8>>>
+) -> OutputWorker
 where
     R: std::io::Read + PipeFd + Send + 'static,
 {
@@ -612,13 +623,23 @@ where
             None
         }
         Stream::Sink(sink) => match pipe {
-            Some(pipe) => Some(spawn_sink_drain(pipe, sink, stop_tx, watch())),
+            Some(pipe) => Some(spawn_sink_drain(pipe, sink, event_tx, watch())),
             None => {
                 sink.finish();
                 None
             }
         },
     }
+}
+
+fn join_output(worker: OutputWorker, stream: &str) -> Result<Vec<u8>, OrbitError> {
+    let Some(worker) = worker else {
+        return Ok(Vec::new());
+    };
+    worker
+        .join()
+        .map_err(|_| OrbitError::Execution(format!("{stream} capture thread panicked")))?
+        .map_err(|err| OrbitError::Execution(format!("failed to capture process {stream}: {err}")))
 }
 
 fn spawn_stdin_thread(

@@ -50,8 +50,10 @@ pub struct CapturedOutput {
 ///
 /// # Errors
 ///
-/// Returns [`OrbitError::Execution`] when the process cannot be spawned or
-/// waited on, and [`OrbitError::ProcessTimeout`] when `deadline` elapses first.
+/// Returns [`OrbitError::Execution`] when spawning, waiting or output capture
+/// fails, and [`OrbitError::ProcessTimeout`] when `deadline` elapses first.
+/// Capture failures return only after group cleanup and all pipe workers join;
+/// intentional prefix truncation is still a successful capture.
 pub fn run_bounded(
     command: &mut Command,
     deadline: Duration,
@@ -83,8 +85,8 @@ pub enum BoundedRunError {
     /// [`io::ErrorKind`], so a caller can retry `ExecutableFileBusy` or tell
     /// "program missing" from "permission denied".
     Spawn(io::Error),
-    /// The child started, then waiting for it failed or the deadline elapsed
-    /// ([`OrbitError::ProcessTimeout`]).
+    /// The child started, then waiting or output capture failed, or the deadline
+    /// elapsed ([`OrbitError::ProcessTimeout`]).
     Run(OrbitError),
 }
 

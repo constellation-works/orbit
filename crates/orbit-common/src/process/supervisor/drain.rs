@@ -59,6 +59,8 @@ impl Drop for StopSignal {
 
 /// Worker half of the drain bound; dropping it reports the worker finished.
 pub(super) struct StopWatch {
+    #[cfg(all(test, unix))]
+    output_failure: Option<super::seam::OutputFailure>,
     #[cfg(unix)]
     stopped: Arc<AtomicBool>,
     #[cfg(unix)]
@@ -93,6 +95,8 @@ impl DrainStop {
 
     pub(super) fn watch(&self) -> StopWatch {
         StopWatch {
+            #[cfg(all(test, unix))]
+            output_failure: None,
             #[cfg(unix)]
             stopped: Arc::clone(&self.stop.stopped),
             #[cfg(unix)]
@@ -126,6 +130,21 @@ impl DrainStop {
     }
 }
 
+#[cfg(all(test, unix))]
+impl StopWatch {
+    pub(super) fn with_output_failure(mut self, pid: u32) -> Self {
+        self.output_failure = super::seam::OutputFailure::take(pid);
+        self
+    }
+
+    fn inject(&mut self, point: super::seam::SupervisionFailure) -> io::Result<()> {
+        match self.output_failure.as_mut() {
+            Some(failure) => failure.inject(point),
+            None => Ok(()),
+        }
+    }
+}
+
 #[cfg(unix)]
 fn wakeup_pair() -> io::Result<(UnixStream, UnixStream)> {
     if super::seam::no_wakeup_pair() {
@@ -144,76 +163,95 @@ pub(super) trait PipeFd {}
 #[cfg(not(unix))]
 impl<T> PipeFd for T {}
 
-/// Drain a child stream into `sink` until EOF, the sink closing or stopping
-/// the run, or the drain bound stopping the worker. A stop is reported once on
-/// `stop_tx`. The worker finishes the sink, so a relay closes and an echo
-/// flushes before the supervisor joins it.
+/// An output worker reports at most one event before it finishes.
+pub(super) enum DrainEvent {
+    SinkStop(ProcessStopCause),
+    CaptureFailed,
+}
+
+/// Drain until EOF, a sink stop or the drain bound. Report capture failures
+/// promptly, retaining their I/O error for the join. Always finish the sink,
+/// so a relay closes and an echo flushes even after an I/O error.
 pub(super) fn spawn_sink_drain<R>(
     mut reader: R,
     mut sink: Box<dyn OutputSink>,
-    stop_tx: SyncSender<ProcessStopCause>,
-    stop: StopWatch,
-) -> JoinHandle<Vec<u8>>
+    event_tx: SyncSender<DrainEvent>,
+    mut stop: StopWatch,
+) -> JoinHandle<io::Result<Vec<u8>>>
 where
     R: Read + PipeFd + Send + 'static,
 {
     thread::spawn(move || {
-        pump(&mut reader, &stop, |bytes| match sink.push(bytes) {
+        let result = pump(&mut reader, &mut stop, |bytes| match sink.push(bytes) {
             SinkVerdict::Continue => false,
             SinkVerdict::Close => true,
             SinkVerdict::Stop(cause) => {
-                let _ = stop_tx.send(cause);
+                let _ = event_tx.send(DrainEvent::SinkStop(cause));
                 true
             }
         });
-        sink.finish()
+        if result.is_err() {
+            let _ = event_tx.send(DrainEvent::CaptureFailed);
+        }
+        let bytes = sink.finish();
+        result.map(|()| bytes)
     })
 }
 
-/// Feed `reader` into `sink` until EOF, a read error, `sink` returning `true`,
-/// or `stop` firing. On stop, the bytes the pipe already buffers are still
-/// read (without waiting for more), so output written before the stop is kept.
+/// Feed `reader` into `sink` until EOF, `sink` returning `true`, or `stop`
+/// firing. On stop, read only bytes already buffered, so a holder that keeps
+/// writing cannot extend the bound. Setup, readiness and read errors survive.
 #[cfg(unix)]
-fn pump<R: Read + AsFd>(reader: &mut R, stop: &StopWatch, mut sink: impl FnMut(&[u8]) -> bool) {
-    if set_nonblocking(reader.as_fd()).is_err() {
-        return;
-    }
+fn pump<R: Read + AsFd>(
+    reader: &mut R,
+    stop: &mut StopWatch,
+    mut sink: impl FnMut(&[u8]) -> bool,
+) -> io::Result<()> {
+    #[cfg(test)]
+    stop.inject(super::seam::SupervisionFailure::PipeSetup)?;
+    set_nonblocking(reader.as_fd())?;
     let mut chunk = [0u8; 8192];
     loop {
-        match wait_ready(reader.as_fd(), libc::POLLIN, stop) {
-            Ok(Ready::Io) => {}
-            Ok(Ready::Stopped) => {
-                read_buffered(reader, &mut chunk, sink);
-                return;
-            }
-            Err(_) => return,
+        match wait_ready(reader.as_fd(), libc::POLLIN, stop)? {
+            Ready::Io => {}
+            Ready::Stopped => return read_buffered(reader, &mut chunk, sink),
         }
-        match reader.read(&mut chunk) {
-            Ok(0) => return,
+        #[cfg(test)]
+        let read = stop
+            .inject(super::seam::SupervisionFailure::PipeRead)
+            .and_then(|()| reader.read(&mut chunk));
+        #[cfg(not(test))]
+        let read = reader.read(&mut chunk);
+        match read {
+            Ok(0) => return Ok(()),
             Ok(n) => {
                 if sink(&chunk[..n]) {
-                    return;
+                    return Ok(());
                 }
             }
             Err(err) if is_retry(&err) => {}
-            Err(_) => return,
+            Err(err) => return Err(err),
         }
     }
 }
 
 #[cfg(not(unix))]
-fn pump<R: Read>(reader: &mut R, _stop: &StopWatch, mut sink: impl FnMut(&[u8]) -> bool) {
+fn pump<R: Read>(
+    reader: &mut R,
+    _stop: &mut StopWatch,
+    mut sink: impl FnMut(&[u8]) -> bool,
+) -> io::Result<()> {
     let mut chunk = [0u8; 8192];
     loop {
         match reader.read(&mut chunk) {
-            Ok(0) => return,
+            Ok(0) => return Ok(()),
             Ok(n) => {
                 if sink(&chunk[..n]) {
-                    return;
+                    return Ok(());
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return,
+            Err(err) => return Err(err),
         }
     }
 }
@@ -225,22 +263,24 @@ fn read_buffered<R: Read + AsFd>(
     reader: &mut R,
     chunk: &mut [u8],
     mut sink: impl FnMut(&[u8]) -> bool,
-) {
-    let mut remaining = buffered_len(reader.as_fd());
+) -> io::Result<()> {
+    let mut remaining = buffered_len(reader.as_fd())?;
     while remaining > 0 {
         let want = remaining.min(chunk.len());
         match reader.read(&mut chunk[..want]) {
-            Ok(0) => return,
+            Ok(0) => return Ok(()),
             Ok(n) => {
                 remaining = remaining.saturating_sub(n);
                 if sink(&chunk[..n]) {
-                    return;
+                    return Ok(());
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return,
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(err) => return Err(err),
         }
     }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -300,14 +340,14 @@ fn wait_ready(fd: BorrowedFd<'_>, events: libc::c_short, stop: &StopWatch) -> io
 }
 
 #[cfg(unix)]
-fn buffered_len(fd: BorrowedFd<'_>) -> usize {
+fn buffered_len(fd: BorrowedFd<'_>) -> io::Result<usize> {
     let mut available: libc::c_int = 0;
     // SAFETY: FIONREAD writes one `c_int` through a valid pointer.
     let rc = unsafe { libc::ioctl(fd.as_raw_fd(), libc::FIONREAD, &mut available) };
     if rc < 0 {
-        return 0;
+        return Err(io::Error::last_os_error());
     }
-    usize::try_from(available).unwrap_or(0)
+    usize::try_from(available).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 #[cfg(unix)]
