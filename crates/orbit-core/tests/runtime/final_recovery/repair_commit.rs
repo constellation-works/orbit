@@ -32,7 +32,11 @@ fn git(fixture: &Fixture, args: &[&str]) -> String {
 }
 
 fn fixture() -> Fixture {
-    let mut fixture = Fixture::new_with_required_commands(&["true"]);
+    fixture_with_command("true")
+}
+
+fn fixture_with_command(command: &str) -> Fixture {
+    let mut fixture = Fixture::new_with_required_commands(&[command]);
     let path = fixture.repo.join(".orbit/config.toml");
     let config = std::fs::read_to_string(&path).unwrap().replace(
         "default_crew = \"reviewers\"",
@@ -76,6 +80,9 @@ fn fixture() -> Fixture {
 
 struct RepairPipeline<'a> {
     fixture: &'a Fixture,
+    repair: &'static str,
+    decisions: Mutex<usize>,
+    validation_heads: Mutex<Vec<(String, String)>>,
     admissions: Mutex<Vec<Value>>,
     commits: Mutex<Vec<Value>>,
     validations: Mutex<Vec<Value>>,
@@ -118,11 +125,29 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         context: ToolContext,
     ) -> Result<Value, DispatchError> {
         match action {
-            "setup" => Ok(self.fixture.input.clone()),
+            "setup" => {
+                let mut output = self.fixture.input.clone();
+                if self.repair == "foreign-root" {
+                    let nested = self.fixture.repo.join("nested");
+                    std::fs::create_dir(&nested).unwrap();
+                    output["workspace_path"] = json!(nested);
+                } else if self.repair == "unrelated-base" {
+                    output["base_sha"] = json!(git(
+                        self.fixture,
+                        &["commit-tree", "HEAD^{tree}", "-m", "unrelated root"]
+                    ));
+                }
+                Ok(output)
+            }
+            "pin_review" => Ok(if self.repair == "settled-review" {
+                json!({"reviewed_head_sha": git(self.fixture, &["rev-parse", "HEAD"])})
+            } else {
+                json!({"applies": true, "attempt_id": "admitted", "head_sha": git(self.fixture, &["rev-parse", "HEAD"])})
+            }),
             "review_report" => {
                 let admissions = self.admissions.lock().unwrap();
                 let admission = admissions.last().unwrap();
-                let verdict = if admissions.len() == 1 {
+                let verdict = if self.repair == "committed" && admissions.len() == 1 {
                     "reject"
                 } else {
                     "accept"
@@ -134,15 +159,45 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         "id": "F1", "severity": "high", "summary": "Candidate needs repair",
                         "paths": ["candidate.txt"], "disposition": {"kind": "open"},
                     }]) } else { json!([]) },
-                    "validation": [{"id": "V1", "command": "true", "outcome": "passed", "role": "required"}],
+                    "validation": [{"id": "V1", "command": self.fixture.runtime.required_validation_commands()[0], "outcome": "passed", "role": "required"}],
                     "escalation": if verdict == "reject" { Some("Repair F1") } else { None },
                 }));
                 Ok(json!({"verdict": verdict}))
             }
             "decide" => {
+                *self.decisions.lock().unwrap() += 1;
+                if self.repair != "committed" {
+                    assert_eq!(input["failed_step_id"], "validate");
+                    self.validation_heads.lock().unwrap().push((
+                        git(self.fixture, &["rev-parse", "HEAD"]),
+                        git(self.fixture, &["status", "--porcelain"]),
+                    ));
+                }
                 std::fs::write(self.fixture.repo.join("candidate.txt"), "repaired\n").unwrap();
-                git(self.fixture, &["add", "candidate.txt"]);
-                git(self.fixture, &["commit", "-m", "repair rejected candidate"]);
+                match self.repair {
+                    "committed" => {
+                        git(self.fixture, &["add", "candidate.txt"]);
+                        git(self.fixture, &["commit", "-m", "repair rejected candidate"]);
+                    }
+                    "protected" => {
+                        std::fs::write(self.fixture.repo.join(".env"), "TOKEN=x\n").unwrap()
+                    }
+                    #[cfg(unix)]
+                    "symlink" => {
+                        std::os::unix::fs::symlink("candidate.txt", self.fixture.repo.join("link"))
+                            .unwrap()
+                    }
+                    "foreign-branch" => {
+                        git(self.fixture, &["checkout", "-b", "foreign"]);
+                    }
+                    "foreign-head" => {
+                        git(
+                            self.fixture,
+                            &["commit", "--allow-empty", "-m", "foreign head"],
+                        );
+                    }
+                    _ => {}
+                }
                 // Deliberately name settlement: the engine must rewind far
                 // enough to admit a fresh reviewer for this repair.
                 Ok(
@@ -175,6 +230,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
             self.commits.lock().unwrap().push(output.clone());
         } else if step_id == "validate" {
             self.validations.lock().unwrap().push(output.clone());
+            self.validation_heads.lock().unwrap().push((
+                output["tested_head"].as_str().unwrap().into(),
+                git(self.fixture, &["status", "--porcelain"]),
+            ));
         }
         self.fixture
             .runtime
@@ -202,7 +261,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
     }
 }
 
-fn job(fixture: &Fixture) -> JobV2 {
+fn job(fixture: &Fixture, repair: &str) -> JobV2 {
     let mut input = fixture.input.clone();
     input["admission"] = json!("{{ steps.review_gate_admit.output }}");
     let step = |id: &str, action: &str| {
@@ -219,6 +278,21 @@ fn job(fixture: &Fixture) -> JobV2 {
             step("review", "review_report"), step("review_gate_settle", "review_gate_settle"),
         ]},
     }).to_string()).unwrap().spec;
+    if matches!(repair, "reviewed" | "settled-review") {
+        let mut pin = job.steps[0].clone();
+        pin.id = "pin_review".into();
+        let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) = &mut pin.body
+        else {
+            unreachable!()
+        };
+        let orbit_types::workflow::activity_job::ActivityV2Spec::Deterministic(spec) =
+            &mut target.spec
+        else {
+            unreachable!()
+        };
+        spec.action = "pin_review".into();
+        job.steps.insert(2, pin);
+    }
     job.final_recovery_activity = Some("decide".into());
     job.resolved_final_recovery_activity = Some(
         load_activity_asset(
@@ -235,10 +309,19 @@ fn job(fixture: &Fixture) -> JobV2 {
     job
 }
 
-fn recover(fixture: &Fixture) {
+fn run_pipeline<'a>(
+    fixture: &'a Fixture,
+    repair: &'static str,
+) -> (
+    RepairPipeline<'a>,
+    Result<orbit_engine::JobOutcome, DispatchError>,
+) {
     let run = fixture.input["job_run_id"].as_str().unwrap();
     let host = RepairPipeline {
         fixture,
+        repair,
+        decisions: Mutex::new(0),
+        validation_heads: Mutex::new(Vec::new()),
         admissions: Mutex::new(Vec::new()),
         commits: Mutex::new(Vec::new()),
         validations: Mutex::new(Vec::new()),
@@ -259,7 +342,50 @@ fn recover(fixture: &Fixture) {
         .unwrap()
         .input
         .unwrap();
-    let outcome = execute_job_with_resume(&job(fixture), input, run, audit, &host, None).unwrap();
+    let mut resume = None;
+    if matches!(repair, "no-diff" | "foreign-task") {
+        // Exercise authoritative checkpoint refusals without changing task
+        // policy or teaching the deterministic commit action a fixture hook.
+        let mut committed = orbit_engine::execute_deterministic_action(
+            &fixture.runtime,
+            "git_commit",
+            &json!({}),
+            &fixture.input,
+            false,
+            &Default::default(),
+            None,
+        )
+        .unwrap();
+        if repair == "no-diff" {
+            committed["skipped_no_diff_expected"] = json!(true);
+        } else {
+            committed["task_id"] = json!("unrelated-task");
+        }
+        host.commits.lock().unwrap().push(committed.clone());
+        let mut state = PipelineState::new(run.into(), "recovery_repair".into(), input.clone());
+        for (index, output) in [(0, fixture.input.clone()), (1, committed)] {
+            state
+                .step_states
+                .insert(index, orbit_types::workflow::JobRunState::Success);
+            state.step_outputs.insert(index, output);
+        }
+        resume = Some(state);
+    }
+    let outcome = execute_job_with_resume(
+        &job(fixture, repair),
+        input,
+        run,
+        audit,
+        &host,
+        resume.as_ref(),
+    );
+    (host, outcome)
+}
+
+fn recover(fixture: &Fixture) {
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let (host, outcome) = run_pipeline(fixture, "committed");
+    let outcome = outcome.unwrap();
     assert!(outcome.success, "{outcome:?}");
     let commits = host.commits.lock().unwrap();
     assert_eq!(commits.len(), 2);
@@ -317,6 +443,77 @@ fn recover(fixture: &Fixture) {
 
 fn final_recovery_repair_commit_gets_a_fresh_before_pr_review() {
     recover(&fixture());
+
+    // The provider only edits files, as in the read-only Git sandbox. A real
+    // required command fails on the implementation and passes on the base.
+    // Recovery must adopt its repair before the real validator runs again.
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let (host, outcome) = run_pipeline(&fixture, "files");
+    let outcome = outcome.unwrap();
+    assert!(outcome.success, "{outcome:?}");
+    assert_eq!(
+        *host.decisions.lock().unwrap(),
+        1,
+        "F2026-10-345: no second recovery invocation to adopt dirty files"
+    );
+    let heads = host.validation_heads.lock().unwrap();
+    assert_eq!(
+        heads.len(),
+        2,
+        "both candidate heads reach committed-candidate validation"
+    );
+    assert_ne!(heads[0].0, heads[1].0);
+    assert!(heads.iter().all(|(_, status)| status.is_empty()));
+    assert_eq!(
+        git(&fixture, &["rev-parse", &format!("{}^", heads[1].0)]),
+        heads[0].0
+    );
+    let commits = host.commits.lock().unwrap();
+    assert_eq!(
+        commits.len(),
+        2,
+        "the repair reruns the guarded commit boundary"
+    );
+    assert_eq!(commits[1]["decision"], "already_committed");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let state = fixture.runtime.read_run_state(run).unwrap().unwrap();
+    let checkpoint = state.final_recovery.unwrap();
+    assert!(
+        matches!(checkpoint.decision, Some(FinalRecoveryDecision::Resume { ref step_id, .. }) if step_id == "commit")
+    );
+    let repair = checkpoint.repair_commit.unwrap();
+    assert_eq!(repair.workspace_path, fixture.repo.canonicalize().unwrap());
+    assert_eq!(repair.head_sha_before, heads[0].0);
+    assert_eq!(repair.head_sha, heads[1].0);
+    assert_eq!(
+        host.validations.lock().unwrap()[0]["tested_head"],
+        repair.head_sha
+    );
+    let admissions = host.admissions.lock().unwrap();
+    assert_eq!(
+        admissions.len(),
+        1,
+        "the new head requires review admission"
+    );
+    assert_eq!(admissions[0]["head_sha"], repair.head_sha);
+    let manifest: ReviewManifest = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, "review-manifest.json")
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    assert_eq!(manifest.candidate.commit, repair.head_sha);
+    assert_eq!(outcome.pipeline["review_gate_settle"]["gate"], "passed");
+    let message = git(&fixture, &["show", "-s", "--format=%B", &repair.head_sha]);
+    assert!(
+        message.contains(&format!("Orbit-Recovery-Run: {run}"))
+            && message.contains("Orbit-Recovery-Step: validate")
+            && message.contains("Orbit-Recovery-Activity: decide"),
+        "host adoption keeps recovery provenance: {message}"
+    );
 }
 
 fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
@@ -341,6 +538,83 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
         assert!(
             error.to_string().contains("worktree_head_changed"),
             "unrecorded HEAD changes fail even after a recorded recovery: {error}"
+        );
+    }
+
+    for (case, reason) in [
+        ("protected", "protected_path"),
+        #[cfg(unix)]
+        ("symlink", "outside_footprint"),
+        ("no-diff", "no_diff_route"),
+        ("reviewed", "reviewed_candidate"),
+        ("settled-review", "reviewed_candidate"),
+        ("foreign-task", "uncommittable"),
+        ("foreign-root", "uncommittable"),
+        ("foreign-branch", "uncommittable"),
+        ("foreign-head", "uncommittable"),
+        ("unrelated-base", "uncommittable"),
+    ] {
+        let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+        let (host, outcome) = run_pipeline(&fixture, case);
+        assert!(outcome.is_err(), "{case}: {outcome:?}");
+        assert_eq!(
+            *host.decisions.lock().unwrap(),
+            1,
+            "{case}: recovery stays bounded"
+        );
+        assert_eq!(
+            host.validation_heads.lock().unwrap().len(),
+            1,
+            "{case}: refused repairs never reach validation"
+        );
+        assert_eq!(
+            host.commits.lock().unwrap().len(),
+            1,
+            "{case}: no commit retry"
+        );
+        assert!(
+            host.admissions.lock().unwrap().is_empty(),
+            "{case}: no review admission"
+        );
+        assert_eq!(
+            git(&fixture, &["diff", "--cached", "--name-only"]),
+            "",
+            "{case}: index unchanged"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.repo.join("candidate.txt")).unwrap(),
+            "repaired\n",
+            "{case}: preserve the refused files"
+        );
+        let initial = host.validation_heads.lock().unwrap()[0].0.clone();
+        if case != "foreign-head" {
+            assert_eq!(
+                git(&fixture, &["rev-parse", "HEAD"]),
+                initial,
+                "{case}: no adoption commit"
+            );
+        } else {
+            assert_eq!(
+                git(&fixture, &["rev-parse", "HEAD^"]),
+                initial,
+                "{case}: only the scripted foreign commit exists"
+            );
+        }
+        let run = fixture.input["job_run_id"].as_str().unwrap();
+        let checkpoint = fixture
+            .runtime
+            .read_run_state(run)
+            .unwrap()
+            .unwrap()
+            .final_recovery
+            .unwrap();
+        assert!(
+            checkpoint.repair_commit.is_none(),
+            "{case}: no authority for a moved head"
+        );
+        assert!(
+            matches!(checkpoint.decision, Some(FinalRecoveryDecision::Escalate { ref diagnosis, .. }) if diagnosis.contains(&format!("recovery_commit_refused:{reason}:"))),
+            "{case}: durable refusal: {checkpoint:?}"
         );
     }
 }

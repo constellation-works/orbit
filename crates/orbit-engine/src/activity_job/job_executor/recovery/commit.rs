@@ -1,5 +1,4 @@
-//! [ORB-14822] The host commits a step recovery's working-tree repair before
-//! the post-recovery attempt.
+//! The host commits a recovery's working-tree repair before retry or resume.
 //!
 //! The recovery sandbox keeps Git metadata read-only, so an agent repairing a
 //! step that runs on the committed candidate (`validate`, branch preparation,
@@ -12,7 +11,9 @@ use crate::executor::automation::vcs::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };
 
+use super::super::final_recovery::RunWorktree;
 use super::*;
+use crate::executor::automation::vcs::git::{git_command_success, git_output};
 
 /// Commit what `recovery` left in the worktree when the failed step runs on
 /// a committed candidate. Nothing happens before the candidate's commit or
@@ -27,6 +28,18 @@ pub(super) fn commit_recovery_repair_for_retry(
     if !matches!(deterministic_action(step), Some(action) if action != "git_commit") {
         return Ok(());
     }
+    commit_recovery_repair_after_commit(step, ctx, recovery, bound)
+}
+
+/// Shared adoption boundary for step retry and final-recovery resume. The
+/// final hook may fail in an agent phase, but must still judge file repairs
+/// against the committed candidate's no-diff and review checkpoints.
+pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    recovery: &ResolvedRecoveryActivity,
+    bound: &Value,
+) -> Result<(), RecoveryCommitRefusal> {
     let pipeline = ctx.pipeline_snapshot();
     let outputs = pipeline
         .values()
@@ -94,7 +107,7 @@ pub(super) fn commit_recovery_repair_for_retry(
                 recovery_activity = %recovery.name,
                 commit_sha = %commit_sha,
                 paths = ?paths,
-                "committed the step recovery's repair before the post-recovery attempt"
+                "committed the recovery repair before retry or resume"
             );
             Ok(())
         }
@@ -105,7 +118,7 @@ pub(super) fn commit_recovery_repair_for_retry(
                 failed_step_id = %step.id,
                 recovery_activity = %recovery.name,
                 reason = refusal.code(),
-                "refused to commit the step recovery's repair; no post-recovery attempt"
+                "refused to commit the recovery repair; no retry or resume"
             );
             Err(refusal)
         }
@@ -120,4 +133,71 @@ fn deterministic_action(step: &JobV2Step) -> Option<&str> {
         }) => Some(spec.action.as_str()),
         _ => None,
     }
+}
+
+/// Adopt only file edits to the exact checkout, branch and candidate the
+/// engine handed to final recovery. The ordinary commit boundary still owns
+/// repairs before commit; committed candidates use the existing host repair
+/// guards before any index mutation, then the recorded head rewinds delivery.
+pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    activity: &ResolvedRecoveryActivity,
+    commit_step: &JobV2Step,
+    task_id: &str,
+    worktree: &RunWorktree,
+    source_before: Option<(&std::path::Path, &str, &str)>,
+) -> Result<(), RecoveryCommitRefusal> {
+    let pipeline = ctx.pipeline_snapshot();
+    let Some(checkpoint) = pipeline
+        .get(&commit_step.id)
+        .map(unwrap_step_output)
+        .filter(|output| output.get("phase").and_then(Value::as_str) == Some("commit"))
+    else {
+        return Ok(());
+    };
+    let refused = |detail: &str| RecoveryCommitRefusal::Uncommittable(detail.into());
+    let root = std::path::Path::new(&worktree.workspace_path);
+    let output = |args: &[&str]| {
+        git_output(root, args)
+            .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
+    };
+    if output(&["status", "--porcelain"])?.is_empty() {
+        return Ok(());
+    }
+    let (root_before, head_before, branch_before) = source_before
+        .ok_or_else(|| refused("final recovery has no observed checkout, candidate or branch"))?;
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| refused(&error.to_string()))?;
+    let git_root = std::path::PathBuf::from(output(&["rev-parse", "--show-toplevel"])?);
+    if root_before != canonical.as_path()
+        || git_root != canonical
+        || checkpoint.get("task_id").and_then(Value::as_str) != Some(task_id)
+        || head_before != output(&["rev-parse", "--verify", "HEAD^{commit}"])?.as_str()
+        || branch_before != output(&["symbolic-ref", "--quiet", "HEAD"])?.as_str()
+    {
+        return Err(refused(
+            "final recovery file repair no longer matches its assigned checkout, task, branch or candidate",
+        ));
+    }
+    let base = worktree
+        .base_sha
+        .as_deref()
+        .ok_or_else(|| refused("final recovery has no pinned base for its file repair"))?;
+    if !git_command_success(root, &["merge-base", "--is-ancestor", base, head_before])
+        .map_err(|error| refused(&error.to_string()))?
+    {
+        return Err(refused(
+            "final recovery candidate does not descend from its pinned base",
+        ));
+    }
+    commit_recovery_repair_after_commit(
+        step,
+        ctx,
+        activity,
+        &serde_json::json!({
+            "task_id": task_id, "workspace_path": worktree.workspace_path,
+        }),
+    )
 }

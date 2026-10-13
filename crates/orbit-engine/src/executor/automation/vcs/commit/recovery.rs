@@ -1,10 +1,10 @@
-//! Committing a step recovery's working-tree repair on the host [ORB-14822].
+//! Committing a recovery's working-tree repair on the host.
 //!
 //! The recovery sandbox mounts the worktree's Git metadata read-only, so a
 //! recovery agent can repair files but never commit them. When the recovered
-//! step runs after the candidate was committed, Orbit commits the repair as
-//! the new candidate head before the post-recovery attempt, which reruns the
-//! step on that head. The repair passes the same path checks owner footprint
+//! retry or final resume follows a committed candidate, Orbit commits the
+//! repair as the new head before validation reruns. The repair passes the same
+//! path checks owner footprint
 //! widening applies; a repair that fails one is refused before the index is
 //! touched.
 
@@ -173,7 +173,7 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
     };
     format!(
         "fix: repair failed `{step}` step from recovery{markers}\n\n\
-         Step recovery repaired the working tree with Git metadata read-only; Orbit \
+         Recovery repaired the working tree with Git metadata read-only; Orbit \
          committed the repair and retries `{step}` on this commit.\n\n\
          Orbit-Recovery-Run: {run}\n\
          Orbit-Recovery-Step: {step}\n\
