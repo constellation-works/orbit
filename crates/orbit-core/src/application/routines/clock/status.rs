@@ -132,6 +132,7 @@ pub(super) fn clock_status_with(
         _ => status_output.success,
     };
     let mut manager_details = None;
+    let mut enabled_unschedulable_warning = false;
     let (mut schedulable, mut health_issue) = if platform == ClockPlatform::Systemd {
         match query_systemd_clock_details(runner) {
             Ok(details) => {
@@ -158,6 +159,7 @@ pub(super) fn clock_status_with(
                 } else if schedulable {
                     (true, None)
                 } else {
+                    enabled_unschedulable_warning = true;
                     (
                         false,
                         Some(
@@ -195,7 +197,9 @@ pub(super) fn clock_status_with(
             systemd_schedulability_with_health(runner, manager_details.as_ref(), now_usec);
         if service_schedulable {
             schedulable = true;
-            health_issue = None;
+            if enabled_unschedulable_warning {
+                health_issue = None;
+            }
         }
         if let Some(issue) = service_issue {
             schedulable = false;
