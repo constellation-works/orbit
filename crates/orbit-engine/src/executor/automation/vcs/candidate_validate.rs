@@ -55,7 +55,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
 use super::baseline::{
-    BaselineCheck, baseline_red_failure, candidate_failure, compare_with_base,
+    BaselineCheck, baseline_red_failure, candidate_failure, compare_candidate_with_base,
     run_validation_command,
 };
 use super::claim::{
@@ -165,7 +165,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             .filter(|_| {
                 !run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none()
             })
-            .map(|base| compare_with_base(host, &workspace_path, base, command, run.selection()));
+            .map(|base| compare_candidate_with_base(host, &workspace_path, base, &run));
         let log_path = format!("validation/{run_id}/{index}.json");
         let baseline_path = baseline
             .as_ref()

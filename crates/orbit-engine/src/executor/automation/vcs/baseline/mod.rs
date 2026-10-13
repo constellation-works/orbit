@@ -8,10 +8,12 @@
 //! required command through [`run_validation_command`], which reruns a
 //! network-inconclusive failure (curl status `000`, DNS, a TLS timeout) up to
 //! [`NETWORK_RETRIES`] times with backoff, and judge a failure that survives
-//! through [`compare_with_base`]:
+//! through [`compare_candidate_with_base`]:
 //!
 //! - the command is rerun on the candidate's synchronized base in a clean,
-//!   detached worktree of that commit, under the managed worktree root and
+//!   detached worktree of that commit (a conclusive comparable full cache
+//!   is reused first; otherwise identified non-timeout test failures replay
+//!   alone with executed-identity proof), under the managed worktree root and
 //!   never inside the Git common directory, whose Linux protection scan
 //!   refuses the symlinks a checkout can hold;
 //! - the base result is cached in the repository's Git common directory per
@@ -73,7 +75,8 @@ pub(super) use command::{
 pub use compare::BaseCommandResult;
 pub(crate) use compare::FAILING_TESTS_KEY;
 pub(super) use compare::{
-    BaselineCheck, baseline_red_failure, candidate_failure, compare_claimed_with_base_until,
-    compare_with_base, compare_with_base_until, hold_failures, known_red,
+    BaselineCheck, baseline_red_failure, candidate_failure, compare_candidate_with_base,
+    compare_claimed_with_base_until, compare_with_base, compare_with_base_until, hold_failures,
+    known_red,
 };
 pub use hold::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};

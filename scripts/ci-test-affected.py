@@ -207,6 +207,29 @@ def executed_tests(junit):
     return int(tests) if tests is not None and tests.isdigit() else None
 
 
+def executed_test_identities(junit):
+    """Normalized binary/test identities that actually ran, never skipped cases.
+
+    A missing or malformed report provides no proof. Do not derive identities
+    from the requested filter: a filter can match only part of that request.
+    """
+    try:
+        root = xml.etree.ElementTree.parse(junit).getroot()
+    except (OSError, xml.etree.ElementTree.ParseError):
+        return None
+    identities = set()
+    for suite in root.iter("testsuite"):
+        binary = suite.get("name") or ""
+        for case in suite.findall("testcase"):
+            if case.find("skipped") is not None:
+                continue
+            identity = f"{binary} {case.get('name') or ''}"
+            if not TEST_ID.fullmatch(identity):
+                return None
+            identities.add(identity)
+    return sorted(identities)
+
+
 def milliseconds(seconds):
     """Round a non-negative duration to milliseconds, or None."""
     try:
@@ -498,7 +521,8 @@ class PhaseTimings:
         return compile_ms, test_ms, entries
 
 
-def write_summary(path, selection, tests_run, base=None, exit_code=None, notices=(), timings=None):
+def write_summary(path, selection, tests_run, base=None, exit_code=None, notices=(), timings=None,
+                  executed=None):
     if timings is None:
         compile_ms = test_ms = package_timings = None
     else:
@@ -506,6 +530,7 @@ def write_summary(path, selection, tests_run, base=None, exit_code=None, notices
     if path:
         Path(path).write_text(json.dumps(dict(
             schema_version=1, selection=selection, tests_run=tests_run,
+            executed_tests=executed,
             command=os.environ.get(GATE_ENV), base=base, exit_code=exit_code,
             notices=list(notices),
             compile_ms=compile_ms, test_ms=test_ms, package_timings=package_timings)))
@@ -799,15 +824,16 @@ def main():
             exit_code, output = run_observed([*budget, "--", *command], test_environment)
             timings.observe(output)
         tests_run = executed_tests(junit)
+        executed = executed_test_identities(junit)
 
     def finished(code):
-        write_summary(summary, selection, tests_run, base, code, notices, timings.record())
+        write_summary(summary, selection, tests_run, base, code, notices, timings.record(), executed)
         return code
 
     if exit_code or not doc_packages:
         return finished(exit_code)
     # Doctests still run, so the summary does not yet report an exit status.
-    write_summary(summary, selection, tests_run, base, None, notices, timings.record())
+    write_summary(summary, selection, tests_run, base, None, notices, timings.record(), executed)
     doc_flags = [argument for name in doc_packages for argument in ("-p", name)]
     doc_code, doc_output = run_observed(
         [*budget, "--", *cargo, "test", "--timings", "--no-fail-fast", *doc_flags, "--doc"],

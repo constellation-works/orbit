@@ -4312,7 +4312,17 @@ fn known_red_coverage_rows(test: &str, selected: &[&str]) {
                     .lines()
                     .map(|line| format!("echo '{line}'\n"))
                     .collect::<String>(),
-                tests_run.map_or_else(String::new, reported_tests),
+                tests_run.map_or_else(String::new, |count| {
+                    if case == "replay-executed" {
+                        format!(
+                            "selection=\"$ORBIT_VALIDATION_SELECTION\"; [ -n \"$selection\" ] || selection='{{\"packages\":[\"fixture\"]}}'; \
+                             printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":{count},\"executed_tests\":[\"orbit-core::runtime suite::broken\",\"orbit-core::runtime suite::flaky\"]}}' \
+                             \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\""
+                        )
+                    } else {
+                        reported_tests(count)
+                    }
+                }),
             ));
             if case == "replay-missing-tool" {
                 gate.set(&format!(

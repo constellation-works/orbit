@@ -81,20 +81,30 @@ pub(in super::super) fn cached_base_check(
     selection: Option<&Value>,
 ) -> Option<BaselineCheck> {
     let cache = cache_paths(workspace_path, base_sha, command, selection).ok()?;
-    let result = read_cached(&cache.result)?;
+    let result = read_cached(&cache.result, selection)?;
     Some(BaselineCheck {
         base_sha: base_sha.to_string(),
         not_comparable: not_comparable(selection, &result),
         result: Ok(result),
         cached: true,
+        exact_replay: selection
+            .is_some_and(|selection| selection.get(super::compare::FAILING_TESTS_KEY).is_some()),
     })
 }
 
-pub(super) fn read_cached(path: &Path) -> Option<BaseCommandResult> {
+pub(super) fn read_cached(path: &Path, selection: Option<&Value>) -> Option<BaseCommandResult> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice::<BaseCommandResult>(&bytes)
         .ok()
         .filter(|result| result.schema_version == CACHE_SCHEMA_VERSION)
+        // Preserve compatible full-cache reuse. Narrow results recorded before
+        // identity proof (or with incomplete proof) must be rerun under the
+        // existing exclusive lock, never accepted from count/selection alone.
+        .filter(|result| {
+            !selection
+                .is_some_and(|selection| selection.get(super::compare::FAILING_TESTS_KEY).is_some())
+                || not_comparable(selection, result).is_none()
+        })
 }
 
 /// Run `command` in a fresh detached worktree of `base_sha`, then remove it.

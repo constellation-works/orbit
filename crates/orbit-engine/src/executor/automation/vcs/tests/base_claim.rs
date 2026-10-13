@@ -87,7 +87,7 @@ fn supervisor_stops_never_classify_partial_failures_as_known_red() {
                 "#!/bin/sh\n\
                  selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
                  [ -n \"$selection\" ] || selection='{{\"packages\":[\"suite\"]}}'\n\
-                 printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}}' \"$selection\" \
+                 printf '{{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}}' \"$selection\" \
                  > \"$ORBIT_VALIDATION_SUMMARY\"\n\
                  echo 'test suite::broken ... FAILED'\n\
                  if [ -f candidate.txt ]; then {stop}; fi\n\
@@ -283,7 +283,7 @@ fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the
         "#!/bin/sh\n\
          selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
          [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
-         printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" \
+         printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" \
          > \"$ORBIT_VALIDATION_SUMMARY\"\n\
          echo 'test suite::broken ... FAILED'\n\
          if [ -f candidate.txt ]; then exec sleep 600; fi\n\
@@ -357,7 +357,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         "#!/bin/sh\n\
          selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
          [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
-         printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" \
+         printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" \
          > \"$ORBIT_VALIDATION_SUMMARY\"\n\
          if [ ! -f candidate.txt ]; then sleep 3; fi\n\
          echo 'test suite::broken ... FAILED'\n\
@@ -495,6 +495,12 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
             "inconclusive",
         ),
         (
+            "unsolicited-narrow",
+            "test suite::broken ... FAILED",
+            Some("test suite::broken ... FAILED"),
+            "contradicted",
+        ),
+        (
             "both-unknown",
             "unknown failure",
             Some("unknown failure"),
@@ -509,18 +515,21 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
         // reported selection refuses even identical identities; the other
         // rows exercise full-selection comparisons and their cache.
         let summary = if case == "base-passes" {
-            "selection=\"$ORBIT_VALIDATION_SELECTION\"; [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'; printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n"
+            "selection=\"$ORBIT_VALIDATION_SELECTION\"; [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'; printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n"
         } else if case == "noncomparable" {
-            "if [ -f candidate.txt ]; then selection='{\"packages\":[\"suite\"]}'; else selection='{\"packages\":[\"other\"]}'; fi; printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n"
+            "if [ -f candidate.txt ]; then selection='{\"packages\":[\"suite\"]}'; else selection='{\"packages\":[\"other\"]}'; fi; printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n"
+        } else if case == "unsolicited-narrow" {
+            "if [ ! -f candidate.txt ]; then printf '%s' '{\"schema_version\":1,\"selection\":{\"packages\":[\"suite\"],\"failing_tests\":[\"suite::broken\"]},\"tests_run\":1,\"executed_tests\":[\"suite::broken\"]}' > \"$ORBIT_VALIDATION_SUMMARY\"; fi\n"
         } else {
             ""
         };
+        let candidate_exit = if case == "unsolicited-narrow" { 2 } else { 1 };
         let base_script = base_output.map_or_else(
             || "exit 0".to_string(),
             |output| format!("printf '%s\\n' '{output}'; exit 1"),
         );
         fs::write(repo.join("check.sh"), format!(
-            "#!/bin/sh\n{summary}if [ -f candidate.txt ]; then printf '%s\\n' '{candidate_output}'; exit 1; fi\n{base_script}\n"
+            "#!/bin/sh\n{summary}if [ -f candidate.txt ]; then printf '%s\\n' '{candidate_output}'; exit {candidate_exit}; fi\n{base_script}\n"
         )).unwrap();
         fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
         git_ok(&repo, &["add", "check.sh"]);
@@ -567,6 +576,10 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
                     "{case}: {:?}",
                     check.verdict
                 ),
+                "contradicted" => assert!(
+                    matches!(check.verdict, BaseFailureVerdict::Contradicted(_)),
+                    "{case}: a full comparison still requires equal exit status"
+                ),
                 "not_comparable" => assert!(
                     matches!(&check.verdict, BaseFailureVerdict::NotComparable(_)),
                     "{case}: {:?}",
@@ -574,10 +587,14 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
                 ),
                 _ => unreachable!(),
             }
-            assert_eq!(check.base_log["cached"], cached, "{case}");
+            assert_eq!(
+                check.base_log["cached"],
+                cached && case != "noncomparable",
+                "{case}: invalid narrow evidence is replayed"
+            );
             assert_eq!(
                 check.base_replay,
-                Some(if !summary.is_empty() {
+                Some(if matches!(case, "base-passes" | "noncomparable") {
                     BaseReplay::FailingTests
                 } else if cached {
                     BaseReplay::CachedFailureSet
