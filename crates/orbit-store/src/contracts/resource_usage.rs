@@ -122,6 +122,18 @@ pub struct AdmissionForecastRecord {
     pub fit_admitted: Vec<String>,
     /// The tasks gap fit kept out.
     pub fit_skipped: Vec<String>,
+    /// A pull request's decision; absent for local admission passes.
+    pub pull: Option<PullForecastDecision>,
+}
+
+/// The request decision made against a follower's forecast, including
+/// requests that returned no claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PullForecastDecision {
+    /// Whether the follower sent the request to the owner.
+    pub sent: bool,
+    /// Whether enforce would hold the request because no kind of work fits.
+    pub forecast_no_headroom: bool,
 }
 
 /// The resource history tables retention prunes on their 30-day window.

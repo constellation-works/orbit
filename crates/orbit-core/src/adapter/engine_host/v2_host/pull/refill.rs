@@ -86,7 +86,9 @@
 //! before the next request is forecast, so each request is one candidate
 //! against a fresh forecast. Shadow mode records the list as
 //! `pull_admission_fit` and requests as with `off`; with `off`, or before the
-//! host has resource profiles, requests carry no list.
+//! host has resource profiles, requests carry no list. Every computed fit
+//! records one accuracy forecast with the request sent/no-headroom decision
+//! and a returned claim priced as its reservation.
 //!
 //! Each pass sends at most the drain's live ceiling of requests, an operator's
 //! `orbit run concurrency` included, not the ceiling it was submitted with.
@@ -340,6 +342,7 @@ pub(crate) fn pull_refill(
                 ship: Some(ship),
                 refusal: None,
             }) => {
+                let forecasts = RefCell::new(Vec::new());
                 let template = || {
                     let caller_before_pr = captured_before_pr(runtime, &run_id)?;
                     let window = crew_window(runtime, &run_id)?;
@@ -353,6 +356,9 @@ pub(crate) fn pull_refill(
                     let fit = runtime.pull_work_fit()?;
                     let admissible = fit.as_ref().and_then(PullWorkFit::admissible);
                     let requests = fit.as_ref().is_none_or(PullWorkFit::requests);
+                    if let Some(fit) = fit.as_ref() {
+                        forecasts.borrow_mut().push((fit.clone(), false, None));
+                    }
                     *work_fit.borrow_mut() = Some(fit);
                     if !requests {
                         return Ok(None);
@@ -384,10 +390,16 @@ pub(crate) fn pull_refill(
                 };
                 // A claim the forecast described is reserved before the next
                 // request is forecast.
-                let claimed =
-                    |receipt: &orbit_store::contracts::AdmissionReceipt,
+                let requested =
+                    |receipt: Option<&orbit_store::contracts::AdmissionReceipt>,
                      requested_at: chrono::DateTime<chrono::Utc>| {
-                        if matches!(*work_fit.borrow(), Some(Some(_))) {
+                        if let Some((_, sent, returned)) = forecasts.borrow_mut().last_mut() {
+                            *sent = true;
+                            *returned = receipt.cloned();
+                        }
+                        if matches!(*work_fit.borrow(), Some(Some(_)))
+                            && let Some(receipt) = receipt
+                        {
                             runtime.reserve_pulled_claim(receipt, requested_at)
                         } else {
                             Ok(())
@@ -431,13 +443,24 @@ pub(crate) fn pull_refill(
                         ))
                     });
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
-                let pass = drain.refill_pass_claiming(
+                let pass = drain.refill_pass_requesting(
                     &destination,
                     &template,
                     &still_admitting,
-                    Some(&claimed),
+                    Some(&requested),
                     ceiling,
                 );
+                for (fit, sent, receipt) in forecasts.into_inner() {
+                    if let Err(error) =
+                        fit.record_forecast(runtime, &run_id, sent, receipt.as_ref())
+                    {
+                        tracing::warn!(
+                            target: "orbit.core.job_run",
+                            %run_id, %error,
+                            "pull drain could not record its admission forecast; the accuracy report will miss this request"
+                        );
+                    }
+                }
                 refilled = true;
                 admitted = pass.admitted;
                 idle_receipt = pass.answer;

@@ -14,20 +14,20 @@ use super::*;
 use chrono::Duration as ChronoDuration;
 use orbit_core::runtime::host_resource::forecast::ForecastDecision;
 use orbit_store::contracts::{
-    AdmissionLoadQuery, AdmissionLoadStoreBackend, AdmissionReservation, ResourceUsageStoreBackend,
-    RunResourceMinute,
+    AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend, AdmissionReservation,
+    ResourceUsageStoreBackend, RunResourceMinute,
 };
 use orbit_types::workflow::{JobRun, PullAdmissionFit};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
 /// A pair whose follower runs `mode`, with the profile and fake `/proc` above.
-fn forecasting(mode: &str) -> (Pair, PathBuf) {
+fn forecasting(mode: &str, tasks: usize) -> (Pair, PathBuf) {
     let mut pair = Pair::with_follower_global(
-        1,
+        tasks,
         &format!(
             "[machine.auto_concurrency]\nmode = \"{mode}\"\nmin_profile_deliveries = 1\n\
-             horizon_cap_minutes = 10\n"
+             horizon_cap_minutes = 30\n"
         ),
     );
     let proc_root = pair._root.path().join(FOLLOWER).join("proc");
@@ -40,7 +40,7 @@ fn forecasting(mode: &str) -> (Pair, PathBuf) {
     (pair, proc_root)
 }
 
-/// One finished three-minute `change`/`low` delivery using `bytes`, admitted
+/// One finished 31-minute `change`/`low` delivery using `bytes`, admitted
 /// two days ago.
 fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
     let store = follower.sqlite_store().unwrap();
@@ -54,7 +54,7 @@ fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
         state: JobRunState::Success,
         scheduled_at: admitted,
         started_at: Some(admitted),
-        finished_at: Some(admitted + ChronoDuration::minutes(3)),
+        finished_at: Some(admitted + ChronoDuration::minutes(31)),
         duration_ms: None,
         created_at: admitted,
         pid: None,
@@ -69,7 +69,7 @@ fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
     store
         .upsert_job_run_for_workspace(&workspace, &run, None)
         .unwrap();
-    for minute in 0..3 {
+    for minute in 0..31 {
         store
             .record_run_resource_minute(&RunResourceMinute {
                 workspace_id: workspace.clone(),
@@ -138,6 +138,15 @@ fn reservations(follower: &OrbitRuntime) -> Vec<AdmissionReservation> {
     seen
 }
 
+/// Forecast records on the follower, in request order.
+fn forecasts(pair: &Pair) -> Vec<AdmissionForecastRecord> {
+    pair.follower
+        .sqlite_store()
+        .unwrap()
+        .admission_forecasts(Utc::now() - ChronoDuration::hours(1))
+        .unwrap()
+}
+
 /// No request goes out while the forecast has room for nothing; once it has
 /// room, the request names what fits, and the claim the owner returns is
 /// reserved on the follower before its leaf run exists.
@@ -149,7 +158,7 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
     ) {
         return;
     }
-    let (pair, proc_root) = forecasting("enforce");
+    let (pair, proc_root) = forecasting("enforce", 1);
     // 16 GiB in use plus 12 is over the 24 GiB admission may reach.
     host_using(&proc_root, 16 * GIB);
     let drain = pair.run_drain();
@@ -166,6 +175,25 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
         "{fit:?}"
     );
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let records = forecasts(&pair);
+    assert_eq!(records.len(), 1);
+    let held = records[0].pull.as_ref().unwrap();
+    assert!(!held.sent && held.forecast_no_headroom);
+    assert!(records[0].admitted.is_empty());
+    assert_eq!(
+        records[0]
+            .points
+            .iter()
+            .map(|point| point.offset_minutes)
+            .collect::<Vec<_>>(),
+        [5, 10, 20, 30]
+    );
+    assert!(
+        records[0]
+            .points
+            .iter()
+            .all(|point| point.memory_bytes == 16 * GIB)
+    );
 
     host_using(&proc_root, 4 * GIB);
     let pass = pair.pass(&drain);
@@ -210,6 +238,18 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
         })
         .unwrap();
     assert_eq!(reserved_in_forecast, 0, "counted once, by its leaf run");
+    let records = forecasts(&pair);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].admitted, pair.tasks);
+    let sent = records[1].pull.as_ref().unwrap();
+    assert!(sent.sent && !sent.forecast_no_headroom);
+    assert!(
+        records[1]
+            .points
+            .iter()
+            .all(|point| point.memory_bytes == 16 * GIB),
+        "4 GiB baseline plus the returned 12 GiB claim at every offset: {records:?}"
+    );
 }
 
 /// Shadow mode records what it would have sent and requests as with `off`,
@@ -222,8 +262,8 @@ fn shadow_and_off_followers_request_without_a_list() {
     ) {
         return;
     }
-    for mode in ["shadow", "off"] {
-        let (pair, proc_root) = forecasting(mode);
+    for (mode, tasks) in [("shadow", 1), ("shadow", 0), ("off", 1)] {
+        let (pair, proc_root) = forecasting(mode, tasks);
         host_using(&proc_root, 16 * GIB);
         let drain = pair.run_drain();
 
@@ -236,9 +276,37 @@ fn shadow_and_off_followers_request_without_a_list() {
         if mode == "shadow" {
             let fit = fit.expect("shadow mode records the fit");
             assert!(!fit.sent && fit.admissible.is_empty(), "{fit:?}");
+            let records = forecasts(&pair);
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].admitted, pair.tasks);
+            let decision = records[0].pull.as_ref().unwrap();
+            assert!(decision.sent && decision.forecast_no_headroom);
+            let expected = (16 + 12 * tasks as u64) * GIB;
+            assert!(
+                records[0]
+                    .points
+                    .iter()
+                    .all(|point| point.memory_bytes == expected),
+                "{records:?}"
+            );
+            let report = pair.follower.forecast_accuracy().unwrap();
+            let counts = &report.drains[0];
+            assert_eq!(
+                (
+                    counts.pull_requests,
+                    counts.pull_sent,
+                    counts.pull_would_hold
+                ),
+                (1, 1, 1)
+            );
+            assert!(
+                counts.would_hold.is_empty(),
+                "pull decisions count requests, not task differences"
+            );
         } else {
             assert_eq!(fit, None);
             assert!(reservations(&pair.follower).is_empty());
+            assert!(forecasts(&pair).is_empty());
         }
     }
 }

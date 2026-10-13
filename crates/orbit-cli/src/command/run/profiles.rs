@@ -44,7 +44,10 @@ is its mean, UNDER how often the forecast was below the measured load, and WORST
 miss with the minute it forecast. A point whose minute has no measurement yet is counted as \
 unmeasured. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
 tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
-that it did not. `--json` adds every forecast point paired with its measured minute.\n\n\
+that it did not. Pull drains record one forecast per request, counting a returned claim. \
+PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, and \
+PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit. \
+`--json` adds every forecast point paired with its measured minute.\n\n\
 Examples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  \
 orbit run profiles --accuracy --json"
 )]
@@ -212,7 +215,10 @@ fn accuracy(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("ENFORCE_PASSES").fixed(),
         Column::new("ADMITTED").fixed(),
         Column::new("WOULD_HOLD").fixed(),
-        Column::new("WOULD_ADD"),
+        Column::new("WOULD_ADD").fixed(),
+        Column::new("PULL_REQUESTS").fixed(),
+        Column::new("PULL_SENT").fixed(),
+        Column::new("PULL_WOULD_HOLD"),
     ])
     .empty_message("no admission forecasts recorded on this host");
     for drain in &report.drains {
@@ -224,6 +230,9 @@ fn accuracy(runtime: &OrbitRuntime) -> CommandOut {
             Cell::new(drain.admitted),
             Cell::new(drain.would_hold.len()),
             Cell::new(drain.would_add.len()),
+            Cell::new(drain.pull_requests),
+            Cell::new(drain.pull_sent),
+            Cell::new(drain.pull_would_hold),
         ]);
     }
     Ok(Payload::blocks(

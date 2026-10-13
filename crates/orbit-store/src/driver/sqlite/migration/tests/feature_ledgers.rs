@@ -112,9 +112,12 @@ fn absorption_writes_what_each_feature_open_wrote() {
     let absorbed = Connection::open_in_memory().expect("absorbed fixture");
     ledger::run_migrations(&absorbed, before_absorption()).expect("migrate to v48");
     assert!(
-        ledger::run_migrations(&absorbed, ledger::MIGRATIONS)
-            .expect("apply v49")
-            .is_none()
+        ledger::run_migrations(
+            &absorbed,
+            &ledger::MIGRATIONS[..before_absorption().len() + 1]
+        )
+        .expect("apply v49")
+        .is_none()
     );
 
     let (rows, records) = feature_footprint(&absorbed);

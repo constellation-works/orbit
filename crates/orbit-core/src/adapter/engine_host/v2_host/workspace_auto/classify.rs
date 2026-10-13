@@ -639,6 +639,7 @@ fn record_admission_forecast(
             memory_total_bytes: forecast.memory_total_bytes,
             points: forecast.into_points(),
             admitted: admitted.to_vec(),
+            pull: None,
             fit_admitted: record
                 .admitted
                 .iter()

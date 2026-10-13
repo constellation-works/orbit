@@ -302,6 +302,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0049".to_string(),
                 "absorb_feature_ledgers".to_string()
             ),
+            (
+                "migration.v0050".to_string(),
+                "pull_forecast_decisions".to_string()
+            ),
         ]
     );
 }
@@ -866,7 +870,7 @@ fn resource_minute_tables_keep_an_older_binary_writing() {
             .expect("registered migration")
     };
     let first = position("run_resource_minutes");
-    let last = position("admission_forecasts");
+    let last = position("pull_forecast_decisions");
     let newer = &ledger::MIGRATIONS[..=last];
     let older = &ledger::MIGRATIONS[..first];
 

@@ -64,7 +64,7 @@ Per-minute resource history:
 
 Admission forecasts:
 
-- Live in the host-wide `admission_forecasts` table (drain workspace and run, forecast time and mode, host size, forecast values, and the task ids the pass admitted and gap fit judged; no payloads).
+- Live in the host-wide `admission_forecasts` table (drain workspace and run, forecast time and mode, host size, forecast values, and the task ids the pass admitted and gap fit judged, or the pull request sent/no-headroom decisions; no payloads).
 - Are pruned with the per-minute resource history by `orbit gc runs --apply` when older than 30 days.
 
 Admission reservations:

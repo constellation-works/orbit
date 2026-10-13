@@ -11,7 +11,9 @@
 //! - **Shadow decisions.** Per drain, over its `shadow` passes: the tasks
 //!   admission admitted that gap fit would have held, and the tasks gap fit
 //!   would have admitted that admission did not. Each task is counted once
-//!   per drain, however many passes it appeared in.
+//!   per drain, however many passes it appeared in. Pull drains separately
+//!   count request forecasts, requests sent, and shadow requests enforce
+//!   would have held because no work fit, even without a returned claim.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -105,6 +107,12 @@ pub struct DrainShadowDecisions {
     pub would_hold: Vec<String>,
     /// Gap fit would have admitted them in a pass that did not.
     pub would_add: Vec<String>,
+    /// Pull request forecasts, including ones enforce held.
+    pub pull_requests: u64,
+    /// Requests actually sent to the owner, in either mode.
+    pub pull_sent: u64,
+    /// Shadow requests enforce would have held (`forecast_no_headroom`).
+    pub pull_would_hold: u64,
 }
 
 /// The report over `records`, made at or after `since`, against the host's
@@ -233,12 +241,27 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
         admitted: BTreeSet<String>,
         would_hold: BTreeSet<String>,
         would_add: BTreeSet<String>,
+        pull_requests: u64,
+        pull_sent: u64,
+        pull_would_hold: u64,
     }
     let mut drains: BTreeMap<(&str, &str), Drain> = BTreeMap::new();
     for record in records {
         let drain = drains
             .entry((record.workspace_id.as_str(), record.run_id.as_str()))
             .or_default();
+        if let Some(pull) = &record.pull {
+            drain.pull_requests += 1;
+            drain.pull_sent += u64::from(pull.sent);
+            if record.mode == SHADOW {
+                drain.shadow_passes += 1;
+                drain.admitted.extend(record.admitted.iter().cloned());
+                drain.pull_would_hold += u64::from(pull.forecast_no_headroom);
+            } else {
+                drain.enforce_passes += 1;
+            }
+            continue;
+        }
         if record.mode != SHADOW {
             drain.enforce_passes += 1;
             continue;
@@ -266,6 +289,9 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
             admitted: drain.admitted.len() as u64,
             would_hold: drain.would_hold.into_iter().collect(),
             would_add: drain.would_add.into_iter().collect(),
+            pull_requests: drain.pull_requests,
+            pull_sent: drain.pull_sent,
+            pull_would_hold: drain.pull_would_hold,
         })
         .collect()
 }
