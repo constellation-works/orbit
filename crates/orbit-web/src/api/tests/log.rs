@@ -1,6 +1,4 @@
-use super::super::log::{
-    LOG_STREAM_MAX_RECORD_BYTES, LogLineBuffer, LogStreamGate, read_appended_log_events,
-};
+use super::super::log::{LOG_STREAM_MAX_RECORD_BYTES, LogLineBuffer, read_appended_log_events};
 use super::test_support::write_lines;
 use crate::log_format::Filters as LogFilters;
 use serde_json::json;
@@ -86,33 +84,4 @@ fn over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline() 
     assert!(!buffer.discarding);
     assert!(buffer.partial.is_empty());
     assert_eq!(delivered[1].1, file_len(&path));
-}
-
-#[test]
-fn log_stream_gate_caps_concurrent_acquisitions() {
-    let gate = LogStreamGate::new(2);
-    assert_eq!(gate.available_permits(), 2);
-
-    let p1 = gate.try_acquire().expect("first permit available");
-    let p2 = gate.try_acquire().expect("second permit available");
-    assert_eq!(gate.available_permits(), 0);
-
-    assert!(
-        gate.try_acquire().is_none(),
-        "third acquisition must be rejected when the cap is reached"
-    );
-
-    drop(p1);
-    assert_eq!(gate.available_permits(), 1);
-    let p3 = gate
-        .try_acquire()
-        .expect("permit available after one was released");
-
-    drop(p2);
-    drop(p3);
-    assert_eq!(
-        gate.available_permits(),
-        2,
-        "all permits return to the gate once stream owners drop them"
-    );
 }

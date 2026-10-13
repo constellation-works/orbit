@@ -2,8 +2,10 @@
 //! connection, not when `ssh` is spawned.
 //!
 //! Admitted as a unit test (fault injection). `connect` cannot host it: that
-//! entry point blocks on signals and may open a browser, and `establish` is
-//! crate-private. The stub is a real executable with ssh's `-L` argv contract.
+//! entry point blocks on signals and may open a browser. Host forwarding uses
+//! the same probe, but fixes its attach/ready budgets and hides the direct
+//! probe result; the private `TunnelSpec`/`ProbeLimit` seams inject the short
+//! budgets below. The stub is a real executable with ssh's `-L` argv contract.
 
 use std::fs;
 use std::io::{Read, Write};

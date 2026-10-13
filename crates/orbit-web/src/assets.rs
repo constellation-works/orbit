@@ -326,15 +326,3 @@ fn accepts_gzip(value: Option<&HeaderValue>) -> bool {
 
     gzip_quality.or(wildcard_quality).unwrap_or(0.0) > 0.0
 }
-
-/// Serve the embedded dashboard file at `route` as its route handler would.
-#[cfg(test)]
-pub(super) fn serve_dashboard_file(route: &str, headers: &HeaderMap) -> Response {
-    let &(_, content_type, body) = DASHBOARD_FILES
-        .iter()
-        .find(|(candidate, _, _)| *candidate == route)
-        .unwrap_or_else(|| panic!("no embedded dashboard file is routed at {route}"));
-    let asset = DashboardAsset::new(content_type, body)
-        .unwrap_or_else(|error| panic!("build dashboard asset {route}: {error}"));
-    dashboard_asset_response(&asset, headers)
-}

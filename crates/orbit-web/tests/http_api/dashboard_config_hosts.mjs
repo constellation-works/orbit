@@ -15,7 +15,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { dashboardFile } from './dashboard_static.mjs';
+import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 
 const classesOf = node => String(node.className || '').split(/\s+/).filter(Boolean);
 class Node {

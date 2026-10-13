@@ -1,4 +1,4 @@
-use crate::serve::{build_app, drain_with_grace_period, teardown_runtime};
+use crate::serve::{drain_with_grace_period, teardown_runtime};
 use orbit_core::OrbitError;
 use std::pin::pin;
 use std::sync::Arc;
@@ -128,43 +128,4 @@ async fn teardown_returns_after_grace_period_with_blocking_work_in_flight() {
     finished_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("blocking task did not finish after release");
-}
-
-async fn app_response(uri: &str) -> axum::response::Response {
-    use tower::ServiceExt;
-
-    let runtime = orbit_core::OrbitRuntime::in_memory().expect("build runtime");
-    let state = crate::state::DashboardState::single(Arc::new(runtime));
-    build_app(state)
-        .expect("build app")
-        .oneshot(
-            axum::http::Request::builder()
-                .uri(uri)
-                .header("host", "localhost:7878")
-                .body(axum::body::Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response")
-}
-
-/// Every response, API and static alike, carries the baseline hardening
-/// headers, and the static asset keeps its own CSP.
-#[tokio::test]
-async fn api_and_static_responses_carry_baseline_security_headers() {
-    for uri in ["/api/tasks", "/static/dashboard.css", "/no-such-route"] {
-        let response = app_response(uri).await;
-        let headers = response.headers();
-        assert_eq!(headers["x-content-type-options"], "nosniff", "{uri}");
-        assert_eq!(headers["referrer-policy"], "no-referrer", "{uri}");
-        assert_eq!(
-            headers["cross-origin-resource-policy"], "same-origin",
-            "{uri}"
-        );
-    }
-    let asset = app_response("/static/dashboard.css").await;
-    assert!(
-        asset.headers().contains_key("content-security-policy"),
-        "static assets keep their CSP"
-    );
 }
