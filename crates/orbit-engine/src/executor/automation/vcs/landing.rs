@@ -136,6 +136,8 @@ impl LandingView {
     /// (no `origin`, no network) leaves the judgement to the refs already
     /// present rather than replacing a freshness problem with a different
     /// failure: what the owner still cannot verify is refused below either way.
+    /// Adopting a published PR's updated head requires its own successful
+    /// fetch, even when this initial refresh failed.
     fn refresh(workspace: &Path, landing_branch: &str, delivery: &HandoffDelivery) -> Self {
         if matches!(delivery, HandoffDelivery::LocalCandidate)
             || !git_command_success(workspace, &["remote", "get-url", "origin"]).unwrap_or(false)
@@ -188,7 +190,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
                     let mut pin = pin_for(candidate);
-                    adopt_base_update(&mut pin, context, &status, view);
+                    adopt_base_update(&mut pin, context, &status);
                     let evidence = match pin.ensure_delivered(&status, &number.to_string()) {
                         Ok(delivered) => json!({
                             "reconciled": "pull_request_merged",
@@ -308,7 +310,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         let state = classify_pr_state(&status);
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
-        let updated_head = adopt_base_update(&mut pin, context, &status, view);
+        let updated_head = adopt_base_update(&mut pin, context, &status);
         if let PrMergeState::Merged = state {
             let delivered = match pin.ensure_delivered(&status, &pr_number) {
                 Ok(delivered) => delivered,
@@ -856,12 +858,13 @@ fn contains_commit(workspace: &Path, reference: &str, commit: &str) -> Result<bo
 /// The provider merges the base as it is when the update runs, which can be
 /// past the landing ref this attempt fetched, so a published landing ref is
 /// fetched again before a head not yet adopted is verified against it. A
-/// fetch that fails refuses the head.
+/// fetch that fails refuses the head, even if the initial refresh failed and
+/// the head and base are cached [ORB-15976]. Without `origin`, verification
+/// intentionally uses the owner's local landing branch.
 fn adopt_base_update(
     pin: &mut DeliveryPin,
     context: &HandoffLandingContext,
     status: &PullRequestStatus,
-    view: &LandingView,
 ) -> Option<String> {
     let candidate = &context.candidate;
     let head = status.head_sha.as_deref()?;
@@ -870,8 +873,9 @@ fn adopt_base_update(
     {
         return None;
     }
-    if view.refreshed
-        && pin.candidate_sha() != Some(head)
+    if pin.candidate_sha() != Some(head)
+        && git_command_success(&context.workspace_path, &["remote", "get-url", "origin"])
+            .unwrap_or(false)
         && let Err(error) = fetch_remote_base(&context.workspace_path, &candidate.landing_branch)
     {
         tracing::warn!(

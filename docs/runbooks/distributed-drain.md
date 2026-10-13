@@ -1176,6 +1176,10 @@ one. From then on:
     landing branch once and waits for the checks on the new head. No agent
     runs. The owner merges that head only when it is a clean merge of the
     accepted candidate with a commit already on the landing branch.
+    When the owner checkout has `origin`, adopting a newly observed updated
+    head requires a successful fresh fetch of the landing branch, even if
+    the initial fetch failed and the head and base are cached. A failed
+    fetch stops adoption without spending rerun, update or repair budgets.
   - **transient**: the log shows the network or the runner giving out. The
     landing reruns the failed jobs once and judges the rerun.
   - **candidate**: anything else. The landing stops for the claim's one
