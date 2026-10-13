@@ -344,6 +344,13 @@ Codex runs each tool command through the user's shell as a login shell (`zsh -lc
 - Commands run sequentially in list order, and the first failing command fails the step, so put cheap gates before long test suites ([rollout](DEVELOPMENT.md#required-validation-commands)).
 - These pipelines and the claimed leaves set `final_validation` on their implementer's input, and its envelope lists the commands this validation will run as `task.final_validation_commands`: this host's list, or the owner's list a claim captured. The implementer leaves those to the pipeline for a diff and still runs focused checks and every workspace check the list omits. A clean no-op or already-landed handoff skips this validation, so its implementer still runs every required command. The field is absent for an empty list, for a claim whose admission captured no owner gates (it validates against this replica's copy, which the owner may refuse), and outside these pipelines, such as a manual or direct run; the implementer then runs every check itself.
 - The PR pipelines also pass that handoff to conflict recovery at `sync_base`.
+  The executor proves a later resolved deterministic validator with the same
+  task, run and worktree bindings and the synchronized base. Its guard must
+  be unconditional or shared with the rebase, and its checkpoint must not
+  skip execution. A copied flag or activity name without that continuation,
+  an unknown compound continuation, or nested recovery keeps advisory checks.
+  Claimed recovery also requires this run's trusted worker binding and the
+  failed rebase's rendered task/run identity to agree with it.
   Recovery keeps focused resolution checks and commands outside the captured
   list. The host validates after the final rebase continuation and base chase;
   if the base absorbs the candidate, `git_rebase` runs and attaches those
