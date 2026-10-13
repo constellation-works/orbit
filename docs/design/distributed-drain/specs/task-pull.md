@@ -616,7 +616,16 @@ least one test; their logs join the handoff's validation [ORB-15747]. A `no-diff
 (a review that files findings) instead commits to a `skipped_no_diff_expected` checkpoint
 naming its task, run and pinned base [ORB-14791]. The owner's own pipeline skips the same
 clean commit on the tag alone; the claimed checkpoint lets the owner recheck that its copy
-of the task still carries the tag. A claimed tagged leaf whose worktree changed or whose HEAD
+of the task still carries the tag. As the owner's pipeline also skips `validate` for the tag,
+`claim_validate` runs no required command, deferral replay or already-resolved replay for this
+checkpoint and records `skipped_no_diff_expected` with no validation references. The owner
+exempts exactly this checkpoint, on a task its copy still tags, from `required validation
+missing` at acceptance, approval and landing; any log the handoff does carry is still checked
+for the exact claim, run and candidate [ORB-15764]. A claim admitted before an owner upgrade and
+settled after it was run by the older leaf, which still pins the required logs for this skip,
+and the upgraded owner accepts them. A newer leaf's empty skip reaching an owner that has not
+upgraded is refused as `required validation missing`; the settlement stays pending on the
+follower, is redelivered with backoff, and is accepted once the owner runs the newer build. A claimed tagged leaf whose worktree changed or whose HEAD
 moved is refused at commit as `no_diff_expected_changed`, before the index is touched: it has
 no pull-request route for code, while the owner's own pipeline still commits such a change
 [ORB-14247]. Both claimed leaves support it, and the PR leaf skips branch

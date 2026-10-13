@@ -137,7 +137,9 @@ spec:
 
     # Required validation runs on the committed candidate, before any handoff
     # exists. There is nothing to publish first: the local candidate is the
-    # delivery.
+    # delivery. A clean base takes the NoDiff route; its `no-diff-expected`
+    # skip runs no command or replay, as the owner's own pipelines skip
+    # `validate` for the tag [ORB-15764].
     - id: validate
       target: activity:claim_validate
       default_input:

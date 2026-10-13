@@ -77,6 +77,10 @@ use super::{already_resolved, no_diff};
 /// NoDiff route, which replays its named tests on the base
 /// ([`super::already_resolved`]); a candidate that changes the base is
 /// refused for one.
+///
+/// [ORB-15764] A `no-diff-expected` skip checkpoint on that route runs no
+/// command or replay at all and records `skipped_no_diff_expected` with no
+/// validation references ([`super::no_diff`]).
 pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,

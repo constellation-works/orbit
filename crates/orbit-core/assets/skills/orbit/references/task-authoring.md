@@ -129,7 +129,8 @@ name the required validation gate that runs that test. The worker sandbox may
 prevent the nested sandbox from starting; the sanctioned deferred-sandbox
 replay then runs that gate on the claim host, outside the worker sandbox. A
 passing host replay is the native-sandbox evidence and satisfies the criterion,
-including on a clean-base NoDiff handoff. The in-worker skip is not evidence by
+including on a verified clean-base NoDiff handoff (a `no-diff-expected` skip
+runs no gate, so it replays nothing). The in-worker skip is not evidence by
 itself; the passing replay is. Do not write acceptance criteria that require
 "no sandbox deferral" or say a skip cannot count as evidence for these tests.
 The replay covers only a required gate named by the deferred record, not a

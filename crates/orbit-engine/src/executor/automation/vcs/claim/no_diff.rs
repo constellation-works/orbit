@@ -2,6 +2,11 @@
 //! checkpoint, not an agent's skip flag; the owner rechecks it on its own base.
 //! An already-resolved outcome's named tests replay here on the base, outside
 //! the agent sandbox, after the required commands [ORB-15747].
+//!
+//! A `no-diff-expected` skip checkpoint runs nothing: no required command,
+//! deferred replay or already-resolved replay. A review, audit or sweep proves
+//! no build, and the owner exempts exactly that checkpoint from required
+//! validation, as its own pipelines skip `validate` for the tag [ORB-15764].
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -25,8 +30,23 @@ use super::input::refused;
 use super::observe::{observe_with, require_clean_candidate};
 use super::validation::{attach_handoff_logs, passed_output, run_claimed_commands};
 use crate::executor::automation::vcs::commit::{
-    claimed_clean_base_checkpoint, verify_clean_tree_handoff, verify_clean_tree_handoff_at_revision,
+    NO_DIFF_EXPECTED_SKIP, claimed_clean_base_checkpoint, verify_clean_tree_handoff,
+    verify_clean_tree_handoff_at_revision,
 };
+
+/// The decision `claim_validate` records for a `no-diff-expected` skip.
+pub(super) const SKIPPED_NO_DIFF_EXPECTED: &str = NO_DIFF_EXPECTED_SKIP;
+
+/// Why that decision ran nothing, in the step's own output.
+const NO_DIFF_EXPECTED_NOTE: &str = "the task is tagged no-diff-expected and its clean base \
+     changed nothing, so no required validation command or replay ran; the owner accepts this \
+     checkpoint without validation logs";
+
+/// Whether `checkpoint` is a `no-diff-expected` skip, which carries no
+/// validation.
+fn skips_validation(checkpoint: &Value) -> bool {
+    checkpoint["decision"] == NO_DIFF_EXPECTED_SKIP
+}
 
 /// Whether the implementer returned clean-tree report scratch references.
 pub(in crate::executor::automation::vcs) fn carries_no_diff_artifacts(input: &Value) -> bool {
@@ -138,16 +158,19 @@ fn checkpoint<H: RuntimeHost + ?Sized>(
         .map_err(|error| refused(format!("invalid NoDiff verifier report: {error}")))
 }
 
+/// Recheck the pinned checkpoint on the leaf, and return whether it is a
+/// `no-diff-expected` skip, whose handoff carries no validation.
 pub(super) fn verify_leaf<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace: &Path,
     evidence: &HandoffArtifactRef,
-) -> Result<(), OrbitError> {
+) -> Result<bool, OrbitError> {
     let report = checkpoint(host, &context.task_id, evidence)?;
     let task = host.get_task(&context.task_id)?;
     require_checkpoint_identity(&report, &task.id, &context.run_id)?;
-    verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, &report)
+    verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, &report)?;
+    Ok(skips_validation(&report))
 }
 
 fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<(), OrbitError> {
@@ -249,6 +272,17 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
         },
     )?;
     require_clean_candidate(workspace, &candidate)?;
+    if skips_validation(report) {
+        // An implementer's deferral or already-resolved selectors name tests
+        // for a gate this route does not run, so neither replays either.
+        let mut output = passed_output(context, &candidate, &[], Vec::new(), Value::Null)?;
+        output["decision"] = json!(SKIPPED_NO_DIFF_EXPECTED);
+        output["note"] = json!(NO_DIFF_EXPECTED_NOTE);
+        output["no_diff_evidence"] = serde_json::to_value(evidence)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        output["already_resolved"] = json!([]);
+        return Ok(output);
+    }
     let replays = claimed_deferred_replays(host, input)?;
     let commands = with_replays(context.required_commands.clone(), &replays);
     let (mut results, validation_env) = run_claimed_commands(

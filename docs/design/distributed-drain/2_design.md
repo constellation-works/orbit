@@ -845,6 +845,10 @@ and landing branch, execution summary and validation artifact references.
   changes of its own; `claim_validate` refuses either and names them. That base need not be
   the current tip: acceptance and landing require only that the owner's current base still
   contains it, so a base that advanced during a long chore is not a refusal ([ORB-15074]).
+- A `no-diff-expected` NoDiff skip runs and carries no required validation, as the owner's own
+  pipelines skip `validate` for the tag; acceptance, approval and landing exempt exactly that
+  checkpoint while the owner's copy of the task keeps the tag ([ORB-15764]). A verified clean
+  tree, an already-landed proof and every candidate with a diff still carry the owner's list.
 
 **Acceptance** (`application::review`, `TaskCommitBoundary`). `TaskHandoff` binds workspace, task,
 claim, execution machine/run, repository, delivery variant, branches and candidate/base

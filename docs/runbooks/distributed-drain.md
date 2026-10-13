@@ -608,8 +608,13 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   runnable crews and this host's OS, and the owner admits only tasks this host
   can run. Tagged `no-diff-expected` work is claimable: the follower's leaf
   hands off `NoDiff` instead of opening a PR, needs no `no-diff.json` from a
-  review, and refuses a change as `no_diff_expected_changed` (remove the tag
-  to ship code). Pin work that must stay on the
+  review, runs no required validation command or replay on its clean base
+  (the owner accepts that skip without logs while its copy of the task keeps
+  the tag), and refuses a change as `no_diff_expected_changed` (remove the
+  tag to ship code). A skip from a leaf built before this exemption still
+  carries the logs, which an upgraded owner accepts; a newer leaf's skip
+  refused by an owner not yet upgraded as `required validation missing` stays
+  pending on the follower and settles once the owner upgrades. Pin work that must stay on the
   owner with an `os:` tag or a crew. If no
   crew is runnable, the drain requests nothing and reports
   `no_runnable_crew`. After you install a missing CLI, start a new drain to pick it up.
