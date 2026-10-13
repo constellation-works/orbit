@@ -172,6 +172,11 @@ def forward():
         child.stdin.flush()
     child.stdin.close()
 threading.Thread(target=forward, daemon=True).start()
+def exit_now():
+    # forward() is blocked reading stdin under its buffer lock, so interpreter
+    # finalization would abort on it [ORB-15926]. Exit without finalizing.
+    sys.stdout.flush()
+    os._exit(0)
 for line in child.stdout:
     message = json.loads(line)
     receipt = message.get('result', {{}}).get('structuredContent', {{}}).get('receipt')
@@ -179,10 +184,11 @@ for line in child.stdout:
         os.rename({lose}, {lose} + '.consumed')
         child.terminate()
         child.wait()
-        sys.exit(0)
+        exit_now()
     sys.stdout.buffer.write(line)
     sys.stdout.buffer.flush()
 child.wait()
+exit_now()
 "#,
         home = json!(owner.home),
         work = json!(owner.work),
