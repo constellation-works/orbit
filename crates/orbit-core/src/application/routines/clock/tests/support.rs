@@ -11,6 +11,18 @@ pub(super) struct MockRunner {
     commands: Mutex<Vec<String>>,
 }
 
+pub(super) fn systemd_activation_outputs(
+    next_elapse: &str,
+    service: Option<&str>,
+) -> Vec<Result<Option<String>, OrbitError>> {
+    vec![
+        Ok(Some(format!(
+            "LoadState=loaded\nActiveState=active\nNextElapseUSecRealtime={next_elapse}\nNextElapseUSecMonotonic={next_elapse}\n"
+        ))),
+        Ok(service.map(str::to_string)),
+    ]
+}
+
 impl MockRunner {
     pub(super) fn new(results: Vec<Result<bool, OrbitError>>) -> Self {
         Self {
@@ -37,6 +49,19 @@ impl MockRunner {
             results: Mutex::new(results.into_iter().rev().collect()),
             outputs: Mutex::new(Vec::new()),
             probes: Mutex::new(probes.into_iter().rev().collect()),
+            commands: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Queue stdout responses ahead of the boolean results [`Self::run`] consumes.
+    pub(super) fn with_outputs(
+        outputs: Vec<Result<Option<String>, OrbitError>>,
+        results: Vec<Result<bool, OrbitError>>,
+    ) -> Self {
+        Self {
+            results: Mutex::new(results.into_iter().rev().collect()),
+            outputs: Mutex::new(outputs.into_iter().rev().collect()),
+            probes: Mutex::new(Vec::new()),
             commands: Mutex::new(Vec::new()),
         }
     }

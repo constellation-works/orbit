@@ -9,12 +9,12 @@ use std::os::unix::fs::PermissionsExt;
 use orbit_common::OrbitError;
 use tempfile::TempDir;
 
-use super::super::enable::set_clock_enabled_with_version_probe;
+use super::super::enable::{set_clock_enabled_with, set_clock_enabled_with_version_probe};
 use super::super::install::{launchd_plist_path, write_launchd_unit};
 use super::super::manager::{ClockPlatform, ManagerCommandOutput};
 use super::super::program::discover_clock_unit_program;
 use super::super::settings::ClockSettings;
-use super::support::MockRunner;
+use super::support::{MockRunner, systemd_activation_outputs};
 
 type VersionProbe = fn(&std::path::Path) -> Result<String, String>;
 
@@ -241,5 +241,89 @@ fn launchd_pause_unloads_loaded_agents_and_leaves_paused_agents_alone() {
             expected.push(fixture.control_command("unload"));
         }
         assert_eq!(runner.commands(), expected);
+    }
+}
+
+#[test]
+fn systemd_enable_accepts_healthy_in_flight_and_finite_timers() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let service = "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n";
+
+    for next_elapse in ["infinity", "1000000"] {
+        let runner = MockRunner::with_outputs(
+            systemd_activation_outputs(next_elapse, Some(service)),
+            vec![Ok(true), Ok(true), Ok(true), Ok(true)],
+        );
+        let status = set_clock_enabled_with(
+            root.path(),
+            true,
+            ClockPlatform::Systemd,
+            &runner,
+            home.path(),
+        )
+        .unwrap();
+
+        assert!(status.enabled);
+        assert!(status.schedulable, "next elapse {next_elapse}");
+        assert!(status.health_issue.is_none(), "next elapse {next_elapse}");
+        assert_eq!(runner.commands().len(), 6, "no retry or extra probe");
+    }
+}
+
+#[test]
+fn systemd_enable_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger() {
+    let cases = [
+        ("missing service", None),
+        (
+            "inactive service",
+            Some("ActiveState=inactive\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
+        ),
+        (
+            "failed service",
+            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
+        ),
+        (
+            "unhealthy service",
+            Some(
+                "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=timeout\nTimeoutStartUSec=10min\nKillMode=mixed\n",
+            ),
+        ),
+        (
+            "unsafe recovery settings",
+            Some(
+                "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=infinity\nKillMode=process\n",
+            ),
+        ),
+    ];
+
+    for (case, service) in cases {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runner = MockRunner::with_outputs(
+            systemd_activation_outputs("infinity", service),
+            vec![Ok(true), Ok(true), Ok(true), Ok(true)],
+        );
+
+        let error = set_clock_enabled_with(
+            root.path(),
+            true,
+            ClockPlatform::Systemd,
+            &runner,
+            home.path(),
+        )
+        .expect_err(case);
+
+        assert!(
+            error
+                .to_string()
+                .contains("systemd timer enable completed, but the manager did not report it active with a finite future trigger"),
+            "{case}: {error}"
+        );
+        assert_eq!(
+            runner.commands().len(),
+            6,
+            "{case}: no retry or extra probe"
+        );
     }
 }

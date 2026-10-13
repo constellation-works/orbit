@@ -99,6 +99,23 @@ Admitted unit tests:
   agents. The public API selects the native host platform, so an integration test
   on Linux cannot force these launchd states.
 
+- The systemd activation matrices in
+  `crates/orbit-core/src/application/routines/clock/tests/enable.rs`
+  (`systemd_enable_accepts_healthy_in_flight_and_finite_timers` and
+  `systemd_enable_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger`)
+  and `tests/install.rs`
+  (`systemd_install_accepts_healthy_in_flight_and_finite_timers` and
+  `systemd_install_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger`)
+  meet criterion 2 (fault injection). The manager-runner seam fixes the
+  observation immediately after activation: a loaded active timer has no next
+  trigger while a healthy oneshot is still running, or its service is missing,
+  inactive, failed, unhealthy, or lacks safe recovery settings. Finite-trigger
+  rows provide controls. The public enable/install APIs use the native manager
+  and cannot force this transient or these failures economically without
+  changing the host's user service. These matrices guard the premature
+  activation refusal observed on 2026-10-13 and exercise the activation entry
+  points, including success reports and execution errors, without timing loops.
+
 - `crates/orbit-core/src/application/task/tests/transitions.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force` (criterion 2, deterministic interleaving). The existing transition-read seam commits an in-progress status after deletion's initial proposed/rejected check, before the task write lock. The isolated fixture asserts refusal leaves the task present, with forced deletion and unchanged eligible statuses as controls. Crate-root integration tests cannot reach the `cfg(test)` seam to choose this ordering reliably.
 
 - `crates/orbit-common/src/process/tests/bounded.rs`: `argv_probe_recovers_when_a_live_child_outgrows_the_queried_buffer` (criteria 2 and 4, native fault injection). A pipe handshake grows a live macOS child's argv between the size query and read. The stale buffer yields an unreadable record, which must not prove exit or authorize cleanup; the probe grows its buffer and recovers the recorded identity. Darwin can return success with a truncated `KERN_PROCARGS2` record, so handling only `ENOMEM` is insufficient. The public bounded runner cannot force this observer interleaving.
