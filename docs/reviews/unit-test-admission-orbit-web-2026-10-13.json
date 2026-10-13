@@ -1,0 +1,465 @@
+{
+  "schema_version": 1,
+  "task_id": "ORB-15854",
+  "run_id": "jrun-20261013-1351-c1",
+  "audit_path": "docs/reviews/unit-test-audit-2026-10-12.json",
+  "audit_head": "dd268d0d5a1640b709bcac0d3759b04879f77a14",
+  "delivery_base": "9ad59080955cb86df219b0bbfc1d11ba80d34417",
+  "counts": {
+    "owned": 34,
+    "moved": 32,
+    "corrected_keep": 2,
+    "retired": 0,
+    "original_admitted_preserved": 24,
+    "resulting_unit_identities": 26
+  },
+  "entries": [
+    {
+      "identity": "api/tests/auto_tasks.rs::toggle_denies_a_caller_without_operator_capability",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::toggle_denies_a_caller_without_operator_capability",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/distributed.rs::a_replica_checkout_reads_empty_and_refuses_every_owner_action",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/distributed_contracts.rs::a_replica_checkout_reads_empty_and_refuses_every_owner_action",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/distributed.rs::claim_console_filters_by_task_and_state_and_compacts_settled_rows",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/distributed_contracts.rs::claim_console_filters_by_task_and_state_and_compacts_settled_rows",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/distributed.rs::default_claim_response_stays_small_with_long_settled_history",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/distributed_contracts.rs::default_claim_response_stays_small_with_long_settled_history",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/log.rs::log_stream_gate_caps_concurrent_acquisitions",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/log.rs::log_stream_gate_caps_concurrent_acquisitions",
+      "rationale": "Existing acquisition/refusal/release invariant now exercises real SSE clients: fill the configured cap, refuse excess, release and reacquire one, then release all and reacquire the same number. Source input only discovers the configured cap, so policy changes do not pin its numeric value. available_permits test-only access is removed."
+    },
+    {
+      "identity": "api/tests/origin.rs::require_localhost_origin_rejects_forged_host_get_without_origin",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::require_localhost_origin_rejects_forged_host_get_without_origin",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/origin.rs::require_localhost_origin_rejects_prefix_match",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::require_localhost_origin_rejects_prefix_match",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/runs/events.rs::list_run_events_rejects_path_traversal_id",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::list_run_events_rejects_path_traversal_id",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/runs/run.rs::dashboard_cancel_requeues_with_reason_by_default_and_can_keep_blocked_state",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::dashboard_cancel_requeues_with_reason_by_default_and_can_keep_blocked_state",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/runs/run.rs::force_cancel_exposes_stopped_and_unstopped_local_children",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::force_cancel_exposes_stopped_and_unstopped_local_children",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated. The live self-PID sentinel is now the fixture server PID, preserving the same safe self-cancellation refusal without killing the test process."
+    },
+    {
+      "identity": "api/tests/tasks.rs::dashboard_allow_missing_context_records_durable_creation_intent",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::dashboard_allow_missing_context_records_durable_creation_intent",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/tasks.rs::get_task_artifact_downloads_unsafe_media_types",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::get_task_artifact_downloads_unsafe_media_types",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/tasks.rs::get_task_artifact_refuses_symlink_escaping_artifact_root",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::get_task_artifact_refuses_symlink_escaping_artifact_root",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/tasks.rs::get_task_artifact_rejects_adversarial_paths",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::get_task_artifact_rejects_adversarial_paths",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/tasks.rs::get_task_artifact_serves_subdirectory_bytes_and_media_type",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::get_task_artifact_serves_subdirectory_bytes_and_media_type",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/tasks.rs::task_list_and_detail_carry_readiness_for_proposed_and_backlog_only",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::task_list_and_detail_carry_readiness_for_proposed_and_backlog_only",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/tasks.rs::update_task_refuses_to_fabricate_or_reopen_a_completion",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/task_contracts.rs::update_task_refuses_to_fabricate_or_reopen_a_completion",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/workspaces.rs::aggregate_job_runs_page_is_bounded_and_observational",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/aggregate_pages.rs::aggregate_job_runs_page_is_bounded_and_observational",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "api/tests/workspaces.rs::aggregate_task_page_opens_only_the_returned_bundles",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/aggregate_pages.rs::aggregate_task_page_opens_only_the_returned_bundles",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "log_format/tests/render.rs::rendered_agent_relays_put_kind_and_run_in_first_60_characters",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/log_render.rs::rendered_agent_relays_put_kind_and_run_in_first_60_characters",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "log_format/tests/render.rs::rendered_context_shortens_paths_without_losing_full_values_or_html_safety",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/log_render.rs::rendered_context_shortens_paths_without_losing_full_values_or_html_safety",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::dashboard_clock_renders_local_times_with_zone_and_reliability_range_in_utc",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::dashboard_clock_renders_local_times_with_zone_and_reliability_range_in_utc",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::dashboard_drops_superseded_audit_codebase_and_scoreboard_responses",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::dashboard_drops_superseded_audit_codebase_and_scoreboard_responses",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::dashboard_routes_emit_csp",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::dashboard_routes_emit_csp",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_states",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_states",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::run_detail_failure_chain_links_root_cause_and_names_a_cancellation",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::run_detail_failure_chain_links_root_cause_and_names_a_cancellation",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::runs_view_executes_load_more_live_duration_actions_header_and_cancel_style",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::runs_view_executes_load_more_live_duration_actions_header_and_cancel_style",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::settings_hosts_view_executes_rows_freshness_load_banner_and_inline_mutations",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::settings_hosts_view_executes_rows_freshness_load_banner_and_inline_mutations",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::settings_system_view_executes_render_provenance_override_edit_and_refused_write",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::settings_system_view_executes_render_provenance_override_edit_and_refused_write",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/dashboard_assets.rs::tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/dashboard_assets.rs::tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view",
+      "rationale": "Existing Node VM case and unchanged JavaScript behavior fixture relocated to the crate-root http_api integration binary; asset imports retain the same relative depth. No assertions or fixture behavior were added."
+    },
+    {
+      "identity": "tests/serve.rs::api_and_static_responses_carry_baseline_security_headers",
+      "audit_decision": "move",
+      "result": "moved",
+      "destination": "crates/orbit-web/tests/http_api/audit_contracts.rs::api_and_static_responses_carry_baseline_security_headers",
+      "rationale": "Existing case and assertions relocated to the existing http_api integration binary through serve_from_env and real HTTP responses, with mutable state isolated by support::isolated."
+    },
+    {
+      "identity": "tests/ssh_tunnel.rs::delayed_forward_bind_attaches_without_a_second_ssh",
+      "audit_decision": "move",
+      "result": "corrected_keep",
+      "criteria": [
+        2
+      ],
+      "source": "crates/orbit-web/src/tests/ssh_tunnel.rs",
+      "rationale": "Corrected admission, criterion 2: the crate-private TunnelSpec accepts a 500 ms attach budget while the stub delays its bind for 2 s. HostTunnelsConfig::default fixes the public host-forward attach budget at 5 s and ready budget at 30 s, so the same 2 s fixture does not cross that attach budget at the public route. A public reproduction would require slowing the stub beyond 5 s and would also add mandatory identity negotiation; it cannot preserve this existing short-budget control without new behavior or visibility. Keep the private establish/healthz fixture, its one-SSH/Attached/reaped assertions and supporting transport.",
+      "seam": [
+        "crates/orbit-web/src/ssh_tunnel.rs::TunnelSpec",
+        "crates/orbit-web/src/ssh_tunnel.rs::establish",
+        "crates/orbit-web/src/connect.rs::healthz_ok",
+        "crates/orbit-web/src/ssh_tunnel.rs::ProbeLimit"
+      ]
+    },
+    {
+      "identity": "tests/ssh_tunnel.rs::oversized_status_line_is_refused_without_draining_the_flood",
+      "audit_decision": "move",
+      "result": "corrected_keep",
+      "criteria": [
+        2,
+        4
+      ],
+      "source": "crates/orbit-web/src/tests/ssh_tunnel.rs",
+      "rationale": "Corrected admission, criteria 2 and 4: the direct healthz_ok(port, ProbeLimit { deadline: now + 5 s, cancel: None }) call asserts a no-newline byte flood returns before 1 s, independently of timeout. The same test also injects ATTACH_SLICE/READY_SLICE into private TunnelSpec and asserts failed establish reaps its child. The host-forward HTTP response hides direct probe completion and uses fixed 5 s/30 s budgets plus identity negotiation; a refusal after its deadline would not prove byte-cap enforcement. Keep this private bounded-read and child-lifecycle seam; no production visibility is widened.",
+      "seam": [
+        "crates/orbit-web/src/ssh_tunnel.rs::TunnelSpec",
+        "crates/orbit-web/src/ssh_tunnel.rs::establish",
+        "crates/orbit-web/src/connect.rs::healthz_ok",
+        "crates/orbit-web/src/ssh_tunnel.rs::ProbeLimit"
+      ]
+    }
+  ],
+  "admitted_preserved": [
+    "api/tests/handlers.rs::successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown",
+    "api/tests/log.rs::over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline",
+    "api/tests/workspaces.rs::stale_build_during_rebind_never_republishes_as_current",
+    "log_format/tests/render.rs::format_message_html_escapes_dynamic_field_values",
+    "log_format/tests/render.rs::rendered_log_redacts_secret_tokens_in_lines_and_fields",
+    "log_format/tests/scan.rs::a_segment_straddling_the_window_is_read_only_back_to_its_start",
+    "log_format/tests/scan.rs::line_verdicts_equal_a_full_parse",
+    "log_format/tests/scan.rs::post_window_errors_do_not_consume_the_match_budget_or_advance_coverage",
+    "log_format/tests/scan.rs::rejected_lines_build_no_value",
+    "log_format/tests/scan.rs::segments_last_written_before_the_window_are_not_opened",
+    "tests/dashboard_assets.rs::dashboard_markdown_call_sites_use_sanitizing_wrapper",
+    "tests/host_tunnels.rs::a_dead_child_is_replaced_by_the_next_request",
+    "tests/host_tunnels.rs::a_paced_identity_body_cannot_outlive_its_deadline",
+    "tests/host_tunnels.rs::a_spawned_remote_gets_operator_exactly_when_the_session_has_it",
+    "tests/host_tunnels.rs::an_idle_tunnel_is_torn_down_but_not_under_an_open_lease",
+    "tests/host_tunnels.rs::concurrent_first_requests_share_one_attached_ssh",
+    "tests/host_tunnels.rs::shutdown_stops_every_child_and_refuses_new_tunnels",
+    "tests/runtime_memo.rs::expired_entry_keeps_in_flight_refresh_single_flight",
+    "tests/serve.rs::early_signal_before_first_poll_is_not_a_lost_wakeup",
+    "tests/serve.rs::grace_period_does_not_start_before_shutdown_is_signaled",
+    "tests/serve.rs::teardown_returns_after_grace_period_with_blocking_work_in_flight",
+    "tests/ssh_tunnel.rs::cancel_during_a_paced_status_reaps_the_ssh_child",
+    "tests/ssh_tunnel.rs::paced_status_fragments_cannot_outlive_the_readiness_budget",
+    "tests/ssh_tunnel.rs::probes_verify_status_code_over_finite_peer"
+  ],
+  "integrity": "All 24 original admitted function bodies match the starting HEAD byte-for-byte; their child fixtures and private seams remain. All other crates baseline records remain identical to the starting baseline.",
+  "validation_policy": "Pipeline final validation owns make ci-fast, make ci-lint, make goldens and make ci-test-affected. Focused orbit-web boundary tests and check-ci-macos are run locally.",
+  "validation": [
+    {
+      "command": "cargo test -p orbit-web --test http_api task_contracts:: -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 7
+    },
+    {
+      "command": "cargo test -p orbit-web --test http_api audit_contracts:: -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 8
+    },
+    {
+      "command": "cargo test -p orbit-web --test http_api distributed_contracts:: -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 3
+    },
+    {
+      "command": "cargo test -p orbit-web --test http_api aggregate_pages:: -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 2
+    },
+    {
+      "command": "cargo test -p orbit-web --test http_api log_render:: -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 2
+    },
+    {
+      "command": "cargo test -p orbit-web --test http_api dashboard_assets:: -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 9
+    },
+    {
+      "command": "cargo test -p orbit-web --test http_api log_stream_gate_caps_concurrent_acquisitions -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 1
+    },
+    {
+      "command": "cargo test -p orbit-web --lib -- --test-threads=1",
+      "outcome": "passed",
+      "tests": 26
+    },
+    {
+      "command": "cargo clippy -p orbit-web --all-targets -- -D warnings -A clippy::disallowed_methods",
+      "outcome": "passed"
+    },
+    {
+      "command": "./scripts/check-ci-macos.sh",
+      "outcome": "passed"
+    },
+    {
+      "command": "python3 scripts/check-doc-links.py",
+      "outcome": "passed"
+    },
+    {
+      "command": "./scripts/check-orphan-modules.sh",
+      "outcome": "passed"
+    },
+    {
+      "command": "python3 scripts/check-windows-portability.py",
+      "outcome": "passed"
+    },
+    {
+      "command": "python3 scripts/unit-test-inventory.py --check scripts/unit-test-baseline.json",
+      "outcome": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "outcome": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "outcome": "passed"
+    },
+    {
+      "command": "make ci-fast",
+      "outcome": "not_run",
+      "reason": "Pipeline final validation on the final candidate; affected-test comparison base is 9ad59080955cb86df219b0bbfc1d11ba80d34417."
+    },
+    {
+      "command": "make ci-lint",
+      "outcome": "not_run",
+      "reason": "Pipeline final validation on the final candidate; affected-test comparison base is 9ad59080955cb86df219b0bbfc1d11ba80d34417."
+    },
+    {
+      "command": "make goldens",
+      "outcome": "not_run",
+      "reason": "Pipeline final validation on the final candidate; affected-test comparison base is 9ad59080955cb86df219b0bbfc1d11ba80d34417."
+    },
+    {
+      "command": "make ci-test-affected",
+      "outcome": "not_run",
+      "reason": "Pipeline final validation on the final candidate; affected-test comparison base is 9ad59080955cb86df219b0bbfc1d11ba80d34417."
+    }
+  ],
+  "validation_repairs": [
+    "Initial targeted Clippy used stricter fixture filesystem lints than the documented all-targets policy; rerun with its -A clippy::disallowed_methods flag. This then found the now-unused cfg(test) serve_dashboard_file helper; removed it and the final targeted lint passes.",
+    "Initial replica fixture used a noncanonical owner ID; changed the disposable fixture to hm_fixture_remote. Initial log HOME fixture had a trailing slash; normalized the fixture path. Both unchanged behavioral cases now pass through public HTTP."
+  ],
+  "criteria_evidence": [
+    "All 34 owned identities are reconciled individually: 32 relocated identities are absent from src and the baseline, with 32 passing boundary cases; two SSH identities retain specific private budget/probe admissions and pass in the library suite.",
+    "All 24 originally admitted function bodies match the starting HEAD byte-for-byte and pass in the 26-test library suite. Required private seams and child entry points remain. Production edits delete only cfg(test) helpers; no behavior, dependency or visibility expansion.",
+    "The regenerated orbit-web baseline exactly matches 26 current identities; every other crate record is unchanged. Empty modules and unused test support are removed, and both admission/layout documentation and the per-identity report are updated. Focused lint, formatter, inventory and supporting guardrails passed; the four required gates belong to pipeline final validation and are not claimed passed.",
+    "No relocated orbit-web identity or file is named by ci-macos.yml filters, so the workflow needs no change. ./scripts/check-ci-macos.sh passed on this native Mac host. Two existing QA inventory Node command paths now name the relocated JavaScript fixtures."
+  ],
+  "reconciliation": {
+    "starting_head": "9ad59080955cb86df219b0bbfc1d11ba80d34417",
+    "starting_status": "clean",
+    "delivery_paths": [
+      "crates/orbit-web/src/api/log.rs",
+      "crates/orbit-web/src/api/tests/auto_tasks.rs",
+      "crates/orbit-web/src/api/tests/distributed.rs",
+      "crates/orbit-web/src/api/tests/handlers.rs",
+      "crates/orbit-web/src/api/tests/log.rs",
+      "crates/orbit-web/src/api/tests/mod.rs",
+      "crates/orbit-web/src/api/tests/origin.rs",
+      "crates/orbit-web/src/api/tests/runs/events.rs",
+      "crates/orbit-web/src/api/tests/runs/mod.rs",
+      "crates/orbit-web/src/api/tests/runs/run.rs",
+      "crates/orbit-web/src/api/tests/tasks.rs",
+      "crates/orbit-web/src/api/tests/test_support.rs",
+      "crates/orbit-web/src/api/tests/workspaces.rs",
+      "crates/orbit-web/src/assets.rs",
+      "crates/orbit-web/src/log_format/tests/render.rs",
+      "crates/orbit-web/src/tests/dashboard_assets.rs",
+      "crates/orbit-web/src/tests/dashboard_codebase.mjs",
+      "crates/orbit-web/src/tests/dashboard_config_hosts.mjs",
+      "crates/orbit-web/src/tests/dashboard_config_system.mjs",
+      "crates/orbit-web/src/tests/dashboard_host_resources.mjs",
+      "crates/orbit-web/src/tests/dashboard_panel_race.mjs",
+      "crates/orbit-web/src/tests/dashboard_run_detail_failure.mjs",
+      "crates/orbit-web/src/tests/dashboard_runs.mjs",
+      "crates/orbit-web/src/tests/dashboard_tasks_rail.mjs",
+      "crates/orbit-web/src/tests/dashboard_timestamps.mjs",
+      "crates/orbit-web/src/tests/serve.rs",
+      "crates/orbit-web/src/tests/ssh_tunnel.rs",
+      "crates/orbit-web/tests/http_api.rs",
+      "crates/orbit-web/tests/http_api/aggregate_pages.rs",
+      "crates/orbit-web/tests/http_api/audit_contracts.rs",
+      "crates/orbit-web/tests/http_api/dashboard_assets.rs",
+      "crates/orbit-web/tests/http_api/dashboard_codebase.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_config_hosts.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_config_system.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_host_resources.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_panel_race.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_run_detail_failure.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_runs.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_tasks_rail.mjs",
+      "crates/orbit-web/tests/http_api/dashboard_timestamps.mjs",
+      "crates/orbit-web/tests/http_api/distributed_contracts.rs",
+      "crates/orbit-web/tests/http_api/log.rs",
+      "crates/orbit-web/tests/http_api/log_render.rs",
+      "crates/orbit-web/tests/http_api/task_contracts.rs",
+      "docs/design-patterns/test_layout.md",
+      "docs/design-patterns/test_strategy.md",
+      "docs/reviews/unit-test-admission-orbit-web-2026-10-13.json",
+      "scripts/qa-full-sweep-inventory.json",
+      "scripts/unit-test-baseline.json"
+    ],
+    "outside_initial_selectors": "Crate-root integration modules and their relocated JS fixtures, source module declarations and unused test helpers, admission/layout documentation, per-identity report, and QA inventory command paths are necessary to complete the owned relocations.",
+    "scratch": ".orbit/tmp/ contains only ignored run-scoped scripts and validation logs. No run-owned non-deliverable paths remain outside scratch. No pre-existing edits were present. Changes remain uncommitted.",
+    "workflow": "Claimed handoff; owner task updates, commit, delivery transitions and final validation belong to the pipeline."
+  }
+}
