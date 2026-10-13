@@ -68,6 +68,17 @@ load. The same clock covers instruction-tree preparation. This hook exists
 only with the dev-dependency `test-support` feature; production builds keep
 their monotonic wall-clock budgets and recognize no override.
 
+The engine's integration scenario families retain named assertion bodies under
+bounded isolated child tests. Pristine Git fixture templates save repeated
+initialization; each row receives independent repository files and objects.
+Their [scenario mapping](../crates/orbit-engine/tests/engine/SCENARIOS.md) lists
+retired nextest names and their surviving rows. PR landing fixtures use the
+engine's dev-only `with_vcs_retry_wait` hook for fixed delays: poll counts, logical
+wait budgets and remote mutations still run, while subprocess deadlines and
+cleanup remain real. Build-slot fixtures use the existing CLI supervision clock
+only after a real wrapper heartbeat proves the queue interval. This removes
+host-speed assumptions without extending timeout or cleanup budgets.
+
 `make ci-test-affected` (`scripts/ci-test-affected.py`) reads Cargo metadata without compiling. It selects every crate with changed paths plus all transitive reverse workspace dependents (dev, build, renamed, optional and target-specific edges), then runs their library, binary and integration test targets with nextest (Cargo if nextest is missing) and Cargo doctests, under the shared [build-budget admission](runbooks/build-budget.md). A change under `crates/orbit-core/` selects `orbit-core`, `orbit-cmd`, `orbit-web` and `orbit-cli`.
 
 - **Diff:** committed, staged, unstaged and non-ignored untracked paths; a move selects both crates.

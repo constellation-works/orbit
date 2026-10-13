@@ -20,7 +20,6 @@ use crate::review_fixes::{
 
 /// A resumed candidate that validated runs no implementation step; the
 /// pipeline commits, validates, reviews and delivers what is in the checkout.
-#[test]
 fn a_validated_candidate_delivers_without_an_implementation_step() {
     let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes).resuming(resumed(
         "resumed_validated",
@@ -52,7 +51,6 @@ fn a_validated_candidate_delivers_without_an_implementation_step() {
 
 /// A candidate that needs repair runs the implementation step, which gets
 /// the repair trigger and output; a fresh one gets none.
-#[test]
 fn a_repair_hands_the_implementer_the_candidate_trigger() {
     let repair = json!({
         "trigger": "validation",
@@ -86,7 +84,6 @@ fn a_repair_hands_the_implementer_the_candidate_trigger() {
 /// [ORB-14257] A claimed PR leaf hands the candidate its claim carries to
 /// `candidate_resume` in claimed mode, and the repair it decides to the
 /// claimed implementer; a claim without one hands it nothing.
-#[test]
 fn a_claimed_leaf_hands_its_kept_candidate_to_resume_and_the_repair_to_the_implementer() {
     let kept = json!({
         "branch": "orbit/T-1-kept",
@@ -142,7 +139,6 @@ fn a_claimed_leaf_hands_its_kept_candidate_to_resume_and_the_repair_to_the_imple
 /// [ORB-14338] A claimed owner-local leaf runs `candidate_resume` too: the
 /// candidate its claim carries reaches the action in claimed mode, and the
 /// repair it decides reaches the claimed implementer.
-#[test]
 fn a_claimed_local_leaf_resumes_its_kept_candidate() {
     let kept = json!({
         "branch": "orbit/T-1-kept",
@@ -217,4 +213,29 @@ fn resumed(outcome: &str, implement: bool, repair: Value) -> Value {
         "source_sha": "candidate",
         "base_sha": "base-sha",
     })
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn candidate_resume_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "candidate_resume_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_validated_candidate_delivers_without_an_implementation_step",
+                a_validated_candidate_delivers_without_an_implementation_step,
+            ),
+            (
+                "a_repair_hands_the_implementer_the_candidate_trigger",
+                a_repair_hands_the_implementer_the_candidate_trigger,
+            ),
+            (
+                "a_claimed_leaf_hands_its_kept_candidate_to_resume_and_the_repair_to_the_implementer",
+                a_claimed_leaf_hands_its_kept_candidate_to_resume_and_the_repair_to_the_implementer,
+            ),
+            (
+                "a_claimed_local_leaf_resumes_its_kept_candidate",
+                a_claimed_local_leaf_resumes_its_kept_candidate,
+            ),
+        ]);
+    });
 }

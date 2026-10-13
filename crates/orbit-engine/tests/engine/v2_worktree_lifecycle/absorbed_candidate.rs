@@ -63,7 +63,6 @@ impl AbsorbedRun {
     }
 }
 
-#[test]
 fn an_identical_landed_patch_settles_before_candidate_validation() {
     isolated_in(
         module_path!(),
@@ -125,7 +124,6 @@ fn an_identical_landed_patch_settles_before_candidate_validation() {
     );
 }
 
-#[test]
 fn a_rebase_retaining_candidate_commits_still_runs_validation() {
     isolated_in(
         module_path!(),
@@ -171,7 +169,6 @@ fn a_rebase_retaining_candidate_commits_still_runs_validation() {
     );
 }
 
-#[test]
 fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
     isolated_in(
         module_path!(),
@@ -293,7 +290,6 @@ fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
 /// candidate's path, but the base does not hold the candidate's change. The
 /// continuation is refused with its typed reason and the final-recovery agent
 /// decides, rather than the task settling as delivered by that commit.
-#[test]
 fn a_discarded_candidate_reaches_the_final_recovery_agent() {
     isolated_in(
         module_path!(),
@@ -357,7 +353,6 @@ fn a_discarded_candidate_reaches_the_final_recovery_agent() {
 /// The resolution keeps the candidate's commit on the pin, but the base
 /// advanced with that same content meanwhile: following the tip drops the
 /// pick, and the candidate is certified absorbed by the advanced commit.
-#[test]
 fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
     isolated_in(
         module_path!(),
@@ -402,7 +397,6 @@ fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
 
 /// The resolution also reverted a path no base commit touched: the candidate
 /// was dropped, not absorbed, and the continuation is refused as before.
-#[test]
 fn a_dropped_candidate_is_refused_at_the_continuation() {
     isolated_in(
         module_path!(),
@@ -442,7 +436,6 @@ fn a_dropped_candidate_is_refused_at_the_continuation() {
 /// Each neighbour of an absorbed candidate keeps the certified checkpoint but
 /// changes what final recovery re-observes. None settles: the agent runs and
 /// reads the typed reason.
-#[test]
 fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
     isolated_in(
         module_path!(),
@@ -826,7 +819,6 @@ fn legacy_absorbed_message(prepared: &PreparedRebase, base_sha: &str) -> String 
     )
 }
 
-#[test]
 fn a_quoted_absorption_marker_never_settles_a_certified_candidate() {
     isolated_in(
         module_path!(),
@@ -868,4 +860,54 @@ fn a_quoted_absorption_marker_never_settles_a_certified_candidate() {
             assert_eq!(host.stub_calls_of("handoff").len(), 1);
         },
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn absorption_contracts_1() {
+    isolated_in(module_path!(), "absorption_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_identical_landed_patch_settles_before_candidate_validation",
+                an_identical_landed_patch_settles_before_candidate_validation,
+            ),
+            (
+                "a_rebase_retaining_candidate_commits_still_runs_validation",
+                a_rebase_retaining_candidate_commits_still_runs_validation,
+            ),
+            (
+                "an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent",
+                an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent,
+            ),
+            (
+                "a_discarded_candidate_reaches_the_final_recovery_agent",
+                a_discarded_candidate_reaches_the_final_recovery_agent,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn absorption_contracts_2() {
+    isolated_in(module_path!(), "absorption_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip",
+                a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip,
+            ),
+            (
+                "a_dropped_candidate_is_refused_at_the_continuation",
+                a_dropped_candidate_is_refused_at_the_continuation,
+            ),
+            (
+                "absorbed_neighbours_fail_closed_with_a_typed_reason",
+                absorbed_neighbours_fail_closed_with_a_typed_reason,
+            ),
+            (
+                "a_quoted_absorption_marker_never_settles_a_certified_candidate",
+                a_quoted_absorption_marker_never_settles_a_certified_candidate,
+            ),
+        ]);
+    });
 }

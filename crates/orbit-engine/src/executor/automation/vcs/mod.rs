@@ -25,6 +25,7 @@ mod push;
 mod remote_probe;
 mod required_command;
 mod resume;
+pub(crate) mod retry_wait;
 pub mod review_gate;
 mod worktree;
 

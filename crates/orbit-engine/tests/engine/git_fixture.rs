@@ -4,6 +4,38 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// Copy a pristine family fixture, keeping independent files and Git objects.
+/// Only repository configuration embeds the template's disposable root.
+pub(super) fn copy_template(source: &Path, destination: &Path) {
+    fn copy(source: &Path, destination: &Path, old_root: &str, new_root: &str) {
+        fs::create_dir_all(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                copy(&entry.path(), &target, old_root, new_root);
+            } else {
+                assert!(
+                    kind.is_file(),
+                    "pristine fixture must contain regular files"
+                );
+                fs::copy(entry.path(), &target).unwrap();
+                if entry.file_name() == "config" {
+                    let config = fs::read_to_string(&target).unwrap();
+                    fs::write(&target, config.replace(old_root, new_root)).unwrap();
+                }
+            }
+        }
+    }
+    copy(
+        source,
+        destination,
+        source.to_str().unwrap(),
+        destination.to_str().unwrap(),
+    );
+}
+
 pub(super) const FILE_ONLY_CONFIG: &str =
     "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n";
 
@@ -20,7 +52,7 @@ pub(super) fn configure_child(command: &mut Command, home: &Path, sandbox: &Path
 pub(super) fn isolated(module: &str, test: &str, body: impl FnOnce()) {
     const CHILD_ENV: &str = "ORBIT_GIT_FIXTURE_CHILD";
     let qualified = format!("{}::{test}", module.split_once("::").unwrap().1);
-    if std::env::var(CHILD_ENV).as_deref() == Ok(&qualified) {
+    if std::env::var_os(CHILD_ENV).is_some() {
         body();
         return;
     }
@@ -56,6 +88,15 @@ pub(super) fn isolated(module: &str, test: &str, body: impl FnOnce()) {
         output.stdout,
         output.stderr,
     );
+}
+
+/// Retain each row's name in captured failure output; execute every assertion.
+#[allow(clippy::print_stderr)]
+pub(super) fn run_scenarios(rows: &[(&str, fn())]) {
+    for (name, scenario) in rows {
+        eprintln!("scenario: {name}");
+        scenario();
+    }
 }
 
 pub(super) fn assert_local_push_remote(repo: &Path) {

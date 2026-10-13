@@ -81,7 +81,7 @@ pub(in super::super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
             retry = run.network_retries + 1,
             "required validation was network-inconclusive; retrying"
         );
-        std::thread::sleep(backoff);
+        super::super::retry_wait::sleep(backoff);
         let retries = run.network_retries + 1;
         run = run_required_command(
             host,

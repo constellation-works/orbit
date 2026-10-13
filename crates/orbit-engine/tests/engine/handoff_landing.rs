@@ -122,7 +122,6 @@ fn land_with(host: &impl RuntimeHost, extra: Value) -> Result<Value, OrbitError>
     )
 }
 
-#[test]
 fn a_local_candidate_landing_names_its_task_before_the_branch_moves() {
     let sandbox = tempdir().unwrap();
     let host = owner_checkout(sandbox.path());
@@ -153,7 +152,6 @@ fn a_local_candidate_landing_names_its_task_before_the_branch_moves() {
     );
 }
 
-#[test]
 fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
     let sandbox = tempdir().unwrap();
     let host = owner_checkout(sandbox.path());
@@ -228,7 +226,6 @@ impl orbit_engine::test_support::NullRuntimeHost for ReconciliationHost {
     }
 }
 
-#[test]
 fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
     for (field, replacement) in [
         ("headRefName", "another-branch"),
@@ -378,7 +375,6 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
 
 /// [ORB-14261] Only a stop a rebase can cure earns the automatic repair: a
 /// conflicting or stale base. A protection refusal stays an operator's call.
-#[test]
 fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
     for (merge_state, repairable) in [
         ("DIRTY", true),
@@ -413,7 +409,6 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
 /// merges while it is absent, still running, skipped, or neutral. A
 /// StatusContext success still passes. A local candidate, which no hosted CI
 /// runs, never lands with one.
-#[test]
 fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
     const OWED: &str = "CodeQL / Analyze (rust)";
     let check = |conclusion: Option<&str>| {
@@ -533,4 +528,42 @@ fn git(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn handoff_landing_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_local_candidate_landing_names_its_task_before_the_branch_moves",
+                a_local_candidate_landing_names_its_task_before_the_branch_moves,
+            ),
+            (
+                "a_candidate_that_cannot_fast_forward_records_no_landing_intent",
+                a_candidate_that_cannot_fast_forward_records_no_landing_intent,
+            ),
+            (
+                "a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts",
+                a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn handoff_landing_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair",
+                only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair,
+            ),
+            (
+                "an_owed_hosted_check_must_pass_before_the_owner_merges",
+                an_owed_hosted_check_must_pass_before_the_owner_merges,
+            ),
+        ]);
+    });
 }
