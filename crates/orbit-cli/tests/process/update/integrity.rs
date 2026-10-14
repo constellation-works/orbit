@@ -70,7 +70,7 @@ impl Install {
         crate::git_repo::seal_lookup_boundary(&cwd);
         let executable = super::install_test_binary(&bin);
         let before = fs::read(&executable).expect("installed bytes");
-        let (private_key, public_key) = generate_keypair(root.path());
+        let (private_key, public_key) = super::release_fixture::write_signing_keypair(root.path());
         let trust_file = root.path().join("trusted-release-keys.txt");
         write_trust(&trust_file, &public_key, revoked_at);
         let generation = home.join(".orbit").join(".generation.lock");
@@ -810,42 +810,6 @@ pub(super) fn mkfifo(path: &Path) {
     assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
 }
 
-fn generate_keypair(dir: &Path) -> (PathBuf, PathBuf) {
-    let private = dir.join("release-test.pem");
-    let public = dir.join("release-test.pub");
-    let generated = Command::new("openssl")
-        .args([
-            "genpkey",
-            "-algorithm",
-            "RSA",
-            "-pkeyopt",
-            "rsa_keygen_bits:2048",
-            "-out",
-        ])
-        .arg(&private)
-        .output()
-        .expect("openssl genpkey");
-    assert!(
-        generated.status.success(),
-        "openssl genpkey: {}",
-        String::from_utf8_lossy(&generated.stderr)
-    );
-    let exported = Command::new("openssl")
-        .arg("pkey")
-        .arg("-in")
-        .arg(&private)
-        .args(["-pubout", "-out"])
-        .arg(&public)
-        .output()
-        .expect("openssl pkey");
-    assert!(
-        exported.status.success(),
-        "openssl pkey: {}",
-        String::from_utf8_lossy(&exported.stderr)
-    );
-    (private, public)
-}
-
 fn write_trust(path: &Path, public_key: &Path, revoked_at: Option<&str>) {
     let revoked = revoked_at.unwrap_or("");
     fs::write(
@@ -953,6 +917,7 @@ pub(super) fn backup_path(executable: &Path) -> PathBuf {
 
 #[test]
 fn release_integrity_contracts_0() {
+    let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
         (
             "a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned",
@@ -970,6 +935,7 @@ fn release_integrity_contracts_0() {
 
 #[test]
 fn release_integrity_contracts_1() {
+    let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
         (
             "an_archive_with_extra_members_including_traversal_is_rejected",
@@ -991,6 +957,7 @@ fn release_integrity_contracts_1() {
 
 #[test]
 fn release_integrity_contracts_2() {
+    let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
         (
             "a_second_concurrent_update_is_refused",
@@ -1013,6 +980,7 @@ fn release_integrity_contracts_2() {
 
 #[test]
 fn release_integrity_contracts_3() {
+    let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
         (
             "an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound",

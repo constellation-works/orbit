@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-13
+last_validated: 2026-10-14
 ---
 # Boundary-First Testing
 
@@ -30,6 +30,8 @@ Critical coverage takes priority:
 For each consolidation or retirement, record the invariant and important failure cases, the existing or replacement test that still detects them, and measured cost before and after. Keep the only guard of a security invariant, recovery path or known incident until equivalent behavioral coverage is demonstrated in the same change (STD-04 §R25). Strengthen assertions or add explicitly required boundary coverage when an audit demonstrates a critical gap; do not add speculative private-function tests or duplicate an existing invariant.
 
 Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
+
+The signed-release update fixtures share throwaway signing material while keeping each installation, trust file, manifest and signature isolated. Release verification does not require fresh random RSA primes for every row. Their hanging-probe case synchronizes with the real child before the supervisor's initial clock sample and checks that timeout reaps it without acquiring admission or replacing the installation. A fixture clock must keep advancing after readiness: a single fixed jump can become the initial sample when the child starts early, leaving the timeout unable to expire.
 
 Use timings and failure evidence to find the actual bottleneck: runner setup, compilation, linting, test execution, fixture startup, serial groups or teardown. Compare the same source selection, runner/build settings and cache conditions; retain failed and slow runs as evidence. Measure the full hosted job after changes as well as focused before/after costs. Fix flakes and hangs at their cause. Retries, artificial sleeps, hidden skips, weaker assertions, zero-test selections and omitted required checks cannot satisfy the budget.
 
