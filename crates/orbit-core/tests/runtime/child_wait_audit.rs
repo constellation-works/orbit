@@ -9,11 +9,18 @@
 //! reaches the incident list; a failed child stays an unexpected incident.
 //!
 //! Each case submits a real child through `invoke_and_wait` and executes or
-//! cancels it in process while the parent's wait polls it.
+//! cancels it in process while the parent's wait polls it. The fixture retains
+//! each substitute's kernel identity behind a release-observation handshake,
+//! then waits for the supervisor's reap before deleting the temporary root,
+//! including when an observation returns an error or an assertion unwinds.
 
 use std::collections::BTreeSet;
+#[cfg(unix)]
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -39,6 +46,29 @@ struct Fixture {
     runtime: OrbitRuntime,
     jobs: Arc<dyn JobRunStoreBackend>,
     parent: String,
+    #[cfg(unix)]
+    listener: std::net::TcpListener,
+    #[cfg(unix)]
+    workers: Mutex<Vec<Substitute>>,
+    #[cfg(unix)]
+    cleaned: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(unix)]
+struct Substitute {
+    run: String,
+    pid: u32,
+    process: orbit_common::process::signal::BoundProcess,
+    control: std::net::TcpStream,
+}
+
+#[cfg(unix)]
+fn reaped(pid: u32) -> bool {
+    // Signal zero is observational and, unlike process_is_alive, includes
+    // zombies. ESRCH therefore proves the supervisor has reaped the child.
+    // SAFETY: signal zero neither mutates memory nor delivers a signal.
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 impl Fixture {
@@ -46,6 +76,9 @@ impl Fixture {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         // A submitted child's substitute worker stays alive until the test
         // has settled the child, so the supervisor never interrupts it.
+        #[cfg(unix)]
+        let listener = crate::worker_fixture::install_owned(&root.path().join("ran-{run_id}"));
+        #[cfg(not(unix))]
         crate::worker_fixture::install(root.path().join("ran-{run_id}").as_path(), "created");
         let global = root.path().join("global");
         let repo = root.path().join("repo");
@@ -95,6 +128,12 @@ impl Fixture {
             runtime,
             jobs,
             parent: parent.run_id,
+            #[cfg(unix)]
+            listener,
+            #[cfg(unix)]
+            workers: Mutex::new(Vec::new()),
+            #[cfg(unix)]
+            cleaned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -111,6 +150,8 @@ impl Fixture {
         let (child, output) = std::thread::scope(|scope| {
             let settler = scope.spawn(|| {
                 let child = self.await_new_child(&before);
+                #[cfg(unix)]
+                self.own_worker(&child).unwrap();
                 // A second runtime on the same roots, as a worker opens.
                 let runtime =
                     OrbitRuntime::from_roots(&self.global, &self.repo.join(".orbit")).unwrap();
@@ -157,6 +198,73 @@ impl Fixture {
         (child, row, output)
     }
 
+    #[cfg(unix)]
+    fn own_worker(&self, child: &str) -> io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let mut ready = libc::pollfd {
+            fd: self.listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // A bounded readiness wait, not a sleep to provoke the marker race.
+        // SAFETY: one initialized pollfd, retained listener, bounded timeout.
+        let polled = unsafe { libc::poll(&mut ready, 1, 5_000) };
+        if polled <= 0 {
+            return Err(if polled == 0 {
+                io::Error::new(io::ErrorKind::TimedOut, "owned worker handshake")
+            } else {
+                io::Error::last_os_error()
+            });
+        }
+        let (control, _) = self.listener.accept()?;
+        control.set_read_timeout(Some(Duration::from_secs(5)))?;
+        control.set_write_timeout(Some(Duration::from_secs(5)))?;
+        let mut reader = io::BufReader::new(control);
+        let mut identity = String::new();
+        reader.read_line(&mut identity)?;
+        let (run, pid) = identity
+            .trim()
+            .split_once(' ')
+            .ok_or_else(|| io::Error::other("worker handshake identity"))?;
+        let pid: u32 = pid.parse().map_err(io::Error::other)?;
+        let (key, parent) = orbit_common::process::ancestry::process_start_and_parent(pid)
+            .ok_or_else(|| io::Error::other("worker kernel identity"))?;
+        if run != child || parent != std::process::id() {
+            return Err(io::Error::other("worker is not this fixture's child"));
+        }
+        let process = orbit_common::process::signal::BoundProcess::bind(pid, None)?
+            .ok_or_else(|| io::Error::other("worker exited before ownership"))?;
+        if orbit_common::process::ancestry::process_start_and_parent(pid) != Some((key, parent)) {
+            return Err(io::Error::other("worker changed during identity binding"));
+        }
+        self.workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(Substitute {
+                run: child.to_string(),
+                pid,
+                process,
+                control: reader.into_inner(),
+            });
+        let _ = writeln!(
+            io::stderr(),
+            "owned substitute: run={child} pid={pid} parent={parent} start={} root={}",
+            key.starttime,
+            self.root.path().display()
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn worker_pids(&self) -> Vec<u32> {
+        self.workers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|worker| worker.pid)
+            .collect()
+    }
+
     fn child_runs(&self) -> Vec<String> {
         self.jobs
             .list_job_runs(CHILD)
@@ -178,6 +286,104 @@ impl Fixture {
             }
             assert!(Instant::now() < deadline, "the child was never submitted");
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // A failed observation can unwind before its settler acquired the
+        // substitute. Acquire every submitted child while the root still lives.
+        let mut failure = None;
+        let children = match self.jobs.list_job_runs(CHILD) {
+            Ok(runs) => runs.into_iter().map(|run| run.run_id).collect::<Vec<_>>(),
+            Err(error) => {
+                self.root.disable_cleanup(true);
+                failure = Some(format!("enumerate workers; root retained: {error}"));
+                Vec::new()
+            }
+        };
+        for child in children {
+            let owned = self
+                .workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .any(|worker| worker.run == child);
+            if !owned && let Err(error) = self.own_worker(&child) {
+                self.root.disable_cleanup(true);
+                failure = Some(format!("owned worker acquisition; root retained: {error}"));
+            }
+        }
+        let workers = self
+            .workers
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let release_deadline = Instant::now() + Duration::from_secs(1);
+        for worker in workers.iter_mut() {
+            let release = std::fs::write(self.root.path().join(format!("ran-{}", worker.run)), "")
+                .and_then(|()| worker.control.write_all(&[1]));
+            if let Err(error) = release {
+                failure = Some(format!("release {}: {error}", worker.run));
+                let _ = worker.process.signal(libc::SIGKILL);
+            }
+        }
+        let mut stopped = false;
+        loop {
+            if workers.iter().all(|worker| reaped(worker.pid)) {
+                break;
+            }
+            if !stopped && Instant::now() >= release_deadline {
+                stopped = true;
+                for worker in workers.iter().filter(|worker| !reaped(worker.pid)) {
+                    // BoundProcess fails closed on PID reuse, including during
+                    // unwinding; it never targets another fixture or a group.
+                    if let Err(error) = worker.process.signal(libc::SIGKILL) {
+                        failure = Some(format!("stop {}: {error}", worker.run));
+                    }
+                }
+                failure.get_or_insert_with(|| "owned worker did not observe release".to_string());
+            }
+            if Instant::now() >= deadline {
+                self.root.disable_cleanup(true);
+                failure = Some("owned worker reap deadline; root retained".to_string());
+                break;
+            }
+            // Bounded predicate observation, not an interleaving based on delay.
+            std::thread::park_timeout(Duration::from_millis(20));
+        }
+        for worker in workers.iter() {
+            if let Ok(log) = std::fs::read_to_string(
+                self.runtime
+                    .paths()
+                    .logs_dir
+                    .join(format!("{}.worker.log", worker.run)),
+            ) {
+                let _ = writeln!(
+                    io::stderr(),
+                    "owned substitute log: run={} pid={}\n{log}",
+                    worker.run,
+                    worker.pid
+                );
+            }
+            let _ = writeln!(
+                io::stderr(),
+                "owned substitute cleanup: run={} pid={} reaped={} root_present={}",
+                worker.run,
+                worker.pid,
+                reaped(worker.pid),
+                self.root.path().exists()
+            );
+        }
+        self.cleaned
+            .store(failure.is_none(), std::sync::atomic::Ordering::SeqCst);
+        if let Some(error) = failure {
+            let _ = writeln!(io::stderr(), "owned substitute cleanup failed: {error}");
+            if !std::thread::panicking() {
+                panic!("{error}");
+            }
         }
     }
 }
@@ -290,4 +496,59 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         )
     );
     assert_eq!(classify(&row), FailureClass::Unexpected);
+
+    #[cfg(unix)]
+    {
+        let root = fixture.root.path().to_path_buf();
+        let pids = fixture.worker_pids();
+        let cleaned = fixture.cleaned.clone();
+        // All substitutes are still behind the observation handshake after
+        // their markers were written, including the genuine live timeout row.
+        assert!(pids.iter().all(|pid| !reaped(*pid)));
+        drop(fixture);
+        assert!(
+            cleaned.load(std::sync::atomic::Ordering::SeqCst),
+            "release must succeed without fallback"
+        );
+        assert!(
+            pids.iter().all(|pid| reaped(*pid)),
+            "owned workers must be reaped before root teardown"
+        );
+        assert!(!root.exists());
+
+        // Exercise both error return and assertion unwind in this admitted
+        // identity, without a new test, production seam, deadline or sleep.
+        for panic in [false, true] {
+            let fixture = Fixture::new();
+            let _ = fixture.observe(json!([]), 60, |runtime, child| {
+                runtime.cancel_job_run(child).unwrap();
+            });
+            let root = fixture.root.path().to_path_buf();
+            let pids = fixture.worker_pids();
+            let cleaned = fixture.cleaned.clone();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _fixture = fixture;
+                if panic {
+                    panic!("injected audit assertion unwind");
+                }
+                Err::<(), _>("injected audit observation error")
+            }));
+            assert!(
+                cleaned.load(std::sync::atomic::Ordering::SeqCst),
+                "error/unwind cleanup must observe release and reap"
+            );
+            assert_eq!(outcome.is_err(), panic);
+            if !panic {
+                assert!(outcome.unwrap().is_err());
+            }
+            assert!(
+                pids.iter().all(|pid| reaped(*pid)),
+                "error/unwind left an owned live or zombie worker"
+            );
+            assert!(
+                !root.exists(),
+                "cleanup finishes before the temporary root is removed"
+            );
+        }
+    }
 }
