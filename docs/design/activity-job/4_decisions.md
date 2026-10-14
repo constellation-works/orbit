@@ -1595,7 +1595,7 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 ## A backstop recovers tasks blocked outside pipelines
 
 **Recorded:** 2026-10-04 · [ORB-13898] · amended [ORB-14685]
-**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/adapter/engine_host/actions/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/application/task/blocked_recovery_steps.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
 
 ### Context
 

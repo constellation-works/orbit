@@ -3,7 +3,9 @@
 //! `prepare_blocked_task_recovery` re-checks the episode and builds the
 //! `final_recovery` agent's input; `apply_blocked_task_recovery` hands the
 //! agent's decision to the shared applier and removes the run's checkout. The
-//! decisions themselves live in `application::task::blocked_recovery`.
+//! decisions themselves live in the sibling `blocked_recovery` module; the
+//! engine dispatcher (`adapter::engine_host::actions::dispatch`) only routes
+//! the two actions here.
 
 use orbit_engine::DispatchError;
 use serde_json::{Map, Value, json};
@@ -19,7 +21,7 @@ use crate::application::task::{
 /// episode echoed under `episode` for the apply step. The input restricts the
 /// agent to the decisions this lane applies and names the failed run's
 /// retained candidate.
-pub(super) fn prepare(
+pub(crate) fn prepare(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -65,7 +67,7 @@ pub(super) fn prepare(
 
 /// `apply_blocked_task_recovery`: apply the agent's decision and report what
 /// the applier did.
-pub(super) fn apply(
+pub(crate) fn apply(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

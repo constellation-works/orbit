@@ -33,7 +33,7 @@ struct Prepared {
     prior: Vec<VerifierVerdict>,
 }
 
-pub(in super::super) fn apply(
+pub(crate) fn apply(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

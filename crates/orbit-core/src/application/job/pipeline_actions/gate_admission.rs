@@ -44,7 +44,7 @@ use crate::runtime::task::locks::parse_task_ids;
 ///
 /// A task that cannot be read at all stays a hard activity failure: that is a
 /// malformed bundle, not a lifecycle decision.
-pub(super) fn gate_admission_stop(
+pub(crate) fn gate_admission_stop(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -297,7 +297,7 @@ fn summarize_statuses(statuses: &[(String, String)]) -> String {
 /// Canonical wait-envelope success token. Skip and stale-noop emitters, and
 /// the admission-stop `error` branch, share this so a spelling change cannot
 /// attach `error` to a successful stop.
-pub(super) fn wait_success_status() -> String {
+pub(crate) fn wait_success_status() -> String {
     JobRunState::Success.to_string()
 }
 
