@@ -26,6 +26,14 @@ opt-level = 2
 [profile.dev]
 debug = "line-tables-only"
 
+# Optimize workspace test code while retaining debug safety and line diagnostics.
+# Dependency overrides from the dev profile still apply to the test profile.
+[profile.test]
+opt-level = 1
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
