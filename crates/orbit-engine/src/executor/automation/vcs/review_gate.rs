@@ -28,6 +28,9 @@ pub use super::interrupted_review::{
     INTERRUPTED_REVIEW_KEY, PreservedReviewRepair, ReviewInFlight, carry_interrupted_review,
     interrupted_review_ref, preserve_interrupted_review, review_in_flight,
 };
+pub use super::scratch_target::{
+    ScratchHostTarget, ScratchHostTargetLease, lease_scratch_host_target,
+};
 
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";

@@ -72,6 +72,46 @@ pub(in super::super) fn cache_paths(
     })
 }
 
+/// A base run this repository's cache records: the scratch checkout it ran
+/// in and the lock it held throughout.
+#[cfg(target_os = "linux")]
+pub(in super::super) struct RecordedBaseRun {
+    pub(in super::super) worktree: PathBuf,
+    pub(in super::super) lock: PathBuf,
+}
+
+/// Every base run whose cache lock exists. The lock file is created before
+/// a run starts and kept afterwards, so it is the durable record that the
+/// run's checkout (and so its host validation target) existed; holding the
+/// lock proves no base run is using either.
+#[cfg(target_os = "linux")]
+pub(in super::super) fn recorded_base_runs(repo: &Path) -> Vec<RecordedBaseRun> {
+    let Ok(dir) = git_common_dir(repo).map(|common| common.join(CACHE_DIR)) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let key = name.to_str()?.strip_suffix(".lock")?;
+            if key.len() != 64
+                || !key
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                return None;
+            }
+            Some(RecordedBaseRun {
+                worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}")).ok()?,
+                lock: entry.path(),
+            })
+        })
+        .collect()
+}
+
 /// The result another run already recorded for `command` on `base_sha` with
 /// `selection`, judged against it, without waiting for or starting a run.
 pub(in super::super) fn cached_base_check(

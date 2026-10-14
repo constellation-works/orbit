@@ -104,9 +104,31 @@ target fails as `failed:` and is left untouched. Symlinks inside are unlinked,
 not followed.
 
 Base reruns, host-evidence and recovery checkouts are detached scratch
-checkouts that no run record names. Their targets, and any other entry, are
-retained as `skipped:unattributed_host_target`; `--estimate-bytes` reports
-their `retained_bytes`. Only a primary checkout's own targets directory is
+checkouts that no run record names, removed after use. Their targets are
+attributed only through a durable record of what built them, and reclaimed
+only while GC holds the lock every user holds while it builds there:
+
+- a base rerun (`base-rerun`) runs under its base-result cache lock,
+  `<git-common-dir>/orbit-baseline/<key>.lock`. That file outlives the run and
+  names the scratch checkout `orbit-baseline-<key>`, whose path GC hashes;
+- host-evidence (`host-evidence`) and review-reconciliation (`recovery`)
+  runs hold a lease, `.orbit/state/host-validation-leases/<target>.lock`,
+  beside a lineage record `<target>.json` naming the kind and canonical source
+  checkout. The record is written before the target exists, and GC accepts it
+  only when that source hashes to the target's name.
+
+A dry run takes no lock and reports `skipped:host_target_in_use` when the
+lock records a holder. Otherwise it reports `would_reclaim` with
+`bytes_reclaimed`. A deleting sweep takes the lock without waiting. If a user
+holds it, the target stays `skipped:host_target_in_use`. If GC gets it, it
+keeps it until the target is removed with the same no-follow checks as above,
+so no user can start meanwhile. A reclaimed lease's record is retired; lock
+files are kept. `--older-than-hours` compares with the lock file's last change,
+which every acquisition and release updates. `detail` names the type and source
+checkout. A target that no run record, cache lock or lease derives, including a
+scratch target built before its record existed, is retained as
+`skipped:unattributed_host_target`; `--estimate-bytes` reports its
+`retained_bytes`. Only a primary checkout's own targets directory is
 inventoried. Admission's prefilter also selects terminal runs with an
 attributed host target, so admission reclaims them oldest first. Sources,
 branches, refs, task artifacts, logs and other caches are never touched.

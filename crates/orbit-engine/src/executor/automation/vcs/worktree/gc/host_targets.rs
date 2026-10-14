@@ -6,19 +6,27 @@
 //! Removing the checkout leaves that target behind. GC attributes a target to
 //! runs only by re-deriving each recorded run's worktree path with the same
 //! key rule; a directory name no run record derives is never inferred to
-//! belong to anyone and is retained. Detached scratch checkouts (base reruns,
-//! host evidence, recovery) are keyed by paths no run record names, so their
-//! targets stay as `skipped:unattributed_host_target`.
+//! belong to anyone and is retained.
+//!
+//! Detached scratch checkouts (base reruns, host evidence, recovery) are
+//! keyed by paths no run record names. Their targets are attributed only by a
+//! durable record of what built them (`scratch_target`), and reclaimed only
+//! while holding the lock every user of the target holds. A target neither a
+//! run record nor a scratch record derives stays
+//! `skipped:unattributed_host_target`.
 
+use super::super::super::baseline::recorded_base_runs;
 use super::super::super::required_command::{
     HOST_VALIDATION_TARGETS_DIR, host_validation_target_key,
 };
+use super::super::super::scratch_target::{LEASE_LABEL, leased_target};
 use super::held::{HeldDirectory, Identity, entry_name};
 use super::leftovers::worker_may_be_alive;
 use super::paths::{attributed_task_ids, run_worktree_paths};
 use super::reclaim::reclaim_patterns;
 use super::sweep::{WorktreeGcOptions, WorktreeGcReport};
 use orbit_common::OrbitError;
+use orbit_common::fs::file_lock::{read_file_lock_holder, try_acquire_exclusive_file_lock};
 use orbit_types::workflow::JobRun;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString, OsStr};
@@ -26,8 +34,9 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-const UNATTRIBUTED_DETAIL: &str = "No recorded run's checkout derives this host validation \
-     target; it may belong to a base rerun, host-evidence or recovery checkout. GC retains it.";
+const UNATTRIBUTED_DETAIL: &str = "Neither a recorded run's checkout nor a base-rerun, \
+     host-evidence or recovery record derives this host validation target. GC retains it.";
+const BASE_RUN_LABEL: &str = "base run cache";
 
 /// The runs whose checkout one host target was built for.
 struct Attribution<'a> {
@@ -38,9 +47,23 @@ struct Attribution<'a> {
     runs: Vec<&'a JobRun>,
 }
 
+/// The scratch checkout one host target was built for, and the lock its
+/// users hold while they build there.
+struct ScratchOwner {
+    /// `base-rerun`, `host-evidence` or `recovery`.
+    kind: &'static str,
+    /// The canonical checkout path the target's name hashes.
+    source: PathBuf,
+    lock: PathBuf,
+    lock_label: &'static str,
+    /// A lease's lineage record, retired with the target.
+    record: Option<PathBuf>,
+}
+
 /// The host validation targets directory of `repo_root`, held open, when it
 /// is a primary checkout and the directory exists.
 struct TargetsRoot {
+    primary: PathBuf,
     path: PathBuf,
     held: HeldDirectory,
 }
@@ -64,7 +87,7 @@ fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
         return Ok(None);
     }
     let mut held = HeldDirectory::open(&primary)?;
-    let mut path = primary;
+    let mut path = primary.clone();
     for component in HOST_VALIDATION_TARGETS_DIR {
         path.push(component);
         held = match held.open_child(&entry_name(OsStr::new(component))?) {
@@ -79,7 +102,11 @@ fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
             Err(error) => return Err(error.into()),
         };
     }
-    Ok(Some(TargetsRoot { path, held }))
+    Ok(Some(TargetsRoot {
+        primary,
+        path,
+        held,
+    }))
 }
 
 /// The size of a retained target, measured through the held root.
@@ -126,6 +153,42 @@ fn attributions<'a>(repo_root: &Path, runs: &'a [JobRun]) -> BTreeMap<String, At
         }
     }
     index
+}
+
+/// Base runs' scratch checkouts by the target key their path derives.
+fn base_run_owners(repo_root: &Path) -> BTreeMap<String, ScratchOwner> {
+    recorded_base_runs(repo_root)
+        .into_iter()
+        .filter_map(|run| {
+            let source = canonical_source(&run.worktree)?;
+            Some((
+                host_validation_target_key(&source),
+                ScratchOwner {
+                    kind: "base-rerun",
+                    source,
+                    lock: run.lock,
+                    lock_label: BASE_RUN_LABEL,
+                    record: None,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn scratch_owner(
+    root: &TargetsRoot,
+    base_runs: &mut BTreeMap<String, ScratchOwner>,
+    key: &str,
+) -> Option<ScratchOwner> {
+    base_runs.remove(key).or_else(|| {
+        leased_target(&root.primary, key).map(|leased| ScratchOwner {
+            kind: leased.record.kind.label(),
+            source: leased.record.source,
+            lock: leased.lock,
+            lock_label: LEASE_LABEL,
+            record: Some(leased.record_path),
+        })
+    })
 }
 
 /// Whether a run's checkout has a host validation target. A prefilter only:
@@ -177,6 +240,7 @@ pub(super) fn collect_host_targets(
         }
     };
     let index = attributions(repo_root, runs);
+    let mut base_runs = base_run_owners(repo_root);
     let mut reports = Vec::new();
     for name in names {
         let target = Target {
@@ -186,11 +250,14 @@ pub(super) fn collect_host_targets(
         let attribution = target.name.to_str().ok().and_then(|key| index.get(key));
         let Some(attribution) = attribution else {
             if options.run_id.is_none() {
-                let mut report = blank_report(&target.path);
-                report.action = "skipped:unattributed_host_target".to_string();
-                report.detail = Some(UNATTRIBUTED_DETAIL.to_string());
-                report.retained_bytes = retained_bytes(&root, &target.name, options);
-                reports.push(report);
+                let owner = target
+                    .name
+                    .to_str()
+                    .ok()
+                    .and_then(|key| scratch_owner(&root, &mut base_runs, key));
+                reports.push(collect_scratch_target(
+                    repo_root, &root, &target, owner, options,
+                ));
             }
             continue;
         };
@@ -285,6 +352,114 @@ fn classify(
         report.retained_bytes = retained_bytes(root, &target.name, options);
         return Ok(());
     }
+    reclaim(repo_root, root, target, observed, options, report)?;
+    if report.action == "reclaimed" {
+        tracing::info!(path = %target.path.display(), bytes = report.bytes_reclaimed,
+            "reclaimed a terminal run's host validation output");
+    }
+    Ok(())
+}
+
+/// Report a target no run record derives: retained unless a scratch record
+/// names it, and reclaimed only while holding the lock its users hold.
+fn collect_scratch_target(
+    repo_root: &Path,
+    root: &TargetsRoot,
+    target: &Target,
+    owner: Option<ScratchOwner>,
+    options: &WorktreeGcOptions,
+) -> WorktreeGcReport {
+    let mut report = blank_report(&target.path);
+    let Some(owner) = owner else {
+        report.action = "skipped:unattributed_host_target".to_string();
+        report.detail = Some(UNATTRIBUTED_DETAIL.to_string());
+        report.retained_bytes = retained_bytes(root, &target.name, options);
+        return report;
+    };
+    report.detail = Some(format!(
+        "host validation output of {} checkout '{}'",
+        owner.kind,
+        owner.source.display()
+    ));
+    if let Err(error) = classify_scratch(repo_root, root, target, &owner, options, &mut report) {
+        tracing::warn!(path = %target.path.display(), %error,
+            "worktree GC failed to reclaim a scratch host validation target; continuing the sweep");
+        report.bytes_reclaimed = 0;
+        report.action = format!("failed:{error}");
+    }
+    report
+}
+
+fn classify_scratch(
+    repo_root: &Path,
+    root: &TargetsRoot,
+    target: &Target,
+    owner: &ScratchOwner,
+    options: &WorktreeGcOptions,
+    report: &mut WorktreeGcReport,
+) -> Result<(), OrbitError> {
+    let observed = match root.held.entry(&target.name) {
+        Ok(entry) if entry.is_directory => entry.identity,
+        _ => {
+            report.action = "skipped:not_a_real_directory".to_string();
+            return Ok(());
+        }
+    };
+    // Every acquisition and release rewrites the lock's holder record, so its
+    // modification time is the last use. An unreadable one counts as recent.
+    if !options.reclaim_kept
+        && options.older_than.is_some_and(|cutoff| {
+            fs::metadata(&owner.lock)
+                .and_then(|meta| meta.modified())
+                .map_or(true, |used| {
+                    chrono::DateTime::<chrono::Utc>::from(used) > cutoff
+                })
+        })
+    {
+        report.action = "skipped:too_recent".to_string();
+        report.retained_bytes = retained_bytes(root, &target.name, options);
+        return Ok(());
+    }
+    // A dry run takes no lock: a recorded holder is a user. Deletion holds
+    // the lock itself until the target is gone, so no user can start.
+    let _guard = if options.delete {
+        match try_acquire_exclusive_file_lock(&owner.lock, owner.lock_label)? {
+            Some(guard) => Some(guard),
+            None => {
+                report.action = "skipped:host_target_in_use".to_string();
+                return Ok(());
+            }
+        }
+    } else if read_file_lock_holder(&owner.lock).is_some() {
+        report.action = "skipped:host_target_in_use".to_string();
+        return Ok(());
+    } else {
+        None
+    };
+    reclaim(repo_root, root, target, observed, options, report)?;
+    if report.action == "reclaimed" {
+        if let Some(record) = &owner.record
+            && let Err(error) = fs::remove_file(record)
+        {
+            tracing::warn!(path = %record.display(), %error,
+                "worktree GC could not retire a reclaimed host validation target's lease record");
+        }
+        tracing::info!(path = %target.path.display(), bytes = report.bytes_reclaimed,
+            kind = owner.kind, "reclaimed a scratch checkout's host validation output");
+    }
+    Ok(())
+}
+
+/// Measure the classified target and, when the sweep deletes, remove it
+/// through the held root after re-establishing containment.
+fn reclaim(
+    repo_root: &Path,
+    root: &TargetsRoot,
+    target: &Target,
+    observed: Identity,
+    options: &WorktreeGcOptions,
+    report: &mut WorktreeGcReport,
+) -> Result<(), OrbitError> {
     let measure_bytes = options.delete || options.estimate_bytes || options.target_only;
     if measure_bytes {
         report.bytes_reclaimed = measure(root, &target.name, observed).map_err(|error| {
@@ -328,8 +503,6 @@ fn classify(
                 target.path.display()
             ))
         })?;
-    tracing::info!(path = %target.path.display(), bytes = report.bytes_reclaimed,
-        "reclaimed a terminal run's host validation output");
     report.action = "reclaimed".to_string();
     Ok(())
 }
