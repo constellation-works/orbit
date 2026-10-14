@@ -1109,11 +1109,9 @@ fn workspace_sync_contracts_1() {
 
 #[test]
 fn workspace_sync_contracts_2() {
-    for (name, check) in [(
-        "workspace_init_refuses_checkout_and_name_collisions_without_writing",
-        workspace_init_refuses_checkout_and_name_collisions_without_writing as fn(),
-    )] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-    }
+    tracing::info!(
+        case = "workspace_init_refuses_checkout_and_name_collisions_without_writing",
+        "CLI contract row"
+    );
+    workspace_init_refuses_checkout_and_name_collisions_without_writing();
 }

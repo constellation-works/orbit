@@ -564,15 +564,11 @@ fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() 
     let selector = routed.bravo_selector();
     let local_before = routed.local_runtime.list_tasks().expect("local tasks");
     let remote_before = routed.remote_runtime.list_tasks().expect("remote tasks");
-    assert!(
-        local_before
-            .iter()
-            .any(|task| task.id.to_string() == routed.local_task)
-    );
+    assert!(local_before.iter().any(|task| task.id == routed.local_task));
     assert!(
         remote_before
             .iter()
-            .any(|task| task.id.to_string() == routed.remote_task)
+            .any(|task| task.id == routed.remote_task)
     );
     routed.take_remote_argv();
 
@@ -1158,11 +1154,9 @@ fn host_routing_contracts_2() {
     if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_2") {
         return;
     }
-    for (name, check) in [(
-        "host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv",
-        host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv as fn(),
-    )] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-    }
+    tracing::info!(
+        case = "host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv",
+        "CLI contract row"
+    );
+    host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv();
 }

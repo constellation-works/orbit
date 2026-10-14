@@ -6,6 +6,16 @@ One duplicated replay-policy matrix retires against core integration coverage. T
 
 The original macOS-only 60-second wall wait is eliminated without shortening a startup deadline. Existing binary update argument, refusal and output cases remain. The Linux-only probe module is guarded at its declaration, removing an unused-import warning on macOS.
 
+## Accepted delivery scope, 2026-10-14
+
+Daniel accepts the measured incremental improvements below: about 17% process
+and 11% workspace summed time, with the transferred core cost accounted. The
+original 50% goal is superseded for this delivery and belongs to the next round.
+Count caps remain 85 process and 75 workspace tests. Historical failed pairs
+and their qualifications remain unchanged. Delivery still requires the four
+pipeline final gates and hosted Linux, Windows compile and native macOS checks
+on the updated head before the coordinator lands the existing PR #4749.
+
 ## Current production measurement, 2026-10-14
 
 The managed implementation resume recovered the validated fixture changes and
@@ -26,10 +36,10 @@ The order was A process/workspace/core, then B process/workspace/core; all six
 commands exited zero with no sandbox deferral notices. This is one sample with
 ordinary host load, not an isolated causal estimate or a best-of selection.
 
-| Binary | Current unreduced A | Reduced B | Half-A limit | Result |
+| Binary | Current unreduced A | Reduced B | Historical half-A limit | Accepted result |
 | --- | --- | --- | --- | --- |
-| process | 160 executed, 166 listed / 149.218 s summed | 74 executed, 80 listed / 124.003 s summed | 74.609 s | Count passes; runtime misses by 49.394 s |
-| workspace | 143 executed/listed / 80.662 s summed | 71 executed/listed / 71.964 s summed | 40.331 s | Count passes; runtime misses by 31.633 s |
+| process | 160 executed, 166 listed / 149.218 s summed | 74 executed, 80 listed / 124.003 s summed | 74.609 s | Count passes; about 17% summed-time reduction |
+| workspace | 143 executed/listed / 80.662 s summed | 71 executed/listed / 71.964 s summed | 40.331 s | Count passes; about 11% summed-time reduction |
 | Existing core resume selector | 1 executed / 0.246 s | 1 executed / 0.650 s | Accounted separately | Added 0.404 s |
 
 The same six pre-existing ignored process child helpers remain ignored; no
@@ -39,8 +49,9 @@ admission but excluding preparation, are process 37.473 -> 32.042 seconds,
 workspace 21.007 -> 19.022, and core 0.316 -> 0.730. The newer shared production
 startup improvement applies to both A and B and cannot be credited solely to
 these test reductions. The historical attempts and their misses below remain
-preserved. **Original half-time acceptance remains unmet; this candidate is
-incomplete.**
+preserved. The original half-time target was missed by 49.394 seconds for
+process and 31.633 seconds for workspace; that target is now explicitly
+superseded for this delivery. No new timing cycle or additional saving is claimed.
 
 Run evidence is stored in task artifacts under
 performance/current-production-resume/. It includes the exact commands,
@@ -66,7 +77,10 @@ commands; they were not run in this implementation session.
 
 ## Original attempt measurements
 
-The count limits pass; the summed-time limits fail. This is an incomplete candidate, not a review-ready delivery. Repository gates were not run because runtime acceptance remains unmet.
+At this historical checkpoint the count limits passed and the original
+summed-time limits failed, so that attempt was incomplete and repository gates
+were not run. The accepted delivery scope above supersedes the half-time gate
+without changing any historical result.
 
 | Binary | Historical Linux baseline | Native macOS baseline | Candidate |
 | --- | --- | --- | --- |
@@ -430,3 +444,61 @@ fixture engine is added. The single removed identity is the duplicated
 handover panic fixture, after its required assertions transfer. Every other
 retirement removes only the specified redundant invocation. CI's existing
 web_serve_handover:: filter still selects the real surviving handover.
+
+
+## Preserved-candidate CI repair
+
+The repair starts from PR #4749 head `bddf17eb1a392cc0dd77723b862eae7d1a2ba026`,
+restored exactly onto its `ab075609` base. Four one-row contract carriers now
+log and call their existing assertion body directly: checkout routing, host
+SSH hint quoting, workspace collision refusal and Linux clock diagnostics.
+The last case is the analogous Linux-only single-element-loop diagnostic
+reproduced during focused Clippy validation. Test identities, isolation, row
+labels and assertions are unchanged. Host routing compares existing string
+IDs directly rather than allocating copies.
+
+The workspace binary now declares the shared portable `ChildGuard` on every
+compile target, matching the process binary. Its Unix signal and process-group
+implementation remains guarded inside the support module; other targets
+compile the existing kill/wait fallback. No GC or sweep assertion is disabled,
+no shell behavior is invented for native Windows, and Windows remains a
+compile-only target with actual execution supported through WSL2.
+
+The immutable produced-manifest digest comparison remains intact. This CI
+repair adds no tests, ignores, retries, policy overrides or performance credit.
+Final validation and exact-head hosted checks remain delivery responsibilities.
+
+Focused repair validation passed: warnings-denied Clippy for both CLI binaries,
+eight existing CLI identities covering all repaired carriers, routing refusal,
+real GC/sweep ownership and immutable candidate preservation, plus the existing
+core resume-ownership identity. Compiled lists remain 80 process entries
+(74 runnable, the same six ignored helpers) and 71 workspace entries. Formatting,
+diff whitespace, doc links, Windows portability inspection and the compiled
+macOS workflow-filter check passed. Direct CLI QA initialized a workspace,
+refused both checkout-renaming and durable-name collisions with registry and
+identity bytes preserved, and parsed the update admission contract. These
+focused checks do not replace pipeline final gates or native hosted checks.
+
+The updated PR title and complete retirement body are stored in task artifacts
+`ci-repair/pr-title.txt` and `ci-repair/pr-body.md`. The coordinator applied
+those bytes to PR #4749 when publishing `94a41ae7`, after all four final gates
+passed on its validated source tree. The original branch and PR remain
+authoritative; replacement PR #4751 was closed unmerged.
+
+### Follow-up macOS carrier repair
+
+Native macOS Clippy on `94a41ae7` found that
+`run_observation_contracts_6` becomes a single-element loop when its Linux-only
+stopped-descendant row is omitted. The carrier now logs and calls the existing
+surface-reservation assertion body directly, followed on Linux by the existing
+stopped-descendant assertion body. Both row labels, order, assertion bodies and
+the isolated-child guard remain unchanged. No test, platform coverage, retry
+or deadline is removed or added.
+
+The other conditional carriers retain at least two rows on Linux and macOS;
+the four previously repaired unary carriers retain their direct calls.
+This repair claims no additional performance improvement and repeats no timing
+experiment or manual QA. Focused warnings-denied Clippy and the existing
+real-CLI carrier check provide local evidence. The pipeline must rerun all four
+final commands, then the coordinator must verify Linux CI, Windows compilation
+and native macOS checks on the newly published head before landing PR #4749.

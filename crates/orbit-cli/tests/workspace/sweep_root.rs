@@ -287,14 +287,9 @@ fn sweep_command_contracts_0() {
 #[cfg(target_os = "linux")]
 #[test]
 fn sweep_command_contracts_1() {
-    for (name, check) in [
-        #[cfg(target_os = "linux")]
-        (
-            "doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup",
-            doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-    }
+    tracing::info!(
+        case = "doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup",
+        "CLI contract row"
+    );
+    doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup();
 }

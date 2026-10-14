@@ -2360,11 +2360,9 @@ fn checkout_routing_contracts_3() {
 
 #[test]
 fn checkout_routing_contracts_4() {
-    for (name, check) in [(
-        "workspace_init_force_rebinds_synthetic_data_dir_checkout",
-        workspace_init_force_rebinds_synthetic_data_dir_checkout as fn(),
-    )] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-    }
+    tracing::info!(
+        case = "workspace_init_force_rebinds_synthetic_data_dir_checkout",
+        "CLI contract row"
+    );
+    workspace_init_force_rebinds_synthetic_data_dir_checkout();
 }
