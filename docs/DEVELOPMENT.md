@@ -205,9 +205,17 @@ may then disappear without erasing conclusively attached evidence.
 
 `not_reported` and `refused` also mean incomplete evidence. Oversized command
 reports are refused rather than silently truncated or mislabeled complete; the workspace
-script reports its bounded prefix with `complete: false`. Bounded command output
-continues to retain failure diagnosis. `complete` describes all reported bytes
-with redaction applied; `raw_complete` is false if the producer reported a
+script reports its bounded prefix with `complete: false`. The host withholds the
+entire payload of a partial source before in-memory or baseline-cache retention:
+a cut can hide the credential length, closing delimiter, multiline value, or
+UTF-8 scalar needed for safe redaction. Its verified reported source size/digest
+remain unchanged; retained size is zero with the empty-content digest,
+`partial_source_withheld: true`, and both completeness flags false. `redacted`
+is true when withholding removed bytes. This also withholds benign partial
+payloads; bounded command output continues to retain failure diagnosis. Complete
+files still undergo whole-text redaction before chunking. Older baseline-cache
+results without this boundary protection are not reused. `complete` describes all
+reported bytes with redaction applied; `raw_complete` is false if the producer reported a
 partial log or redaction changed it. Binary logs are unsupported. A command
 interrupted before reporting cannot establish complete raw evidence. Evidence
 is diagnostic only: no report, missing chunk or completeness claim can grant
