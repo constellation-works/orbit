@@ -1508,10 +1508,10 @@ const TASK_FIELD_EDITORS = {
   context_files: {
     label: "context files",
     toText: (task) => linesToText(task.context_files),
-    renderView: (task) =>
-      Array.isArray(task.context_files) && task.context_files.length > 0
-        ? buildFileList(task)
-        : emptyFieldView("no context files"),
+    // Keep the empty state in the same refreshable list as populated
+    // selectors, so a background refresh can replace it without rebuilding an
+    // open detail that contains another field's draft.
+    renderView: (task) => buildFileList(task),
     // The server refuses a selector that names nothing unless the caller says
     // the task is about to create it, so that escape is the editor's own
     // checkbox rather than a second, silently different code path.
@@ -1571,7 +1571,7 @@ function refreshFileList(ul) {
   const applicable = task.status === "backlog" || task.status === "in-progress";
   const nodes = [];
   let unknown = false;
-  for (const path of task.context_files) {
+  for (const path of Array.isArray(task.context_files) ? task.context_files : []) {
     const matches = applicable ? taskContextContenders(task, path) : [];
     if (matches === null) unknown = true;
     const li = el("li", {}, [el("span", { class: "context-selector" }, selectorParts(path))]);
