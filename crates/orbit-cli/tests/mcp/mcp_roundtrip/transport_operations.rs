@@ -1231,5 +1231,6 @@ fn artifact_and_auto_task_stdio_contracts() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

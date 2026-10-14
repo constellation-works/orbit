@@ -1605,6 +1605,7 @@ fn workspace_selector_contracts_0() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -1630,6 +1631,7 @@ fn workspace_selector_contracts_1() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -1653,5 +1655,6 @@ fn workspace_selector_contracts_2() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

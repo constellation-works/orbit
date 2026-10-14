@@ -720,6 +720,7 @@ fn routine_command_contracts_0() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -742,5 +743,6 @@ fn routine_command_contracts_1() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

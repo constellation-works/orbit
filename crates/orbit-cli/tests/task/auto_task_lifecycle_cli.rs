@@ -1284,6 +1284,7 @@ fn auto_task_lifecycle_and_recovery() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -1301,5 +1302,6 @@ fn retired_coverage_and_closed_actions() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

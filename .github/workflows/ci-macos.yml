@@ -187,18 +187,18 @@ jobs:
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
-        run: cargo test --no-fail-fast -p orbit-exec --locked
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-exec --locked
 
       # Native ps must execute here: the nested-agent denial path is replayed
       # by the claim host, while this job asserts real orphan-group cleanup.
       - name: Run orphaned-fixture process tests
-        run: cargo test --no-fail-fast -p orbit-common --test test_env --locked
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --test test_env --locked
 
       - name: Run macOS proc.spawn regressions
         run: |
-          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
-          cargo test --locked -p orbit-tools git_can_read_a_benign_host_file_visible_to_its_parent -- --nocapture
-          cargo test --locked -p orbit-tools git_inherits_parent_access_to_a_deny_read_file -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --locked -p orbit-tools git_can_read_a_benign_host_file_visible_to_its_parent -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --locked -p orbit-tools git_inherits_parent_access_to_a_deny_read_file -- --nocapture
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
       # stay inside the agent's profile, widened only by its own plugin state.
@@ -206,22 +206,22 @@ jobs:
       # sandbox gate covers the Linux boundary through orbit-exec's
       # Bubblewrap integration tests.
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
-        run: cargo test --no-fail-fast -p orbit-tools --locked --test tools plugin_admission::brokered -- --include-ignored
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-tools --locked --test tools plugin_admission::brokered -- --include-ignored
 
       - name: Run orbit-core sandbox and blocked-recovery tests
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
         run: |
-          cargo test --no-fail-fast -p orbit-core --locked sandbox
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked sandbox
           # This table also retains the sandbox-command grammar refusal row.
-          cargo test --no-fail-fast -p orbit-core --locked a_self_skipped_host_run_holds_the_review_scenarios
-          cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked a_self_skipped_host_run_holds_the_review_scenarios
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
 
       # [ORB-13236] Darwin peer credentials and the ancestry walk: a client
       # inside the run's sandbox-exec is answered, another run's client and a
       # same-UID host process are refused.
       - name: Run agent-call broker tests (real sandbox-exec)
-        run: cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
 
       # [ORB-12553] Generation admission turns on Darwin descriptor and flock
       # behavior. The orbit-common unit tests that drove it directly were
@@ -230,30 +230,30 @@ jobs:
       # the trailing `::` out of YAML's mapping syntax.
       - name: Run executable-generation admission tests
         run: |
-          cargo test --no-fail-fast -p orbit-cli --locked generation_root::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked generation_root::
 
       # Shared process behavior uses locked participant records, FIFO
       # rendezvous and a file-size limit instead of /proc and /dev/full.
       - name: Run portable process-boundary tests
         run: |
-          cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
-          cargo test --no-fail-fast -p orbit-cmd --locked --lib update::tests::converge::
-          cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
-          cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
-          cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
-          cargo test --no-fail-fast -p orbit-cli --locked observational_read_only_stores --test mcp
-          cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cmd --locked --lib update::tests::converge::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked observational_read_only_stores --test mcp
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
         run: |
-          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture # check-ci-macos: darwin-only
-          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
-          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture # check-ci-macos: darwin-only
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
 
       - name: Run macOS plugin fetch refusal
-        run: cargo test --no-fail-fast -p orbit-core --locked a_fetch_phase_is_refused_on_macos -- --nocapture # check-ci-macos: darwin-only
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked a_fetch_phase_is_refused_on_macos -- --nocapture # check-ci-macos: darwin-only
 
       # [ORB-13017] A Python exec backend with a uv-locked dependency must
       # certify, install and follow a lockfile upgrade under the sandbox-exec
@@ -272,7 +272,7 @@ jobs:
           uv --version | grep -F "${UV_VERSION}"
 
       - name: Run uv-locked Python plugin fixture test
-        run: cargo test --no-fail-fast -p orbit-cli --locked plugin_cli_group::a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test tool -- --exact
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked plugin_cli_group::a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test tool -- --exact
 
       # This runs only after every required macOS command above succeeds. The
       # report records the physical checkout HEAD rather than github.sha, which
