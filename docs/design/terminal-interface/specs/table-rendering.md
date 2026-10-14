@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Table Rendering"
-last_validated: 2026-10-09
+last_validated: 2026-10-14
 ---
 
 # Spec: Table Rendering
@@ -68,7 +68,7 @@ The path from current behavior:
 1. ~~Change the preset in `crates/orbit-cli/src/output/table.rs` to a borderless one and switch `ContentArrangement` off full-width wrapping.~~ Done [ORB-10567].
 2. ~~Make `add_single_line_row` the only exported row constructor; convert the 19 call sites that use `Table::add_row` directly.~~ Done [ORB-10567] — `output::table::Table` wraps `comfy_table`, and its `add_row` is the only constructor reachable from a command module.
 3. ~~Move width computation behind the sink (see [./output-modes.md](./output-modes.md) §1) so it is not resolved from a terminal that may not exist.~~ Done — `OutputSink` prefers `COLUMNS`, falls back to a terminal query, and resolves a zero width for non-terminal sinks; `Table::emit` consumes that resolved width when sizing columns.
-4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done — `audit_event_table` uses per-column sizing. **Remaining:** some count/summary lines that neighbor a table still print to stdout rather than stderr (`orbit migrate status`; `orbit doctor` prints its healthy summary to stdout, while failures and warnings go to stderr).
+4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done — `audit_event_table` uses per-column sizing. **Remaining:** some count/summary lines that neighbor a table still print to stdout rather than stderr (`orbit migrate`; `orbit doctor` prints its healthy summary to stdout, while failures and warnings go to stderr).
 5. ~~Add per-column *fixed*/*flexible* and alignment metadata at each call site.~~ Done [ORB-10567] for the 21 table call sites, via `Column::fixed` / `Column::number` / `Column::path` / `Column::filtered`.
 
 Step 3 uses the sink contract in [./output-modes.md](./output-modes.md) §1. Step 4 remains per-command and may proceed incrementally.
