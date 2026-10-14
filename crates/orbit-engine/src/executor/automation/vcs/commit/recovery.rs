@@ -29,6 +29,8 @@ pub(crate) struct RecoveryCommitRequest<'a> {
     pub(crate) run_id: &'a str,
     pub(crate) failed_step_id: &'a str,
     pub(crate) recovery_activity: &'a str,
+    /// Exact paths explained by an admitted CI repair, if applicable.
+    pub(crate) repair_paths: Option<&'a [String]>,
     pub(crate) task_ids: &'a [String],
     /// The commit step skipped a clean, no-diff-expected candidate: this run
     /// has no route that delivers a change.
@@ -57,6 +59,8 @@ pub(crate) enum RecoveryCommitRefusal {
     ProtectedPath(Vec<String>),
     /// A symlink or gitlink: footprint widening accepts only regular files.
     OutsideFootprint(Vec<String>),
+    /// CI repair changed a path absent from its evidence record.
+    UnexplainedPaths(Vec<String>),
     /// The run committed to delivering no change.
     NoDiffRoute,
     /// The candidate is the head a before-PR review was admitted on or
@@ -72,6 +76,7 @@ impl RecoveryCommitRefusal {
         match self {
             Self::ProtectedPath(_) => "protected_path",
             Self::OutsideFootprint(_) => "outside_footprint",
+            Self::UnexplainedPaths(_) => "unexplained_paths",
             Self::NoDiffRoute => "no_diff_route",
             Self::ReviewedCandidate(_) => "reviewed_candidate",
             Self::Uncommittable(_) => "uncommittable",
@@ -93,6 +98,9 @@ impl std::fmt::Display for RecoveryCommitRefusal {
                 "the repair leaves non-regular files {paths:?}; the task footprint widens only \
                  over regular files, never a symlink or gitlink"
             ),
+            Self::UnexplainedPaths(paths) => {
+                write!(f, "the CI repair has unexplained paths {paths:?}")
+            }
             Self::NoDiffRoute => f.write_str(
                 "the commit step skipped this no-diff-expected candidate, so the run has no \
                  route that delivers the repair",
@@ -104,7 +112,11 @@ impl std::fmt::Display for RecoveryCommitRefusal {
             ),
             Self::Uncommittable(detail) => f.write_str(detail),
         }?;
-        f.write_str(". Orbit committed nothing and left the repair in the worktree")
+        if matches!(self, Self::Uncommittable(_)) {
+            f.write_str(". Orbit stopped recovery; inspect the retained worktree and HEAD")
+        } else {
+            f.write_str(". Orbit committed nothing and left the repair in the worktree")
+        }
     }
 }
 
@@ -148,6 +160,16 @@ pub(crate) fn commit_recovery_repair(
     if !irregular.is_empty() {
         return Err(RecoveryCommitRefusal::OutsideFootprint(irregular));
     }
+    if let Some(explained) = request.repair_paths {
+        let unexplained = paths
+            .iter()
+            .filter(|path| !explained.contains(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unexplained.is_empty() || explained.iter().any(|path| !paths.contains(path)) {
+            return Err(RecoveryCommitRefusal::UnexplainedPaths(paths));
+        }
+    }
     ensure_named_branch(&workspace_path).map_err(uncommittable)?;
     ensure_no_unmerged_changes(&workspace_path).map_err(uncommittable)?;
 
@@ -161,7 +183,9 @@ pub(crate) fn commit_recovery_repair(
         .map_err(uncommittable)?;
     Ok(RecoveryCommit::Committed {
         commit_sha,
-        paths: staged,
+        // The pre-stage inventory has rename detection disabled, retaining
+        // both endpoints for scope evidence and task-context reconciliation.
+        paths,
     })
 }
 

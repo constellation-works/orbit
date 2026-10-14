@@ -7141,6 +7141,10 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(())
     }
 
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
     }
@@ -7199,6 +7203,9 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         input: &Value,
         _tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
+        if action == "test_ci_repair" {
+            return auto_fix::perform_ci_repair(self, input);
+        }
         if let Some(output) = self.scripted.lock().unwrap().get(action).cloned() {
             self.scripted_inputs
                 .lock()
@@ -7211,6 +7218,19 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                 action: action.to_string(),
                 message: error.to_string(),
             })
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        if self.scripted.lock().unwrap().contains_key("test_ci_repair")
+            && let Some(answer) = auto_fix::ci_answer(self, operation, &input)
+        {
+            return Ok(answer);
+        }
+        orbit_engine::run_private_vcs_operation(operation, &input)
     }
 
     /// One owner-local claim on the fixture's candidate branch, requiring
@@ -7361,6 +7381,13 @@ status() {
     printf '%s\n' "$reads" > "$forge/reads"
     observed=$(sed -n "${reads}p" "$forge/checks")
     [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    if [ "$observed" = source_contract ]; then
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        else
+            observed=failure
+        fi
+    fi
     state=OPEN
     reported_head=$(head_sha)
     if [ -f "$forge/heads" ]; then

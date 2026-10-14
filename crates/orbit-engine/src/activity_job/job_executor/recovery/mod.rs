@@ -1,5 +1,6 @@
 //! Step failure recovery: bounded inputs, durable decisions, retries and evidence.
 
+mod check_scope;
 mod commit;
 mod decision;
 pub(super) mod evidence;

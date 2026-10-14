@@ -399,7 +399,7 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
         }
         let signature = error_signature(&log, failed_step(job));
         details.push(format!(
-            "'{}' failed in step `{}` on head {head} with signature `{}`; log excerpt:\n{}",
+            "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
             job_label(job),
             failed_step(job),
             signature.text,
@@ -472,6 +472,71 @@ fn inherited<H: RuntimeHost + ?Sized>(
             same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
         })
         .then(|| format!("the base branch moved from {base} to {tip}, where it passes")))
+}
+
+/// A shared-base failure already repaired on a newer base. Every failed
+/// required job must have the same diagnostic on the old base and succeed on
+/// the new one. Missing evidence never authorizes a refresh.
+pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    head: &str,
+    old_base: &str,
+    new_base: &str,
+    failed: &[(Option<String>, String)],
+) -> Option<Value> {
+    if old_base == new_base {
+        return None;
+    }
+    let jobs = commit_jobs(host, workspace, head).ok()?;
+    let base_jobs = commit_jobs(host, workspace, old_base).ok()?;
+    let tip_jobs = commit_jobs(host, workspace, new_base).ok()?;
+    let mut evidence = Vec::new();
+    for check in failed {
+        let job = jobs
+            .iter()
+            .find(|job| unsuccessful(job) && answers(job, check))?;
+        let log = job_log(
+            host,
+            workspace,
+            job["run_id"].as_u64()?,
+            job["job_id"].as_u64()?,
+        )
+        .ok()?;
+        if transient_evidence(&log).is_some() {
+            return None;
+        }
+        let signature = error_signature(&log, failed_step(job));
+        if signature.step_fallback {
+            return None;
+        }
+        let mut matched = None;
+        for base_job in base_jobs
+            .iter()
+            .filter(|base_job| same_job(base_job, job) && unsuccessful(base_job))
+        {
+            let base_log = job_log(
+                host,
+                workspace,
+                base_job["run_id"].as_u64()?,
+                base_job["job_id"].as_u64()?,
+            )
+            .ok()?;
+            let base_signature = error_signature(&base_log, failed_step(base_job));
+            if !base_signature.step_fallback && base_signature.text == signature.text {
+                matched = Some(base_job);
+                break;
+            }
+        }
+        let base_job = matched?;
+        let passing = tip_jobs
+            .iter()
+            .find(|tip| same_job(tip, job) && tip["conclusion"].as_str() == Some("success"))?;
+        evidence.push(json!({"failed_job":job,"base_job":base_job,"passing_job":passing,"signature":signature.text,"log_excerpt":excerpt(&log)}));
+    }
+    (!evidence.is_empty()).then(
+        || json!({"failed_head":head,"old_base":old_base,"landed_base":new_base,"checks":evidence}),
+    )
 }
 
 /// The step a failed job's signature falls back to naming.

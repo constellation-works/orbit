@@ -406,3 +406,322 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
         },
     );
 }
+
+// CI API answers belong to the same bare-remote head read by the forge.
+// Unlike a scripted green status, source_contract evaluates the published tree.
+pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> Option<Value> {
+    match operation {
+        "pr.required_checks" => {
+            let head = git(
+                &host.repo,
+                &["ls-remote", "origin", &format!("refs/heads/{BRANCH}")],
+            );
+            Some(json!({"pull_request":{"commits":{"nodes":[{"commit":{
+                "oid":head.split_whitespace().next().unwrap(),
+                "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"test","isRequired":true}]}}
+            }}]}}}))
+        }
+        "ci.commit_jobs" => {
+            let commit = input["commit"].as_str().unwrap();
+            let contents = git(&host.repo, &["show", &format!("{commit}:src/contract")]);
+            let run = u64::from_str_radix(&commit[..12], 16).unwrap();
+            Some(
+                json!({"jobs":[{"name":"test","workflow":"CI","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"}]}),
+            )
+        }
+
+        "ci.job_log" => Some(
+            json!({"log":"error: src/contract: expected fixed, found broken\nsource contract failed"}),
+        ),
+        _ => None,
+    }
+}
+
+pub(super) fn perform_ci_repair(
+    host: &DeliveryHost,
+    input: &Value,
+) -> Result<Value, DispatchError> {
+    let mode = host.scripted.lock().unwrap()["test_ci_repair"]["mode"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    host.scripted_inputs
+        .lock()
+        .unwrap()
+        .insert("test_ci_repair".into(), input.clone());
+    let error = input["error_message"].as_str().unwrap();
+    assert!(
+        orbit_types::workflow::is_pr_auto_fix_check_repair(error),
+        "{mode}: {error}"
+    );
+    let report = error
+        .split("before writing retry, write ")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .unwrap_or(".orbit/tmp/baseline-scope.json");
+    let head = git(&host.repo, &["rev-parse", "HEAD"]);
+    fs::write(host.repo.join("src/contract"), "fixed\n").unwrap();
+    let mut paths = vec![
+        json!({"path":"src/contract","reason":"fix the source contract named by the evidenced CI job"}),
+    ];
+    if mode == "unrelated" {
+        fs::write(host.repo.join("unrelated.txt"), "unrelated work\n").unwrap();
+    } else if mode == "workflow" {
+        fs::create_dir_all(host.repo.join(".github/workflows")).unwrap();
+        fs::write(host.repo.join(".github/workflows/ci.yml"), "weakened\n").unwrap();
+        paths.push(json!({"path":".github/workflows/ci.yml","reason":"bypass check"}));
+    }
+    fs::create_dir_all(host.repo.join(".orbit/tmp")).unwrap();
+    if mode != "missing" {
+        fs::write(
+            host.repo.join(report),
+            serde_json::to_vec(&json!({
+                "schema_version":1, "run_id":input["run_id"],
+                "failed_head":if mode == "stale" { "stale" } else { &head },
+                "cause":"shared-base src/contract violates the required source contract",
+                "paths":paths,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    if mode == "remote_moved" {
+        // Another writer advances the published branch while recovery edits locally.
+        let foreign = git(
+            &host.repo,
+            &["commit-tree", "HEAD^{tree}", "-p", &head, "-m", "foreign"],
+        );
+        git(
+            &host.repo,
+            &["push", "origin", &format!("{foreign}:refs/heads/{BRANCH}")],
+        );
+    }
+    Ok(json!({"summary":"repair the shared-base source contract"}))
+}
+
+#[test]
+fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
+    isolated(
+        "auto_fix::docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head",
+        |sandbox| {
+            for mode in [
+                "unrelated",
+                "repair",
+                "landed",
+                "reviewed",
+                "landed_reviewed",
+                "budget",
+                "review_required",
+                "missing",
+                "stale",
+                "workflow",
+                "remote_moved",
+                "validation_failed",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let mut fx = Fixture::new(row);
+                    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
+                    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
+                    fx.commit_on_base("src/contract", "broken\n");
+                    git(&fx.repo, &["reset", "--hard", BASE]);
+                    fx.base_sha = fx.head();
+                    delete_remote_branch(&fx, BRANCH);
+                    fx.candidate = fx.commit("README.md", "documentation only\n");
+                    assert_eq!(
+                        git(
+                            &fx.repo,
+                            &["diff", "--name-only", &fx.base_sha, &fx.candidate]
+                        ),
+                        "README.md"
+                    );
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    host.set_context_files(TASK_ID, &["file:README.md"]);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    host.script("test_ci_repair", json!({"mode":mode}));
+                    host.script(
+                        "test_checkpoint",
+                        json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+                    );
+                    host.require_commands(&[if mode == "validation_failed" {
+                        "exit 23"
+                    } else {
+                        "test \"$(cat src/contract)\" = fixed"
+                    }]);
+                    fx.script_checks(&["source_contract"]);
+                    if matches!(mode, "landed" | "landed_reviewed") {
+                        fx.commit_on_base("src/contract", "fixed\n");
+                    }
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    if matches!(mode, "reviewed" | "landed_reviewed") {
+                        input["reviewed_head_sha"] = json!(fx.candidate);
+                        input["re_review_on_conflict"] = json!(true);
+                        host.script(
+                            "test_checkpoint",
+                            json!({"phase":"commit","reviewed_head_sha":fx.candidate}),
+                        );
+                    }
+                    if mode == "review_required" {
+                        fx.script_checks(&["review_required"]);
+                    }
+                    if mode == "budget" {
+                        for attempt in 1..=PR_AUTO_FIX_BUDGET {
+                            seed_auto_fix_history(
+                                &host,
+                                PR_AUTO_FIX_ADMITTED_EVENT,
+                                &PrAutoFixAttempt {
+                                    pr_number: PR_NUMBER.into(),
+                                    head_sha: format!("spent-{attempt}"),
+                                    blocker: PrAutoFixBlocker::FailedChecks,
+                                    attempt,
+                                    budget: PR_AUTO_FIX_BUDGET,
+                                    run_id: RUN_ID.into(),
+                                    crew: "fixture".into(),
+                                    crew_source: "fixture".into(),
+                                },
+                            );
+                        }
+                    }
+                    let mut job = job_asset(json!([
+                        {"id":"commit","target":"activity:checkpoint","recovery_activity":"step_failure_recovery"},
+                        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+                    ]));
+                    let mut catalog = V2ActivityCatalog::new();
+                    for (name, action) in [
+                        ("checkpoint", "test_checkpoint"),
+                        ("pr_complete", "pr_complete"),
+                        ("step_failure_recovery", "test_ci_repair"),
+                        ("pr_conflict_recovery", "unexpected_conflict"),
+                    ] {
+                        catalog.insert(
+                            name,
+                            ActivityV2 {
+                                description: name.into(),
+                                input_schema_json: Value::Null,
+                                output_schema_json: Value::Null,
+                                fs_profile: None,
+                                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                                    action: action.into(),
+                                    config: Value::Null,
+                                }),
+                            },
+                        );
+                    }
+                    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+                    let audit = tempfile::tempdir().unwrap();
+                    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
+                    let outcome =
+                        execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None);
+                    if matches!(mode, "repair" | "landed") {
+                        let result = outcome.expect(mode);
+                        assert!(result.success, "{result:?}");
+                        let head = fx.head();
+                        assert_ne!(head, fx.candidate);
+                        assert_eq!(fx.remote_tip(BRANCH), head);
+                        assert_eq!(result.pipeline["complete_pr"]["merge"]["head_sha"], head);
+                        assert_eq!(
+                            result.pipeline["complete_pr"]["merge"]["reason"],
+                            "auto_fix_mergeable"
+                        );
+                        if mode == "repair" {
+                            let evidence = host
+                                .validation_log(TASK_ID, &format!("auto-fix/{RUN_ID}/{head}.json"));
+                            assert_eq!(evidence["changed_paths"], json!(["src/contract"]));
+                            assert_eq!(evidence["failed_head"], fx.candidate);
+                            assert_eq!(evidence["repair_head"], head);
+                            assert_eq!(host.widenings().last().unwrap().3, vec!["src/contract"]);
+                        } else {
+                            let evidence = host.validation_log(
+                                TASK_ID,
+                                &format!("auto-fix/{RUN_ID}/landed-{}.json", fx.candidate),
+                            );
+                            assert_eq!(evidence["failed_head"], fx.candidate);
+                            assert!(
+                                !host
+                                    .scripted_inputs
+                                    .lock()
+                                    .unwrap()
+                                    .contains_key("test_ci_repair"),
+                                "landed repair is adopted without duplicate agent edits"
+                            );
+                            assert_eq!(
+                                git(&fx.repo, &["diff", "--name-only", BASE, "HEAD"]),
+                                "README.md"
+                            );
+                        }
+                        let log =
+                            host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                        assert_eq!(log["tested_head"], head);
+                    } else if matches!(mode, "reviewed" | "landed_reviewed") {
+                        let result = outcome.expect(mode);
+                        assert!(result.success, "{result:?}");
+                        assert_eq!(result.pipeline["complete_pr"]["re_review_required"], true);
+                        assert_eq!(
+                            fx.remote_tip(BRANCH),
+                            fx.candidate,
+                            "review precedes publication"
+                        );
+                        assert_ne!(fx.head(), fx.candidate);
+                    } else {
+                        let error = match outcome {
+                            Ok(result) => {
+                                assert!(!result.success, "{mode}: {result:?}");
+                                result.message.unwrap_or_default()
+                            }
+                            Err(error) => error.to_string(),
+                        };
+                        let expected = match mode {
+                            "unrelated" => "unexplained_paths",
+                            "remote_moved" => "moved away",
+                            "validation_failed" => "23",
+                            "budget" => "auto_fix_budget_exhausted",
+                            "review_required" => "REVIEW_REQUIRED",
+                            _ => "CI repair scope",
+                        };
+                        assert!(error.contains(expected), "{mode}: {error}");
+                        if matches!(mode, "budget" | "review_required") {
+                            assert!(
+                                !host
+                                    .scripted_inputs
+                                    .lock()
+                                    .unwrap()
+                                    .contains_key("test_ci_repair")
+                            );
+                        }
+                        if mode != "remote_moved" {
+                            assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{mode}");
+                        }
+                        if !matches!(mode, "remote_moved" | "validation_failed") {
+                            assert_eq!(
+                                fx.head(),
+                                fx.candidate,
+                                "scope refusal precedes commit: {mode}"
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        if mode == "budget" {
+                            3
+                        } else if mode == "review_required" {
+                            0
+                        } else {
+                            1
+                        }
+                    );
+                    assert!(
+                        fx.merge_requests().is_empty(),
+                        "repair does not grant completion"
+                    );
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
+}
