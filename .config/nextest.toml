@@ -1,9 +1,10 @@
 nextest-version = { required = "0.9.48" }
 
 [profile.default]
-# Individual integration fixtures use seconds-long process deadlines. Ten
-# minutes per test leaves headroom while bounding a stuck child/test harness.
-slow-timeout = { period = "5m", terminate-after = 2 }
+# Flag tests as slow at 5 seconds and terminate after at most 15 seconds.
+# Using grace-period = "0s" ensures the termination bound is not extended by
+# the default 10-second Unix SIGTERM grace period.
+slow-timeout = { period = "5s", terminate-after = 3, grace-period = "0s" }
 # Wait briefly for a test's own child cleanup, then fail on a leaked process.
 leak-timeout = { period = "5s", result = "fail" }
 
@@ -51,3 +52,32 @@ max-threads = 8
 [[profile.default.overrides]]
 filter = 'package(orbit-cli) & binary(mcp)'
 test-group = 'mcp-contracts'
+
+# Explicit per-test duration overrides. Each override names a specific test
+# identity or bounded contract table that genuinely requires more runtime,
+# and carries a comment with the task ID tracking its optimization.
+
+# [ORB-16106] Claimed-review sandbox bridge crosses broker and confined reviewer.
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(tool) & test(=claimed_review_bridge_sandbox::claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer)'
+slow-timeout = { period = "5s", terminate-after = 12, grace-period = "0s" }
+
+# [ORB-16114] Local-candidate binary updates and backup/rollback contract tables.
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(process) & test(/^(update::local_candidate::(local_candidate_contracts_0|local_candidate_contracts_1))$/)'
+slow-timeout = { period = "5s", terminate-after = 12, grace-period = "0s" }
+
+# [ORB-16115] Multi-stage MCP server handover and executable replacement contracts.
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(mcp) & test(/^(mcp_roundtrip::upgrade::(upgrade_admission_and_session_handover|a_replaced_drain_hands_its_run_to_the_installed_executable|a_replaced_mcp_server_hands_its_session_over_after_invalid_requests))$/)'
+slow-timeout = { period = "5s", terminate-after = 12, grace-period = "0s" }
+
+# [ORB-16116] Web server dashboard executable replacement and session handover.
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(process) & test(=web_serve_handover::a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving)'
+slow-timeout = { period = "5s", terminate-after = 12, grace-period = "0s" }
+
+# [ORB-16117] Process update flow and release integrity verification under concurrent load.
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(process) & test(/^(update::flow::(update_flow_contracts_0|update_flow_contracts_1)|update::integrity::(release_integrity_contracts_1|release_integrity_contracts_2))$/)'
+slow-timeout = { period = "5s", terminate-after = 12, grace-period = "0s" }
