@@ -21,6 +21,8 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 
 ## Gates
 
+When an edit changes any generated row in `docs/INDEX.md` (for example, indexed Markdown frontmatter, its first heading, or summary), run `make docs-index`, review the generated index, and run `scripts/generate-doc-indexes.sh --check`. Include any resulting `docs/INDEX.md` change with the source edits. Do this even when `make ci-fast` is pipeline-owned final validation.
+
 For tasks that deliver a diff, `make ci-fast`, `make ci-test-affected`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. In a managed delivery, the pipeline's final validation runs the commands the envelope lists in `task.final_validation_commands` on the final candidate; leave those to it and run the rest. `make ci-fast` checks formatting and repository guardrails; it runs no Rust tests. `make ci-test-affected` runs full test targets for changed crates and their transitive workspace dependents; focused test filters do not replace it. See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci) for base selection and the required-command policy. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot and sandbox profile goldens after an intentional surface or policy change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
 
 Tasks tagged `no-diff-expected` run no workspace gates or required validation commands and attach no `no-diff.json` or workspace validation logs, in owner or claimed mode. Run only commands their own brief requires: QA sweeps may build and run the product, and reviews may reproduce findings when the brief asks for it.
