@@ -286,9 +286,13 @@ jobs:
           if ! probe; then
             echo "Initial Bubblewrap probe failed: $(cat "$probe_err")"
             package_started=$SECONDS
-            export DEBIAN_FRONTEND=noninteractive
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
+            # The ephemeral runner needs the new sandbox binaries, not restarts
+            # of unrelated image services (PHP's restart previously took 90s).
+            # needrestart's supported list-only mode applies to this install;
+            # the real namespace probe below still judges the installed binary.
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+              apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
             package_seconds=$((SECONDS - package_started))
             package_started=""
           else
