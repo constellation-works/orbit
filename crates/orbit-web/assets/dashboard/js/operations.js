@@ -24,6 +24,7 @@ let autoDrainConcurrency = "";
 let autoDrainMode = "";
 let autoDrainComplete = false;
 let autoDrainApproveProposed = false;
+let autoDrainAutoFix = false;
 // Set while Start or Stop is refreshing the card after reporting its result, so
 // the state change that result caused is not announced over the result.
 let holdDrainAnnouncement = false;
@@ -1580,6 +1581,11 @@ function autoDrainReasons(payload) {
       : payload.controls_authorized === false
         ? "Approving proposed tasks requires an authorized operator session; the window can still start and leave them for you."
         : ""),
+    autoFix: workspaceReason || (payload.replica === true
+      ? "A pull replica cannot repair owner pull requests; start the window on the owner machine."
+      : payload.controls_authorized !== true
+        ? "Auto-fix requires an authorized operator session."
+        : ""),
     // Stop is also the settle-only pass (`orbit run auto --stop`): it delivers
     // recorded settlements and needs no live window, so only a read-only view
     // or a missing operator session blocks it.
@@ -1953,6 +1959,29 @@ function autoDrainApproveControl(payload, reasons) {
   return field;
 }
 
+const AUTO_DRAIN_AUTO_FIX_HELP = "Repair failed required checks and merge conflicts on this window's PRs. Merging still requires Mark done.";
+
+function autoDrainAutoFixControl(payload, reasons) {
+  const input = el("input");
+  input.id = "auto-drain-auto-fix";
+  input.type = "checkbox";
+  input.checked = autoDrainAutoFix;
+  // Keep an unavailable selected option clearable after authority changes.
+  input.disabled = Boolean(reasons.autoFix) && !autoDrainAutoFix;
+  input.dataset.drainFocus = "auto-fix";
+  input.setAttribute("aria-describedby", "auto-drain-auto-fix-help");
+  input.addEventListener("change", () => {
+    autoDrainAutoFix = input.checked;
+    renderAutoDrain(payload);
+  });
+  const help = el("p", { class: `drain-field-hint${reasons.autoFix ? " warn" : ""}`, text: reasons.autoFix || AUTO_DRAIN_AUTO_FIX_HELP });
+  help.id = "auto-drain-auto-fix-help";
+  return el("div", { class: "drain-field" }, [
+    el("label", { class: "drain-field-label" }, [input, el("span", { text: " Auto-fix PR blockers" })]),
+    help,
+  ]);
+}
+
 // Why Start is off, in one place so typing in the concurrency field can
 // re-evaluate it without a rebuild.
 function autoDrainStartBlocked(payload) {
@@ -1961,7 +1990,8 @@ function autoDrainStartBlocked(payload) {
     || pendingOperations.has("auto-drain:start")
     || !autoDrainConcurrencyValid()
     || (autoDrainComplete && Boolean(reasons.complete))
-    || (autoDrainApproveProposed && Boolean(reasons.approve));
+    || (autoDrainApproveProposed && Boolean(reasons.approve))
+    || (autoDrainAutoFix && Boolean(reasons.autoFix));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -1980,7 +2010,7 @@ function autoDrainStartButton(payload, form) {
   form.syncConcurrency?.();
   button.addEventListener("click", async () => {
     const visit = captureWorkspaceVisit();
-    if (pendingOperations.has(key) || !autoDrainConcurrencyValid()) return;
+    if (autoDrainStartBlocked(payload)) return;
     const workspace = selectedWorkspace();
     const counts = autoDrainCounts(payload);
     const duration = autoDrainDuration;
@@ -1988,6 +2018,7 @@ function autoDrainStartButton(payload, form) {
       ? `WARNING: ${AUTO_DRAIN_COMPLETE_WARNING}`
       : "Shipped tasks stay in review; a separate action completes them.";
     const approveProposed = autoDrainApproveProposed;
+    const autoFix = autoDrainAutoFix;
     const mode = payload.controls_authorized === true && payload.replica !== true ? autoDrainMode : "";
     const confirmText = [
       `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
@@ -1996,6 +2027,7 @@ function autoDrainStartButton(payload, form) {
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
       completeLine,
+      ...(autoFix ? [`Auto-fix PR blockers: ${AUTO_DRAIN_AUTO_FIX_HELP}`] : []),
       ...(approveProposed ? [`${AUTO_DRAIN_APPROVE_WARNING} ${AUTO_DRAIN_APPROVE_RULE}`] : []),
     ].join("\n");
     if (!window.confirm(confirmText)) return;
@@ -2003,7 +2035,7 @@ function autoDrainStartButton(payload, form) {
     feedback("auto-drain-operation-feedback", "pending", `Starting a ${duration} auto-delivery window…`);
     renderAutoDrain(payload);
     try {
-      const body = { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed };
+      const body = { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed, auto_fix: autoFix };
       if (mode) body.auto_concurrency = mode;
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
@@ -2011,10 +2043,12 @@ function autoDrainStartButton(payload, form) {
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
-      feedback("auto-drain-operation-feedback", "success", [`Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...(result?.auto_concurrency?.mode ? [`Auto-concurrency: ${result.auto_concurrency.mode} (${result.auto_concurrency.source}).`] : []), ...submissionNoticeLines(result)].join("\n"));
+      feedback("auto-drain-operation-feedback", "success", [`Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...(result?.auto_fix === true ? ["Auto-fix PR blockers enabled."] : []), ...(result?.auto_concurrency?.mode ? [`Auto-concurrency: ${result.auto_concurrency.mode} (${result.auto_concurrency.source}).`] : []), ...submissionNoticeLines(result)].join("\n"));
       await refreshDrainAfterAction();
     } catch (error) {
-      if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
+      if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", error.status
+        ? `Auto-delivery window failed to start: ${error.message}`
+        : `Submission outcome unknown: ${error.message}. Check the window and run history before starting again; this request was not retried.`);
     } finally {
       pendingOperations.delete(key);
       if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
@@ -2360,6 +2394,7 @@ function renderAutoDrainStart(payload, reasons) {
     autoDrainModeControl(payload),
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
+    autoDrainAutoFixControl(payload, reasons),
     form.problem,
     autoDrainStartButton(payload, form),
   );

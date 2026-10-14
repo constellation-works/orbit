@@ -917,7 +917,12 @@ rationale in their detail.
 `orbit run auto --auto-fix` lets the drain repair the pull requests its own runs
 opened when a required check fails or the branch conflicts with its base. It is a
 per-invocation flag with no configuration key, and it authorizes repair only:
-merging still needs `--complete`. Without the flag nothing changes.
+merging still needs `--complete`. Without the flag nothing changes. The dashboard's
+**Auto-fix PR blockers** checkbox starts the same owner drain with `auto_fix: true`.
+It is off by default and independent of completion and proposed-task approval;
+it requires an operator session and is unavailable on pull replicas. The receipt
+and persisted run input carry the chosen repair authority. This control uses the
+same watcher, crew pool and attempt ledger described below.
 
 The crew comes from the existing pool resolution, in this order:
 

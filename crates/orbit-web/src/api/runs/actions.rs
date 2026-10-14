@@ -4,8 +4,8 @@ use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_COMPLETE,
-    DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
+    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
+    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::OrbitRuntime;
@@ -140,6 +140,10 @@ pub(in crate::api) struct AutoDrainBody {
     /// tasks for the operator, same as an omitted flag.
     #[serde(default)]
     approve_proposed: bool,
+    /// Explicit repair authority for this owner's PR leaves, mirroring
+    /// `--auto-fix`. Off by default; does not authorize completion or merging.
+    #[serde(default)]
+    auto_fix: bool,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another
     /// operator holds one.
     #[serde(default)]
@@ -183,7 +187,7 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// (`POST /workflows/auto?workspace=<id>`).
 ///
 /// Dashboard counterpart to `orbit run auto --for <duration> [--concurrency
-/// N] [--complete] [--approve-proposed]`, reusing the same drain-submission
+/// N] [--complete] [--approve-proposed] [--auto-fix]`, reusing the same drain-submission
 /// runtime path the CLI does. `?workspace` is required: a missing or blank selector returns 400
 /// `workspace_required` and starts nothing, including when the server has a
 /// default workspace (`Ws` would otherwise select that default).
@@ -194,7 +198,8 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// the same way `auto_task.mint`'s unconditional mint is. `approve_proposed`
 /// (CLI `--approve-proposed`) is likewise explicit and operator-gated: it lets
 /// the window approve qualifying proposed tasks, including ones filed after
-/// submission. A non-boolean value fails body parsing like any other bad field.
+/// submission. `auto_fix` independently grants operator-only PR repair authority
+/// through the existing owner drain, watcher and repair ledger. A non-boolean value fails body parsing like any other bad field.
 /// The receipt carries the drain's submission notices (`warning`, `note`,
 /// `resource_throttle`, `validation_env_warning`) as `orbit.workflow.auto`
 /// does.
@@ -228,6 +233,13 @@ pub(in crate::api) async fn auto_drain_workflow_action(
     {
         return authorization_denied(denial);
     }
+    let auto_fix = body.auto_fix;
+    if auto_fix
+        && let Err(denial) =
+            authorized_caller(&DASHBOARD_AUTO_DRAIN_AUTO_FIX, state.operator_session())
+    {
+        return authorization_denied(denial);
+    }
     if body.auto_concurrency.is_some()
         && let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_MODE, state.operator_session())
     {
@@ -248,8 +260,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             // Strict worker containment is a CLI-only flag.
             false,
             approve_proposed,
-            // `--auto-fix` is a CLI-only flag.
-            false,
+            auto_fix,
             body.auto_concurrency,
         )?;
         let mut started = json!({
@@ -260,6 +271,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             "submitted_at": invoke.submitted_at,
             "completion": completion.as_input_value(),
             "approve_proposed": approve_proposed,
+            "auto_fix": auto_fix,
         });
         started["auto_concurrency"] = runtime.run_auto_concurrency(&invoke.run_id)?;
         runtime
@@ -384,7 +396,7 @@ pub(in crate::api) async fn auto_drain_readiness(
             &[],
         )?;
         // A replica executes through a pull drain, which cannot approve
-        // proposed tasks (`--pull` conflicts with `--approve-proposed`), so the
+        // proposed tasks or repair PRs (`--pull` conflicts with both flags), so the
         // form withholds that opt-in there.
         if let Some(object) = payload.as_object_mut() {
             object.insert(
@@ -398,9 +410,9 @@ pub(in crate::api) async fn auto_drain_readiness(
     {
         Ok(mut payload) => {
             // So the form can hide/disable the `complete` and
-            // `approve_proposed` and forecast-mode opt-ins and the stop control before the
+            // `approve_proposed`, `auto_fix` and forecast-mode opt-ins and the stop control before the
             // operator ever hits the separately-governed 403 at submission.
-            // All four operations admit the same operator capability, so one
+            // All five operations admit the same operator capability, so one
             // flag describes them.
             if let Some(object) = payload.as_object_mut() {
                 let operator_session = state.operator_session();
@@ -413,6 +425,8 @@ pub(in crate::api) async fn auto_drain_readiness(
                                 operator_session,
                             )
                             .is_ok()
+                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_AUTO_FIX, operator_session)
+                                .is_ok()
                             && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
                                 .is_ok()
                             && authorized_caller(&DASHBOARD_AUTO_DRAIN_MODE, operator_session)
