@@ -259,16 +259,19 @@ pub(super) async fn retry_handoff_action(
         "handoff.retry",
         handoff_id,
         arguments,
-        move |runtime| {
-            let dispatch = runtime.retry_handoff_as_operator(
-                &runtime.workspace_id()?,
-                &request,
-                OPERATOR_ACTOR,
-            )?;
-            serde_json::to_value(dispatch).map_err(|error| OrbitError::Execution(error.to_string()))
-        },
+        move |runtime| retry_handoff_response(runtime, &request),
     )
     .await
+}
+
+// Called by run_owner_action on its blocking worker, including workspace lookup.
+fn retry_handoff_response(
+    runtime: &OrbitRuntime,
+    request: &orbit_types::workflow::handoff::LandingRetryRequest,
+) -> Result<Value, OrbitError> {
+    let dispatch =
+        runtime.retry_handoff_as_operator(&runtime.workspace_id()?, request, OPERATOR_ACTOR)?;
+    serde_json::to_value(dispatch).map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
 /// `POST /api/distributed/handoffs/:id/revoke` — withdraw completion authority.
