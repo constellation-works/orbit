@@ -408,7 +408,7 @@ on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-1399
 `crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs` (`CreateLeaf`, `claim_review_admission`),
 `crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
 `crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
-`crates/orbit-core/src/adapter/engine_host/actions/pull/refill.rs::reviewer_refusal`,
+`crates/orbit-core/src/application/pull_drain/refill/owner.rs::reviewer_refusal`,
 `crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml`
 
 ### Context
@@ -637,9 +637,9 @@ removing it, and it cannot stop the owner's own drain binding an id a follower a
 **Recorded:** 2026-09-28 · [ORB-13663], after the Mac follower's drain `jrun-20260928-0242-t1`
 was cancelled at 04:14Z and its six live leaves finished with four handoffs recorded but
 undelivered, two failures recorded nowhere, and every owner claim left `running`.
-**Code anchors:** `crates/orbit-core/src/adapter/engine_host/actions/pull/settle.rs`
+**Code anchors:** `crates/orbit-core/src/application/pull_drain/settle.rs`
 (`OrbitRuntime::best_effort_settle_terminal_claimed_leaf`, `OrbitRuntime::settle_pending_pulls`),
-`crates/orbit-core/src/adapter/engine_host/actions/pull/drain/settlement.rs::PullDrain::carry_settlement`,
+`crates/orbit-core/src/application/pull_drain/drain/settlement.rs::PullDrain::carry_settlement`,
 `crates/orbit-core/src/runtime/task/reservation_cleanup.rs::finalize_job_run_with_cleanup_after_prior_read`,
 `crates/orbit-core/src/application/job/run/actions.rs::cancel_job_run_with_reason`
 

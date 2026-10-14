@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
+use crate::application::pull_drain;
 use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
@@ -263,9 +264,7 @@ pub(crate) fn run_deterministic(
         }
         // [ORB-13625] One follower pull-drain iteration: reconcile earlier
         // admissions, then top free slots up from the owner.
-        CoreDeterministicAction::PullRefill => {
-            super::pull::refill::pull_refill(runtime, action, input)
-        }
+        CoreDeterministicAction::PullRefill => pull_drain::pull_refill(runtime, action, input),
         // ADR-0223: scheduled shipment resolves only the active runtime's
         // canonical ship input; cross-workspace enumeration stays in the
         // legacy CLI sweep and `workflow.auto_ship` is deliberately ignored.

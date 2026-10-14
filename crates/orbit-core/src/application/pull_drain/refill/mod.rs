@@ -104,29 +104,36 @@
 //! pending requests: neither new work nor an earlier unanswered request may
 //! be admitted without knowing whether the drain is cancelling.
 
+mod cancel;
+mod crews;
+mod input;
+mod owner;
+mod record;
+
 use std::cell::{Cell, RefCell};
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{
-    AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
-};
-use orbit_types::workflow::{
-    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullAdmissionFit, PullBreaker,
-    PullCrewPreflight,
+    AdmissionRequest, AdmissionRunContext, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, PullDestination,
 };
 use serde_json::{Value, json};
 
-use super::super::cli_executor::resolve_cli_executor;
-use super::adapters::{LeafPullLauncher, RoutedPullPeer};
+use self::cancel::cancelling_pass;
+use self::crews::crew_window;
+use self::input::{bool_input, single_pass_input, u64_input};
+use self::owner::{ProbeVerdict, captured_before_pr, probe};
+use self::record::{
+    breaker_refusal, protocol_skew_failure, record_admission_fit, record_breaker,
+    refused_settlements,
+};
 use super::drain::{
     BreakerGate, DEFAULT_BREAKER_COOLDOWN_SECONDS, PullDrain, RefusedDelivery, admits_request,
     breaker_gate, settle_breaker,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    OwnerAnswer, PullCrewWindow, PullWorkFit, RefusedPullSettlement, owner_binary_version,
+    OwnerAnswer, PullCrewWindow, PullWorkFit, owner_binary_version,
 };
 use crate::application::job::pull_window_closed;
 
@@ -137,12 +144,6 @@ pub(crate) const PULL_DRAIN_JOB_NAME: &str = "workspace_pull_pipeline";
 const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
 const DEFAULT_POLL_SLEEP_SECONDS: u64 = 30;
 const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
-
-/// What the owner's probe said about admitting this executor now.
-struct ProbeVerdict {
-    ship: Option<AdmissionShipContract>,
-    refusal: Option<String>,
-}
 
 pub(crate) fn pull_refill(
     runtime: &OrbitRuntime,
@@ -192,15 +193,12 @@ pub(crate) fn pull_refill(
             destination.owner_machine_id
         ))
     })?;
-    let peer = RoutedPullPeer {
-        runtime,
-        transport: transport.clone(),
-    };
-    let launcher = LeafPullLauncher { runtime };
+    let peer = runtime.routed_pull_peer(transport.clone());
+    let launcher = runtime.leaf_pull_launcher();
     let drain = PullDrain {
         jobs: runtime.stores().jobs(),
-        peer: &peer,
-        launcher: &launcher,
+        peer: peer.as_ref(),
+        launcher: launcher.as_ref(),
         refused_delivery: RefusedDelivery::WhenDue,
     };
     let read_pass_state = || {
@@ -724,434 +722,4 @@ pub(crate) fn pull_refill(
         "wait": !done && sleep_seconds > 0,
         "sleep_seconds": sleep_seconds,
     }))
-}
-
-/// Preserve the cause before the engine terminalizes the drain. Its outbox
-/// remains available to leaf workers and later settlement-only passes.
-fn protocol_skew_failure(
-    runtime: &OrbitRuntime,
-    action: &str,
-    run_id: &str,
-    throttle: Option<orbit_types::workflow::ResourceThrottle>,
-    message: String,
-) -> DispatchError {
-    match runtime.record_pull_pass(
-        run_id,
-        throttle,
-        None,
-        Some(&format!("protocol_skew: {message}")),
-        Some("protocol_skew"),
-        OwnerAnswer::None,
-    ) {
-        Ok(_) => DispatchError::ProtocolSkew(message),
-        Err(error) => DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("pull drain could not record pass health: {error}"),
-        },
-    }
-}
-
-/// Record the drain's failure breaker as this pass left it; `None` closes it
-/// [ORB-15639].
-fn record_breaker(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    breaker: Option<&PullBreaker>,
-) -> Result<(), OrbitError> {
-    runtime
-        .stores()
-        .jobs()
-        .update_run_state(run_id, &mut |_, state| {
-            state.pull_drain.pull_breaker = breaker.cloned();
-            Ok(())
-        })
-        .map(|_| ())
-}
-
-/// Record what the drain's host load forecast last had room for; `None`
-/// clears it once nothing is forecast.
-fn record_admission_fit(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    fit: Option<&PullAdmissionFit>,
-) -> Result<(), OrbitError> {
-    runtime
-        .stores()
-        .jobs()
-        .update_run_state(run_id, &mut |_, state| {
-            state.pull_drain.pull_admission_fit = fit.cloned();
-            Ok(())
-        })
-        .map(|_| ())
-}
-
-/// Why the failure breaker holds new requests, if it does: open until it
-/// half-opens, or half-open while `waits_on` claims this drain carries have
-/// not settled.
-fn breaker_refusal(
-    breaker: Option<&PullBreaker>,
-    gate: BreakerGate,
-    waits_on: usize,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<String> {
-    let breaker = breaker?;
-    match gate {
-        BreakerGate::Closed => None,
-        BreakerGate::Open => Some(format!(
-            "circuit_open: the failure breaker is {}; inspect the failed claims and fix the \
-             cause meanwhile, or start a new drain to reset it",
-            breaker.describe(now)
-        )),
-        BreakerGate::HalfOpen => (waits_on > 0).then(|| {
-            format!(
-                "circuit_half_open: the failure breaker is {}; {waits_on} claim(s) this drain \
-                 carries have not settled yet",
-                breaker.describe(now)
-            )
-        }),
-    }
-}
-
-/// The settlements for `destination` its owner refused while still holding
-/// their claims [ORB-13979].
-fn refused_settlements(
-    drain: &PullDrain<'_>,
-    destination: &PullDestination,
-) -> Result<Vec<RefusedPullSettlement>, OrbitError> {
-    Ok(drain
-        .jobs
-        .unsettled_local_pull_admissions()?
-        .iter()
-        .filter(|record| record.destination == *destination)
-        .filter_map(RefusedPullSettlement::of)
-        .collect())
-}
-
-/// One pass of a gracefully cancelled drain: release what never launched,
-/// settle what ended, wait for live leaves, and end the drain `cancelled`
-/// once nothing it carries is unsettled.
-fn cancelling_pass(
-    runtime: &OrbitRuntime,
-    drain: &PullDrain<'_>,
-    run_id: &str,
-    destination: &PullDestination,
-    cancel: &DrainCancelRequest,
-    poll: u64,
-) -> Result<Value, OrbitError> {
-    let cause = match cancel.reason.as_deref() {
-        Some(reason) => format!("the drain was cancelled by {}: {reason}", cancel.actor),
-        None => format!("the drain was cancelled by {}", cancel.actor),
-    };
-    // Only what this drain carries: another live drain's work is its own.
-    let mut error = None;
-    let carried = runtime
-        .pull_drain_admissions(run_id)
-        .map(|records| {
-            records
-                .into_iter()
-                .map(|record| (record.destination, record.request.request_id))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|failure| {
-            error = Some(failure.to_string());
-            Vec::new()
-        });
-    let carries = |record: &LocalPullAdmission| {
-        carried
-            .iter()
-            .any(|(to, id)| *to == record.destination && *id == record.request.request_id)
-    };
-    if let Err(failure) = drain.release_pending(&carries, &cause) {
-        error.get_or_insert(failure.to_string());
-    }
-    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output();
-    let unsettled = match runtime.pull_drain_admissions(run_id) {
-        Ok(records) => Some(records.len()),
-        Err(failure) => {
-            error.get_or_insert(failure.to_string());
-            None
-        }
-    };
-    let waiting_leaves = match runtime.pull_drain_claimed_leaves(run_id) {
-        Ok(leaves) => leaves,
-        Err(failure) => {
-            error.get_or_insert(failure.to_string());
-            Vec::new()
-        }
-    };
-    let mut done = unsettled == Some(0);
-    if done && let Err(failure) = runtime.complete_graceful_drain_cancel(run_id) {
-        // The drain stays running and the next pass tries again.
-        error.get_or_insert(failure.to_string());
-        done = false;
-    }
-    if let Some(message) = error.as_deref() {
-        tracing::warn!(
-            target: "orbit.core.pull",
-            selector = %destination.selector,
-            %message,
-            "cancelling pull drain pass did not complete; retrying next iteration",
-        );
-    }
-    let health = runtime.record_pull_pass(
-        run_id,
-        None,
-        None,
-        error.as_deref(),
-        None,
-        OwnerAnswer::None,
-    )?;
-    Ok(json!({
-        "admitted": 0,
-        "unsettled": unsettled,
-        "admitting": false,
-        "refusal": Value::Null,
-        "consecutive_failures": 0,
-        "reclaimed_build_bytes": reclaimed_build_bytes,
-        "error": error,
-        "last_pass_error": health.last_pass_error,
-        "consecutive_pass_failures": health.consecutive_pass_failures,
-        "degraded": health.degraded,
-        "host_shutdown": Value::Null,
-        "resource_throttle": Value::Null,
-        "resource_telemetry_unknown": [],
-        "cancelling": true,
-        "waiting_leaves": waiting_leaves,
-        "done": done,
-        "wait": !done,
-        "sleep_seconds": if done { 0 } else { poll },
-    }))
-}
-
-/// The drain's crew window, taking and persisting its preflight on the first
-/// pass of the window. A preflight that cannot be persisted is still used for
-/// this pass, and taken again on the next.
-fn crew_window(runtime: &OrbitRuntime, run_id: &str) -> Result<PullCrewWindow, OrbitError> {
-    let stored = runtime
-        .read_run_state(run_id)?
-        .and_then(|state| state.pull_drain.pull_crew_preflight);
-    let preflight = match stored {
-        Some(preflight) => preflight,
-        None => {
-            let preflight = crew_preflight(runtime);
-            let mut pending = Some(preflight.clone());
-            if let Err(failure) =
-                runtime
-                    .stores()
-                    .jobs()
-                    .update_run_state(run_id, &mut |_, state| {
-                        if state.pull_drain.pull_crew_preflight.is_none() {
-                            state.pull_drain.pull_crew_preflight = pending.take();
-                        }
-                        Ok(())
-                    })
-            {
-                tracing::warn!(
-                    target: "orbit.core.pull",
-                    run_id,
-                    %failure,
-                    "pull drain could not record its crew preflight; the next pass takes it again",
-                );
-            }
-            preflight
-        }
-    };
-    runtime.crew_window_from(run_id, Some(preflight))
-}
-
-/// The window's provider preflight [ORB-13941]: every configured crew this
-/// host could dispatch now, resolved the way dispatch resolves it — enabled,
-/// its provider's executor resolvable, and that executor's CLI found where a
-/// leaf would launch it. Cheap: no provider process is started. An
-/// unauthenticated CLI passes here and is caught by its first claimed leaf.
-/// Only auth-excluded providers with a declared probe may recover later.
-fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
-    let registry = runtime.configured_crew_registry_projection();
-    let mut runnable = Vec::new();
-    let mut excluded = Vec::new();
-    for crew in &registry.crews {
-        let unusable = if crew.enabled {
-            match resolve_cli_executor(runtime, &crew.provider) {
-                Ok(executor) => runtime
-                    .locate_provider_launcher(&executor.command)
-                    .is_none()
-                    .then(|| {
-                        format!(
-                            "provider `{}` CLI `{}` was not found on this host",
-                            crew.provider, executor.command
-                        )
-                    }),
-                Err(failure) => Some(format!("provider `{}`: {failure}", crew.provider)),
-            }
-        } else {
-            Some(format!(
-                "disabled here (`[crews.{}] enabled = false`)",
-                crew.name
-            ))
-        };
-        match unusable {
-            None => runnable.push(crew.name.clone()),
-            Some(reason) => excluded.push(CrewExclusion {
-                crew: crew.name.clone(),
-                source: CrewExclusionSource::Preflight,
-                reason,
-                until: None,
-            }),
-        }
-    }
-    PullCrewPreflight {
-        checked_at: chrono::Utc::now(),
-        runnable,
-        default_crew: registry.default_crew,
-        excluded,
-    }
-}
-
-/// Ask the owner whether it would admit this executor now, and for the ship
-/// contract a new request must carry. Declaring this binary's version, the
-/// protocol schema and the drain's captured `review.before_pr` makes the
-/// owner report the first refusal admission would raise, so a mismatch stops
-/// new requests before any is persisted.
-fn probe(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    transport: &std::sync::Arc<dyn orbit_tools::DrainOwnerTransport>,
-    destination: &PullDestination,
-) -> Result<ProbeVerdict, OrbitError> {
-    let report = crate::application::distributed::probe_pull_contract(
-        transport.as_ref(),
-        &destination.selector,
-        captured_before_pr(runtime, run_id)?,
-    )?;
-    if report.get("owner_machine_id").and_then(Value::as_str)
-        != Some(destination.owner_machine_id.as_str())
-    {
-        return Ok(ProbeVerdict {
-            ship: None,
-            refusal: Some(format!(
-                "owner answered as {:?}, not the bound owner '{}'",
-                report.get("owner_machine_id"),
-                destination.owner_machine_id
-            )),
-        });
-    }
-    let admits = report.get("admits").and_then(Value::as_bool) == Some(true);
-    if !admits {
-        let refusal = report
-            .get("refusal")
-            .and_then(Value::as_str)
-            .unwrap_or("refused");
-        let diagnostics = report
-            .get("diagnostics")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            })
-            .unwrap_or_default();
-        return Ok(ProbeVerdict {
-            ship: None,
-            refusal: Some(format!("{refusal}: {diagnostics}")),
-        });
-    }
-    let ship = report
-        .get("ship")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| OrbitError::Store(format!("owner probe ship contract: {error}")))?;
-    if let Some(ship) = &ship
-        && let Some(refusal) = reviewer_refusal(runtime, run_id, ship)?
-    {
-        return Ok(ProbeVerdict {
-            ship: None,
-            refusal: Some(refusal),
-        });
-    }
-    Ok(ProbeVerdict {
-        ship,
-        refusal: None,
-    })
-}
-
-/// Why this drain cannot run the before-PR or before-landing review the
-/// owner's ship contract captured [ORB-13908]: the crew is unset, does not
-/// resolve here, or the drain's window cannot run it. Claiming anyway would
-/// only escalate the task at its gate, so the drain requests nothing until the
-/// owner or this host changes, or until a capacity backoff on the crew lifts
-/// by itself [ORB-15791].
-fn reviewer_refusal(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    ship: &AdmissionShipContract,
-) -> Result<Option<String>, OrbitError> {
-    if let Some(refusal) = runtime.claimed_review_refusal(ship) {
-        return Ok(Some(refusal));
-    }
-    let Some(crew) = ship
-        .review
-        .as_ref()
-        .and_then(|review| review.crew.as_deref())
-    else {
-        return Ok(None);
-    };
-    let timing = if ship.before_landing {
-        "before-landing"
-    } else {
-        "before-PR"
-    };
-    // The window without its `--allow-crew` restriction: that selects the
-    // claims' implementation crews, not the review each one owes.
-    Ok(crew_window(runtime, run_id)?
-        .reviewer_unrunnable_reason(crew)
-        .map(|reason| {
-            format!("before_pr_reviewer_unavailable: the owner's {timing} review {reason}")
-        }))
-}
-
-/// Whether the drain was submitted without a window: `for_seconds` zero, as
-/// the job forwards it. A pass given no `for_seconds` at all is a timed one.
-fn single_pass_input(input: &Value) -> bool {
-    match input.get("for_seconds") {
-        Some(Value::Number(number)) => number.as_f64() == Some(0.0),
-        Some(Value::String(text)) => {
-            let text = text.trim();
-            text.is_empty() || text.parse::<f64>().is_ok_and(|seconds| seconds == 0.0)
-        }
-        Some(Value::Null) => true,
-        _ => false,
-    }
-}
-
-/// A boolean templated into activity input, which renders as a string.
-fn bool_input(input: &Value, key: &str) -> bool {
-    match input.get(key) {
-        Some(Value::Bool(value)) => *value,
-        Some(Value::String(text)) => text.trim() == "true",
-        _ => false,
-    }
-}
-
-fn u64_input(input: &Value, key: &str, default: u64) -> u64 {
-    match input.get(key) {
-        Some(Value::Number(number)) => number.as_u64().unwrap_or(default),
-        Some(Value::String(text)) => text.trim().parse().unwrap_or(default),
-        _ => default,
-    }
-}
-
-/// The `review.before_pr` the pull drain captured at submission
-/// [ORB-13992]: turning it on later does not change what a running drain
-/// declares. A drain submitted before the capture existed falls back to this
-/// host's current setting.
-fn captured_before_pr(runtime: &OrbitRuntime, run_id: &str) -> Result<bool, OrbitError> {
-    Ok(
-        crate::application::review::run_review_admission(runtime, run_id)?.map_or_else(
-            || runtime.local_review_before_pr(),
-            |admission| admission.gates_pr(),
-        ),
-    )
 }

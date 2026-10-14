@@ -51,7 +51,6 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::candidate::stopping_candidate;
 use super::drain::{
     PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
@@ -480,15 +479,12 @@ impl OrbitRuntime {
                 })
                 .collect();
         };
-        let peer = RoutedPullPeer {
-            transport,
-            runtime: self,
-        };
-        let launcher = LeafPullLauncher { runtime: self };
+        let peer = self.routed_pull_peer(transport);
+        let launcher = self.leaf_pull_launcher();
         let drain = PullDrain {
             jobs: self.stores().jobs(),
-            peer: &peer,
-            launcher: &launcher,
+            peer: peer.as_ref(),
+            launcher: launcher.as_ref(),
             refused_delivery,
         };
         // One unreachable owner costs one delivery timeout per pass, not one
