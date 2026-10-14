@@ -431,6 +431,20 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             OrbitError::Execution(format!("create the validation summary directory: {error}"))
         })?;
     let summary_path = summary_dir.path().join("summary.json");
+    let evidence_dir = tempfile::Builder::new()
+        .prefix("evidence-")
+        .tempdir_in(summary_dir.path())
+        .map_err(|error| {
+            OrbitError::Execution(format!("create command evidence directory: {error}"))
+        })?;
+    // Hold the directory before the command runs: even a renamed/replaced parent
+    // cannot redirect reads. Only flat, no-follow regular files are accepted.
+    let evidence_anchor = std::fs::File::open(evidence_dir.path())?;
+    let invocation = evidence_dir
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| OrbitError::Execution("command evidence invocation is not UTF-8".into()))?;
     let waits_path = summary_dir.path().join("waits");
     orbit_common::fs::io::create_private_dir(&waits_path).map_err(|error| {
         OrbitError::Execution(format!("create validation wait directory: {error}"))
@@ -439,7 +453,9 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         .env
         .iter()
         .filter(|(key, _)| {
-            key != VALIDATION_SUMMARY_ENV
+            key != super::required_evidence::DIRECTORY_ENV
+                && key != super::required_evidence::INVOCATION_ENV
+                && key != VALIDATION_SUMMARY_ENV
                 && key != VALIDATION_SELECTION_ENV
                 && key != orbit_common::process::build_budget::WAIT_DIRECTORY_ENV
         })
@@ -456,6 +472,14 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     if let Some(selection) = selection {
         env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
     }
+    env.push((
+        super::required_evidence::DIRECTORY_ENV.into(),
+        evidence_dir.path().to_string_lossy().into_owned(),
+    ));
+    env.push((
+        super::required_evidence::INVOCATION_ENV.into(),
+        invocation.to_string(),
+    ));
     let setup_ms = started.elapsed().as_millis();
     let supervised = run_process_supervised(
         &ExecRequest {
@@ -485,6 +509,10 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
                 "package_timings": value["package_timings"],
             })
         });
+    let evidence_started = Instant::now();
+    let command_evidence =
+        super::required_evidence::capture(&evidence_anchor, invocation, workspace_path);
+    let evidence_capture_ms = evidence_started.elapsed().as_millis();
     let timing = json!({
         "elapsed_ms": started.elapsed().as_millis(),
         "network_retry_backoff_ms": 0,
@@ -497,6 +525,8 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             "timed_out": outcome.timed_out,
             "admission_waits": admission,
             "phase_timings": phase_timings,
+            "command_evidence": command_evidence,
+            "evidence_capture_ms": evidence_capture_ms,
         }],
     });
     let summary = ValidationSummary::read(&summary_path);

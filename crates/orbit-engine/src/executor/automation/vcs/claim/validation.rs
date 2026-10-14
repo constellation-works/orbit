@@ -474,19 +474,17 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     let check = (!run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none())
         .then(|| compare_candidate_with_base(host, &workspace_path, &candidate.base.commit, run));
     let coverage_failure = run.coverage_failure(commit, replay);
-    if let Some(check) = check.as_ref().filter(|_| coverage_failure.is_none())
-        && let Some(failures) = check.known_red(run)
-    {
-        return Ok((
-            Some(HandoffKnownRed {
+    let known_red = check
+        .as_ref()
+        .filter(|_| coverage_failure.is_none())
+        .and_then(|check| {
+            check.known_red(run).map(|failures| HandoffKnownRed {
                 base_sha: check.base_sha.clone(),
                 selection: run.selection().cloned(),
                 failures: failures.clone(),
-            }),
-            None,
-        ));
-    }
-    let rerun = if coverage_failure.is_none() {
+            })
+        });
+    let rerun = if coverage_failure.is_none() && known_red.is_none() {
         rerun_failed_tests(
             host,
             &workspace_path,
@@ -525,6 +523,8 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         "flaky": rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()),
         "failure_kind": if rerun.as_ref().is_some_and(|rerun| rerun.flaky.is_some()) {
             json!("flaky")
+        } else if known_red.is_some() {
+            json!("known_red")
         } else if red {
             json!("baseline_red")
         } else if check.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
@@ -535,6 +535,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             run.failure_kind()
         },
         "network_retries": run.network_retries,
+        "timing": run.timing,
         "summary": run.summary,
         "baseline": check.as_ref().map(|check| check.record(Some(&base_path))),
     });
@@ -550,6 +551,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
                 "tested_head": commit, "command": rerun.run.command,
                 "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
                 "output": rerun.run.output, "summary": rerun.run.summary,
+                "timing": rerun.run.timing,
                 "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
             }),
         ));
@@ -560,6 +562,16 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     for (path, content) in logs {
         if let Err(error) = serde_json::to_vec(&content)
             .map_err(|error| OrbitError::Execution(error.to_string()))
+            .and_then(|bytes| {
+                super::super::required_evidence::retain(
+                    host,
+                    std::slice::from_ref(&context.task_id),
+                    &context.run_id,
+                    path,
+                    &bytes,
+                    true,
+                )
+            })
             .and_then(|bytes| host.attach_claim_validation_log(path, bytes))
         {
             tracing::warn!(
@@ -567,6 +579,9 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
                 "could not attach a claimed validation failure log: {error}"
             );
         }
+    }
+    if let Some(known_red) = known_red {
+        return Ok((Some(known_red), None));
     }
     if let Some(record) = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()) {
         require_clean_candidate(&workspace_path, candidate)?;

@@ -31,6 +31,7 @@ libtest time plus the doctest time.
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -545,6 +546,45 @@ HOST_NOTICE_MARKERS = ("sandbox_apply: Operation not permitted",
                        "No permissions to create new namespace")
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 NEXTEST_STATUS = re.compile(r"^( *)([A-Z][A-Z0-9 +/]*?)\s+\[")
+# The existing task artifact inline ceiling, also enforced independently by
+# the generic executor. An oversized source is reported as a partial prefix.
+COMMAND_EVIDENCE_BYTES = 1024 * 1024
+
+
+def report_command_evidence(log_path):
+    """Report failed raw runner bytes through the host's generic evidence channel.
+
+    Standalone gates retain their scratch log as before. The executor supplies
+    a fresh directory and invocation; no runner pathname is interpreted by core.
+    Copy at most the inline artifact ceiling, marking an oversized source's
+    prefix incomplete. The host independently enforces read/retention ceilings
+    and redaction; a producer report never claims durable retention.
+    """
+    directory = os.environ.get("ORBIT_COMMAND_EVIDENCE_DIR")
+    invocation = os.environ.get("ORBIT_COMMAND_EVIDENCE_INVOCATION")
+    if not directory or not invocation:
+        return
+    try:
+        target = Path(directory) / log_path.name
+        digest = hashlib.sha256()
+        size = 0
+        with log_path.open("rb") as source, target.open("xb") as output:
+            while size < COMMAND_EVIDENCE_BYTES:
+                block = source.read(min(64 * 1024, COMMAND_EVIDENCE_BYTES - size))
+                if not block:
+                    break
+                digest.update(block)
+                size += len(block)
+                output.write(block)
+            complete = not source.read(1)
+        manifest = dict(schema_version=1, invocation=invocation, files=[dict(
+            name=target.name, source=log_path.relative_to(ROOT).as_posix(),
+            bytes=size, sha256=digest.hexdigest(), complete=complete)])
+        (Path(directory) / "manifest.json").write_text(json.dumps(manifest))
+    except (OSError, ValueError) as error:
+        # Evidence failure never masks or repairs the runner's nonzero status.
+        print(f"ci-test-affected: command evidence report unavailable: {error}",
+              file=sys.stderr, flush=True)
 
 
 def run_nextest(command, environment):
@@ -587,7 +627,11 @@ def run_nextest(command, environment):
                               or any(marker in plain for marker in HOST_NOTICE_MARKERS))
                     if status or not passing_block or notice:
                         print(plain if notice else line, end="", file=sys.stderr, flush=True)
-                return process.wait(), notices, "".join(captured)
+                exit_code = process.wait()
+                log.flush()
+                if exit_code:
+                    report_command_evidence(Path(log.name))
+                return exit_code, notices, "".join(captured)
             except BaseException:
                 process.terminate()
                 process.wait()

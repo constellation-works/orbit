@@ -2053,6 +2053,295 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
     );
 }
 
+/// A failed public command retains its reported middle diagnostic beyond the
+/// host-assigned scratch lifetime; refused/unknown evidence never repairs it.
+fn required_validation_retains_reported_evidence_after_scratch_lifetime() {
+    isolated(
+        "required_validation_retains_reported_evidence_after_scratch_lifetime",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let script = sandbox.join("report-evidence.py");
+            let source = sandbox.join("raw-failure.log");
+            let observed = sandbox.join("evidence-directory");
+            let raw = format!(
+                "{}        FAIL [0.001s] fixture::suite broken\n  scenario: middle-failure\n  assertion: durable-detail\n{}",
+                "héád noise\n".repeat(20000),
+                "tail noise\n".repeat(20000)
+            );
+            fs::write(&source, &raw).unwrap();
+            fs::write(&script, r#"import hashlib, json, os, sys
+from pathlib import Path
+mode, source, observed = sys.argv[1:]
+if not Path('src/feature.txt').exists() and mode != 'both':
+    sys.exit(0)
+if 'ORBIT_COMMAND_EVIDENCE_DIR' not in os.environ:
+    Path(observed).write_text('unavailable-evidence-directory')
+    sys.stdout.write(Path(source).read_text())
+    sys.exit(3)
+directory = Path(os.environ['ORBIT_COMMAND_EVIDENCE_DIR'])
+Path(observed).write_text(str(directory))
+raw = Path(source).read_bytes()
+if mode == 'oversized': raw = b'x' * (1048576 + 1)
+if mode == 'invalid-utf8': raw = b'\xff\xfe'
+if mode == 'redacted': raw = b'Authorization: Bearer fixture-secret-token\n'
+name = 'runner.log'
+path = directory / name
+path.write_bytes(raw)
+if mode == 'symlink':
+    path.unlink()
+    path.symlink_to(source)
+if mode == 'fifo':
+    path.unlink()
+    os.mkfifo(path)
+entry = dict(name=name, source='logs/runner.log', bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), complete=mode != 'partial')
+manifest = dict(schema_version=1, invocation=os.environ['ORBIT_COMMAND_EVIDENCE_INVOCATION'], files=[entry])
+if mode == 'foreign': manifest['invocation'] = 'another-command'
+if mode == 'outside': entry['name'] = source
+if mode == 'outside-source': entry['source'] = '../runner.log'
+if mode == 'digest': entry['sha256'] = '0' * 64
+if mode == 'size': entry['bytes'] += 1
+if mode == 'malformed': manifest['unexpected'] = True
+if mode == 'total-oversized':
+    raw = b'x' * 600000
+    path.write_bytes(raw)
+    entry.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    (directory / 'another.log').write_bytes(raw)
+    manifest['files'].append(dict(entry, name='another.log'))
+(directory / 'manifest.json').write_text(json.dumps(manifest))
+if mode == 'manifest-oversized':
+    (directory / 'manifest.json').write_text(' ' * (16384 + 1))
+if mode == 'parent-swap':
+    directory.rename(directory.with_name('anchored-renamed'))
+    directory.symlink_to(Path(source).parent, target_is_directory=True)
+if mode == 'manifest-symlink':
+    (directory / 'manifest.json').unlink()
+    (directory / 'manifest.json').symlink_to(source)
+if mode == 'both':
+    print('test broken ... FAILED')
+else:
+    sys.stdout.write(Path(source).read_text())
+sys.exit(3)
+"#).unwrap();
+            let mut measurements = Vec::new();
+            for route in ["candidate_validate", "claim_validate"] {
+                for mode in [
+                    "complete",
+                    "both",
+                    "partial",
+                    "redacted",
+                    "malformed",
+                    "foreign",
+                    "outside",
+                    "outside-source",
+                    "symlink",
+                    "fifo",
+                    "manifest-symlink",
+                    "manifest-oversized",
+                    "total-oversized",
+                    "invalid-utf8",
+                    "parent-swap",
+                    "oversized",
+                    "digest",
+                    "size",
+                    "unknown-write",
+                    "foreign-owner",
+                ] {
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    *host.fail_evidence_writes.lock().unwrap() = mode == "unknown-write";
+                    if mode == "foreign-owner" {
+                        host.tasks
+                            .lock()
+                            .unwrap()
+                            .get_mut(TASK_ID)
+                            .unwrap()
+                            .job_run_id = Some("foreign-run".into());
+                    }
+                    let command = format!(
+                        "python3 '{}' {mode} '{}' '{}'",
+                        script.display(),
+                        source.display(),
+                        observed.display()
+                    );
+                    host.require_commands(&[&command]);
+                    let input = if route == "candidate_validate" {
+                        fx.validate_input()
+                    } else {
+                        json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha})
+                    };
+                    let outcome = action(&host, route, &input);
+                    if mode == "foreign-owner" && route == "candidate_validate" {
+                        assert!(outcome.unwrap_err().to_string().contains("does not own"));
+                        assert!(
+                            host.artifacts.lock().unwrap().is_empty(),
+                            "foreign ownership cannot store bytes"
+                        );
+                        continue;
+                    }
+                    if mode == "both" {
+                        assert_eq!(
+                            outcome.unwrap()["decision"],
+                            "passed_with_known_red",
+                            "original shared failure qualification survives"
+                        );
+                    } else {
+                        let failure = outcome.unwrap_err().to_string();
+                        assert!(
+                            failure.contains("exit 3"),
+                            "{route}/{mode}: original failure remains: {failure}"
+                        );
+                    }
+                    let ephemeral = fs::read_to_string(&observed).unwrap();
+                    assert!(
+                        !Path::new(&ephemeral).exists(),
+                        "supported TempDir lifetime removed disposable scratch before readback"
+                    );
+                    let read = |path: &str| -> Value {
+                        if route == "candidate_validate" {
+                            host.validation_log(TASK_ID, path)
+                        } else {
+                            serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path])
+                                .unwrap()
+                        }
+                    };
+                    let log_path = if route == "candidate_validate" {
+                        format!("validation/{RUN_ID}/0.json")
+                    } else {
+                        "validation/claim-landing/0.failed.json".into()
+                    };
+                    let log = read(&log_path);
+                    assert_eq!(log["exit_code"], 3);
+                    let evidence = &log["timing"]["attempts"][0]["command_evidence"];
+                    assert!(log["timing"]["attempts"][0]["evidence_capture_ms"].is_u64());
+                    measurements.push(json!({"route": route, "mode": mode,
+                        "raw_bytes": raw.len(), "bounded_bytes": log["output"].as_str().unwrap().len(),
+                        "capture_ms": log["timing"]["attempts"][0]["evidence_capture_ms"],
+                        "retention_ms": log["timing"]["evidence_retention_ms"],
+                        "status": evidence["status"]}));
+                    match mode {
+                        "complete" | "both" | "partial" | "redacted" | "foreign-owner"
+                        | "parent-swap" => {
+                            assert_eq!(
+                                evidence["status"], "captured",
+                                "{route}/{mode}: {evidence}"
+                            );
+                            let file = &evidence["files"][0];
+                            let reference = &file["manifests"][0];
+                            let manifest = read(reference["path"].as_str().unwrap());
+                            assert_eq!(manifest["task_id"], TASK_ID);
+                            assert_eq!(
+                                manifest["source_workspace"],
+                                fx.repo.to_string_lossy().as_ref()
+                            );
+                            assert_eq!(manifest["provenance"]["command"], command);
+                            assert_eq!(
+                                manifest["provenance"]["command_sha256"],
+                                orbit_common::security::release::sha256_hex(command.as_bytes())
+                            );
+                            assert_eq!(manifest["provenance"]["run_id"], RUN_ID);
+                            assert_eq!(manifest["provenance"]["tested_head"], fx.candidate);
+                            assert_eq!(manifest["provenance"]["role"], "candidate");
+                            assert_eq!(manifest["file"]["source"], "logs/runner.log");
+                            let mut retained = String::new();
+                            for chunk in manifest["file"]["chunks"].as_array().unwrap() {
+                                let stored = read(chunk["path"].as_str().unwrap());
+                                let data = stored["content"].as_str().unwrap();
+                                assert_eq!(chunk["offset"], retained.len());
+                                assert_eq!(
+                                    chunk["sha256"],
+                                    orbit_common::security::release::sha256_hex(data.as_bytes())
+                                );
+                                assert_eq!(
+                                    chunk["artifact_sha256"],
+                                    orbit_common::security::release::sha256_hex(
+                                        &serde_json::to_vec(&stored).unwrap()
+                                    )
+                                );
+                                retained.push_str(data);
+                            }
+                            assert_eq!(
+                                file["retained_sha256"],
+                                orbit_common::security::release::sha256_hex(retained.as_bytes())
+                            );
+                            assert_eq!(file["retained_bytes"], retained.len());
+                            assert_eq!(file["complete"], mode != "partial");
+                            assert_eq!(
+                                file["raw_complete"],
+                                mode != "partial" && mode != "redacted"
+                            );
+                            if mode == "redacted" {
+                                assert!(
+                                    !retained.contains("fixture-secret-token"),
+                                    "secrets cannot bypass validation redaction"
+                                );
+                                assert_eq!(file["redacted"], true);
+                            } else {
+                                assert_eq!(
+                                    retained, raw,
+                                    "all raw middle failure bytes survive scratch cleanup"
+                                );
+                            }
+                            if mode == "both" {
+                                let base_path = if route == "candidate_validate" {
+                                    format!("validation/{RUN_ID}/0.baseline.json")
+                                } else {
+                                    "validation/claim-landing/0.baseline.json".into()
+                                };
+                                let base = read(&base_path);
+                                let base_ref = &base["timing"]["attempts"][0]["command_evidence"]["files"]
+                                    [0]["manifests"][0];
+                                let base_manifest = read(base_ref["path"].as_str().unwrap());
+                                assert_eq!(base_manifest["provenance"]["tested_head"], fx.base_sha);
+                                assert_eq!(base_manifest["provenance"]["role"], "baseline");
+                            } else {
+                                assert!(log["output"].as_str().unwrap().contains("durable-detail"));
+                            }
+                        }
+                        "unknown-write" => {
+                            assert_eq!(evidence["status"], "attachment_unknown");
+                            assert_eq!(evidence["complete"], false);
+                            assert_eq!(evidence["captured_files"][0]["source"], "logs/runner.log");
+                            assert_eq!(evidence["captured_files"][0]["complete"], false);
+                            let paths: Vec<_> = if route == "candidate_validate" {
+                                host.artifacts
+                                    .lock()
+                                    .unwrap()
+                                    .keys()
+                                    .map(|(_, path)| path.clone())
+                                    .collect()
+                            } else {
+                                host.claim_logs.lock().unwrap().clone()
+                            };
+                            assert_eq!(
+                                paths
+                                    .iter()
+                                    .filter(|path| path.contains("/evidence/"))
+                                    .count(),
+                                1,
+                                "unknown write is never retried"
+                            );
+                            assert!(
+                                !paths.iter().any(|path| path.ends_with(".manifest.json")),
+                                "no complete manifest follows an unknown chunk write"
+                            );
+                        }
+                        _ => {
+                            assert_eq!(evidence["status"], "refused", "{route}/{mode}: {evidence}");
+                            assert_eq!(evidence["complete"], false);
+                            assert!(
+                                evidence.get("files").is_none(),
+                                "refused bytes cannot be passed off as complete"
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(path) = std::env::var_os("EVIDENCE_SCENARIO_REPORT") {
+                fs::write(path, serde_json::to_vec_pretty(&measurements).unwrap()).unwrap();
+            }
+        },
+    );
+}
+
 /// Large captured output belongs only to artifacts, on both delivery routes.
 fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() {
     isolated(
@@ -6677,6 +6966,8 @@ struct DeliveryHost {
     /// Outputs of the actions a job graph scripts, by action; every other
     /// action is the engine's own.
     scripted: Mutex<BTreeMap<String, Value>>,
+    /// Simulate a chunk stored with an unknown attachment response.
+    fail_evidence_writes: Mutex<bool>,
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     /// Trusted system artifacts, by task id and path.
@@ -6734,6 +7025,7 @@ impl DeliveryHost {
             baseline_commands: Mutex::default(),
             scripted: Mutex::default(),
             artifacts: Mutex::default(),
+            fail_evidence_writes: Mutex::default(),
             artifact_creators: Mutex::default(),
             releases: Mutex::default(),
             validation_env: Mutex::default(),
@@ -7311,6 +7603,11 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             .lock()
             .unwrap()
             .insert(path.to_string(), content);
+        if *self.fail_evidence_writes.lock().unwrap() && path.contains("/evidence/") {
+            return Err(OrbitError::Execution(
+                "attachment response unknown after write".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -7373,6 +7670,11 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             .lock()
             .unwrap()
             .insert((task_id.to_string(), path.to_string()), content);
+        if *self.fail_evidence_writes.lock().unwrap() && path.contains("/evidence/") {
+            return Err(OrbitError::Execution(
+                "attachment response unknown after write".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -8121,6 +8423,7 @@ fn validation_repairs_and_logs() {
     isolated("validation_repairs_and_logs", |_| {
         required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes();
         required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs();
+        required_validation_retains_reported_evidence_after_scratch_lifetime();
         printed_supervisor_notes_remain_candidate_failures_on_both_streams();
     });
 }
