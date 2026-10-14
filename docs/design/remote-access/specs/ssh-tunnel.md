@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-10-11
+last_validated: 2026-10-14
 tags: [remote-access]
 ---
 
@@ -80,7 +80,7 @@ Attach mode sends no remote command, so --workspace and --global cannot reconfig
 - Other early exit: report the remote Web command and status.
 - Probe timeout: not an error; proceed to spawn mode. The five seconds start when the child reports that it bound the forward, not when the probe process starts. One poll cannot run past the time still left.
 - Spawn readiness timeout: fail and tear down the SSH child. The 30 seconds are a total deadline with the same 8 KiB status-line bound.
-- Local port selection is a time-of-check/time-of-use race. If another process claims the port first, SSH exits 255 on its failed bind and no bind is reported, so that listener is never probed or attached as the tunnel.
+- Local port selection is a time-of-check/time-of-use race. If another process claims the port first, SSH exits 255 on its failed bind and no bind is reported, so that listener is never probed or attached as the tunnel. The dashboard's unattended host forward can reallocate a proven initial bind collision within its original deadline ([host-forward.md](./host-forward.md#tunnels)); foreground `web connect` continues to surface it, and neither caller replays a remote command after a spawn failure.
 - Two simultaneous connects can both miss an absent server and try to spawn; one remote bind may fail. This is surfaced rather than hidden.
 
 The command requires a reachable remote host and a foreground tunnel. It provides no reconnect, offline view, replication, or cross-machine merge behavior.

@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web host forward — another registered host's dashboard API through this one"
-last_validated: 2026-10-11
+last_validated: 2026-10-14
 tags: [remote-access, host-registry]
 ---
 
@@ -53,6 +53,7 @@ One tunnel per host, keyed by `machine_id`.
 
 - **Establish.** Attach first, then spawn, exactly as `web connect` does. The spawned remote command is `orbit web serve --no-open --port <remote>`, plus `--operator` exactly when the serving session has the operator capability. The local listener is `127.0.0.1` on an ephemeral port; the remote port is the default dashboard port, 7878.
 - **Unattended SSH.** A server has no terminal, so every SSH child gets `-o BatchMode=yes -o ConnectTimeout=10`, and the wait for the forward listener is bounded. A host that needs a passphrase or password fails as `unreachable_destination` rather than waiting.
+- **Initial port collisions.** If the initial attach child exits 255 before its bind marker and its complete diagnostic reports `Address already in use` for the selected loopback port followed by `Could not request local forwarding.`, the dashboard may choose another ephemeral port. There are at most three allocations, all under the original connect/authentication deadline and the same single-flight lock. The failed child is reaped before another starts. Cancellation refuses the next allocation. A foreign listener is never probed, even if it advertises the registered machine identity. Authentication, network, readiness and remote-command failures are surfaced without another allocation; a collision while starting the remote command is also surfaced. Initial unattended probe diagnostics use the C locale, are stored in the child's private marker directory, and are logged on teardown (at most 8 KiB); missing, incomplete or oversized diagnostics cannot authorize reallocation.
 - **Single flight.** Concurrent first requests for one host share one establish. Requests waiting behind a failed attempt get that failure rather than starting another. Establish runs on the blocking pool, so a slow host never stalls other requests.
 - **Identity.** On each new tunnel the dashboard reads `GET /api/hosts?probe=false` through it and takes the row marked `local`. The read's ten seconds are a total deadline, not a per-read socket timeout. The status line and the header block are each at most 8 KiB, and the body is at most 1 MiB. A reply that exceeds a cap, or that is still unfinished at the deadline, refuses the tunnel and tears the SSH child down. Shutdown during the read stops it the same way. A `machine_id` other than the host file's is 409 `host_identity_mismatch`, and the tunnel is torn down. The read starts only after the SSH child reported binding the forward ([bind report](./ssh-tunnel.md#bind-report)), and if that child has exited by the end of the read the result is `unreachable_destination` with its exit classification: a listener that took the port from a failed SSH is never reported as a mismatched host. A 404 is 409 `host_too_old`: that dashboard predates the host registry and cannot prove its identity.
 - **Reuse and re-establish.** A live tunnel is reused. When its SSH child has exited, or the host's SSH target changed, the next request tears it down and establishes again. There is no reconnect loop and no heartbeat.

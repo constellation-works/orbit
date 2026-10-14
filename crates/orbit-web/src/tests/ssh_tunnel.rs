@@ -410,9 +410,11 @@ fn run_establish(
         });
         let _ = tx.send(outcome);
     });
-    rx.recv_timeout(wait).unwrap_or_else(|_| {
-        panic!("establish hung; a probe must return within the readiness budget")
-    })
+    rx.recv_timeout(wait)
+        .unwrap_or_else(|_| {
+            panic!("establish hung; a probe must return within the readiness budget")
+        })
+        .map_err(orbit_core::OrbitError::from)
 }
 
 fn child_pids(count_path: &Path) -> Vec<i32> {
