@@ -62,14 +62,26 @@ impl NextestRegions {
     }
 
     fn observe_line(&mut self) {
-        let bytes = std::mem::take(&mut self.line);
+        let mut bytes = std::mem::take(&mut self.line);
         let total = std::mem::take(&mut self.line_bytes);
+        self.observe_bytes(&bytes, total);
+        bytes.clear();
+        self.line = bytes;
+    }
+
+    fn observe_bytes(&mut self, bytes: &[u8], total: usize) {
         let start = self.offset - total;
-        let line = String::from_utf8_lossy(&bytes);
-        if let Err(error) = std::str::from_utf8(&bytes)
+        let line = String::from_utf8_lossy(bytes);
+        if let Err(error) = std::str::from_utf8(bytes)
             && (error.error_len().is_some() || total == bytes.len())
         {
             self.complete = false;
+        }
+        // Outside a command or captured block, a short line cannot be a
+        // status, command boundary, or truncation notice. UTF-8 validity and
+        // original source offsets were still checked above.
+        if !self.open && self.command.is_none() && line.len() < 7 {
+            return;
         }
         let (columns, payload) = runner_payload(&line);
         let plain = strip_ansi_sequences(payload);

@@ -33,6 +33,65 @@ helper. Its streaming omission marker is part of the output contract.
 All existing unit tests remain. Retirement tasks can use this mapping when
 removing duplicated cases.
 
+## Carrier cost and boundary coverage
+
+Rows write `golden row start: <suite>/<fixture>` to stderr before source
+construction or rendering. Completion records include row elapsed time; streamed
+rows also record source preparation, source bytes, chunk size, push count, push
+time and finish/render time. A timeout can therefore name the last started row
+and collector. Nextest's full success output retains these records.
+
+The collector amortizes tiny reads in a bounded 4096-byte input buffer, processes
+the final partial buffer in `finish`, and keeps unfinished UTF-8 characters for
+the next batch. Head/tail retention, adjacent cut bytes, scan limits, redaction
+and source byte accounting still operate on the original bytes. A bounded tail
+ring avoids moving retained bytes on each batch. The line collectors reuse their
+bounded buffers and avoid impossible command/identity matches on short lines;
+short lines inside an active command or failure block still count and survive.
+Unstyled lines bypass ANSI character reconstruction.
+
+All original 122 streamed rows, their chunk schedules, caps and golden outputs
+remain unchanged. In particular, the three 8 MiB source-limit negatives remain;
+the retention-cut credential rows retain their 19 chunk sizes; checkout/event
+and action identity, ambiguous/hidden columns, overlong lines, source refusal,
+completeness, omitted-byte accounting, Unicode, multiline panic and secondary
+failure controls retain their existing public-boundary carriers. The separate
+mid-log nextest test still checks uneven and whole-stream input, source ranges,
+oversized first blocks, secondary failures and the block cap. No coverage moved
+to another test. The added
+`checkout_unicode_crosses_transport_and_collector_batch_boundaries` row puts a
+two-byte checkout subject character across byte 4096 and checks single-byte,
+uneven, batch-sized and whole-stream input. The original collector fails its
+chunk-equivalence assertion; the candidate preserves the character in evidence.
+
+Native Linux measurements against source
+`6a74cce2f1cf3305898bd6eb19b3e6b1d2c8e2fe` used the full `orbit-tools`
+library/binary/integration selection, the default nextest profile, Rust 1.98.1,
+nextest 0.9.136, the same progress instrumentation and host build budget (8
+admission slots, 4 Cargo jobs, 4 test threads). Dependencies were warm for the
+matched pair; production changes required a rebuild. Each run passed all 100
+tests across three binaries, with zero skipped tests.
+
+| Matched sample | Streamed carrier | Target test wall | Summed testcase cost | Streamed rows |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 6.682 s | 6.852 s | 12.534 s | 122 |
+| Candidate | 2.862 s | 3.048 s | 6.909 s | 123 |
+
+The carrier reduction is 57.2%, including its final partial-batch work and the
+added Unicode row. Summed full-target cost falls 44.9%; it is not elapsed job
+time. Raw logs, JUnit, source hashes, build/runner/load context, preparation and
+per-collector timings for every exploratory and final sample are retained in
+the task's `log-cost` evidence. No sample was rejected as an outlier. The initial
+baseline required a cold 45.60-second build; matched test timings exclude build
+time. A profiling attempt was denied by the host's perf policy and is retained
+as unavailable attribution, rather than a successful profile.
+
+Separately, the source's hosted Check / Clippy / Test job
+`115794101765` in run `38546610947` succeeded in 1158 seconds, and its captured
+streamed carrier row took 25.486 seconds. No candidate hosted job has run as
+part of this native comparison. These measurements establish the native carrier
+target, not a hosted speedup or the whole-job 900-second budget.
+
 | Existing test file | Regression / fixture prefix | Golden |
 | --- | --- | --- |
 | `discovery_requests.rs` | `dependabot_alert_request_is_bounded_and_projects_compact_evidence` | `requests.golden.json` |
