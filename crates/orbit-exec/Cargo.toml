@@ -17,6 +17,7 @@ orbit-types = { path = "../orbit-types" }
 regex.workspace = true
 
 [dev-dependencies]
+orbit-common = { path = "../orbit-common", features = ["test-support"] }
 tempfile.workspace = true
 wait-timeout.workspace = true
 
