@@ -80,6 +80,65 @@ was restored byte-for-byte before the candidate suite ran. macOS execution is
 not measured here; its existing `mcp_roundtrip::upgrade::` CI filter includes
 the restored row and its native candidate assessment/signing helpers.
 
+### Upgrade fixture staging cost
+
+The three native upgrade identities retain their original rows and isolated
+workspaces. The manual drain, invalid-request and oversized-partial-request
+replacements now rename the candidate already prepared by `distinct_copy` over
+the installation. This retains a distinct assessed executable, atomic replacement
+of the path while the old inode runs, and real process re-execution. It removes
+three second copies of the 376,159,086-byte candidate and three second assessment
+commands in the measured selection. The local-candidate update row still invokes
+the production installer, including its own staging, probe and manifest checks.
+The drain cleanup guard stays armed until cancellation, owner exit and terminal
+state are all asserted, then avoids cancelling that completed run again.
+
+The table emits each row's identity before execution and its elapsed time after
+completion. Its review-schema row still bootstraps the feature migration through
+`task list`: an attempted removal failed with `no such table:
+feature_schema_meta` and was reverted. No behavioral row or assertion was retired.
+
+On Linux `dk-server-2`, source base
+`3e7135562c01af7903f7f8db65cb1fcd73fb7cdf` and the uncommitted candidate measured:
+
+| Native nextest identity (`mcp_roundtrip::upgrade::`) | Baseline s | Candidate s |
+|---|---:|---:|
+| `a_replaced_drain_hands_its_run_to_the_installed_executable` | 4.426 | 2.822 |
+| `a_replaced_mcp_server_hands_its_session_over_after_invalid_requests` | 3.392 | 3.253 |
+| `upgrade_admission_and_session_handover` | 12.196 | 11.355 |
+| Summed test time | 20.014 | 17.430 |
+| Nextest test wall time | 12.197 | 11.356 |
+
+Both arms selected and executed the same three identities, with 58 other entries
+excluded by the filter. They used the host's existing eight build slots, four
+Cargo jobs and four test threads, the unchanged MCP group and default nextest
+profile, and disabled compiler caches. Load averages before/after were
+10.928/10.566/11.325 → 6.029/8.780/10.516 for the baseline and
+6.118/6.921/9.353 → 7.731/7.237/9.430 for the candidate on 32 CPUs. These are
+single shared-host samples, not a statistical speedup claim. End-to-end commands
+took 177.542s (cold baseline build) and 14.601s (incremental candidate build);
+those build costs are not comparable throughput measurements.
+
+The complete MCP and process targets subsequently ran 135 tests in 52.758s of
+test wall time (207.887s summed; 57.391s including compilation). The three named
+identities took 2.801s, 3.212s and 11.505s. The separately repaired flow callback
+passed in 0.547s; the dashboard staging helper's unchanged behavior passed in
+5.674s. Six entries were excluded by platform/configuration, and two existing
+read-only Bubblewrap scenarios reported namespace-permission deferrals; those
+confined paths were not executed. A selector-listing check was briefly started
+alongside this run and stopped to restore sequential Cargo validation, so this
+run is coverage evidence rather than a performance comparison.
+
+The retained parent macOS output reports 28.912s, 30.686s and 50.942s at source
+`13945db3a357d2c3f056c34214b32717af864d99`. That source object and its exact build
+budget were unavailable here; this Linux pair does not establish a macOS repair.
+The current checkout still uses the five-minute nextest timeout, so the
+15-second target is assessed from recorded durations. The four required delivery
+gates run separately in pipeline final validation; these focused measurements
+do not establish the complete CI job's 15-minute budget. Raw outputs, JUnit,
+source snapshots, diagnostic trace and all failed attempts are retained as task
+runtime artifacts.
+
 ## Retired tests
 
 Each line identifies a removed entry and its surviving coverage or redundancy

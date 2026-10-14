@@ -64,7 +64,10 @@ fn exercise_handover(after_handover: impl FnOnce(BoundServer, u32, u16)) {
     let candidate = temp.path().join("candidate");
     generation_fixture::distinct_copy(Path::new(env!("CARGO_BIN_EXE_orbit")), &candidate);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    generation_fixture::install_over(&candidate, &installed);
+    let staged = installed.with_extension("staged");
+    std::fs::copy(&candidate, &staged).expect("stage replacement");
+    generation_fixture::assess(&staged);
+    std::fs::rename(&staged, &installed).expect("replace installation");
 
     test_env::wait_until("handover", || {
         generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()
