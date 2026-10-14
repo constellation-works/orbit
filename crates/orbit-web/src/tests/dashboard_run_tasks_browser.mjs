@@ -253,3 +253,214 @@ export async function assertTaskLinkScopeHistory(browser, origin, evidence) {
     await page.close();
   }
 }
+
+// Search dismissal must retire both text filtering and asynchronously opened
+// details. Held network responses make these races deterministic.
+export async function assertTaskLookupClear(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const tasks = [
+    { id: 'ORB-16021', title: 'Completed lookup target', status: 'done', priority: 'medium', description: 'Full lookup detail' },
+    { id: 'ORB-16022', title: 'Listed lookup target', status: 'in-progress', priority: 'medium' },
+  ];
+  const filters = 'in-progress,review,blocked,proposed,backlog';
+  const base = `${origin}/?host=dk-server-2&workspace=ws_orbit&window=24h#tasks?status=${encodeURIComponent(filters)}`;
+  const held = [];
+  let holdDetail = false;
+  let holdList = false;
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  const list = page.locator('#tasks-body .row[data-key="task-ORB-16022"]');
+  const pinned = page.locator('#tasks-body [data-key="pinned-ORB-16021"]');
+  const search = page.locator('#task-search');
+  const clear = page.getByRole('button', { name: 'Clear task search and open result', exact: true });
+  const boot = async url => {
+    await page.goto(url);
+    await page.evaluate(async () => {
+      globalThis.setInterval = () => 0;
+      globalThis.EventSource = class { close() {} };
+      await import('/app.js');
+    });
+  };
+  const lookup = async id => { await search.fill(id); await search.press('Enter'); };
+  const routeState = () => page.evaluate(() => {
+    const url = new URL(location.href);
+    return { scope: url.search, params: Object.fromEntries(new URLSearchParams(url.hash.split('?')[1])), query: document.getElementById('task-search').value };
+  });
+  const restored = async () => {
+    await list.waitFor({ state: 'visible' });
+    await page.waitForFunction(() => !document.querySelector('#tasks-body .pinned-task-wrap, #tasks-body .row.expanded'));
+    const state = await routeState();
+    check(!state.params.open && !state.params.q && state.query === '', `Clear must retire open and query: ${JSON.stringify(state)}`);
+    check(state.scope === '?workspace=ws_orbit&window=24h' && state.params.status === filters, `Clear must retain scope and status: ${JSON.stringify(state)}`);
+    check(await page.locator('#task-lookup-status').textContent() === '', 'Clear must retire lookup feedback');
+    check(await pinned.count() === 0, 'Clear must remove the out-of-filter target');
+  };
+  const nextHeld = async () => {
+    await page.waitForFunction(() => document.getElementById('task-lookup-status').textContent.includes('Looking up'));
+    // The request event precedes route interception; await the actual held route.
+    await new Promise(resolve => {
+      if (held.length) resolve();
+      else held.push({ notify: resolve });
+    });
+    return held.shift();
+  };
+  const release = async read => {
+    const response = page.waitForResponse(reply => reply.request() === read.request);
+    await read.fulfill();
+    await (await response).finished();
+    await page.evaluate(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+  };
+  try {
+    await page.route('**/api/**', async route => {
+      const url = new URL(route.request().url());
+      const pathname = url.pathname.replace(/^\/api\/on\/[^/]+/, '/api');
+      let status = 200;
+      let body = { items: [], total: 0, limit: 50 };
+      if (pathname === '/api/hosts') body = { hosts: [{ name: 'dk-server-2', local: true, reachable: true }] };
+      else if (pathname === '/api/workspaces') body = [{ id: 'ws_orbit', name: 'orbit', status: 'active', is_default: true }, { id: 'ws_other', name: 'other', status: 'active' }];
+      else if (pathname === '/api/diagnostics/friction') body = [];
+      else if (pathname === '/api/crews') body = { default_crew: null, crews: [] };
+      else if (pathname === '/api/tasks') {
+        const q = url.searchParams.get('q')?.toLowerCase() || '';
+        const selected = (url.searchParams.get('status') || filters).split(',');
+        const items = tasks.filter(t => selected.includes(t.status) && `${t.id} ${t.title}`.toLowerCase().includes(q));
+        body = { items, total: items.length, limit: 50 };
+      } else if (/^\/api\/tasks\/ORB-\d+$/.test(pathname)) {
+        body = tasks.find(t => t.id === pathname.split('/').pop());
+        if (pathname.endsWith('16025') && url.searchParams.get('workspace') === 'ws_other') body = { id: 'ORB-16025', title: 'Other workspace result', status: 'done', priority: 'medium' };
+        if (!body) { status = pathname.endsWith('16024') ? 503 : 404; body = { error: 'Fixture lookup unavailable' }; }
+      }
+      if (holdDetail && body?.id) body = { ...body, title: 'Obsolete held lookup' };
+      const fulfill = () => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      if ((holdDetail && /^\/api\/tasks\/ORB-\d+$/.test(pathname)) || (holdList && pathname === '/api/tasks')) {
+        const waiter = held.find(entry => entry.notify);
+        if (waiter) held.splice(held.indexOf(waiter), 1);
+        held.push({ fulfill, pathname, request: route.request() });
+        waiter?.notify();
+        return;
+      }
+      await fulfill();
+    });
+    await boot(base);
+    await list.waitFor({ state: 'visible' });
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+      await lookup('ORB-16021');
+      await pinned.waitFor({ state: 'visible' });
+      check(await search.inputValue() === '', 'A successful lookup empties search');
+      await page.screenshot({ path: path.join(evidence, `task-lookup-open-${width}.png`) });
+      check(await clear.isVisible(), 'An empty search with a lookup result must expose Clear beside search');
+      const layout = await clear.evaluate(node => {
+        const rect = node.getBoundingClientRect();
+        const search = document.getElementById('task-search').getBoundingClientRect();
+        return { inside: rect.left >= search.left && rect.right <= search.right && rect.top === search.top, width: rect.width, height: rect.height, hit: node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)) };
+      });
+      check(layout.inside && layout.hit && layout.width >= 40 && layout.height >= 40, `Clear must be reachable beside search at ${width}px: ${JSON.stringify(layout)}`);
+      await search.focus(); await page.keyboard.press('Tab');
+      check(await clear.evaluate(node => document.activeElement === node && node.matches(':focus-visible')), 'Tab from search must reach the visibly focused Clear button');
+      await page.keyboard.press(width === 375 ? 'Space' : 'Enter');
+      await restored();
+      check(await search.evaluate(node => document.activeElement === node), 'Clear returns focus to usable search');
+      await page.screenshot({ path: path.join(evidence, `task-lookup-cleared-${width}.png`) });
+      await lookup('ORB-16022');
+      await list.and(page.locator('.expanded')).waitFor({ state: 'visible' });
+      check(!(await routeState()).params.q, 'Successful listed lookup must remove stale q from route');
+      await clear.click(); await restored();
+      await boot(`${base}&open=ORB-16021`);
+      await pinned.waitFor({ state: 'visible' });
+      await page.screenshot({ path: path.join(evidence, `task-deep-link-${width}.png`) });
+      await clear.click(); await restored();
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // Copied links retain filters, and their cleared route survives reload.
+    await boot(`${base}&open=ORB-16021`);
+    await pinned.waitFor({ state: 'visible' });
+    await clear.click(); await restored();
+    await boot(page.url()); await restored();
+    // Existing detail Close and row collapse still remove open=.
+    await lookup('ORB-16021'); await pinned.waitFor({ state: 'visible' });
+    await pinned.getByRole('button', { name: 'Close', exact: true }).click(); await restored();
+    await lookup('ORB-16022'); await list.and(page.locator('.expanded')).waitFor({ state: 'visible' });
+    await list.locator('.title').click(); await restored();
+    for (const id of ['ORB-16023', 'ORB-16024']) {
+      await lookup(id);
+      await page.waitForFunction(() => document.querySelector('.task-search-wrap.error'));
+      check((await routeState()).params.q === id.toLowerCase(), 'Failed lookup must retain its text query in the route until cleared');
+      await clear.click(); await restored();
+    }
+    await search.fill('Listed');
+    await page.waitForFunction(() => location.hash.includes('q=listed'));
+    await clear.click(); await restored();
+    // Hold an ID read, clear it, then let its response arrive.
+    holdDetail = true;
+    await lookup('ORB-16021'); const delayed = await nextHeld();
+    check((await routeState()).params.q === 'orb-16021', 'Pending lookup must represent its text query in the route');
+    await clear.click(); await restored();
+    holdDetail = false; await release(delayed);
+    await restored();
+    holdDetail = true;
+    await lookup('ORB-16024'); const delayedError = await nextHeld();
+    await clear.click(); await restored();
+    holdDetail = false; await release(delayedError);
+    await restored();
+    // Hash-driven reads use a generation as well as ID: clear and reopen the
+    // same target before the first response returns (the ABA case).
+    holdDetail = true;
+    const hashRequest = page.waitForRequest(request => new URL(request.url()).pathname.endsWith('/api/tasks/ORB-16021'));
+    await page.evaluate(() => { location.hash += '&open=ORB-16021'; });
+    await hashRequest;
+    await new Promise(resolve => { if (held.length) resolve(); else held.push({ notify: resolve }); });
+    const old = held.shift();
+    await clear.click(); await restored();
+    holdDetail = false;
+    await lookup('ORB-16021'); await pinned.waitFor({ state: 'visible' });
+    await release(old);
+    check(!(await pinned.textContent()).includes('Obsolete held lookup'), 'A retired hash lookup must not replace a newer result for the same ID');
+    await clear.click(); await restored();
+    // A refresh already reading a list when Clear is clicked may complete
+    // later; it must not restore the detail or its former query.
+    await lookup('ORB-16021'); await pinned.waitFor({ state: 'visible' });
+    holdList = true;
+    const request = page.waitForRequest(req => new URL(req.url()).pathname === '/api/tasks');
+    await page.locator('#refresh-btn').click(); await request;
+    await new Promise(resolve => { if (held.length) resolve(); else held.push({ notify: resolve }); });
+    const refresh = held.shift(); holdList = false;
+    await clear.click(); await restored(); await release(refresh);
+    await restored();
+    // Back/Forward reads each entry's open/query state rather than preserving
+    // an old pin when returning to a cleared list.
+    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('jobs/history'));
+    await page.waitForFunction(() => location.hash.startsWith('#jobs/history'));
+    await page.evaluate(() => { location.hash = '#tasks?open=ORB-16021'; });
+    await pinned.waitFor({ state: 'visible' });
+    await page.goBack(); await page.waitForFunction(() => location.hash.startsWith('#jobs/history'));
+    await page.goBack(); await restored();
+    await page.goForward(); await page.waitForFunction(() => location.hash.startsWith('#jobs/history'));
+    await page.goForward(); await pinned.waitFor({ state: 'visible' });
+    await clear.click(); await restored();
+    // Lookup must preserve a non-default selection too, rather than route
+    // through bare #tasks and silently reset the operator's chips.
+    await boot(base.replace(encodeURIComponent(filters), 'in-progress'));
+    await list.waitFor({ state: 'visible' });
+    await lookup('ORB-16021'); await pinned.waitFor({ state: 'visible' });
+    check((await routeState()).params.status === 'in-progress', 'Lookup must preserve a custom status selection');
+    await clear.click(); await list.waitFor({ state: 'visible' });
+    check((await routeState()).params.status === 'in-progress' && !(await routeState()).params.open, 'Clear must preserve a custom status selection');
+    // Aggregate/other-workspace resolution adopts the owner before awaiting
+    // its refresh. Replaying its own normalized route must not cancel it.
+    await boot(base);
+    await list.waitFor({ state: 'visible' });
+    await lookup('ORB-16025');
+    await page.locator('#tasks-body [data-key="pinned-ORB-16025"]').waitFor({ state: 'visible' });
+    check((await routeState()).scope === '?workspace=ws_other&window=24h', 'Lookup must still adopt its owning workspace');
+    await clear.click();
+    await page.waitForFunction(() => !document.querySelector('.pinned-task-wrap'));
+    check((await routeState()).scope === '?workspace=ws_other&window=24h' && !(await routeState()).params.open, 'Clear must retain the adopted workspace');
+    check(errors.length === 0, errors.join('\n'));
+    fs.writeFileSync(path.join(evidence, 'task-lookup-clear-result.json'), JSON.stringify({ passed: true, widths: [1440, 375], keyboard: ['Enter', 'Space'], deepLink: true, listedAndFilteredOut: true, reload: true, history: true, notFoundAndError: true, delayedLookup: true, delayedHashLookupSameId: true, delayedRefresh: true, retainedScopeAndFilters: true }, null, 2));
+  } finally {
+    for (const response of held) if (response.fulfill) await response.fulfill().catch(() => {});
+    await page.close();
+  }
+}

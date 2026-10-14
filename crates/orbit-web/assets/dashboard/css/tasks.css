@@ -38,7 +38,7 @@
 .task-search-wrap #task-search {
   width: 100%;
   height: 40px;
-  padding: 0 40px 0 36px;
+  padding: 0 72px 0 36px;
   border-radius: var(--radius);
   background: var(--bg-elev);
   font-size: 13.5px;
@@ -52,20 +52,18 @@
   color: var(--fg-mute);
   pointer-events: none;
 }
-.task-search-key {
+#task-search-clear {
   position: absolute;
-  right: 10px;
-  top: 10px;
-  padding: 0 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 18px;
-  color: var(--fg-dim);
-  pointer-events: none;
+  right: 4px;
+  top: 0;
+  min-width: 60px;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
 }
-.task-search-wrap #task-search:not(:placeholder-shown) ~ .task-search-key { display: none; }
 .task-search-wrap.error #task-search { border-color: var(--state-failed); }
 
 /* ORB-00211: Enter on a task ID in the search box looks the task up anywhere.
