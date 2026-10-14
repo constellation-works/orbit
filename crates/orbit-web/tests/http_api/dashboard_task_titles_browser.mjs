@@ -168,9 +168,17 @@ export async function assertTaskTitleLayout(page, evidence) {
     const status = page.locator('#tasks-body [data-key="detail-TITLE-1"] .task-status-select');
     await status.waitFor({ state: 'visible' });
     await status.focus();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
-    await page.keyboard.press('Tab');
+    if (!(await status.evaluate(node => document.activeElement === node && getComputedStyle(node).opacity === '1'))) {
+      throw new Error('Focus must reveal the native status editor');
+    }
+    await status.evaluate(node => node.addEventListener('change', event => {
+      globalThis.taskTitleFixture.keyboardStatusChange = { value: node.value, trusted: event.isTrusted };
+    }, { once: true }));
+    // macOS headless Chromium does not navigate the native popup with
+    // ArrowDown/Enter. Native select typeahead commits the matching option
+    // directly, including when the current option is hidden and disabled.
+    // Use real keyboard input, not selectOption or a dispatched change event.
+    await page.keyboard.press('i');
     await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].status === 'in-progress', undefined, { timeout: 5000 }).catch(async error => {
       const state = await page.evaluate(() => ({
         writes: globalThis.taskTitleFixture.writes,
@@ -180,15 +188,21 @@ export async function assertTaskTitleLayout(page, evidence) {
       }));
       throw new Error(`${error.message}: ${JSON.stringify(state)}`);
     });
-    const writes = await page.evaluate(() => globalThis.taskTitleFixture.writes);
-    if (!writes.some(write => write.status === 'in-progress') || !writes.some(write => write.crew === 'sol')) {
+    const { writes, keyboardStatusChange } = await page.evaluate(() => ({
+      writes: globalThis.taskTitleFixture.writes,
+      keyboardStatusChange: globalThis.taskTitleFixture.keyboardStatusChange,
+    }));
+    if (keyboardStatusChange?.value !== 'in-progress' || keyboardStatusChange.trusted !== true) {
+      throw new Error(`Keyboard typeahead must emit a native status change: ${JSON.stringify(keyboardStatusChange)}`);
+    }
+    if (writes.length !== 2 || writes[0].crew !== 'sol' || JSON.stringify(writes[1]) !== JSON.stringify({ status: 'in-progress' })) {
       throw new Error(`Keyboard edits must reach the task mutation boundary: ${JSON.stringify(writes)}`);
     }
     await assertStatusChangeFoldsDetail(page, evidence);
     // The edits' Undo feedback expires with a redraw in this fixture's
     // context; let it land here rather than in a later scenario.
     await page.waitForFunction(() => !document.querySelector('#tasks-body .mutation-feedback'), undefined, { timeout: 15000 });
-    fs.writeFileSync(path.join(evidence, 'task-titles-result.json'), JSON.stringify({ passed: true, measurements, writes }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'task-titles-result.json'), JSON.stringify({ passed: true, measurements, writes, keyboardStatusChange }, null, 2));
   } finally {
     await page.evaluate(() => { globalThis.fetch = globalThis.taskTitleFixture.priorFetch; delete globalThis.taskTitleFixture; });
   }
