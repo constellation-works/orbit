@@ -972,6 +972,164 @@ fn excluded(pass: &Value, crew: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Required tools must be satisfiable before a follower creates any claim or
+/// leaf (F2026-10-352/353/354). Provenance never changes that authority.
+fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
+    let pair = Pair::new(0);
+    let owner = &pair.wire.owner;
+    let mut held = Vec::new();
+    for tool in ["orbit.task.update", "orbit.search", "orbit.task.list"] {
+        for automated in [false, true] {
+            let file = format!("src/requirement{}.rs", held.len());
+            let task = if automated {
+                std::fs::write(pair.owner_repo.join(&file), "fn work() {}\n").unwrap();
+                let definition = owner
+                    .auto_task_add(orbit_core::AutoTaskAddParams {
+                        name: format!("tool-routing-{}", held.len()),
+                        description: "Preclaim requirement regression".into(),
+                        schedule: orbit_core::AutoTaskSchedule::Interval { every_minutes: 60 },
+                        template: serde_json::from_value(json!({
+                            "title": "Automated tool requirement",
+                            "description": "Same requirements as hand-authored work.",
+                            "acceptance_criteria": ["Requirements remain satisfiable."],
+                            "required_tools": [tool],
+                            "context_files": [format!("file:{file}")],
+                            "complexity": "low", "status": "backlog",
+                        }))
+                        .unwrap(),
+                        dedupe: orbit_core::DedupePolicy::SkipIfOpen,
+                    })
+                    .unwrap();
+                let task = owner.auto_task_mint(&definition.name).unwrap();
+                owner.run_tool("orbit.task.update", json!({
+                    "id": task.id, "plan": "1. Implement the requirement.", "model": "codex",
+                })).unwrap();
+                task.id
+            } else {
+                backlog_task_with_input(
+                    owner,
+                    &pair.owner_repo,
+                    &file,
+                    None,
+                    json!({"required_tools": [tool]}),
+                )
+            };
+            held.push((task, tool));
+        }
+    }
+    let local = owner
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    for (task, _) in &held {
+        assert!(
+            local["task_ids"].as_array().unwrap().contains(&json!(task)),
+            "owner-local dispatch remains eligible: {local}"
+        );
+    }
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert!(error_of(&idle).is_empty(), "{idle}");
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert!(
+        pair.owner_claims().is_empty(),
+        "no claim for unsatisfiable tools"
+    );
+    assert!(
+        pair.leaf_runs().is_empty(),
+        "no worktree setup or failed leaf"
+    );
+    let request = pair.wire.calls("orbit.task.pull").pop().unwrap();
+    let receipt = pair
+        .wire
+        .call("", "orbit.task.pull", request.clone())
+        .unwrap();
+    assert!(receipt["receipt"]["claim"].is_null(), "{receipt}");
+    assert_eq!(
+        pair.wire
+            .call("", "orbit.task.pull", request.clone())
+            .unwrap(),
+        receipt,
+        "idle replay preserves the original exclusions"
+    );
+    let exclusions = receipt["receipt"]["deferred_conflicts"].as_array().unwrap();
+    assert_eq!(exclusions.len(), held.len(), "{receipt}");
+    for (task, tool) in &held {
+        let reason = exclusions
+            .iter()
+            .find(|entry| entry["task_id"] == *task)
+            .unwrap()["reason"]
+            .as_str()
+            .unwrap();
+        assert!(reason.contains(tool), "{reason}");
+        assert!(
+            reason.contains(if *tool == "orbit.task.update" {
+                "denied in claimed mode"
+            } else {
+                "outside the closed claimed-owner bridge"
+            }),
+            "{reason}"
+        );
+        assert_eq!(pair.owner_status(task), "backlog");
+        assert_eq!(pair.owner_task(task)["required_tools"], json!([tool]));
+        let mutation = owner.run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task, "required_tools": [], "model": "codex",
+            }),
+        );
+        assert!(mutation.is_err(), "requirements remain immutable");
+        // The owner-local implementer keeps its existing activity admission.
+        let grant = owner
+            .resolve_activity_tool_denials(std::slice::from_ref(task), "agent_implement", &[])
+            .unwrap();
+        assert_eq!(grant.requested_tools, vec![tool.to_string()]);
+        assert!(grant.effective_tools.iter().any(|name| name == tool));
+    }
+    for peers in held.as_chunks::<2>().0 {
+        let reason = |task: &str| {
+            exclusions
+                .iter()
+                .find(|entry| entry["task_id"] == task)
+                .unwrap()["reason"]
+                .clone()
+        };
+        assert_eq!(
+            reason(&peers[0].0),
+            reason(&peers[1].0),
+            "hand-authored and auto-task records obey the same policy"
+        );
+    }
+
+    let supported = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/supported.rs",
+        None,
+        json!({"required_tools": [
+            "orbit.task.show", "orbit.task.add", "orbit.friction.add",
+            "orbit.task.artifact.get", "orbit.task.artifact.put", "proc.spawn",
+        ]}),
+    );
+    assert_eq!(
+        pair.wire.call("", "orbit.task.pull", request).unwrap(),
+        receipt,
+        "adding eligible work does not alter a stored idle receipt"
+    );
+    let leaf = pair.queued_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), supported);
+    assert_eq!(pair.owner_claims().len(), 1);
+    assert_eq!(pair.leaf_runs(), vec![leaf]);
+    for (task, tool) in &held {
+        assert!(!pair.owner_has_claim_for_task(task));
+        assert_eq!(pair.owner_task(task)["required_tools"], json!([tool]));
+    }
+}
+
 /// A follower whose window preflight cannot find crew `antigravity`'s CLI is
 /// never handed an `antigravity` task [ORB-13941]. The owner admits the next
 /// task it can run instead and, once only the unrunnable one is left, answers
@@ -2262,6 +2420,7 @@ crate::scenario_table!(
     an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome,
     contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do,
     a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run,
+    unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf,
     a_follower_is_handed_only_tasks_its_os_satisfies,
     a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window
 );

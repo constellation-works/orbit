@@ -218,6 +218,7 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
     for (tool, input) in [
         ("orbit.task.update", json!({"id": TASK, "status": "done"})),
         ("orbit.task.list", json!({})),
+        ("orbit.search", json!({"query": "owner backlog"})),
         (
             "orbit.friction.update",
             json!({"id": "F-1", "status": "resolved"}),
