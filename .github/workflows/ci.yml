@@ -16,7 +16,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # [ORB-10126] ENOSPC controls on ubuntu-latest (~14 GB free). Incremental
+  # ENOSPC controls for ephemeral runners. Disk admission below measures
+  # the current image rather than assuming an old image's free space. Incremental
   # artifacts roughly double target/ and are useless on ephemeral runners;
   # full test debuginfo is the single biggest target-size lever. Coverage
   # only needs line tables, so trim the whole workspace test profile to
@@ -111,23 +112,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45 # Observed ~12 minutes; allows cold builds and slower test hosts.
     steps:
-      # [ORB-10126] Same runner-bloat reclaim as coverage.yml; the ci job
-      # compiles the whole workspace from the same target/ and sits close to
-      # the ubuntu-latest disk limit. Runs ahead of the build.
-      - name: Free up runner disk space
+      # Hosted Ubuntu 24.04 measurements: 86 GiB initially free, 112 GiB
+      # after tool cleanup, 99 GiB after cache restore/build/tests. Admit
+      # only with 32 GiB free (>2x that 13 GiB growth plus reserve); retain
+      # cleanup for smaller images and fail if it cannot reach the minimum.
+      - name: Admit runner disk space
         run: |
           set -euo pipefail
-          echo "Disk before cleanup:"
+          started=$SECONDS
+          minimum_kib=$((32 * 1024 * 1024))
+          available_kib() { df -Pk / | awk 'NR == 2 {print $4}'; }
+          echo "runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown}"
+          echo "Disk before admission:"
           df -h /
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc /usr/local/.ghcup
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/share/powershell
-          sudo rm -rf /usr/share/swift
-          echo "Disk after cleanup:"
+          if (( $(available_kib) < minimum_kib )); then
+            for path in /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+              /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+              /usr/local/share/boost /usr/local/share/powershell /usr/share/swift; do
+              sudo rm -rf "$path"
+              if (( $(available_kib) >= minimum_kib )); then
+                break
+              fi
+            done
+          else
+            echo "Cleanup unnecessary: at least 32 GiB available"
+          fi
+          free_kib="$(available_kib)"
+          echo "disk_admission_seconds=$((SECONDS - started)) free_kib=$free_kib minimum_kib=$minimum_kib"
           df -h /
+          if (( free_kib < minimum_kib )); then
+            echo "::error title=Insufficient runner disk::Need at least 32 GiB free before cache restore and compilation"
+            exit 1
+          fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -152,6 +168,7 @@ jobs:
       # artifacts (the sandbox gate below used to be one) restores this entry.
       # Dependencies stay valid when a test fails, so save on failure too.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        id: rust-cache
         with:
           shared-key: rust-1.98.1
           cache-on-failure: true
@@ -205,10 +222,10 @@ jobs:
           rm -f "$archive"
           uv --version | grep -F "${UV_VERSION}"
 
-      # [ORB-13884] Ubuntu does not ship Bubblewrap, and Ubuntu 24.04 restricts
-      # unprivileged user namespaces through AppArmor. Prepare and probe it
+      # Ubuntu 24.04 can restrict unprivileged user namespaces through AppArmor.
+      # Probe the trusted Bubblewrap first, preparing signed packages if needed,
       # before the portable suite so probe-gated tests take their live branch.
-      # This adds apt package setup and possible AppArmor loading before the
+      # This may add apt package setup and AppArmor loading before the
       # guardrails; a setup failure therefore preempts their output. The test
       # runner shows successful nextest output immediately, increasing log
       # volume so the live assertions are visible. The profile is ephemeral,
@@ -216,9 +233,21 @@ jobs:
       - name: Prepare and probe Bubblewrap for the Linux boundary tests
         run: |
           set -euo pipefail
+          started=$SECONDS
+          package_seconds=0
+          package_started=""
+          probe_seconds=0
           profile_src=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
           profile_dst=/etc/apparmor.d/bwrap-userns-restrict
           probe_err="$(mktemp)"
+          report_setup() {
+            if [ -n "$package_started" ]; then
+              package_seconds=$((SECONDS - package_started))
+            fi
+            echo "bubblewrap_setup_seconds=$((SECONDS - started)) package_seconds=$package_seconds probe_seconds=$probe_seconds"
+            rm -f "$probe_err"
+          }
+          trap report_setup EXIT
 
           fail() {
             echo "::error title=Bubblewrap unavailable::$1"
@@ -237,7 +266,7 @@ jobs:
           # The same checks Orbit's capability probe makes: the trusted path,
           # the --bind-fd feature, then a real user+mount namespace.
           probe() {
-            local help
+            local help probe_started=$SECONDS result=0
             : >"$probe_err"
             if [ ! -x /usr/bin/bwrap ]; then
               echo "trusted Bubblewrap not available at /usr/bin/bwrap" >"$probe_err"
@@ -249,12 +278,22 @@ jobs:
               return 1
             fi
             /usr/bin/bwrap --die-with-parent --new-session --unshare-all --share-net \
-              --ro-bind / / -- /bin/true 2>"$probe_err"
+              --ro-bind / / -- /bin/true 2>"$probe_err" || result=$?
+            probe_seconds=$((probe_seconds + SECONDS - probe_started))
+            return "$result"
           }
 
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
+          if ! probe; then
+            echo "Initial Bubblewrap probe failed: $(cat "$probe_err")"
+            package_started=$SECONDS
+            export DEBIAN_FRONTEND=noninteractive
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
+            package_seconds=$((SECONDS - package_started))
+            package_started=""
+          else
+            echo "Trusted Bubblewrap already supports --bind-fd and real namespaces; package preparation unnecessary"
+          fi
 
           if probe; then
             echo "Bubblewrap probe passed without an AppArmor profile"
@@ -278,10 +317,23 @@ jobs:
             echo "Bubblewrap probe passed after loading the packaged bwrap-userns-restrict profile"
           fi
 
+      - name: Report build inputs
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          echo "tested_head=$(git rev-parse HEAD) runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown} cache_hit=${CACHE_HIT}"
+          rustc --version
+          df -Pk /
+          du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
+
       - name: Run CI guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/ci-guardrails.sh
+        run: |
+          set -euo pipefail
+          TIMEFORMAT='guardrails_seconds=%R'
+          time ./scripts/ci-guardrails.sh
 
       # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
       # explicit, named gate for orbit-policy's evaluation matrix (incl. the
@@ -321,7 +373,9 @@ jobs:
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
         if: always()
-        run: df -h /
+        run: |
+          df -Pk /
+          du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
 
       # CI runners report bounded provenance only. The host-owned
       # `ci_failure_sweep_pipeline` queries GitHub and is the sole authority
