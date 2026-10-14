@@ -22,7 +22,7 @@ operational and contributor procedures, feature designs, and incident reviews.
 | --- | --- |
 | [Orbit Configuration](./CONFIG.md) | Orbit Configuration |
 | [Orbit Data Handling](./DATA_HANDLING.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
-| [Development Reference](./DEVELOPMENT.md) | Orbit development reference: test isolation, coverage, MSRV, supply chain, vendored JS |
+| [Development Reference](./DEVELOPMENT.md) | Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS |
 | [Lessons Learned While Building Orbit](./LESSONS.md) | Lessons Learned While Building Orbit |
 | [Optimistic Merging](./OPTIMISTIC_MERGING.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
 | [Orbit Positioning](./POSITIONING.md) | Orbit Positioning |

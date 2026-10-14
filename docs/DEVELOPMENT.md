@@ -1,6 +1,6 @@
 ---
 type: context
-summary: "Orbit development reference: test isolation, coverage, MSRV, supply chain, vendored JS"
+summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
 last_validated: 2026-10-10
 ---
 
@@ -26,6 +26,8 @@ make ci-test-affected  # complete test targets of changed crates and their works
 make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI log, sandbox and SQLite ledger schema goldens; UPDATE=1 regenerates
 ```
+
+When an edit changes any generated row in `docs/INDEX.md` (for example, indexed Markdown frontmatter, its first heading, or summary), run `make docs-index`, review the generated index, and run `scripts/generate-doc-indexes.sh --check`. Include any resulting `docs/INDEX.md` change with the source edits, even when `make ci-fast` is pipeline-owned final validation.
 
 When renaming or consolidating a test selected by macOS CI, update the filter
 in `.github/workflows/ci-macos.yml` and run `make check-ci-macos`. This lists
