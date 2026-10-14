@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-13
+last_validated: 2026-10-14
 ---
 # Boundary-First Testing
 
@@ -27,9 +27,37 @@ Critical coverage takes priority:
 | Resource admission | Capacity ceilings, enforcement decisions, unavailable or stale measurements, and safe behavior when profiles or forecasts are uncertain. |
 | Public contracts | Real CLI, MCP, API and UI behavior where relevant: inputs, scopes, identifiers, persisted effects, errors, machine output and critical user workflows. |
 
-For each consolidation or retirement, record the invariant and important failure cases, the existing or replacement test that still detects them, and measured cost before and after. Keep the only guard of a security invariant, recovery path or known incident until equivalent behavioral coverage is demonstrated in the same change (STD-04 §R25). Strengthen assertions or add explicitly required boundary coverage when an audit demonstrates a critical gap; do not add speculative private-function tests or duplicate an existing invariant.
+### Per-test time budget and nextest enforcement
 
-Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
+To ensure slow tests cannot land unnoticed and consume the 15-minute CI budget, nextest enforces a per-test time budget in `.config/nextest.toml` under `[profile.default]`:
+
+- **Slow test warning**: Nextest flags any test exceeding 5 seconds (`period = "5s"`).
+- **Termination bound**: Nextest terminates any test running longer than 15 seconds (`terminate-after = 3`, `grace-period = "0s"`). The Unix SIGTERM grace period is explicitly set to `0s` so the test process is terminated within at most 15 seconds rather than extending into an extra 10-second default grace window.
+- **Process leak failure**: Nextest waits 5 seconds for child-process cleanup and fails if leaked processes remain (`leak-timeout = { period = "5s", result = "fail" }`).
+
+#### Override request process
+
+Tests that genuinely require more runtime (e.g. multi-stage process handover, complex local update verification, or admitted history replay) must obtain an explicit override rather than loosening global limits:
+
+1. Add an override under `[[profile.default.overrides]]` in `.config/nextest.toml`.
+2. The override filter must target the exact test function or contract table using `package(...) & binary(...) & test(...)` (or `kind(lib)` for unit tests). Blanket crate-wide or binary-wide exemptions are strictly prohibited.
+3. Every override MUST carry a comment citing a filed Orbit task ID tracking its optimization and reduction (e.g., `# [ORB-XXXXX]`). Never add an override without an active tracking task.
+4. Overrides must never introduce test retries (`retries = ...`) or mask timeout failures (`on-timeout = "pass"`).
+
+### Retirement, consolidation, and performance evidence
+
+Consolidation and retirement optimize test runtime while preserving critical guarantees:
+
+- **Behavior survival and redundancy**: For each consolidation or retirement, record the invariant and important failure cases, the existing or replacement test that still detects them, and measured cost before and after. Keep the only guard of a security invariant, recovery path, or known incident until equivalent behavioral coverage is demonstrated in the same change (STD-04 §R25). Never weaken surviving assertions or remove security/cleanup guarantees.
+- **Avoid boundary shifting**: Avoid policies or refactors that merely relocate duplicate unit tests into more expensive integration or e2e suites to bypass unit-test inventory rules. True consolidation eliminates redundant work and respects boundary costs.
+- **Table-driven consolidation**: Consolidating into table-driven cases amortizes setup but must preserve row isolation, authority scrubbing, process ownership, and clear failure reporting. A smaller number of carrier test functions executing the same expensive work is not a runtime improvement; a carrier that hangs or hides the failing row is a quality regression.
+- **No new bureaucracy**: This policy adds no new validation gate or test bureaucracy; reuse existing unit inventory (`scripts/unit-test-inventory.py`) and shell-wait guards.
+- **Performance evidence standards**:
+  - Performance evidence must report both **wall-clock elapsed time** and **summed test time** for baseline and candidate on the same host with identical production build-budget and nextest settings.
+  - Fewer named test entries or lower summed test time alone does not establish a speedup; parallel execution and fixture startup overhead dictate real wall-clock elapsed time.
+  - Any trade-off between concurrency caps (e.g., serialized groups) and table serialization must be measured at the affected-gate or end-to-end boundary (`make ci-test-affected`).
+  - Record sample counts and any host-load or workload differences.
+  - Do not add new benchmark gates or synthetic load loops.
 
 Use timings and failure evidence to find the actual bottleneck: runner setup, compilation, linting, test execution, fixture startup, serial groups or teardown. Compare the same source selection, runner/build settings and cache conditions; retain failed and slow runs as evidence. Measure the full hosted job after changes as well as focused before/after costs. Fix flakes and hangs at their cause. Retries, artificial sleeps, hidden skips, weaker assertions, zero-test selections and omitted required checks cannot satisfy the budget.
 
@@ -54,9 +82,19 @@ The default is not "no unit tests". The aim is to put each guarantee at the chea
 | **E2E** | `crates/orbit-cli/tests/` against the built `orbit` binary | A small set of critical flows end to end: ship and land, the drain, gates, update. |
 | **Unit** (exception) | `<module>/tests/<file>.rs` per [test_layout.md](test_layout.md) | Only what meets the admission criteria below. |
 
+## Universal all-layer admission bar
+
+Before adding any test at any layer—unit, integration, golden, or e2e—it must satisfy this high-value admission bar:
+
+1. **Distinct behavioral failure mode**: The test must protect a unique observable failure mode or security boundary not already prevented by compiler types, lints, schemas, or existing tests.
+2. **Explicit check for existing coverage**: Verify that surviving tests at any layer do not already cover this behavior before adding a new case.
+3. **Cheapest reliable boundary**: Place coverage at the lowest-cost boundary that can reliably prove the guarantee. Never move duplicate unit tests into heavier integration suites.
+4. **Justified fixture and runtime cost**: Extend an existing table-driven test, scenario fixture, or test binary before adding a new test function, file, or binary target. Every added second of runtime must be justified against the 15-minute gate budget.
+5. **Incident link retention**: Any test guarding an observed defect or incident regression must retain the incident or task ID link in its test name or assertion message.
+
 ## Unit-test admission criteria
 
-A unit test is allowed only when at least one of these holds and a boundary test cannot prove the same thing economically:
+A unit test is allowed only when it satisfies the universal admission bar above AND at least one of these holds where a boundary test cannot prove the same thing economically:
 
 1. **Combinatorial pure logic.** Examples: a state-machine transition table, a parser's edge cases, policy or selector matching, scheduler or backoff arithmetic, cycle detection. Write one table-driven test per invariant, not one test per case.
 2. **Deterministic interleaving or fault injection.** The test needs a test seam to force a race, a crash mid-write, a TOCTOU swap or a lost reply.
