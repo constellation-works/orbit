@@ -12,6 +12,7 @@ import re
 import runpy
 import select
 import signal
+import shlex
 import shutil
 import socket
 import subprocess
@@ -266,6 +267,14 @@ def validate_inventory(repo: Path, inventory: dict):
                     or any(not isinstance(name, str) or not name.strip() for name in tests)
                     or len(tests) != len(set(tests))):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral cases")
+        if "required_rows" in scenario:
+            rows = scenario["required_rows"]
+            if (not isinstance(rows, list) or not rows or len(rows) != len(set(rows))
+                    or any(not isinstance(row, str) or not row.strip() for row in rows)):
+                errors.append(f"scenario {scenario['id']} has invalid required behavioral rows")
+        for case, reason in scenario.get("coverage_gaps", {}).items():
+            if not case or not isinstance(reason, str) or not reason.strip():
+                errors.append(f"scenario {scenario['id']} has an unexplained boundary coverage gap")
         for surface in scenario.get("surfaces", []):
             claims.setdefault(surface, []).append(scenario["id"])
     for surface, reason in gaps.items():
@@ -329,6 +338,11 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False):
             try:
                 validate_cargo_target(scenario["command"], packages)
                 if list_cases:
+                    if scenario.get("capability") == "linux" and platform.system() != "Linux":
+                        print(json.dumps({"scenario": scenario["id"], "selection_status": "NOT_RUN",
+                                          "missing_capability": "Linux-compiled behavioral cases",
+                                          "behavioral_coverage": False}))
+                        continue
                     command = list(scenario["command"])
                     if "--" not in command:
                         command.append("--")
@@ -419,13 +433,55 @@ def candidate_source(repo: Path, excluded_paths=()):
 def finalize_result(evidence, assertions, candidate_id, failure=None, accept_nonzero=False):
     evidence["assertions"] = assertions
     evidence["candidate_id"] = candidate_id
+    notices = execution_notices(evidence)
+    if notices:
+        evidence["outcome"] = "NOT_RUN"
+        evidence["assertions"] = []
+        evidence["missing_capabilities"] = notices
+        return evidence
+    if evidence.get("output_truncated"):
+        failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
     if (evidence["exit_code"] != 0 and not accept_nonzero) or failure:
         evidence["outcome"] = "FAIL"
+        evidence["assertions"] = []
         if failure:
             evidence["stderr"] = (evidence.get("stderr") or "") + "\nassertion: " + failure
     else:
         evidence["outcome"] = "PASS"
     return evidence
+
+
+def execution_notices(evidence):
+    """A harness success cannot override an explicitly unavailable behavior."""
+    output = evidence.get("stdout", "") + "\n" + evidence.get("stderr", "")
+    notices = re.findall(r"^(?:SKIP:|DEFERRED:|skipping\b)[^\n]*",
+                         output, re.MULTILINE | re.IGNORECASE)
+    if isinstance(evidence.get("preparation"), dict):
+        notices.extend(execution_notices(evidence["preparation"]))
+    return sorted(set(notices))
+
+
+def verify_retained_evidence(results):
+    """Reopen every referenced byte after all producers have finished."""
+    for result in results:
+        retained = result.get("retained_evidence")
+        if not retained:
+            continue
+        try:
+            directory = Path(retained["directory"]).resolve()
+            files = retained["files"]
+            if not files:
+                raise ValueError("retained evidence manifest is empty")
+            for item in files:
+                path = (directory / item["path"]).resolve()
+                if not path.is_relative_to(directory) or not path.is_file():
+                    raise ValueError(f"retained evidence is missing or escapes its directory: {path}")
+                if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                    raise ValueError(f"retained evidence hash mismatch: {path}")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            result["outcome"] = "FAIL"
+            result["assertions"] = []
+            result["retained_evidence_error"] = str(error)
 
 
 def parse_json(evidence, description):
@@ -452,10 +508,12 @@ def validate_npm_result(repo, command, evidence):
     return body["assertions"]
 
 
-def validate_cargo_test_evidence(command, evidence, required_tests=()):
+def validate_cargo_test_evidence(command, evidence, required_tests=(), required_rows=()):
     """Require completed, non-vacuous Rust tests, including command-kind suites."""
     if not is_cargo_test(command):
         return
+    if evidence.get("output_truncated"):
+        raise ValueError("cargo test output was truncated; behavioral evidence is incomplete")
     summaries = re.findall(
         r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;",
         evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""))
@@ -477,9 +535,17 @@ def validate_cargo_test_evidence(command, evidence, required_tests=()):
     missing = set(required_tests) - set(passing_tests)
     if missing:
         raise ValueError(f"cargo test did not pass the required behavioral cases: {sorted(missing)}")
+    completed_rows = sorted(set(re.findall(
+        r"^qa-scenario-pass: (\S+)$",
+        evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""), re.MULTILINE)))
+    evidence["passing_rows"] = completed_rows
+    missing_rows = set(required_rows) - set(completed_rows)
+    if missing_rows:
+        raise ValueError(f"cargo test did not complete required behavioral rows: {sorted(missing_rows)}")
 
 
 def scenario_decision(inventory, results, candidate_id):
+    verify_retained_evidence(results)
     failures = []
     for scenario in inventory["scenarios"]:
         if not scenario["required"]:
@@ -487,7 +553,15 @@ def scenario_decision(inventory, results, candidate_id):
         if scenario.get("kind") == "coverage-gap":
             failures.append(f"{scenario['id']}: required coverage gap: {scenario.get('coverage_gap')}")
             continue
+        if scenario.get("coverage_gaps"):
+            failures.append(f"{scenario['id']}: required boundary coverage gaps: {scenario['coverage_gaps']}")
+            continue
         rows = [row for row in results if row["scenario"] == scenario["id"]]
+        if scenario.get("capability") == "browser":
+            for row in rows:
+                if row["outcome"] == "PASS" and not row.get("retained_evidence"):
+                    row.update(outcome="FAIL", assertions=[],
+                               retained_evidence_error="browser execution has no retained evidence manifest")
         observed = {item for row in rows for item in row.get("assertions", [])}
         required = set(scenario["assertions"])
         if not rows or any(row["outcome"] != "PASS" for row in rows):
@@ -1232,6 +1306,68 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
     }
     if body.get("source_identity") != expected_identity:
         raise ValueError("hosted evidence source identity does not match the checkout")
+    validate_native_execution(body.get("execution", []), repo, candidate["head"])
+
+
+def native_required_commands(repo):
+    commands = []
+    for line in (repo / ".github/workflows/ci-macos.yml").read_text().splitlines():
+        if line.lstrip().startswith("#") or "--record-native-command " not in line:
+            continue
+        tokens = shlex.split(line.split("# check-ci-macos:")[0])
+        commands.append(tokens[tokens.index("--record-native-command") + 1:])
+    if not commands:
+        raise ValueError("macOS workflow has no recorded execution commands")
+    return commands
+
+
+def validate_native_execution(records, repo, head):
+    expected = native_required_commands(repo)
+    if sorted(json.dumps(row.get("command")) for row in records) != sorted(json.dumps(cmd) for cmd in expected):
+        raise ValueError("macOS evidence does not record every exact required execution command")
+    for row in records:
+        if row.get("source_revision") != head or row.get("exit_code") != 0:
+            raise ValueError("macOS execution failed or names a different revision")
+        if row.get("source_status") != [] or row.get("source_stable") is not True:
+            raise ValueError("macOS execution requires a clean source candidate stable through each command")
+        if execution_notices(row):
+            raise ValueError("macOS execution self-skipped: " + "; ".join(execution_notices(row)))
+        command = row["command"]
+        if row.get("executed_command") != native_execution_command(command):
+            raise ValueError("macOS evidence does not retain the actual execution arguments")
+        validate_cargo_test_evidence(command[command.index("cargo"):], row)
+
+
+def native_execution_command(command):
+    executed = list(command)
+    if "--list" in executed or "--no-run" in executed:
+        raise ValueError("native execution cannot use a listing or compile-only command")
+    if "--" not in executed:
+        executed.append("--")
+    if "--nocapture" not in executed and "--show-output" not in executed:
+        executed.append("--show-output")
+    return executed
+
+
+def record_native_execution(command, repo, directory):
+    """Run one workflow command and retain its actual output for the emitter."""
+    if not directory or "cargo" not in command or command[command.index("cargo") + 1] != "test":
+        raise ValueError("native execution requires an evidence directory and cargo test command")
+    executed = native_execution_command(command)
+    source = candidate_source(repo)
+    evidence = run(executed, cwd=repo, env=dict(os.environ), timeout=1800)
+    evidence["executed_command"] = executed
+    evidence["command"] = command
+    evidence["source_revision"] = source["head"]
+    evidence["source_status"] = source["status"]
+    evidence["source_stable"] = candidate_source(repo)["candidate_id"] == source["candidate_id"]
+    directory.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(json.dumps(command).encode()).hexdigest()
+    with (directory / f"{digest}.json").open("x") as stream:
+        json.dump(evidence, stream, indent=2)
+    print(evidence.get("stdout", ""), end="")
+    print(evidence.get("stderr", ""), end="", file=sys.stderr)
+    return evidence["exit_code"]
 
 
 def process_self_test():
@@ -1474,6 +1610,7 @@ def npm_package_self_test():
 
 
 def self_test():
+    runpy.run_path(str(Path(__file__).with_name("qa_full_sweep_regression.py")))["self_test"]()
     process_self_test()
     builtin_init_self_test()
     npm_package_self_test()
@@ -1703,6 +1840,7 @@ def self_test():
             path = repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(relative + "\n")
+        (repo / ".github/workflows/ci-macos.yml").write_text("python3 scripts/test-qa-full-sweep.py --record-native-command cargo test -p native --lib\n")
         scenario = {
             "command": ["./scripts/check-ci-macos.sh"],
             "assertions": ["workflow-current", "matching-revision"],
@@ -1715,6 +1853,10 @@ def self_test():
                          "run_id": "123", "run_attempt": "1",
                          "workflow_ref": "owner/orbit/.github/workflows/ci-macos.yml@refs/heads/main",
                          "workflow_sha": "b" * 40},
+            "execution": [{"command": ["cargo", "test", "-p", "native", "--lib"],
+                           "executed_command": ["cargo", "test", "-p", "native", "--lib", "--", "--show-output"],
+                           "source_revision": "a" * 40, "source_status": [], "source_stable": True, "exit_code": 0,
+                           "stdout": "test native_boundary ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;", "stderr": ""}],
             "source_identity": {
                 path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
                 for path in identity_paths
@@ -1730,6 +1872,9 @@ def self_test():
             {**hosted, "assertions": ["workflow-current"]},
             {**hosted, "producer": {**hosted["producer"], "run_id": ""}},
             {**hosted, "source_identity": {}},
+            {**hosted, "execution": []},
+            {**hosted, "execution": [{**hosted["execution"][0], "stdout": "native_boundary: test\n1 test, 0 benchmarks"}]},
+            {**hosted, "execution": [{**hosted["execution"][0], "stderr": "SKIP: sandbox-exec cannot apply a profile: Operation not permitted"}]},
         ]
         for mutation in mutations:
             try:
@@ -1764,6 +1909,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 "stderr": "", "outcome": "PASS", "assertions": body["assertions"],
                 "candidate_id": candidate_id, "imported_from": str(path),
                 "evidence_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "native_evidence": body,
             })
             continue
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
@@ -1778,6 +1924,15 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 raise ValueError(f"{path}: imported command does not match the required check")
             if result.get("candidate_id") != candidate_id:
                 raise ValueError(f"{path}: result candidate does not match report candidate")
+            if set(result.get("assertions", [])) != set(scenario["assertions"]):
+                raise ValueError(f"{path}: imported assertions do not match the required guarantees")
+            if scenario.get("capability") == "macos":
+                validate_hosted_macos_evidence(result.get("native_evidence", {}), scenario, candidate, repo)
+            if scenario.get("capability") == "linux" and body.get("environment", {}).get("os") != "Linux":
+                raise ValueError(f"{path}: Linux cases require Linux execution evidence")
+            validate_cargo_test_evidence(result["command"], result, scenario.get("required_tests", []),
+                                         scenario.get("required_rows", []))
+            result = finalize_result(dict(result), result["assertions"], candidate_id)
             imported.append({**result, "imported_from":str(path),
                              "evidence_sha256":hashlib.sha256(path.read_bytes()).hexdigest()})
     return imported
@@ -1804,8 +1959,20 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--list-cli-paths", action="store_true",
                         help="discover executable help paths without claiming behavioral coverage")
-    args = parser.parse_args()
+    parser.add_argument("--native-execution-dir", type=Path)
+    parser.add_argument("--record-native-command", nargs=argparse.REMAINDER)
+    argv = sys.argv[1:]
+    if "--record-native-command" in argv:
+        index = argv.index("--record-native-command")
+        args = parser.parse_args(argv[:index])
+        args.record_native_command = argv[index + 1:]
+        if not args.record_native_command:
+            parser.error("--record-native-command requires a command")
+    else:
+        args = parser.parse_args(argv)
     repo = args.repo_root.resolve()
+    if args.record_native_command:
+        raise SystemExit(record_native_execution(args.record_native_command, repo, args.native_execution_dir))
     inventory_path = repo / "scripts/qa-full-sweep-inventory.json"
     inventory = json.loads(inventory_path.read_text())
     errors, surfaces = validate_inventory(repo, inventory)
@@ -1825,7 +1992,7 @@ def main():
         return
     if args.check_cargo_selections and not args.check:
         parser.error("--check-cargo-selections requires --check")
-    errors.extend(cargo_inventory_errors(repo, inventory, list_cases=args.check_cargo_selections))
+    errors.extend(cargo_inventory_errors(repo, inventory, list_cases=args.check_cargo_selections or args.run_commands))
     if args.check:
         if errors:
             print("\n".join(errors))
@@ -1861,7 +2028,8 @@ def main():
     capabilities = {"local": bool(binary) or args.build_candidate,
                     "browser": browser_inputs_valid,
                     "website-build": args.website_build,
-                    "macos": platform.system() == "Darwin"}
+                    "macos": platform.system() == "Darwin",
+                    "linux": platform.system() == "Linux"}
     binary_record = {"path":str(binary) if binary else None, "version":None,
                      "sha256":hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None}
     browser_record = {
@@ -1912,6 +2080,10 @@ def main():
                              "sha256":hashlib.sha256(binary.read_bytes()).hexdigest()}
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
+        browser_run_dir = None
+        if args.run_commands and capabilities["browser"]:
+            browser_evidence_dir.mkdir(parents=True, exist_ok=True)
+            browser_run_dir = Path(tempfile.mkdtemp(prefix=f"{candidate_id[:12]}-", dir=browser_evidence_dir))
         for scenario in inventory["scenarios"]:
             if scenario["kind"] == "builtin" or scenario["id"] == "source-binary-provenance":
                 continue
@@ -1921,8 +2093,9 @@ def main():
                                 "outcome": "BLOCKED", "assertions": [], "candidate_id": candidate_id})
                 continue
             if args.run_commands and capabilities.get(scenario["capability"], False):
+                scenario_evidence_dir = browser_run_dir / scenario["id"] if browser_run_dir else browser_evidence_dir
                 command = [part.replace("{playwright_module}", str(args.playwright_module))
-                           .replace("{evidence_dir}", str(browser_evidence_dir))
+                           .replace("{evidence_dir}", str(scenario_evidence_dir))
                            for part in scenario["command"]]
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
                 if scenario["id"] == "website-build":
@@ -1930,16 +2103,18 @@ def main():
                 else:
                     evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
                 if scenario["capability"] == "browser":
-                    browser_evidence_dir.mkdir(parents=True, exist_ok=True)
-                    (browser_evidence_dir / "harness-result.json").write_text(
+                    scenario_evidence_dir.mkdir(parents=True, exist_ok=True)
+                    (scenario_evidence_dir / "harness-result.json").write_text(
                         json.dumps({"command": command, "exit_code": evidence["exit_code"],
                                     "stdout": evidence["stdout"], "stderr": evidence["stderr"],
-                                    "browser_version": browser_record["version"]}, indent=2) + "\n")
+                                    "browser_version": browser_record["version"],
+                                    "candidate_id": candidate_id, "scenario": scenario["id"]}, indent=2) + "\n")
                 unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
                 failure = None if unchanged else "source candidate changed while the scenario ran"
                 assertions = scenario["assertions"]
                 try:
-                    validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []))
+                    validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []),
+                                                 scenario.get("required_rows", []))
                     if scenario["id"] == "npm-package":
                         assertions = []
                         assertions = validate_npm_result(repo, command, evidence)
@@ -1949,14 +2124,20 @@ def main():
                     assertions = []
                 result = {"scenario":scenario["id"],
                           **finalize_result(evidence, assertions, candidate_id, failure)}
+                if scenario["capability"] == "macos" and result["outcome"] == "PASS":
+                    result.update(outcome="NOT_RUN", assertions=[], evidence_type="inventory-listing",
+                                  inventory_assertions=["macos-required-workflow-is-current"],
+                                  missing_capabilities=["actual matching-candidate macOS execution evidence"])
+                if scenario.get("coverage_gaps"):
+                    result.update(outcome="BLOCKED", assertions=[], coverage_gaps=scenario["coverage_gaps"])
                 if scenario["capability"] == "browser":
                     artifacts = []
-                    if browser_evidence_dir.is_dir():
-                        for path in sorted(browser_evidence_dir.rglob("*")):
+                    if scenario_evidence_dir.is_dir():
+                        for path in sorted(scenario_evidence_dir.rglob("*")):
                             if path.is_file():
-                                artifacts.append({"path": str(path.relative_to(browser_evidence_dir)),
+                                artifacts.append({"path": str(path.relative_to(scenario_evidence_dir)),
                                                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-                    result["retained_evidence"] = {"directory": str(browser_evidence_dir),
+                    result["retained_evidence"] = {"directory": str(scenario_evidence_dir),
                                                    "files": artifacts}
                 results.append(result)
             else:

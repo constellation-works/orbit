@@ -33,13 +33,22 @@ pub fn assert_child_test_passed(
         "child test `{test_name}` did not run exactly once; missing or ignored entry point:\n{stdout}\n{stderr}"
     );
     let deferrals = stdout.lines().chain(stderr.lines()).filter(|line| {
-        line.trim_start()
-            .starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
+        let line = line.trim_start();
+        line.starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
+            || line.starts_with("SKIP:")
+            || line.starts_with("qa-scenario-pass: ")
     });
     for line in deferrals {
         // Bypass libtest capture, as the child's own notice did.
         let _ = writeln!(std::io::stderr(), "{}", line.trim());
     }
+}
+
+/// Retain a consolidated behavioral row's completion at the test-command boundary.
+/// Call only after the row's assertions return; unavailable coverage must still
+/// emit its skip or deferral notice, which invalidates QA execution credit.
+pub fn record_scenario_pass(name: &str) {
+    let _ = writeln!(std::io::stderr(), "qa-scenario-pass: {name}");
 }
 
 /// How long [`run_child_test`] lets a re-executed child test go without

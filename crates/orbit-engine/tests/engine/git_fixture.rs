@@ -96,6 +96,7 @@ pub(super) fn run_scenarios(rows: &[(&str, fn())]) {
     for (name, scenario) in rows {
         eprintln!("scenario: {name}");
         scenario();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
