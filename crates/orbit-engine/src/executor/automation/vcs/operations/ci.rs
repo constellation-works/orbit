@@ -95,11 +95,26 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         &json!({"run": run_id, "job": job_id, "scope": "failed"}),
     )?
     .in_directory(workspace_path);
-    let read = github_cli::read_run_log(
+    let deadline = input
+        .get("deadline_ms")
+        .map(|_| super::super::completion_deadline::Deadline::from_input(input))
+        .transpose()?;
+    let read = github_cli::read_run_log_guarded(
         &requests,
         github_cli::LogReadBounds::new(MAX_JOB_LOG_BYTES),
         None,
+        &|request| {
+            let mut request = request.clone();
+            if let Some(deadline) = deadline {
+                request.timeout_ms = Some(deadline.remaining()?);
+            }
+            Ok(request)
+        },
     )?;
+    if let Some(deadline) = deadline {
+        super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
+        deadline.remaining()?;
+    }
     Ok(json!({
         "log": read.log.text,
         "truncated": read.log.truncated,
@@ -117,6 +132,13 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             "invalid private automation VCS workflow run id '{run_id}'"
         )));
     }
+    let deadline = input
+        .get("prerequisite")
+        .map(|_| super::super::completion_deadline::Deadline::from_input(input))
+        .transpose()?;
+    if let Some(deadline) = deadline {
+        deadline.remaining()?;
+    }
     if let Some(evidence) = input.get("prerequisite") {
         let expected: orbit_types::workflow::PrInfrastructureEvidence =
             serde_json::from_value(evidence.clone())
@@ -125,7 +147,7 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             return Err(super::prerequisite::unreadable("rerun run identity"));
         }
         let observed = super::prerequisite::observe(
-            &json!({"workspace_path":workspace_path,"evidence":expected}),
+            &json!({"workspace_path":workspace_path,"evidence":expected,"deadline_ms":input["deadline_ms"]}),
         )?;
         if observed["attempt"].as_u64() != Some(u64::from(expected.run_attempt))
             || observed["status"] != "completed"
@@ -136,7 +158,7 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             ));
         }
         let refreshed = super::prerequisite::evidence(
-            &json!({"workspace_path":workspace_path,"pr":expected.pr_number,"head_sha":expected.head_sha,"head_branch":expected.head_branch,"base_branch":expected.base_branch}),
+            &json!({"workspace_path":workspace_path,"pr":expected.pr_number,"head_sha":expected.head_sha,"head_branch":expected.head_branch,"base_branch":expected.base_branch,"deadline_ms":input["deadline_ms"]}),
         )?;
         let refreshed: orbit_types::workflow::PrInfrastructureEvidence =
             serde_json::from_value(refreshed["evidence"].clone())
@@ -147,24 +169,9 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             ));
         }
     }
-    let timeout_ms = if input.get("prerequisite").is_some() {
-        let deadline_ms = input["deadline_ms"]
-            .as_u64()
-            .ok_or_else(|| super::prerequisite::unreadable("rerun completion deadline"))?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| super::prerequisite::unreadable("rerun clock"))?
-            .as_millis();
-        if now >= u128::from(deadline_ms) {
-            return Err(super::prerequisite::unreadable(
-                "completion deadline expired before mutation",
-            ));
-        }
-        u64::try_from(u128::from(deadline_ms) - now)
-            .map_err(|_| super::prerequisite::unreadable("rerun deadline overflow"))?
-            .min(DEFAULT_TIMEOUT_MS)
-    } else {
-        DEFAULT_TIMEOUT_MS
+    let timeout_ms = match deadline {
+        Some(deadline) => deadline.remaining()?,
+        None => DEFAULT_TIMEOUT_MS,
     };
     let result = super::process::run_vcs_process(
         "gh",

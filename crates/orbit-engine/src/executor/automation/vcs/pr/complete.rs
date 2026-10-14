@@ -312,6 +312,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     )?
     .max(MIN_POLL_INTERVAL_SECONDS);
     let completion_started = std::time::Instant::now();
+    let completion_deadline_ms = super::super::completion_deadline::now_ms()?
+        .checked_add(max_wait_seconds.saturating_mul(1000))
+        .ok_or_else(|| stopped(pr_number, "completion deadline overflow"))?;
     let mut waited_seconds = 0_u64;
     let mut auto_merge_requested = false;
     let mut merge_requested = false;
@@ -411,8 +414,13 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     pr_number,
                     &status,
                     diagnose,
-                    max_wait_seconds
-                        .saturating_sub(waited_seconds.max(completion_started.elapsed().as_secs())),
+                    completion_deadline_ms.min(
+                        super::super::completion_deadline::now_ms()?.saturating_add(
+                            max_wait_seconds
+                                .saturating_sub(waited_seconds)
+                                .saturating_mul(1000)
+                        )
+                    ),
                 )?,
                 super::infrastructure::InfrastructureStep::Wait
             );

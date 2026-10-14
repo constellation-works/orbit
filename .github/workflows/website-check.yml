@@ -33,17 +33,14 @@ jobs:
         id: state
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          set -euo pipefail
-          state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" | jq -er '
-            if .merged == true then "merged"
-            elif .state == "open" or .state == "closed" then .state
+          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+            if .merged == true then "state=merged"
+            elif .state == "open" or .state == "closed" then "state=" + .state
             else error("Unexpected pull request state") end
-          ')"
-          echo "state=$state" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUMBER} live state: $state"
+          ' >> "$GITHUB_OUTPUT"
 
   check:
     needs: pr-state

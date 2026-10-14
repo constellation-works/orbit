@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Execute PR-state gates offline and evaluate their workflow job conditions."""
 
+import http.server
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 
 try:
@@ -46,22 +49,55 @@ class PrStateWorkflowTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.output = self.root / "output"
-        self.response = self.root / "response.json"
-        self.request = self.root / "request.json"
-        # Only transport is stubbed: the workflow's real Bash and jq execute.
+        self.credentials = self.root / "credentials.json"
+        self.requests = []
+        self.response = {}
+        self.api_failure = False
+        fixture = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                fixture.requests.append({"method": self.command, "path": self.path})
+                # A bodyless gateway failure preserves the no-output failure
+                # case; successful malformed payloads are separate controls.
+                body = b"" if fixture.api_failure else json.dumps(fixture.response).encode()
+                self.send_response(503 if fixture.api_failure else 200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_POST = do_PATCH = do_DELETE = do_GET
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread.start()
+
+        def close_server():
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        self.addCleanup(close_server)
+        real_gh = shutil.which("gh")
+        self.assertIsNotNone(real_gh, "the offline fixture requires the GitHub CLI used by the workflow")
+        # Redirect only the transport endpoint; real gh handles placeholders,
+        # method selection, JSON projection and errors, and real Bash executes.
         gh = self.root / "gh"
         gh.write_text("""#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
-Path(os.environ["FIXTURE_REQUEST"]).write_text(json.dumps({
-    "args": sys.argv[1:], "token": os.environ.get("GH_TOKEN")
-}))
-if os.environ.get("FIXTURE_API_FAILURE") == "1":
-    sys.stderr.write("fixture GitHub API unavailable\\n")
-    sys.exit(1)
-sys.stdout.write(Path(os.environ["FIXTURE_RESPONSE"]).read_text())
+Path(os.environ["FIXTURE_CREDENTIALS"]).write_text(json.dumps({"token": os.environ.get("GH_TOKEN")}))
+args = [os.environ["FIXTURE_ENDPOINT"] + arg if arg.startswith("repos/") else arg
+        for arg in sys.argv[1:]]
+os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
 """)
         gh.chmod(0o755)
+        self.fixture_env = {"FIXTURE_GH": real_gh,
+                            "FIXTURE_CREDENTIALS": str(self.credentials),
+                            "FIXTURE_ENDPOINT": f"http://127.0.0.1:{server.server_port}/"}
         self.workflows = {}
         for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
             document = yaml.safe_load(path.read_text())
@@ -69,21 +105,35 @@ sys.stdout.write(Path(os.environ["FIXTURE_RESPONSE"]).read_text())
             if "pull_request" in document.get("on", document.get(True, {})):
                 self.workflows[path.name] = document
         self.assertTrue(self.workflows, "the fixture must exercise PR workflows")
+        # Frozen original runs cannot acquire the new command by rewriting
+        # today's workflows. Execute the historical source through real gh,
+        # jq and Bash as well as the projected command.
+        legacy = ROOT / "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml"
+        self.workflows["legacy-codeql"] = yaml.safe_load(legacy.read_text())
 
     def run_gate(self, gate, response, *, api_failure=False):
         self.output.write_text("")
-        self.response.write_text(json.dumps(response))
-        self.request.write_text("{}")
+        self.response = response
+        self.api_failure = api_failure
+        self.requests.clear()
+        self.credentials.write_text("{}")
         step = gate["steps"][0]
         bindings = {"${{ github.token }}": "offline-token",
-                    "${{ github.event.pull_request.number }}": "42"}
+                    "${{ github.event.pull_request.number }}": "42",
+                    "${{ github.repository }}": "fixture/repository"}
         env = dict(PATH=f"{self.root}:{os.environ['PATH']}", LANG="C",
+                   HOME=str(self.root), GH_CONFIG_DIR=str(self.root / "gh-config"),
                    GITHUB_REPOSITORY="fixture/repository", GITHUB_OUTPUT=str(self.output),
-                   FIXTURE_RESPONSE=str(self.response), FIXTURE_REQUEST=str(self.request),
-                   FIXTURE_API_FAILURE="1" if api_failure else "0")
+                   **self.fixture_env)
         env.update({key: bindings.get(value, value) for key, value in step["env"].items()})
-        result = subprocess.run([step["shell"], "-e", "-o", "pipefail", "-c", step["run"]],
+        script = step["run"]
+        for expression, value in bindings.items():
+            script = script.replace(expression, value)
+        result = subprocess.run([step["shell"], "-e", "-o", "pipefail", "-c", script],
                                 cwd=self.root, env=env, text=True, capture_output=True, timeout=10)
+        self.assertEqual(self.requests, [{"method": "GET", "path": "/repos/fixture/repository/pulls/42"}],
+                         "each gate must make exactly one read of the bound pull request")
+        self.assertEqual(json.loads(self.credentials.read_text()), {"token": "offline-token"})
         outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
         # Follow the actual step-to-job output binding consumed by needs.
         binding = gate["outputs"]["state"]
@@ -118,8 +168,6 @@ sys.stdout.write(Path(os.environ["FIXTURE_RESPONSE"]).read_text())
                     result, output = self.run_gate(gate, response)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(output, state)
-                    self.assertEqual(json.loads(self.request.read_text()), {
-                        "args": ["api", "repos/fixture/repository/pulls/42"], "token": "offline-token"})
                     self.assert_admission(document, "pull_request", output, state == "open")
                     print(f"{name}: live {state} -> build jobs {'admitted' if state == 'open' else 'skipped'}")
 
@@ -136,7 +184,8 @@ sys.stdout.write(Path(os.environ["FIXTURE_RESPONSE"]).read_text())
 
     def test_api_errors_fail_gate_without_admitting_unknown_state(self):
         for name, document in self.workflows.items():
-            for response, api_failure in ((RESPONSES["open"], True), ({}, False)):
+            for response, api_failure in ((RESPONSES["open"], True), ({}, False),
+                                          ({"state": "unexpected", "merged": False}, False)):
                 with self.subTest(workflow=name, response=response, api_failure=api_failure):
                     result, output = self.run_gate(document["jobs"]["pr-state"], response,
                                                    api_failure=api_failure)
