@@ -213,7 +213,6 @@ fn assert_recorded(fixture: &Fixture, started: &Value, unset: &[&str]) {
     );
 }
 
-#[test]
 fn job_start_warns_once_naming_only_the_unset_variable_and_records_it() {
     let fixture = Fixture::new();
     let (started, stderr) = fixture.start(&[(SET, SECRET)], &["run", "job", JOB, "--json"]);
@@ -241,7 +240,6 @@ fn job_start_warns_once_naming_only_the_unset_variable_and_records_it() {
 /// A drain or ship start reports the unset name with its other notices: in
 /// the JSON receipt's `warning`, and as a `Warning:` line in text, never as a
 /// bare stderr line.
-#[test]
 fn drain_and_ship_starts_report_the_unset_variable_and_record_it() {
     let fixture = Fixture::new();
     // Both CLI workflow entry points launch the worker from the installed
@@ -286,7 +284,6 @@ fn drain_and_ship_starts_report_the_unset_variable_and_record_it() {
     assert_recorded(&fixture, &serde_json::json!({ "run_id": run_id }), &[UNSET]);
 }
 
-#[test]
 fn start_with_every_pass_listed_variable_set_is_silent_and_records_nothing() {
     let fixture = Fixture::new();
     let (started, stderr) = fixture.start(
@@ -297,7 +294,6 @@ fn start_with_every_pass_listed_variable_set_is_silent_and_records_nothing() {
     assert_recorded(&fixture, &started, &[]);
 }
 
-#[test]
 fn doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set() {
     let fixture = Fixture::new();
     let unset = fixture.doctor_row(&[(SET, SECRET)]);
@@ -772,4 +768,29 @@ fn clock_credential_loader_child() {
         finish.send(()).unwrap();
         reader.join().unwrap();
     });
+}
+
+#[test]
+fn pass_list_warning_contracts() {
+    for (name, check) in [
+        (
+            "job_start_warns_once_naming_only_the_unset_variable_and_records_it",
+            job_start_warns_once_naming_only_the_unset_variable_and_records_it as fn(),
+        ),
+        (
+            "drain_and_ship_starts_report_the_unset_variable_and_record_it",
+            drain_and_ship_starts_report_the_unset_variable_and_record_it as fn(),
+        ),
+        (
+            "start_with_every_pass_listed_variable_set_is_silent_and_records_nothing",
+            start_with_every_pass_listed_variable_set_is_silent_and_records_nothing as fn(),
+        ),
+        (
+            "doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set",
+            doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

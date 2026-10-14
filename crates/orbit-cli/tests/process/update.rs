@@ -157,8 +157,7 @@ fn checkout_build(checkout: &Path) -> PathBuf {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
+fn update_preserves_explicit_and_environment_roots_from_another_checkout(executable: &Path) {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
     let checkout_b = temp.path().join("checkout-b");
@@ -182,10 +181,9 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
     fs::remove_file(&managed_a).expect("remove root A managed asset");
     fs::remove_file(&managed_b).expect("remove root B managed asset");
 
-    let executable = install_test_binary(&temp.path().join("managed-bin"));
     let root_a_arg = root_a.to_string_lossy();
     let output = output_of(
-        installed_orbit(&executable, &checkout_b, &home, mirror.path())
+        installed_orbit(executable, &checkout_b, &home, mirror.path())
             .env("ORBIT_ROOT", &root_b)
             .args(["update", "--root", root_a_arg.as_ref(), "--json"]),
     )
@@ -214,7 +212,7 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
     assert!(!managed_b.exists(), "sync unexpectedly touched root B");
 
     let compatibility = output_of(
-        installed_orbit(&executable, &checkout_b, &home, mirror.path())
+        installed_orbit(executable, &checkout_b, &home, mirror.path())
             .env("ORBIT_ROOT", &root_b)
             .args([
                 "migrate",
@@ -244,7 +242,7 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
 
     fs::remove_file(&managed_a).expect("remove root A asset for environment-only retry");
     let retry = output_of(
-        installed_orbit(&executable, &checkout_b, &home, mirror.path())
+        installed_orbit(executable, &checkout_b, &home, mirror.path())
             .env("ORBIT_ROOT", &root_a)
             .args(["update", "--json"]),
     )
@@ -260,8 +258,7 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn update_without_a_root_override_retains_default_workspace_routing() {
+fn update_without_a_root_override_retains_default_workspace_routing(executable: &Path) {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
@@ -290,9 +287,8 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
     let workspace_root = repo.join(".orbit");
     let managed = workspace_root.join("auto_tasks/code-review.yaml");
     fs::remove_file(&managed).expect("remove default-root managed asset");
-    let executable = install_test_binary(&temp.path().join("managed-bin"));
     let output = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path()).args(["update", "--json"]),
+        installed_orbit(executable, &repo, &home, mirror.path()).args(["update", "--json"]),
     )
     .expect("run default-root update");
     assert!(
@@ -317,8 +313,7 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn update_and_preflight_admit_against_the_same_overridden_root() {
+fn update_and_preflight_admit_against_the_same_overridden_root(executable: &Path) {
     use orbit_common::fs::generation::{GenerationGuard, executable_generation};
 
     let temp = tempdir().expect("fixture tempdir");
@@ -336,14 +331,13 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let mirror = mirror_publishing("99.0.0");
     initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
 
-    let executable = install_test_binary(&temp.path().join("managed-bin"));
-    let digest = executable_generation(&executable).expect("installed digest");
+    let digest = executable_generation(executable).expect("installed digest");
     let _client = GenerationGuard::acquire(&scratch, &digest).expect("live pin on override");
-    let before = fs::read(&executable).expect("installed bytes");
+    let before = fs::read(executable).expect("installed bytes");
     let scratch_arg = scratch.to_string_lossy();
 
     let preflight = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path()).args([
+        installed_orbit(executable, &repo, &home, mirror.path()).args([
             "update",
             "--preflight",
             "--json",
@@ -357,7 +351,7 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     // Request the installed version: the update downloads nothing and goes
     // straight to the admission it takes before converging.
     let update = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path()).args([
+        installed_orbit(executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
             env!("CARGO_PKG_VERSION"),
@@ -369,13 +363,13 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     .expect("update against overridden root");
     assert_admission_refused(&update, "update --root");
     assert_eq!(
-        fs::read(&executable).expect("installed bytes"),
+        fs::read(executable).expect("installed bytes"),
         before,
         "overridden-root update replaced the binary under a live pin"
     );
 
     let env_preflight = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path())
+        installed_orbit(executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
             .args(["update", "--preflight", "--json"]),
     )
@@ -383,20 +377,20 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     assert_admission_refused(&env_preflight, "preflight ORBIT_ROOT");
 
     let env_update = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path())
+        installed_orbit(executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
             .args(["update", "--version", env!("CARGO_PKG_VERSION"), "--json"]),
     )
     .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT");
     assert_eq!(
-        fs::read(&executable).expect("installed bytes"),
+        fs::read(executable).expect("installed bytes"),
         before,
         "ORBIT_ROOT update replaced the binary under a live pin"
     );
 
     let host_preflight = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path()).args([
+        installed_orbit(executable, &repo, &home, mirror.path()).args([
             "update",
             "--preflight",
             "--json",
@@ -428,8 +422,7 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
 /// through both spellings of the override — and preflight has to name the same
 /// pair of authorities the update will lock.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling() {
+fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling(executable: &Path) {
     use orbit_common::fs::generation::{GenerationGuard, executable_generation};
 
     let temp = tempdir().expect("fixture tempdir");
@@ -444,13 +437,12 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let mirror = mirror_publishing("99.0.0");
     initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
 
-    let executable = install_test_binary(&temp.path().join("managed-bin"));
     let scratch_arg = scratch.to_string_lossy();
     let host_global = home.join(".orbit");
 
     // Quiet: the override preflight still reports the host-global authority.
     let preflight = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path()).args([
+        installed_orbit(executable, &repo, &home, mirror.path()).args([
             "update",
             "--preflight",
             "--json",
@@ -473,14 +465,14 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
         "an override must not drop the host-global authority from the report"
     );
 
-    let digest = executable_generation(&executable).expect("installed digest");
+    let digest = executable_generation(executable).expect("installed digest");
     let _client = GenerationGuard::acquire(&host_global, &digest).expect("live host-global pin");
-    let before = fs::read(&executable).expect("installed bytes");
+    let before = fs::read(executable).expect("installed bytes");
 
     // Request the installed version: the update downloads nothing and goes
     // straight to the admission it takes before converging.
     let root_update = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path()).args([
+        installed_orbit(executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
             env!("CARGO_PKG_VERSION"),
@@ -492,26 +484,26 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     .expect("update against overridden root");
     assert_admission_refused(&root_update, "update --root under a host-global pin");
     assert_eq!(
-        fs::read(&executable).expect("installed bytes"),
+        fs::read(executable).expect("installed bytes"),
         before,
         "--root update replaced the binary under a live host-global pin"
     );
 
     let env_update = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path())
+        installed_orbit(executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
             .args(["update", "--version", env!("CARGO_PKG_VERSION"), "--json"]),
     )
     .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT under a host-global pin");
     assert_eq!(
-        fs::read(&executable).expect("installed bytes"),
+        fs::read(executable).expect("installed bytes"),
         before,
         "ORBIT_ROOT update replaced the binary under a live host-global pin"
     );
 
     let refused_preflight = output_of(
-        installed_orbit(&executable, &repo, &home, mirror.path())
+        installed_orbit(executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
             .args(["update", "--preflight", "--json"]),
     )
@@ -537,7 +529,6 @@ fn assert_admission_refused(output: &std::process::Output, label: &str) {
     );
 }
 
-#[test]
 fn help_documents_both_latest_and_explicit_version_selection() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -553,7 +544,6 @@ fn help_documents_both_latest_and_explicit_version_selection() {
     assert!(help.contains("--allow-downgrade"), "{help}");
 }
 
-#[test]
 fn check_reports_the_available_release_and_exits_three() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -589,17 +579,20 @@ fn check_reports_the_available_release_and_exits_three() {
             .contains("invalid input: "),
         "{report}"
     );
+    // These read-only views and the refusal use one assessed image. The
+    // parser, channel classification, output and exit paths still run through
+    // the real binary; no replacement or handover fixture shares this image.
+    check_renders_a_prefix_free_remediation_sentence(&executable, home.path(), mirror.path());
+    applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works(
+        &executable,
+        home.path(),
+        mirror.path(),
+    );
 }
 
-#[test]
-fn check_renders_a_prefix_free_remediation_sentence() {
-    let home = tempdir().expect("home");
-    let mirror = mirror_publishing("9.9.9");
-    let executable = checkout_build(home.path());
-    let output = output_of(
-        orbit_at(&executable, home.path(), home.path(), mirror.path()).args(["update", "--check"]),
-    )
-    .expect("run update --check");
+fn check_renders_a_prefix_free_remediation_sentence(executable: &Path, home: &Path, mirror: &Path) {
+    let output = output_of(orbit_at(executable, home, home, mirror).args(["update", "--check"]))
+        .expect("run update --check");
 
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let text = String::from_utf8_lossy(&output.stdout);
@@ -613,7 +606,6 @@ fn check_renders_a_prefix_free_remediation_sentence() {
     assert!(!text.contains("invalid input: "), "{text}");
 }
 
-#[test]
 fn check_is_quiet_and_succeeds_when_the_installed_release_is_current() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing(env!("CARGO_PKG_VERSION"));
@@ -627,7 +619,6 @@ fn check_is_quiet_and_succeeds_when_the_installed_release_is_current() {
     assert_eq!(report["outcome"], "already_current");
 }
 
-#[test]
 fn check_succeeds_without_recommending_an_update_when_the_published_release_is_older() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("0.0.0");
@@ -655,14 +646,13 @@ fn check_succeeds_without_recommending_an_update_when_the_published_release_is_o
     assert!(!text.contains("`orbit update`"), "{text}");
 }
 
-#[test]
-fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works() {
-    let home = tempdir().expect("home");
-    let mirror = mirror_publishing("9.9.9");
-    let executable = checkout_build(home.path());
+fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works(
+    executable: &Path,
+    home: &Path,
+    mirror: &Path,
+) {
     let output =
-        output_of(orbit_at(&executable, home.path(), home.path(), mirror.path()).arg("update"))
-            .expect("run update");
+        output_of(orbit_at(executable, home, home, mirror).arg("update")).expect("run update");
 
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -678,7 +668,6 @@ fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works
 /// binary installed by an installer, or somewhere no installer owns, is
 /// never offered the local-build remediation, and an unknown location is
 /// refused in place.
-#[test]
 fn installed_and_unknown_location_binaries_are_not_checkout_builds() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
@@ -712,18 +701,23 @@ fn installed_and_unknown_location_binaries_are_not_checkout_builds() {
         "{stderr}"
     );
 
-    let cargo = install_test_binary(&home.path().join(".cargo").join("bin"));
+    // All children have exited before a rename. Assessment follows the file,
+    // while each next process still classifies its actual executable path.
+    let cargo = home.path().join(".cargo/bin/orbit");
+    fs::create_dir_all(cargo.parent().unwrap()).expect("cargo bin directory");
+    fs::rename(&unknown, &cargo).expect("move assessed image to cargo channel");
     let report = check(&cargo);
     assert_eq!(report["install_channel"], "cargo", "{report}");
     assert_eq!(report["updatable"], false, "{report}");
 
-    let managed = install_test_binary(&home.path().join(".orbit").join("bin"));
+    let managed = home.path().join(".orbit/bin/orbit");
+    fs::create_dir_all(managed.parent().unwrap()).expect("managed bin directory");
+    fs::rename(&cargo, &managed).expect("move assessed image to managed channel");
     let report = check(&managed);
     assert_eq!(report["install_channel"], "managed", "{report}");
     assert_eq!(report["updatable"], true, "{report}");
 }
 
-#[test]
 fn an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work() {
     let home = tempdir().expect("home");
     // No mirror content at all: the version is rejected before it is consulted.
@@ -736,4 +730,92 @@ fn an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work(
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("MAJOR.MINOR.PATCH"), "{stderr}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn update_command_contracts_0() {
+    if crate::isolated_test::run_in_child("update::update_command_contracts_0") {
+        return;
+    }
+    // These rows only converge an equal-version installation or refuse an
+    // update. Share its immutable image, while each row still owns independent
+    // HOME, configuration, workspace and generation state.
+    let image = tempdir().expect("read-only updater image fixture");
+    let executable = install_test_binary(&image.path().join("managed-bin"));
+    let before = fs::read(&executable).expect("read-only updater image");
+    for (name, check) in [
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "update_preserves_explicit_and_environment_roots_from_another_checkout",
+            update_preserves_explicit_and_environment_roots_from_another_checkout as fn(&Path),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "update_without_a_root_override_retains_default_workspace_routing",
+            update_without_a_root_override_retains_default_workspace_routing as fn(&Path),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "update_and_preflight_admit_against_the_same_overridden_root",
+            update_and_preflight_admit_against_the_same_overridden_root as fn(&Path),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling",
+            a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling
+                as fn(&Path),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check(&executable);
+        assert_eq!(
+            fs::read(&executable).expect("read-only updater image after row"),
+            before,
+            "no-swap row {name} changed the shared executable",
+        );
+    }
+}
+
+#[test]
+fn update_command_contracts_1() {
+    for (name, check) in [
+        (
+            "help_documents_both_latest_and_explicit_version_selection",
+            help_documents_both_latest_and_explicit_version_selection as fn(),
+        ),
+        (
+            "check_reports_the_available_release_and_exits_three",
+            check_reports_the_available_release_and_exits_three as fn(),
+        ),
+        (
+            "check_is_quiet_and_succeeds_when_the_installed_release_is_current",
+            check_is_quiet_and_succeeds_when_the_installed_release_is_current as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn update_command_contracts_2() {
+    for (name, check) in [
+        (
+            "check_succeeds_without_recommending_an_update_when_the_published_release_is_older",
+            check_succeeds_without_recommending_an_update_when_the_published_release_is_older
+                as fn(),
+        ),
+        (
+            "installed_and_unknown_location_binaries_are_not_checkout_builds",
+            installed_and_unknown_location_binaries_are_not_checkout_builds as fn(),
+        ),
+        (
+            "an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work",
+            an_unparseable_requested_version_is_rejected_before_any_network_or_disk_work as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

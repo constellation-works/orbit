@@ -25,7 +25,6 @@ use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-#[test]
 fn explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots() {
     for (raw, suffix) in [
         ("~", ""),
@@ -130,7 +129,6 @@ fn initialize_registered_root(work: &Path, home: &Path, root: &Path) {
         .success();
 }
 
-#[test]
 fn task_list_with_tilde_orbit_root_registers_its_participant_under_home() {
     use std::process::{Command, Stdio};
     use std::time::Instant;
@@ -192,7 +190,6 @@ fn task_list_with_tilde_orbit_root_registers_its_participant_under_home() {
     assert!(!work.join("~").exists());
 }
 
-#[test]
 fn clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -246,7 +243,6 @@ fn clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume() {
 /// migration cannot run beside a live drain stopped routines and worktree GC
 /// with no alert. Each refused tick says so, and `orbit doctor` reports the
 /// run of refusals until the clock runs again.
-#[test]
 fn clock_ticks_refused_by_a_breaking_migration_are_reported_by_doctor() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -376,7 +372,6 @@ fn assert_generation_record(root: &Path) {
 }
 
 #[cfg(unix)]
-#[test]
 fn init_with_root_succeeds_when_home_orbit_is_readonly_and_unpinned() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -413,7 +408,6 @@ fn init_with_root_succeeds_when_home_orbit_is_readonly_and_unpinned() {
     assert!(!home_orbit.join(".generation-admission.lock").exists());
 }
 
-#[test]
 fn init_with_isolated_home_writes_generation_lock_under_home_orbit() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -449,7 +443,6 @@ fn init_with_isolated_home_writes_generation_lock_under_home_orbit() {
 /// this process cannot write is refused by the probe, not discovered after
 /// the executable has already been swapped.
 #[cfg(unix)]
-#[test]
 fn preflight_with_root_refuses_an_unwritable_host_global_authority() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -484,7 +477,6 @@ fn preflight_with_root_refuses_an_unwritable_host_global_authority() {
 /// A `--root` override stays isolated for state, and admission over a
 /// writable host-global root still reports both authorities.
 #[cfg(unix)]
-#[test]
 fn preflight_with_root_reports_both_authorities_when_home_orbit_is_writable() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -529,7 +521,6 @@ fn preflight_with_root_reports_both_authorities_when_home_orbit_is_writable() {
     );
 }
 
-#[test]
 fn preflight_on_isolated_home_is_blocked_by_a_live_exclusive_holder() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -553,7 +544,6 @@ fn preflight_on_isolated_home_is_blocked_by_a_live_exclusive_holder() {
     );
 }
 
-#[test]
 fn isolated_home_refuses_a_different_executable_digest_while_a_pin_is_held() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -583,7 +573,6 @@ fn isolated_home_refuses_a_different_executable_digest_while_a_pin_is_held() {
     );
 }
 
-#[test]
 fn init_with_root_ignores_a_foreign_pin_on_home_orbit() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -713,7 +702,6 @@ fn assert_admitted_roots(output: &std::process::Output, expected: &[&Path]) {
 /// An uninitialized `--root` is still a generation authority. Preflight also
 /// admits the host-global root and the initialized workspace discovered from
 /// the working directory, and reports that nothing was reserved.
-#[test]
 fn preflight_with_root_admits_uninitialized_override_cwd_and_host_global() {
     let trees = PreflightTrees::new(true);
     let output = preflight_output(&trees, Some(&trees.scratch), None);
@@ -732,7 +720,6 @@ fn preflight_with_root_admits_uninitialized_override_cwd_and_host_global() {
 }
 
 /// `ORBIT_ROOT` is the same explicit generation root as `--root`.
-#[test]
 fn preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global() {
     let trees = PreflightTrees::new(true);
     let output = preflight_output(&trees, None, Some(&trees.scratch));
@@ -749,7 +736,6 @@ fn preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global()
 /// A live client in the discovered workspace refuses the probe for both
 /// spellings of an uninitialized override. The override does not drop that
 /// authority.
-#[test]
 fn preflight_refuses_a_live_cwd_client_for_root_and_orbit_root() {
     let trees = PreflightTrees::new(true);
     let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("digest");
@@ -775,7 +761,6 @@ fn preflight_refuses_a_live_cwd_client_for_root_and_orbit_root() {
 
 /// An initialized `--root` selects that workspace for convergence. A different
 /// cwd workspace is not an extra authority, matching the updater.
-#[test]
 fn preflight_with_initialized_root_does_not_add_a_different_cwd_workspace() {
     let trees = PreflightTrees::new(true);
     let other = trees._temp.path().join("other");
@@ -793,7 +778,6 @@ fn preflight_with_initialized_root_does_not_add_a_different_cwd_workspace() {
 /// Two spellings of one authority stay one entry: a symlink to the host-global
 /// root plus that root itself. The distinct cwd workspace is still admitted.
 #[cfg(unix)]
-#[test]
 fn preflight_deduplicates_a_host_global_alias_and_keeps_the_cwd_workspace() {
     let trees = PreflightTrees::new(true);
     let alias = trees._temp.path().join("host-alias");
@@ -807,7 +791,6 @@ fn preflight_deduplicates_a_host_global_alias_and_keeps_the_cwd_workspace() {
 }
 
 /// A workspace config that cannot be read is not turned into "no workspace".
-#[test]
 fn preflight_reports_a_broken_cwd_workspace_config() {
     let trees = PreflightTrees::new(true);
     fs::write(trees.workspace_orbit.join("config.toml"), "root = [\n").expect("break config");
@@ -827,7 +810,6 @@ fn preflight_reports_a_broken_cwd_workspace_config() {
 
 /// `orbit update` still refuses an explicit root that is not a workspace.
 /// Preflight's probe does not relax convergence.
-#[test]
 fn update_with_uninitialized_root_still_requires_a_workspace() {
     let trees = PreflightTrees::new(false);
     for (label, mut command) in [
@@ -866,5 +848,127 @@ fn update_with_uninitialized_root_still_requires_a_workspace() {
             !trees.scratch.join("config.toml").exists(),
             "{label} must not initialize the explicit root"
         );
+    }
+}
+
+#[test]
+fn generation_admission_contracts_0() {
+    for (name, check) in [
+        (
+            "explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots",
+            explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots
+                as fn(),
+        ),
+        (
+            "task_list_with_tilde_orbit_root_registers_its_participant_under_home",
+            task_list_with_tilde_orbit_root_registers_its_participant_under_home as fn(),
+        ),
+        (
+            "clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume",
+            clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume as fn(),
+        ),
+        (
+            "clock_ticks_refused_by_a_breaking_migration_are_reported_by_doctor",
+            clock_ticks_refused_by_a_breaking_migration_are_reported_by_doctor as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn generation_admission_contracts_1() {
+    for (name, check) in [
+        #[cfg(unix)]
+        (
+            "init_with_root_succeeds_when_home_orbit_is_readonly_and_unpinned",
+            init_with_root_succeeds_when_home_orbit_is_readonly_and_unpinned as fn(),
+        ),
+        (
+            "init_with_isolated_home_writes_generation_lock_under_home_orbit",
+            init_with_isolated_home_writes_generation_lock_under_home_orbit as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "preflight_with_root_refuses_an_unwritable_host_global_authority",
+            preflight_with_root_refuses_an_unwritable_host_global_authority as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "preflight_with_root_reports_both_authorities_when_home_orbit_is_writable",
+            preflight_with_root_reports_both_authorities_when_home_orbit_is_writable as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn generation_admission_contracts_2() {
+    for (name, check) in [
+        (
+            "preflight_on_isolated_home_is_blocked_by_a_live_exclusive_holder",
+            preflight_on_isolated_home_is_blocked_by_a_live_exclusive_holder as fn(),
+        ),
+        (
+            "isolated_home_refuses_a_different_executable_digest_while_a_pin_is_held",
+            isolated_home_refuses_a_different_executable_digest_while_a_pin_is_held as fn(),
+        ),
+        (
+            "init_with_root_ignores_a_foreign_pin_on_home_orbit",
+            init_with_root_ignores_a_foreign_pin_on_home_orbit as fn(),
+        ),
+        (
+            "preflight_with_root_admits_uninitialized_override_cwd_and_host_global",
+            preflight_with_root_admits_uninitialized_override_cwd_and_host_global as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn generation_admission_contracts_3() {
+    for (name, check) in [
+        (
+            "preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global",
+            preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global as fn(),
+        ),
+        (
+            "preflight_refuses_a_live_cwd_client_for_root_and_orbit_root",
+            preflight_refuses_a_live_cwd_client_for_root_and_orbit_root as fn(),
+        ),
+        (
+            "preflight_with_initialized_root_does_not_add_a_different_cwd_workspace",
+            preflight_with_initialized_root_does_not_add_a_different_cwd_workspace as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "preflight_deduplicates_a_host_global_alias_and_keeps_the_cwd_workspace",
+            preflight_deduplicates_a_host_global_alias_and_keeps_the_cwd_workspace as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn generation_admission_contracts_4() {
+    for (name, check) in [
+        (
+            "preflight_reports_a_broken_cwd_workspace_config",
+            preflight_reports_a_broken_cwd_workspace_config as fn(),
+        ),
+        (
+            "update_with_uninitialized_root_still_requires_a_workspace",
+            update_with_uninitialized_root_still_requires_a_workspace as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

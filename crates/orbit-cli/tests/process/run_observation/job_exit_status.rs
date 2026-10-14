@@ -4,9 +4,8 @@ use std::fs;
 
 use serde_json::{Value, json};
 
-use super::{FAILED, Fixture};
+use super::{FAILED, Fixture, isolated_run_observation};
 
-#[test]
 fn failing_replay_exits_nonzero_and_preserves_its_result() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -73,7 +72,6 @@ fn failing_replay_exits_nonzero_and_preserves_its_result() {
 
 /// A Git substitute reports a server error for a verified local remote,
 /// causing the real engine to hold without contacting a forge or an agent.
-#[test]
 fn held_run_resume_and_replay_exit_nonzero() {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
@@ -203,5 +201,25 @@ exec {real_git} "$@"
         let id = result["run_id"].as_str().unwrap();
         let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
         assert_eq!(shown["run"]["state"], "held");
+    }
+}
+
+#[test]
+fn job_exit_contracts() {
+    if !isolated_run_observation("run_observation::job_exit_status::job_exit_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "failing_replay_exits_nonzero_and_preserves_its_result",
+            failing_replay_exits_nonzero_and_preserves_its_result as fn(),
+        ),
+        (
+            "held_run_resume_and_replay_exit_nonzero",
+            held_run_resume_and_replay_exit_nonzero as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

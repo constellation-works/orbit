@@ -20,7 +20,6 @@ fn macho(magic: [u8; 4], cpu: u32) -> Vec<u8> {
     header
 }
 
-#[test]
 fn executable_headers_map_to_release_targets_or_refuse() {
     let cases: [(Vec<u8>, Result<&str, &str>); 9] = [
         (elf(2, 1, 62), Ok("x86_64-unknown-linux-gnu")),
@@ -55,7 +54,6 @@ fn executable_headers_map_to_release_targets_or_refuse() {
     assert!(executable_target(&elf(2, 1, 62)[..12]).is_err());
 }
 
-#[test]
 fn manifests_are_v1_operator_attested_documents_only() {
     let valid = serde_json::json!({
         "schema_version": 1,
@@ -139,4 +137,21 @@ fn manifests_are_v1_operator_attested_documents_only() {
         .remove("source_commit");
     assert!(CandidateManifest::parse(missing.to_string().as_bytes()).is_err());
     assert!(CandidateManifest::parse(b"not json").is_err());
+}
+
+#[test]
+fn candidate_input_contracts() {
+    for (name, check) in [
+        (
+            "executable_headers_map_to_release_targets_or_refuse",
+            executable_headers_map_to_release_targets_or_refuse as fn(),
+        ),
+        (
+            "manifests_are_v1_operator_attested_documents_only",
+            manifests_are_v1_operator_attested_documents_only as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }
