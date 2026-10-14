@@ -20,7 +20,16 @@ pub(super) fn copy_template(source: &Path, destination: &Path) {
                     kind.is_file(),
                     "pristine fixture must contain regular files"
                 );
-                fs::copy(entry.path(), &target).unwrap();
+                fs::copy(entry.path(), &target).unwrap_or_else(|error| {
+                    panic!(
+                        "pristine fixture copy {} -> {} failed: {error}; source metadata: {:?}; source parent: {:?}; destination parent: {:?}",
+                        entry.path().display(),
+                        target.display(),
+                        fs::symlink_metadata(entry.path()),
+                        fs::symlink_metadata(source),
+                        fs::symlink_metadata(destination),
+                    )
+                });
                 if entry.file_name() == "config" {
                     let config = fs::read_to_string(&target).unwrap();
                     fs::write(&target, config.replace(old_root, new_root)).unwrap();
@@ -36,13 +45,19 @@ pub(super) fn copy_template(source: &Path, destination: &Path) {
     );
 }
 
-pub(super) const FILE_ONLY_CONFIG: &str =
-    "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n";
+// Seed preparation must wait for automatic maintenance, including receive-pack
+// in the bare remote. Git 2.55 transfers temporary locks to detached children;
+// waiting only for the original Git command does not make its files immutable.
+// Keep maintenance, locking and durability enabled, but finish them foreground.
+pub(super) const ISOLATED_GIT_CONFIG: &str = concat!(
+    "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n",
+    "[maintenance]\n\tautoDetach = false\n[gc]\n\tautoDetach = false\n",
+);
 
 pub(super) fn configure_child(command: &mut Command, home: &Path, sandbox: &Path) {
     // Engine VCS children clear GIT_* variables but retain HOME. Both layers
     // must enforce the policy, including calls through the real provider.
-    fs::write(home.join(".gitconfig"), FILE_ONLY_CONFIG).unwrap();
+    fs::write(home.join(".gitconfig"), ISOLATED_GIT_CONFIG).unwrap();
     command
         .env("GIT_ALLOW_PROTOCOL", "file")
         .env("GIT_CEILING_DIRECTORIES", sandbox);
