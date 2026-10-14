@@ -91,12 +91,24 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
             .collect(),
         _ => Vec::new(),
     };
+    let repair_paths = bound
+        .get("ci_repair_paths")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let request = RecoveryCommitRequest {
         workspace_path: std::path::Path::new(workspace_path),
         run_id: &ctx.run_id,
         failed_step_id: &step.id,
         recovery_activity: &recovery.name,
         task_ids: &task_ids,
+        repair_paths: bound
+            .get("ci_repair_paths")
+            .and_then(Value::as_array)
+            .map(|_| &repair_paths[..]),
         no_diff_route: checkpoint
             .get("skipped_no_diff_expected")
             .and_then(Value::as_bool)
@@ -115,6 +127,9 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
                 paths = ?paths,
                 "committed the recovery repair before retry or resume"
             );
+            if let Some(evidence) = bound.get("ci_repair_evidence") {
+                super::check_scope::record(ctx, &task_ids, evidence, &commit_sha, &paths)?;
+            }
             Ok(())
         }
         Err(refusal) => {

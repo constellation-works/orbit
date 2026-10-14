@@ -349,6 +349,52 @@ pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
     }
 }
 
+/// Recognize a landed repair using all required failures and exact base jobs.
+/// This is only diagnosis: the caller still admits an attempt, validates,
+/// reviews and lease-publishes the refreshed candidate.
+pub(super) fn landed_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    status: &PullRequestStatus,
+    failed: &[(Option<String>, String)],
+) -> Option<Value> {
+    let workspace = Path::new(workspace_path);
+    let head = status.head_sha.as_deref()?;
+    let failed = required_failures(host, workspace_path, pr_number, head, failed).ok()?;
+    let base = input_string_field(input, "base")?;
+    let base_ref =
+        resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input).ok()?)
+            .ok()?;
+    let tip = commit_sha(workspace, &base_ref).ok()?;
+    let old = git_output(workspace, &["merge-base", head, &tip]).ok()?;
+    super::super::landing_checks::landed_check_repair(host, workspace, head, &old, &tip, &failed)
+}
+
+/// Retain the failed and passing exact-head evidence before refreshing.
+pub(super) fn record_landed_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    evidence: &Value,
+) -> Result<(), OrbitError> {
+    let head = evidence["failed_head"]
+        .as_str()
+        .ok_or_else(|| stopped("", "missing failed head"))?;
+    let path = format!("auto-fix/{}/landed-{head}.json", auto_fix.run_id);
+    let owner_run = host
+        .get_task(auto_fix.primary_task()?)?
+        .job_run_id
+        .ok_or_else(|| stopped("", "missing owning run"))?;
+    let evidence = orbit_common::security::redaction::redact_all_json(evidence.clone());
+    host.attach_task_validation_log(
+        auto_fix.primary_task()?,
+        &owner_run,
+        &path,
+        serde_json::to_vec(&evidence).map_err(|error| OrbitError::Execution(error.to_string()))?,
+    )
+}
+
 /// The failed checks branch protection requires on `head_sha`. The rollup
 /// does not say which checks are required, and a `BLOCKED` state can come
 /// from a rule the rollup does not show, so an optional failure beside it

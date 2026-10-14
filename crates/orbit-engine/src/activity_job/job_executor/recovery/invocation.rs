@@ -138,6 +138,17 @@ pub(super) fn dispatch_recovery(
         };
         input["crew_config_key"] = Value::String(crews_key.to_string());
     }
+    if orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic()) {
+        let instruction =
+            super::check_scope::instruction(&ctx.run_id, &step.id, &failure.diagnostic());
+        if let Some(error) = input
+            .get("error_message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            input["error_message"] = Value::String(format!("{error}\n{instruction}"));
+        }
+    }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
         .map_err(|error| ("decision", error.to_string()))?;
     // Observed before the provider runs, so an absent decision can be judged

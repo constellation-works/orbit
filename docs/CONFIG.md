@@ -906,6 +906,20 @@ existing recovery activities, final validation and push do the repair:
   failure is repaired, with that head's failed step, error signature and log
   excerpt as evidence. A conflict is rebased onto the current base by PR
   conflict recovery.
+- An admitted required-check repair may change the source files needed to fix
+  its evidenced failure outside the original task description or selectors,
+  including a defect already on the shared base. Ordinary step recovery keeps
+  its candidate-scope boundary. The repair writes the run/head-bound scope
+  record named in its recovery input, explaining the cause and each changed
+  path. The host checks that record against its admission and actual edits
+  before committing, retaining a pre-commit copy under
+  `auto-fix/<run>/scope-<failed-head>.json` and the committed record under
+  `auto-fix/<run>/<repair-head>.json`. It widens task selectors with recovery
+  provenance. Missing or stale records, unexplained files, protected metadata,
+  environment files, symlinks and CI workflow
+  edits are refused. Explanations are agent evidence for review; they cannot
+  grant a repair admission or bypass validation. Required commands, test
+  assertions and branch rules must not be weakened.
 - Approvals, permissions, admin rules, unknown status, failures with no
   readable job log, transient infrastructure failures and optional checks
   failing alone launch no agent; the watcher stops with the reason.
@@ -927,6 +941,15 @@ existing recovery activities, final validation and push do the repair:
   branch, exact-head and review guards still apply. Resume spends no new
   repair attempt merely to finish an inherited repair and grants no merge
   authority.
+- When a shared-base repair has already landed, Orbit can refresh the owned
+  branch instead of dispatching duplicate edits. Every failed required job
+  must have the same diagnostic on the old base and pass on the newer base.
+  It retains those failed and passing job identities and the landed base in
+  `auto-fix/<run>/landed-<failed-head>.json`, spends an ordinary repair attempt,
+  pins that base, validates the refreshed candidate, and uses the same review
+  and publication leases before watching the new exact head. Missing evidence
+  leaves the ordinary diagnosis path in place; it never means the failure is
+  outside authorized repair scope.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
 ### Setting `task.crew`

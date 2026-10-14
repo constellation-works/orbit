@@ -94,7 +94,8 @@ use super::super::push::push_batch_changes;
 use super::answers::{PullRequestStatus, ReviewedMergeOutcome, read_pr_status};
 use super::auto_fix::{
     AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, blocked_verdict,
-    publish_local_repair, record_published_repair, repair_failed_checks, stopped,
+    landed_repair, publish_local_repair, record_landed_repair, record_published_repair,
+    repair_failed_checks, stopped,
 };
 use super::delivery::{DeliveryEvidence, DeliveryPin, PrMergeState, classify_pr_state};
 use super::head_lag::HeadLag;
@@ -315,6 +316,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut merge_requested = false;
     let mut requested_landed_commit: Option<String> = None;
     let mut conflict_refresh_attempted = false;
+    let mut landed_refresh_attempted = false;
     let mut merge_capabilities: Option<PermittedMerge> = None;
     let mut base_modified_refusals = 0_u32;
     // The latest base-modification refusal, kept for the error that ends the
@@ -455,6 +457,79 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         ));
                     }
                     BlockedVerdict::RepairChecks(failed) => {
+                        if !landed_refresh_attempted
+                            && let Some(evidence) = landed_repair(
+                                host,
+                                input,
+                                workspace_path,
+                                pr_number,
+                                &status,
+                                &failed,
+                            )
+                        {
+                            let from = status
+                                .head_sha
+                                .as_deref()
+                                .ok_or_else(|| stopped(pr_number, "missing failed head"))?;
+                            admit(
+                                host,
+                                auto_fix,
+                                pr_number,
+                                from,
+                                PrAutoFixBlocker::FailedChecks,
+                            )?;
+                            record_landed_repair(host, auto_fix, &evidence)?;
+                            let mut refresh_input = input.clone();
+                            refresh_input["published_head_sha"] = json!(from);
+                            // Pin the diagnosed landed base; a second base advance
+                            // must be diagnosed on a later bounded attempt.
+                            refresh_input["landed_repair_base_sha"] =
+                                evidence["landed_base"].clone();
+                            // Keep PR identity checking against the named base.
+                            let rebased = rebase_conflicting_pr_branch(
+                                host,
+                                &refresh_input,
+                                workspace_path,
+                                pr_number,
+                                &status,
+                            )?;
+                            super::super::candidate_validate::candidate_validate(
+                                host,
+                                &json!({
+                                    "job_run_id":input["job_run_id"], "completed_task_ids":input["completed_task_ids"],
+                                    "workspace_path":workspace_path, "base_sha":rebased["base_sha"], "base_ref":rebased["base_ref"],
+                                }),
+                            )?;
+                            if reviewed_head_sha.is_some() {
+                                return Ok(Delivery::RebasedForReview {
+                                    rebased,
+                                    reason: "auto_fix_landed_check_repair",
+                                });
+                            }
+                            push_batch_changes(
+                                host,
+                                &json!({
+                                    "job_run_id":input["job_run_id"], "completed_task_ids":input["completed_task_ids"],
+                                    "workspace_path":workspace_path, "branch":rebased["head"],
+                                    "rewrite_performed":rebased["rewritten"], "rewrite_head_before":rebased["head_sha_before"],
+                                    "expected_remote_sha":rebased["remote_sha_before"],
+                                }),
+                            )?;
+                            let to = rebased["head_sha"]
+                                .as_str()
+                                .ok_or_else(|| stopped(pr_number, "missing refreshed head"))?;
+                            record_published_repair(
+                                host,
+                                auto_fix,
+                                pr_number,
+                                from,
+                                to,
+                                PrAutoFixBlocker::FailedChecks,
+                            )?;
+                            pin.adopt_refreshed_candidate(Some(to));
+                            landed_refresh_attempted = true;
+                            continue;
+                        }
                         return Err(repair_failed_checks(
                             host,
                             auto_fix,
@@ -857,7 +932,16 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
 
     let base_ref =
         resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input)?)?;
-    let target_base_sha = commit_sha(workspace, &base_ref)?;
+    let observed_base_sha = commit_sha(workspace, &base_ref)?;
+    if let Some(pinned) = input_string_field(input, "landed_repair_base_sha")
+        && pinned != observed_base_sha
+    {
+        return Err(stopped(
+            pr_number,
+            "base advanced after the landed repair was diagnosed",
+        ));
+    }
+    let target_base_sha = observed_base_sha;
     let published_freshness =
         branch_freshness_against_ref(workspace, &published_head_sha, &base_ref, &target_base_sha)?;
     if published_freshness.commits_ahead == 0 {

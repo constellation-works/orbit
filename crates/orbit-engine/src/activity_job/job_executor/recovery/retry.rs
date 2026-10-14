@@ -195,6 +195,9 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             let committed = bind_recovery_context(step, ctx, &mut bound)
                 .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
                 .and_then(|()| {
+                    if check_repair {
+                        super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)?;
+                    }
                     // A reviewed head's check repair is re-reviewed before
                     // the completion step publishes it.
                     let review_follows = check_repair
