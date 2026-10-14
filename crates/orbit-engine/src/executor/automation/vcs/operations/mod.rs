@@ -2,8 +2,10 @@ mod ci;
 mod dispatch;
 mod input;
 mod pr;
+mod prerequisite;
 mod process;
 mod push_retry;
+mod workflow_dependency;
 
 pub(crate) use dispatch::run;
 pub(super) use process::{
@@ -42,3 +44,6 @@ const LONG_TIMEOUT_MS: u64 = 60_000;
 /// The `refusal` a reviewed merge reports, instead of failing, when its
 /// caller opts in with `report_base_modified`.
 pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
+
+pub(crate) const CI_PREREQUISITE_EVIDENCE: &str = "ci.prerequisite_evidence";
+pub(crate) const CI_PREREQUISITE_OBSERVE: &str = "ci.prerequisite_observe";

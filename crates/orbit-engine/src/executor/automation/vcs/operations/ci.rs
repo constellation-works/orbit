@@ -2,6 +2,10 @@
 //! when a pull request's check fails: which jobs ran on a commit, a failed
 //! job's bounded log, and a rerun of a run's failed jobs.
 //!
+//! Missing-required prerequisite recovery uses the same rerun operation with
+//! typed evidence and a durable owner reservation; this adapter rechecks its
+//! exact identities, source, latest attempt and deadline before mutation.
+//!
 //! The log read is the CI sweep's own (`orbit_tools::github_cli`), so landing
 //! classifies a failure from exactly the excerpt the sweep would file.
 
@@ -13,7 +17,7 @@ use serde_json::{Value, json};
 
 use super::DEFAULT_TIMEOUT_MS;
 use super::input::{required_string, valid_expected_remote_sha};
-use super::process::{execute, execute_with_transient_retry};
+use super::process::execute_with_transient_retry;
 
 /// Largest failed-job log excerpt one read returns.
 const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
@@ -113,7 +117,56 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             "invalid private automation VCS workflow run id '{run_id}'"
         )));
     }
-    let result = execute(
+    if let Some(evidence) = input.get("prerequisite") {
+        let expected: orbit_types::workflow::PrInfrastructureEvidence =
+            serde_json::from_value(evidence.clone())
+                .map_err(|_| super::prerequisite::unreadable("rerun reservation"))?;
+        if expected.run_id.to_string() != run_id {
+            return Err(super::prerequisite::unreadable("rerun run identity"));
+        }
+        let observed = super::prerequisite::observe(
+            &json!({"workspace_path":workspace_path,"evidence":expected}),
+        )?;
+        if observed["attempt"].as_u64() != Some(u64::from(expected.run_attempt))
+            || observed["status"] != "completed"
+            || observed["conclusion"] != "failure"
+        {
+            return Err(super::prerequisite::unreadable(
+                "attempt advanced before mutation",
+            ));
+        }
+        let refreshed = super::prerequisite::evidence(
+            &json!({"workspace_path":workspace_path,"pr":expected.pr_number,"head_sha":expected.head_sha,"head_branch":expected.head_branch,"base_branch":expected.base_branch}),
+        )?;
+        let refreshed: orbit_types::workflow::PrInfrastructureEvidence =
+            serde_json::from_value(refreshed["evidence"].clone())
+                .map_err(|_| super::prerequisite::unreadable("refreshed prerequisite"))?;
+        if refreshed != expected {
+            return Err(super::prerequisite::unreadable(
+                "evidence changed before mutation",
+            ));
+        }
+    }
+    let timeout_ms = if input.get("prerequisite").is_some() {
+        let deadline_ms = input["deadline_ms"]
+            .as_u64()
+            .ok_or_else(|| super::prerequisite::unreadable("rerun completion deadline"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| super::prerequisite::unreadable("rerun clock"))?
+            .as_millis();
+        if now >= u128::from(deadline_ms) {
+            return Err(super::prerequisite::unreadable(
+                "completion deadline expired before mutation",
+            ));
+        }
+        u64::try_from(u128::from(deadline_ms) - now)
+            .map_err(|_| super::prerequisite::unreadable("rerun deadline overflow"))?
+            .min(DEFAULT_TIMEOUT_MS)
+    } else {
+        DEFAULT_TIMEOUT_MS
+    };
+    let result = super::process::run_vcs_process(
         "gh",
         vec![
             "run".to_string(),
@@ -122,9 +175,18 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             "--failed".to_string(),
         ],
         Some(Path::new(workspace_path)),
-        DEFAULT_TIMEOUT_MS,
-        "workflow rerun",
+        timeout_ms,
     )?;
+    if input.get("prerequisite").is_some()
+        && !result.success
+        && !result.timed_out
+        && ["(HTTP 401)", "(HTTP 403)"]
+            .iter()
+            .any(|status| result.stderr.trim_end().ends_with(status))
+    {
+        return Ok(json!({"refusal":"credential_or_permission","diagnostic":result.stderr}));
+    }
+    let result = super::process::succeeded(result, "workflow rerun")?;
     Ok(json!({ "stdout": result.stdout, "stderr": result.stderr }))
 }
 

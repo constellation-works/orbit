@@ -13,6 +13,7 @@ mod body;
 mod complete;
 mod delivery;
 mod head_lag;
+mod infrastructure;
 mod merge;
 mod open;
 mod promote;

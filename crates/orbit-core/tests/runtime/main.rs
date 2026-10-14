@@ -86,6 +86,7 @@ mod job_finalization;
 mod local_route_before_pr;
 mod plugin_inspection;
 mod pr_forge_admission;
+mod pr_infrastructure;
 mod process_isolation;
 mod provider_failure_hold;
 mod provider_limit_admission;

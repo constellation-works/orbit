@@ -959,9 +959,29 @@ existing recovery activities, final validation and push do the repair:
   edits are refused. Explanations are agent evidence for review; they cannot
   grant a repair admission or bypass validation. Required commands, test
   assertions and branch rules must not be weakened.
-- Approvals, permissions, admin rules, unknown status, failures with no
-  readable job log, transient infrastructure failures and optional checks
-  failing alone launch no agent; the watcher stops with the reason.
+- An absent protected check can be recovered without an agent when the forge
+  supplies complete effective classic and ruleset policy (including integration
+  identity), an exact PR/head/base and latest workflow attempt, and source that
+  directly links the missing job to a failed API-read prerequisite. The failed
+  step must show an explicit GitHub HTTP 502, 503 or 504; credential or permission
+  diagnostics veto recovery. The adapter accepts literal job names and a bounded
+  single-axis literal matrix. The workflow blob must match both the event base
+  and exact PR head, proving the merge-ref workflow uses that DAG. It holds on
+  changed definitions, dynamic or ambiguous dependencies,
+  incomplete pages, source, jobs or logs, and additional administrative rules.
+- Before rerunning failed jobs, the owner reserves one infrastructure rerun per
+  repository/PR across all heads, resumes and sibling executions under the primary
+  task's write lock. Its original policy, workflow source, identities and log are
+  retained in history and `auto-fix/<run>/infrastructure-<workflow-run>-original.json`.
+  Replies and observations are retained beside it. This budget is separate from
+  the three agent repairs and draws no crew. A lost reply spends the reservation:
+  subsequent polls and resumed executions observe the current attempt and status
+  without repeating the mutation. A second failure, superseded attempt, changed
+  policy or identity, or absent protected result holds the PR in review. Reads,
+  the mutation and waiting share the existing completion deadline.
+- Approvals, permissions, admin rules, unknown status, unreadable evidence,
+  infrastructure failures outside that narrow prerequisite case and optional
+  checks failing alone launch no agent; the watcher stops with the reason.
 - The repaired candidate passes required validation, is pushed only when the
   remote branch is still at the head the repair was admitted for, and the
   watcher then checks the new head. A head that the review gate already

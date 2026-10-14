@@ -311,6 +311,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         MAX_POLL_INTERVAL_SECONDS,
     )?
     .max(MIN_POLL_INTERVAL_SECONDS);
+    let completion_started = std::time::Instant::now();
     let mut waited_seconds = 0_u64;
     let mut auto_merge_requested = false;
     let mut merge_requested = false;
@@ -357,6 +358,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     }
 
     loop {
+        waited_seconds = waited_seconds.max(completion_started.elapsed().as_secs());
         let status = read_pr_status(host, Path::new(workspace_path), pr_number)?;
         let state = classify_pr_state(&status);
         if matches!(
@@ -382,7 +384,41 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             pin.ensure_pinned_candidate(&status, pr_number)?;
             ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
         }
+        let mut infrastructure_wait = false;
+        if let Some(auto_fix) = auto_fix
+            && matches!(
+                state,
+                PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
+            )
+        {
+            let verdict = blocked_verdict(&status, unsettled_polls);
+            // Outstanding reviews and unreadable rollups cannot authorize a
+            // rerun, including when a reservation already exists.
+            let diagnose = is_blocked_merge_state(&status)
+                && matches!(verdict, BlockedVerdict::RepairChecks(_));
+            if let BlockedVerdict::Stop(reason) = &verdict
+                && (reason.starts_with("review is required")
+                    || reason == "review decision is unavailable"
+                    || reason.contains("unreadable"))
+            {
+                return Err(stopped(pr_number, reason));
+            }
+            infrastructure_wait = matches!(
+                super::infrastructure::recover(
+                    host,
+                    auto_fix,
+                    workspace_path,
+                    pr_number,
+                    &status,
+                    diagnose,
+                    max_wait_seconds
+                        .saturating_sub(waited_seconds.max(completion_started.elapsed().as_secs())),
+                )?,
+                super::infrastructure::InfrastructureStep::Wait
+            );
+        }
         match state {
+            _ if infrastructure_wait => {}
             PrMergeState::Merged if watch_only => {
                 return Ok(Delivery::Watched(json!({
                     "merged": true,
