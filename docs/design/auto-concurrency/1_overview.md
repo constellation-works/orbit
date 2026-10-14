@@ -27,7 +27,8 @@ related_artifacts: [ORB-15757]
 
 The implementation supports forecast-based admission, but that does not
 establish forecast accuracy or readiness to enforce it. The native Mac
-operational report has one paired forecast and measured host point so far;
+operational report from 2026-10-13 at 22:57:50 UTC recorded one paired
+forecast and measured host point;
 that confirms the reporting path, not a useful accuracy cohort or a safe
 threshold. Historical Mac worker minutes without corrected CPU-unit
 provenance remain stored but are excluded from profiles, so the eligible Mac
@@ -138,5 +139,5 @@ alongside the original implementation work; source links follow the current
   starvation signal.
 
 The links above point to the source in the current tree. Task records carry
-the delivery and native operational evidence; the single reported Mac pair
+the delivery and native operational evidence; the Mac pair reported on 2026-10-13
 does not demonstrate forecast accuracy or enforcement readiness.
