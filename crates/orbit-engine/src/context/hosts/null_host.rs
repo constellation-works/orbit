@@ -253,6 +253,16 @@ pub trait NullRuntimeHost: Send + Sync {
             "this host keeps no auto-fix ledger".to_string(),
         ))
     }
+    fn admit_pr_infrastructure(
+        &self,
+        _execution: &str,
+        _task_ids: &[String],
+        _evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        Ok(orbit_types::workflow::PrInfrastructureAdmission::Refused(
+            "this host keeps no infrastructure ledger".into(),
+        ))
+    }
     fn validate_step_recovery_mutation(
         &self,
         _run_id: &str,
@@ -898,6 +908,15 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<PrAutoFixAdmission, OrbitError> {
         NullRuntimeHost::admit_pr_auto_fix(self, request)
     }
+    fn admit_pr_infrastructure(
+        &self,
+        execution: &str,
+        task_ids: &[String],
+        evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        NullRuntimeHost::admit_pr_infrastructure(self, execution, task_ids, evidence)
+    }
+
     fn validate_step_recovery_mutation(
         &self,
         run_id: &str,

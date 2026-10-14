@@ -5,7 +5,9 @@
 //! durable records: the run's frozen `workflow.low_complexity_crews` draw,
 //! which names the crew every repair of the run uses, and the pull request's
 //! ledger in the primary task's history, which bounds and deduplicates the
-//! dispatches across heads, restarts and runs.
+//! dispatches across heads, restarts and runs. Infrastructure prerequisite
+//! recovery has a separate one-rerun history reservation under the same owner
+//! lock; it draws no crew and never dispatches an agent.
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::{PrAutoFixAdmission, PrAutoFixRequest, RuntimeHost, TaskAutomationUpdate};
@@ -127,5 +129,63 @@ impl OrbitRuntime {
             OrbitError::Execution("auto-fix admission did not run under the task lock".to_string())
         })?;
         Ok(PrAutoFixAdmission::Decided(decision))
+    }
+}
+
+impl OrbitRuntime {
+    /// Reserve infrastructure recovery without drawing or invoking a crew.
+    pub(crate) fn admit_pr_infrastructure(
+        &self,
+        execution: &str,
+        task_ids: &[String],
+        evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, decide_pr_infrastructure,
+        };
+        if self.worker_invocation().is_some() {
+            return Ok(PrInfrastructureAdmission::Refused(
+                "infrastructure recovery requires the owning host".into(),
+            ));
+        }
+        let Some(primary) = task_ids.iter().min() else {
+            return Ok(PrInfrastructureAdmission::Refused(
+                "no owning task for the infrastructure ledger".into(),
+            ));
+        };
+        let mut decision = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(primary, &mut || {
+                let history = self.get_task_history(primary)?;
+                let admitted = decide_pr_infrastructure(&history, execution, evidence);
+                if let PrInfrastructureAdmission::Reserved(reservation) = &admitted {
+                    let note = serde_json::to_string(reservation)
+                        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+                    self.apply_task_automation_update(
+                        primary,
+                        TaskAutomationUpdate {
+                            append_history: vec![TaskHistoryEntry {
+                                at: Utc::now(),
+                                by: "system".into(),
+                                event: PR_INFRASTRUCTURE_RESERVED_EVENT.into(),
+                                note: Some(note),
+                                from_status: None,
+                                to_status: None,
+                                operation_id: None,
+                                decision: None,
+                            }],
+                            ..TaskAutomationUpdate::default()
+                        },
+                    )?;
+                }
+                decision = Some(admitted);
+                Ok(())
+            })?;
+        decision.ok_or_else(|| {
+            OrbitError::Execution(
+                "infrastructure admission did not execute under the task lock".into(),
+            )
+        })
     }
 }

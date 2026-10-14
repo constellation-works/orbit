@@ -161,3 +161,10 @@ pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
 
 pub mod automation;
+
+mod pr_infrastructure;
+pub use pr_infrastructure::{
+    PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, PrInfrastructureEvidence,
+    PrInfrastructureReservation, RequiredGate, decide_pr_infrastructure,
+    pr_infrastructure_reservations,
+};

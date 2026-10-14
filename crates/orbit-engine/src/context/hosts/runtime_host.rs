@@ -213,6 +213,19 @@ pub trait RuntimeHost: Send + Sync {
         request: &PrAutoFixRequest,
     ) -> Result<PrAutoFixAdmission, OrbitError>;
 
+    /// Reserve the cumulative infrastructure rerun before mutation, under the
+    /// owner task lock. Hosts without a durable ledger refuse by default.
+    fn admit_pr_infrastructure(
+        &self,
+        _execution: &str,
+        _task_ids: &[String],
+        _evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        Ok(orbit_types::workflow::PrInfrastructureAdmission::Refused(
+            "this host cannot durably reserve infrastructure recovery".into(),
+        ))
+    }
+
     // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 
     /// Record how a reviewed candidate actually landed after a managed

@@ -16,6 +16,9 @@
 //!   reports ([`head_check_evidence`]); a check no job answers, an unreadable
 //!   job or log, or a runner or network failure stops without an agent.
 //!
+//! An optional-only failure first passes the narrowly evidenced prerequisite
+//! recovery in `infrastructure`: one durable rerun, no crew or source repair.
+//!
 //! A `DIRTY` pull request takes the existing conflict path (pinned rebase,
 //! `pr_conflict_recovery`, lease-checked push, or a re-review round for a
 //! reviewed head).
@@ -64,10 +67,10 @@ pub(super) const UNSETTLED_BLOCKED_POLLS: u32 = 4;
 
 /// What an auto-fix run may do, read once per completion step.
 pub(super) struct AutoFix {
-    run_id: String,
+    pub(super) run_id: String,
     /// Current execution and authenticated retry ancestors, never siblings.
     ledger_runs: BTreeSet<String>,
-    task_ids: Vec<String>,
+    pub(super) task_ids: Vec<String>,
     allowed_crews: Value,
     /// `--complete` was granted too: completion may merge once mergeable.
     merge_authorized: bool,
@@ -100,7 +103,7 @@ impl AutoFix {
         !self.merge_authorized
     }
 
-    fn primary_task(&self) -> Result<&str, OrbitError> {
+    pub(super) fn primary_task(&self) -> Result<&str, OrbitError> {
         self.task_ids
             .iter()
             .min()

@@ -69,6 +69,7 @@ use tempfile::TempDir;
 
 mod auto_fix;
 mod flaky;
+mod infrastructure;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
 
@@ -6901,6 +6902,27 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(orbit_engine::PrAutoFixAdmission::Decided(decision))
     }
 
+    fn admit_pr_infrastructure(
+        &self,
+        execution: &str,
+        _task_ids: &[String],
+        evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, decide_pr_infrastructure,
+        };
+        let decision = decide_pr_infrastructure(&self.history(TASK_ID), execution, evidence);
+        if let PrInfrastructureAdmission::Reserved(reservation) = &decision {
+            auto_fix::seed_auto_fix_history(self, PR_INFRASTRUCTURE_RESERVED_EVENT, reservation);
+            fs::write(
+                self.repo.parent().unwrap().join("forge/infra-reserved"),
+                "reserved",
+            )
+            .unwrap();
+        }
+        Ok(decision)
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,
@@ -7441,6 +7463,15 @@ status() {
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        prerequisite)
+            merge_state=BLOCKED
+            rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
+            if [ -f "$forge/rerun-applied" ]; then
+                case "$(cat "$forge/infrastructure")" in
+                    positive|merge|lost|moved|deleted) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+                    clean_missing) merge_state=CLEAN; rollup=$(check success) ;;
+                esac
+            fi ;;
         review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
         dirty) merge_state=DIRTY; rollup=$(check success) ;;
         closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
@@ -7582,6 +7613,44 @@ merge() {
     land "$sha"
     printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$(cat "$forge/merged")"
 }
+
+if [ -f "$forge/infrastructure" ]; then
+    phase=before
+    [ ! -f "$forge/rerun-applied" ] || phase=after
+    if [ -f "$forge/infra-auth403" ] && [ "$1" = api ]; then
+        echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1
+    fi
+    case "$1 ${2:-}" in
+        "api graphql")
+            case "$*" in
+                *requiredStatusChecks*) cat "$forge/infra-policy"; exit ;;
+                *statusCheckRollup*) cat "$forge/infra-rollup-policy"; exit ;;
+            esac ;;
+        "api repos/{owner}/{repo}") cat "$forge/infra-repo"; exit ;;
+        "api repos/{owner}/{repo}/pulls/42") cat "$forge/infra-pr"; exit ;;
+        "api repos/{owner}/{repo}/rules/branches/agent-main?per_page=100") cat "$forge/infra-rules"; exit ;;
+        "api repos/{owner}/{repo}/actions/runs/700") cat "$forge/infra-run-$phase"; exit ;;
+        "api repos/{owner}/{repo}/actions/runs/700/attempts/1/jobs?per_page=100") cat "$forge/infra-jobs"; exit ;;
+        "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
+        "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
+        "run view") cat "$forge/infra-log"; exit ;;
+        "run rerun")
+            [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
+            mode=$(cat "$forge/infrastructure")
+            if [ "$mode" = auth ]; then echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
+            if [ "$mode" != no_apply ]; then touch "$forge/rerun-applied"; fi
+            if [ "$mode" = moved ]; then advance "$(cat "$forge/pr-head")" foreign; fi
+            if [ "$mode" = deleted ]; then git --git-dir="$remote" update-ref -d "refs/heads/$(cat "$forge/pr-head")"; fi
+            if [ "$mode" = lost ] || [ "$mode" = no_apply ]; then echo 'HTTP 503: lost mutation reply' >&2; exit 1; fi
+            exit ;;
+        "api "*)
+            case "$2" in
+                *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
+                *'/actions/runs?head_sha='*) cat "$forge/infra-runs-$phase"; exit ;;
+                *'/contents/'*) cat "$forge/infra-contents"; exit ;;
+            esac ;;
+    esac
+fi
 
 case "$1 ${2:-}" in
     "pr list")

@@ -926,6 +926,15 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::admit_pr_auto_fix(self, request)
     }
 
+    fn admit_pr_infrastructure(
+        &self,
+        execution: &str,
+        task_ids: &[String],
+        evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        OrbitRuntime::admit_pr_infrastructure(self, execution, task_ids, evidence)
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,

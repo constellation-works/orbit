@@ -514,9 +514,26 @@ It cannot be combined with `--pull` or `--stop`.
   `step_failure_recovery`, with the failed head's error signature and log
   excerpt as evidence. Conflicts are repaired by `pr_conflict_recovery` against
   the current base.
-- Approvals, permissions, admin rules, unknown or unreadable status, transient
-  runner or network failures, and optional-check failures alone launch no agent;
-  the leaf stops in `review` with the reason.
+- A missing protected check may trigger one infrastructure rerun without an
+  agent: the forge must read effective classic and ruleset policy with integration
+  identity, bind the PR, repository, base, head, workflow, event and latest attempt,
+  and read complete workflow source, jobs and logs proving a direct dependency on
+  a failed API-read prerequisite with an explicit HTTP 502, 503 or 504. Literal
+  names and a bounded single-axis literal matrix are supported; ambiguous or
+  dynamic dependencies hold. The workflow blob must match the event base and
+  exact PR head, proving the merge-ref DAG; changed definitions hold.
+  Credential/permission diagnostics veto recovery.
+- The owner reserves that rerun in the primary task's durable history under its
+  write lock before mutation, separately from the agent-repair budget. One
+  infrastructure rerun is allowed per repository/PR across heads, resumes and
+  siblings. Original evidence, the reply and current-attempt observations are
+  retained under `auto-fix/<run>/infrastructure-<workflow-run>-*.json`. A lost reply
+  is reconciled by observation, never another mutation. A second failure, missing
+  protected result, superseded attempt, changed policy or identity, or completion
+  deadline expiry holds the PR. Repair-only authority still cannot merge.
+- Approvals, permissions, administrative rules, unknown or unreadable evidence,
+  infrastructure failures outside that narrow prerequisite case, and optional
+  failures alone launch no agent; the leaf stops in `review` with the reason.
 - The repair goes through the ordinary commit, required final validation and
   lease-checked push. The watcher then re-checks the new head, and a reviewed
   head goes back through re-review before it can merge.
