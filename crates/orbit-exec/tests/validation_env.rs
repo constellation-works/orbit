@@ -13,11 +13,14 @@
 //! toolchain locator plus an unrelated secret), or a real `bash`/`zsh` with a
 //! disposable `HOME` whose profile extends PATH.
 
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use orbit_common::test_env::{SupervisorSeam, with_supervision_clock, with_supervisor_seam};
 use orbit_exec::{
     EnvironmentMode, ExecRequest, LoginShell, LoginShellMode, NoSandbox, StdinMode,
     ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment, ValidationPathMode,
@@ -474,7 +477,7 @@ fn interactive_rc_toolchains_are_found_and_can_be_disabled() {
 fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
     for (rc, reason, timeout, stalled_startup) in [
         (
-            "exec /bin/sleep 30",
+            "echo ready > \"$HOME/timeout-ready\"; exec /bin/sleep 30",
             "did not finish within 300ms",
             Duration::from_millis(300),
             false,
@@ -492,7 +495,7 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             false,
         ),
         (
-            "exec /bin/sleep 30",
+            "echo ready > \"$HOME/timeout-ready\"; exec /bin/sleep 30",
             "did not finish within 300ms",
             Duration::from_millis(300),
             true,
@@ -507,36 +510,37 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             ),
             rc,
         );
-        if stalled_startup {
-            // Stop interactive startup before the profile can record its mode.
-            // This models an unscheduled/slow startup without loading the host.
-            let profile = host.home.join(".bash_profile");
-            fs::write(
-                &profile,
-                format!(
-                    "case $- in *i*) exec /bin/sleep 30 ;; esac\n{}",
-                    fs::read_to_string(&profile).unwrap()
-                ),
-            )
-            .unwrap();
-        }
-        // macOS runner startup can exceed 300ms; keep the production probe
-        // timeout for these immediate-exit cases. The hanging case above
-        // continues to exercise the short bounded-timeout path.
+        let stall = if stalled_startup {
+            // Stop before either observed-startup marker. The supervisor still
+            // records the attempted child and kills it at the fixture deadline.
+            "[ \"$1\" = -i ] && { echo ready > \"$HOME/timeout-ready\"; exec /bin/sleep 30; }\n"
+        } else {
+            ""
+        };
+        // Keep real native bash/profile startup in every row. Short deadline
+        // rows advance the existing supervisor clock only after the failing
+        // child reaches its stall; healthy startup does not spend that clock.
         let program = host.home.join("recording-bash");
         executable(
             &program,
-            "#!/bin/sh\n\
+            &format!(
+                "#!/bin/sh\n\
+             {stall}\
              printf '%s %s\\n' \"$$\" \"$1\" >> \"$HOME/shell-entries\"\n\
-             exec /bin/bash \"$@\"\n",
+             exec /bin/bash \"$@\"\n"
+            ),
         );
         let bash = LoginShell::new(&program, timeout);
         let started = Instant::now();
-        let resolved = ValidationEnvironment::resolve(
-            host.launcher_env(),
-            &ValidationEnvPolicy::default(),
-            &bash,
-        );
+        let resolved = if timeout == Duration::from_millis(300) {
+            resolve_with_ready_timeout(&host, &bash)
+        } else {
+            ValidationEnvironment::resolve(
+                host.launcher_env(),
+                &ValidationEnvPolicy::default(),
+                &bash,
+            )
+        };
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "bounded fallback: {rc}"
@@ -563,10 +567,11 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             .lines()
             .map(|line| line.split_whitespace().nth(1).unwrap() == "-i")
             .collect();
-        if timeout == Duration::from_millis(300) {
-            assert!(
-                matches!(entries.as_slice(), [false] | [true, false]),
-                "timed-out startup may not reach even the shell-entry marker: {entries:?}"
+        if stalled_startup {
+            assert_eq!(
+                entries,
+                vec![false],
+                "timeout precedes the shell-entry marker"
             );
         } else {
             assert_eq!(entries, vec![true, false], "interactive then login entry");
@@ -576,13 +581,8 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
         let modes: Vec<bool> = probes.lines().map(|flags| flags.contains('i')).collect();
         if stalled_startup {
             assert_eq!(modes, vec![false], "timeout precedes the profile marker");
-        } else if timeout == Duration::from_millis(300) {
-            assert!(
-                matches!(modes.as_slice(), [false] | [true, false]),
-                "timed-out startup may not reach the profile: {modes:?}"
-            );
         } else {
-            assert_eq!(modes, vec![true, false], "immediate rc failure is observed");
+            assert_eq!(modes, vec![true, false], "rc failure is observed");
         }
         eprintln!(
             "rc={rc:?} stalled_startup={stalled_startup} elapsed={:?} \
@@ -615,6 +615,62 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             "cached fallback must not re-enter the profile or rc"
         );
     }
+}
+
+/// The 300ms budget tests timeout ownership, not how quickly a shared host can
+/// schedule two shell startups. Real processes and real cleanup remain; the
+/// existing thread-scoped clock makes only the interactive stall expire.
+fn resolve_with_ready_timeout(host: &Host, bash: &LoginShell) -> ValidationEnvironment {
+    let origin = Instant::now();
+    let now = Rc::new(Cell::new(origin));
+    let clock = Rc::clone(&now);
+    let children = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&children);
+    let ready = host.home.join("timeout-ready");
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            let mut pids = observed.borrow_mut();
+            if pids.last() != Some(&child.id()) {
+                pids.push(child.id());
+            }
+            if pids.len() == 1 && ready.exists() {
+                now.set(now.get() + Duration::from_millis(300));
+                return Ok(None);
+            }
+            // Keep an independent wall bound even if startup never reaches
+            // readiness. Advancing expires the probe through real cleanup.
+            if origin.elapsed() >= Duration::from_secs(5) {
+                now.set(now.get() + Duration::from_secs(10));
+                return Ok(None);
+            }
+            child.try_wait()
+        })),
+        ..SupervisorSeam::default()
+    };
+    let resolved = with_supervision_clock(
+        move || clock.get(),
+        || {
+            with_supervisor_seam(seam, || {
+                ValidationEnvironment::resolve(
+                    host.launcher_env(),
+                    &ValidationEnvPolicy::default(),
+                    bash,
+                )
+            })
+        },
+    );
+    assert_eq!(children.borrow().len(), 2, "exactly two probes attempted");
+    for &pid in children.borrow().iter() {
+        // Safety: signal zero only checks existence; each child was observed
+        // through its owned handle and must have been reaped before return.
+        let exists = unsafe { libc::kill(i32::try_from(pid).unwrap(), 0) };
+        assert_eq!(exists, -1, "probe {pid} must not survive resolution");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+    resolved
 }
 
 /// A shell that cannot start records both attempts; a cached failure does not

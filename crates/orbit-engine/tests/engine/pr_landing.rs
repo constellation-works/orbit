@@ -7672,7 +7672,7 @@ fn in_fresh_row(parent: &Path, body: impl FnOnce(&Path)) {
     let bin = row.path().join("bin");
     fs::create_dir(&home).unwrap();
     fs::create_dir(&bin).unwrap();
-    fs::write(home.join(".gitconfig"), git_fixture::FILE_ONLY_CONFIG).unwrap();
+    fs::write(home.join(".gitconfig"), git_fixture::ISOLATED_GIT_CONFIG).unwrap();
     let gh = bin.join("gh");
     fs::write(&gh, FAKE_GH.replace("__SANDBOX__", path_str(row.path()))).unwrap();
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();

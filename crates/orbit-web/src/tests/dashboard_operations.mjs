@@ -68,6 +68,8 @@ const memberDiagnostic = {
   } },
 };
 let fullStateError = false;
+let loseAutoResponse = false;
+let refuseAutoFix = false;
 const requests = [];
 const confirmations = [];
 const readinessTasks = [
@@ -97,7 +99,9 @@ globalThis.fetch = async (path, options = {}) => {
       if (body?.name === 'delivery-code-review') legacyConsumerOn = body.enabled;
       else enabled[workspace] = body.enabled;
     }
-    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', auto_concurrency: { mode: body.auto_concurrency || 'shadow', source: body.auto_concurrency ? 'explicit' : 'configured', configured_mode: 'shadow' }, approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
+    if (url.pathname === '/api/workflows/auto' && loseAutoResponse) throw new TypeError('fixture lost response');
+    if (url.pathname === '/api/workflows/auto' && refuseAutoFix) return response({ error: 'fixture repair authority refused', code: 'authorization_denied' }, 403);
+    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', auto_concurrency: { mode: body.auto_concurrency || 'shadow', source: body.auto_concurrency ? 'explicit' : 'configured', configured_mode: 'shadow' }, approve_proposed: body.approve_proposed === true, auto_fix: body.auto_fix === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
@@ -276,7 +280,7 @@ assert(String(approveLabel('approve').title).includes('context files') && String
 const requestsBeforeApprove = requests.filter(r => r.path === '/api/workflows/auto').length;
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const defaultStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
-assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false && !Object.hasOwn(defaultStart.body, 'auto_concurrency'), `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
+assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false && defaultStart.body.auto_fix === false && !Object.hasOwn(defaultStart.body, 'auto_concurrency'), `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
 assert(!confirmations.at(-1).includes('approve qualifying proposed tasks'), 'the confirm dialog stays quiet when approving is off');
 approveOption('approve').checked = true; approveOption('approve').dispatchEvent(new Event('change'));
 assert(approveOption('approve').checked && !approveOption('leave').checked, 'choosing Approve qualifying selects it');
@@ -288,10 +292,48 @@ assert(get('auto-drain-operation-feedback').textContent.includes('Approving qual
 approveOption('leave').checked = true; approveOption('leave').dispatchEvent(new Event('change'));
 assert(approveOption('leave').checked, 'approving returns to off');
 
+// Repair authority is a separate default-off choice, retained across polling.
+const autoFixInput = () => startNode('auto-drain-auto-fix');
+assert(autoFixInput().type === 'checkbox' && !autoFixInput().checked, 'repair defaults off independently of completion and approval');
+autoFixInput().click();
+await fetchAndRenderOperations();
+assert(autoFixInput().checked && completionOption('review').checked && approveOption('leave').checked, 'poll retains repair without raising other authorities');
+const autoPosts = () => requests.filter(r => r.path === '/api/workflows/auto');
+delayPost = true;
+const beforeRepair = autoPosts().length;
+drainButton('Start 2h window').click(); await tick();
+assert(drainButton('Starting…').disabled, 'pending repair launch disables Start');
+drainButton('Starting…').click(); await tick();
+assert(autoPosts().length === beforeRepair + 1, 'pending launch sends exactly one POST');
+delayPost = false; releasePost(); await tick(); await tick(); await tick();
+assert(autoPosts().at(-1).body.auto_fix === true && autoPosts().at(-1).body.complete === false && autoPosts().at(-1).body.approve_proposed === false, 'repair alone posts only repair authority');
+assert(confirmations.at(-1).includes('Auto-fix PR blockers'), 'confirmation names repair authority');
+assert(get('auto-drain-operation-feedback').textContent.includes('Auto-fix PR blockers enabled'), 'receipt exposes the submitted repair authority');
+refuseAutoFix = true;
+const beforeRefusal = autoPosts().length;
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+assert(autoPosts().length === beforeRefusal + 1 && get('auto-drain-operation-feedback').textContent.includes('fixture repair authority refused'), 'a server refusal is visible and not retried');
+refuseAutoFix = false;
+loseAutoResponse = true;
+const beforeLost = autoPosts().length;
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+await fetchAndRenderOperations();
+assert(autoPosts().length === beforeLost + 1, 'lost response and polling never repeat the submission');
+assert(get('auto-drain-operation-feedback').textContent.includes('Submission outcome unknown'), 'lost response asks for reconciliation rather than claiming refusal');
+loseAutoResponse = false;
+controlsAuthorized = false;
+await fetchAndRenderOperations();
+assert(drainButton('Start 2h window').disabled, 'authority lost while repair is selected blocks submission');
+autoFixInput().click();
+assert(!autoFixInput().checked, 'unavailable selected authority can be cleared');
+controlsAuthorized = true;
+await fetchAndRenderOperations();
+
 // Unauthorized sessions and pull replicas get the control disabled with the
 // reason as visible text; Start itself still works without the opt-in.
 controlsAuthorized = false;
 await fetchAndRenderOperations();
+assert(autoFixInput().disabled && get('auto-drain-auto-fix-help').textContent.trim(), 'unauthorized repair is disabled with a visible reason');
 assert(modeInput().disabled && modeInput().value === '', 'unauthorized launch cannot submit an explicit mode');
 assert(approveOption('approve').disabled && !approveOption('leave').disabled, 'an unauthorized session cannot choose to approve');
 assert(drainText().includes('Approving proposed tasks requires an authorized operator session'), 'the unauthorized reason is visible text');
@@ -299,6 +341,7 @@ assert(!drainButton('Start 2h window').disabled, 'an unauthorized session can st
 controlsAuthorized = true;
 replicaWorkspace = true;
 await fetchAndRenderOperations();
+assert(autoFixInput().disabled && get('auto-drain-auto-fix-help').textContent.includes('owner'), 'replica repair is disabled with an owner restriction');
 assert(modeInput().disabled, 'replica launch cannot choose an unsupported override');
 assert(approveOption('approve').disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
 replicaWorkspace = false;

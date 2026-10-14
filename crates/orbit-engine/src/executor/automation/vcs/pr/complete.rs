@@ -325,8 +325,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
     let reviewed_head_sha = reviewed_head_sha(input);
     // [ORB-11982] The candidate this run is authorized to deliver. It moves
-    // exactly once, when the bounded conflict repair below rewrites and
-    // lease-pushes the same branch.
+    // through authenticated repair publications, or when bounded conflict
+    // repair rewrites and lease-pushes the same branch.
     let mut pin = DeliveryPin::from_input(input);
     let mut head_lag = HeadLag::new(max_wait_seconds, poll_interval_seconds);
     let watch_only = auto_fix.is_some_and(AutoFix::watch_only);
@@ -493,13 +493,6 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                                 pr_number,
                                 &status,
                             )?;
-                            super::super::candidate_validate::candidate_validate(
-                                host,
-                                &json!({
-                                    "job_run_id":input["job_run_id"], "completed_task_ids":input["completed_task_ids"],
-                                    "workspace_path":workspace_path, "base_sha":rebased["base_sha"], "base_ref":rebased["base_ref"],
-                                }),
-                            )?;
                             if reviewed_head_sha.is_some() {
                                 return Ok(Delivery::RebasedForReview {
                                     rebased,
@@ -513,6 +506,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                                     "workspace_path":workspace_path, "branch":rebased["head"],
                                     "rewrite_performed":rebased["rewritten"], "rewrite_head_before":rebased["head_sha_before"],
                                     "expected_remote_sha":rebased["remote_sha_before"],
+                                    "lease_remote_sha":rebased["remote_sha_before"],
                                 }),
                             )?;
                             let to = rebased["head_sha"]
@@ -542,6 +536,14 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }
             }
             PrMergeState::Conflict => {
+                // The pin may have adopted a contiguous publication from this
+                // run or an authenticated retry ancestor. Lease that exact
+                // candidate, retaining the original input as provenance. Neither
+                // local HEAD nor a provider observation grants this authority.
+                let mut refresh_input = input.clone();
+                if let Some(candidate) = pin.candidate_sha() {
+                    refresh_input["published_head_sha"] = json!(candidate);
+                }
                 // [ORB-11333] Repairing a conflict rewrites the candidate; a
                 // reviewed head cannot be merged as unreviewed content.
                 // [ORB-13890] The pipeline may ask for the rebase so it can
@@ -559,7 +561,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     }
                     let rebased = rebase_conflicting_pr_branch(
                         host,
-                        input,
+                        &refresh_input,
                         workspace_path,
                         pr_number,
                         &status,
@@ -575,8 +577,13 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 if let Some(auto_fix) = auto_fix {
                     admit_conflict_repair(host, auto_fix, pr_number, &status)?;
                 }
-                let refreshed =
-                    refresh_conflicting_pr_branch(host, input, workspace_path, pr_number, &status)?;
+                let refreshed = refresh_conflicting_pr_branch(
+                    host,
+                    &refresh_input,
+                    workspace_path,
+                    pr_number,
+                    &status,
+                )?;
                 if let (Some(auto_fix), Some(from), Some(to)) =
                     (auto_fix, pin.candidate_sha(), refreshed.as_deref())
                 {
@@ -858,9 +865,8 @@ fn completion_conflict_error(pr_number: &str) -> OrbitError {
 /// other fetch, ownership, authorization, and push failures stay untyped and
 /// cannot launch the conflict-recovery agent.
 ///
-/// Returns the rewritten candidate SHA now published on the branch, which is
-/// the only SHA other than the original published head that completion may
-/// later accept as delivered.
+/// Returns the rewritten candidate SHA now published on the branch, which
+/// completion adopts for subsequent provider readback and delivery checks.
 fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -878,6 +884,7 @@ fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         "rewrite_performed": synced["rewritten"],
         "rewrite_head_before": synced["head_sha_before"],
         "expected_remote_sha": synced["remote_sha_before"],
+        "lease_remote_sha": synced["remote_sha_before"],
     });
     push_batch_changes(host, &push_input)?;
     Ok(synced
@@ -968,7 +975,20 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         "commits_behind": published_freshness.commits_behind,
         "sync_required": true,
     });
-    rebase_pr_branch(host, &rebase_input)
+    let rebased = rebase_pr_branch(host, &rebase_input)?;
+    // Auto-fix can refresh inside the watcher without returning through the
+    // pipeline's validation step. Validate the exact rewrite before either
+    // publication or the independent re-review handoff.
+    if input.get("auto_fix").and_then(Value::as_bool) == Some(true) {
+        super::super::candidate_validate::candidate_validate(
+            host,
+            &json!({
+                "job_run_id":input["job_run_id"], "completed_task_ids":input["completed_task_ids"],
+                "workspace_path":workspace_path, "base_sha":rebased["base_sha"], "base_ref":rebased["base_ref"],
+            }),
+        )?;
+    }
+    Ok(rebased)
 }
 
 fn request_merge<H: RuntimeHost + ?Sized>(

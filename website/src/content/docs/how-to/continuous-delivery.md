@@ -196,7 +196,8 @@ end with some tasks still in the backlog.
 - **Dashboard:** in the **Drain** card, pick a **Window length** (`15m` to
   `8h`), set **Parallel tasks**, and under **When a task finishes** choose
   **Stop at review** or **Mark done**. Optionally choose **Approve qualifying**
-  under **Proposed tasks** (`--approve-proposed`). Click **Start … window** and
+  under **Proposed tasks** (`--approve-proposed`). You can also check
+  **Auto-fix PR blockers** to repair the window's blocked PRs. Click **Start … window** and
   confirm.
   See [Auto-drain](../dashboard/#auto-drain).
 - **Agent:** ask for a window and say how long, how many tasks at once, and
@@ -222,8 +223,11 @@ session. See [Completing work with
 ### Repair blocked pull requests
 
 `--auto-fix` lets the window repair the pull requests it opened when a required
-check fails or the branch conflicts with its base. It is CLI-only and off by
-default:
+check fails or the branch conflicts with its base. It is off by default. In the
+dashboard, check **Auto-fix PR blockers** when starting a window; this requires
+an operator session on the owner machine and is disabled on pull replicas.
+Completion and proposed-task approval remain separate choices. The receipt
+reports whether repair was enabled. From the CLI:
 
 ```bash
 orbit run auto --for 4h --auto-fix

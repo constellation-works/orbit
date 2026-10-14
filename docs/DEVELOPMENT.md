@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-10-10
+last_validated: 2026-10-14
 ---
 
 # Development Reference
@@ -86,6 +86,12 @@ their monotonic wall-clock budgets and recognize no override.
 The engine's integration scenario families retain named assertion bodies under
 bounded isolated child tests. Pristine Git fixture templates save repeated
 initialization; each row receives independent repository files and objects.
+The isolated Git config sets `maintenance.autoDetach` and `gc.autoDetach` to
+false: automatic maintenance still runs with its normal locks and durability,
+but completes before preparation returns and the seed is copied. This prevents
+Git 2.55's detached temporary-lock owner from changing a supposedly pristine
+seed during the copy. Missing source files remain fixture failures with source
+and destination observations.
 Their [scenario mapping](../crates/orbit-engine/tests/engine/SCENARIOS.md) lists
 retired nextest names and their surviving rows. PR landing fixtures use the
 engine's dev-only `with_vcs_retry_wait` hook for fixed delays: poll counts, logical
@@ -264,6 +270,7 @@ Test design (boundary first, unit tests by exception, binary layout) is in [test
 
 ### Test process environment
 
+- **Login-shell fallback fixtures.** `orbit-exec`'s `validation_env` integration target keeps real native bash/profile startup for exit-status and missing-marker fallbacks. Its two 300ms timeout rows use the existing thread-scoped supervisor clock: readiness at the rc stall (or before either startup marker) advances only the failing interactive probe's deadline. Healthy login startup does not consume that fixture clock; an independent five-second wall bound still expires stuck setup through the supervisor. All four rows require successful login tooling, PATH and CARGO_HOME, secret exclusion and cached no-probe reuse. The short rows also verify both attempted children were reaped. The separate failing/hanging and SIGTERM-ignoring shell cases retain real wall-clock timeout coverage. This avoids making successful fallback depend on native startup fitting within 300ms, without changing production deadlines.
 - **Worker binding.** A claimed executor exports `ORBIT_WORKER_CONTEXT_REQUIRED`, so Orbit commands its agent runs refuse to start without a worker binding. A test has none, so any in-process runtime would fail with `managed worker runtime binding unavailable`. `make ci-test-affected` drops the marker; tests of the refusal set it on their own child.
 - **Focused `cargo test` in a managed run.** Every test binary of `orbit-common` and `orbit-core`, and the CLI MCP integration target, calls `orbit_common::isolate_test_process!()`, which clears `INHERITED_AUTHORITY_ENV` before `main`; re-executed children keep what their parent set. Add the macro to any other crate whose tests build a runtime: under `#[cfg(test)]` in the lib and at the top of each integration target. This scrub does not isolate process-wide changes made later by a test: those complete bodies still belong in exact-test children.
 - **Seatbelt on macOS.** Tests that launch Seatbelt-confined children call `orbit_exec::macos_sandbox_test_guard(test_name)`. Only a probe exit 71 with the `sandbox_apply` marker (a nested macOS executor) yields a named `SKIP: sandbox-exec cannot apply a profile: <test>: <reason>` notice, which an implementer's gate may hand off (below); a missing binary, spawn error, timeout or other failure fails the test. macOS host coverage sets `ORBIT_REQUIRE_SANDBOX_EXEC=1`, which makes an apply refusal fail too; a skipped run never satisfies `host_sandbox_test` evidence. Binary-absence tests use `sandbox_exec_available()`.

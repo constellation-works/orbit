@@ -875,32 +875,26 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             let operator = fixture.server(true);
             let before = run_ids(&fixture);
 
-            // A session without the operator capability cannot turn it on, and
-            // is told which governed operation refused it.
-            let denied = error_code(
-                agent.send(
-                    "POST",
-                    &uri,
-                    json!({"for_duration":"1m","approve_proposed":true}),
-                ),
-                403,
-                "authorization_denied",
-            );
-            assert_eq!(denied["operation"], "auto_drain.approve_proposed");
-            assert_eq!(run_ids(&fixture), before, "a denied start persists no run");
-
-            // Anything but a JSON boolean is refused before a run exists.
-            for wrong in [json!("true"), json!(1), json!(null)] {
-                assert_parse_error(
-                    operator.send(
-                        "POST",
-                        &uri,
-                        json!({"for_duration":"1m","approve_proposed":wrong}),
-                    ),
-                    "invalid type",
+            // Each authority is independently guarded before durable effects.
+            for (field, operation) in [
+                ("approve_proposed", "auto_drain.approve_proposed"),
+                ("auto_fix", "auto_drain.auto_fix"),
+            ] {
+                let denied = error_code(
+                    agent.send("POST", &uri, json!({"for_duration":"1m",field:true})),
+                    403,
+                    "authorization_denied",
                 );
+                assert_eq!(denied["operation"], operation);
+                assert_eq!(run_ids(&fixture), before, "a denied start persists no run");
+                for wrong in [json!("true"), json!(1), json!(null)] {
+                    assert_parse_error(
+                        operator.send("POST", &uri, json!({"for_duration":"1m",field:wrong})),
+                        "invalid type",
+                    );
+                }
+                assert_eq!(run_ids(&fixture), before, "a rejected body persists no run");
             }
-            assert_eq!(run_ids(&fixture), before, "a rejected body persists no run");
 
             for wrong in [
                 json!(false),
@@ -986,15 +980,17 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             // an unauthorized session too.
             for body in [
                 json!({"for_duration":"1m"}),
-                json!({"for_duration":"1m","approve_proposed":false}),
+                json!({"for_duration":"1m","approve_proposed":false,"auto_fix":false}),
             ] {
                 let started = json_ok(agent.send("POST", &uri, body));
                 assert_eq!(started["approve_proposed"], false, "{started}");
+                assert_eq!(started["auto_fix"], false, "{started}");
                 assert_eq!(started["auto_concurrency"]["mode"], "shadow");
                 assert_eq!(started["auto_concurrency"]["source"], "configured");
                 assert_eq!(started["completion"], "review", "{started}");
                 let run = run_input(&fixture, &started);
                 assert_ne!(run["approve_proposed"], true, "{run}");
+                assert_ne!(run["auto_fix"], true, "{run}");
             }
 
             let started = json_ok(operator.send(
@@ -1009,6 +1005,34 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             );
             let run = run_input(&fixture, &started);
             assert_eq!(run["approve_proposed"], true, "{run}");
+
+            for (complete, approve) in [(false, false), (true, true)] {
+                let before = run_ids(&fixture);
+                let receipt = json_ok(operator.send(
+                    "POST", &uri,
+                    json!({"for_duration":"1m","auto_fix":true,"complete":complete,"approve_proposed":approve}),
+                ));
+                assert_eq!(receipt["auto_fix"], true);
+                assert_eq!(receipt["approve_proposed"], approve);
+                assert_eq!(
+                    receipt["completion"],
+                    if complete { "done" } else { "review" }
+                );
+                let input = run_input(&fixture, &receipt);
+                assert_eq!(
+                    input["auto_fix"], true,
+                    "the existing coordinator must inherit repair authority"
+                );
+                assert_eq!(
+                    input["completion"].as_str().unwrap_or("review"),
+                    receipt["completion"].as_str().unwrap()
+                );
+                assert_eq!(
+                    input["approve_proposed"].as_bool().unwrap_or(false),
+                    approve
+                );
+                assert_eq!(run_ids(&fixture).len(), before.len() + 1);
+            }
 
             // A long-lived dashboard must capture the host default at submission,
             // rather than keep inheriting the runtime's startup snapshot.
@@ -1055,6 +1079,29 @@ fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
             assert_eq!(operator["controls_authorized"], true, "{operator}");
             assert_eq!(operator["replica"], false, "{operator}");
             assert_eq!(operator["approvals"]["enabled"], false, "{operator}");
+            let replica = Fixture::replica_of("hm_fixture_remote");
+            let server = replica.server(true);
+            let readiness = json_ok(server.get(&uri));
+            assert_eq!(readiness["replica"], true);
+            let before = listed_runs(&replica);
+            let response = server.send(
+                "POST",
+                &format!("/api/workflows/auto?workspace={WS}"),
+                json!({"for_duration":"1m","auto_fix":true}),
+            );
+            assert!(!response.status().is_success());
+            let refused: Value = response.json().unwrap();
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|message| !message.is_empty()),
+                "owner admission must explain its refusal: {refused}"
+            );
+            assert_eq!(
+                listed_runs(&replica),
+                before,
+                "replica refusal must precede run creation"
+            );
         },
     );
 }
