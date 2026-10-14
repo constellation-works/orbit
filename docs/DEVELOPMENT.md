@@ -86,6 +86,12 @@ their monotonic wall-clock budgets and recognize no override.
 The engine's integration scenario families retain named assertion bodies under
 bounded isolated child tests. Pristine Git fixture templates save repeated
 initialization; each row receives independent repository files and objects.
+The isolated Git config sets `maintenance.autoDetach` and `gc.autoDetach` to
+false: automatic maintenance still runs with its normal locks and durability,
+but completes before preparation returns and the seed is copied. This prevents
+Git 2.55's detached temporary-lock owner from changing a supposedly pristine
+seed during the copy. Missing source files remain fixture failures with source
+and destination observations.
 Their [scenario mapping](../crates/orbit-engine/tests/engine/SCENARIOS.md) lists
 retired nextest names and their surviving rows. PR landing fixtures use the
 engine's dev-only `with_vcs_retry_wait` hook for fixed delays: poll counts, logical

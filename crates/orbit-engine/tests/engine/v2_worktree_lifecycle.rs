@@ -3221,7 +3221,7 @@ fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
             for (index, settings) in cases.iter().enumerate() {
                 // This HOME belongs only to the isolated child. Each case
                 // starts without any settings from the preceding case.
-                fs::write(&global_config, super::git_fixture::FILE_ONLY_CONFIG).unwrap();
+                fs::write(&global_config, super::git_fixture::ISOLATED_GIT_CONFIG).unwrap();
                 for (key, value) in *settings {
                     git(&fixture.repo, &["config", "--global", key, value]);
                     assert_eq!(
@@ -3708,7 +3708,64 @@ fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts
         "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
         || {
             const FAILURES: usize = 8;
+            let trace = TempDir::new().unwrap();
+            let events = trace.path().join("git-events.jsonl");
+            git(
+                trace.path(),
+                &[
+                    "config",
+                    "--global",
+                    "trace2.eventTarget",
+                    path_str(&events),
+                ],
+            );
+            let earlier = Fixture::new();
+            fs::write(earlier.repo.join("README.md"), "earlier row\n").unwrap();
+            git(&earlier.repo, &["config", "user.name", "Earlier Row"]);
             let fixture = Fixture::new();
+            let events: Vec<Value> = fs::read_to_string(&events)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert!(
+                events.iter().any(|event| {
+                    event["event"] == "child_start"
+                        && event["argv"]
+                            .as_array()
+                            .is_some_and(|args| args.iter().any(|arg| arg == "maintenance"))
+                }),
+                "seed preparation must still execute native automatic Git maintenance"
+            );
+            assert!(
+                !events.iter().any(|event| event["event"] == "region_enter"
+                    && event["category"] == "maintenance"
+                    && event["label"] == "detach"),
+                "pristine seed maintenance must finish before copying: a detached daemon can remove its maintenance.lock during fs::copy"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("README.md")).unwrap(),
+                "base\n"
+            );
+            assert_eq!(git(&fixture.repo, &["config", "user.name"]), "Orbit Test");
+            assert_eq!(
+                git(&fixture.repo, &["remote", "get-url", "origin"]),
+                path_str(&fixture.root.path().join("origin.git")),
+                "each row's remote configuration must name its own bare repository"
+            );
+            let head = git(&earlier.repo, &["rev-parse", "HEAD"]);
+            let object = earlier
+                .repo
+                .join(".git/objects")
+                .join(&head[..2])
+                .join(&head[2..]);
+            // Git can make loose objects read-only. Corrupt this row's file
+            // deliberately to detect shared inodes, rather than just unlinking it.
+            fs::set_permissions(&object, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(object, b"damaged earlier row object").unwrap();
+            git(&fixture.repo, &["cat-file", "-e", "HEAD"]);
+            git(&fixture.repo, &["fsck", "--strict"]);
+            drop(earlier);
             let host = LifecycleHost::new(&fixture.repo);
             host.add_task("T-REPEAT", TaskStatus::Backlog);
             let setup = action(

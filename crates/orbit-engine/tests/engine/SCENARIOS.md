@@ -7,6 +7,13 @@ cover the original table. Each family still runs in an isolated child with a
 bounded supervisor; mutable repositories, hosts and audit stores remain separate.
 Pristine Git fixture templates share initialization within a family process,
 then copy independent files and Git objects for each scenario.
+The isolated Git configuration keeps automatic maintenance and GC in the
+foreground. Git 2.55 hands temporary locks to detached maintenance children,
+so waiting for only the preparing command can leave a seed changing while it
+is copied. Copies still refuse any missing or non-regular source file.
+The repeated-dirty recovery row observes native maintenance through Trace2,
+rejects detached seed preparation, and checks independent working files,
+repository configuration and Git objects before its eight recovery attempts.
 
 The PR landing fixtures inject only fixed retry waits through the dev-only
 `test-support` hook. Poll limits, requested delays, remote identity checks, exact
