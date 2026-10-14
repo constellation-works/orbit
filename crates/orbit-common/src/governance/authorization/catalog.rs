@@ -124,6 +124,14 @@ pub const DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED: GovernedOperation = GovernedOpe
     rationale: "opting in lets every pass of the window approve qualifying proposed tasks into the backlog, including ones filed after submission",
 };
 
+/// Opt-in PR blocker repairs for a dashboard-submitted owner auto-drain.
+pub const DASHBOARD_AUTO_DRAIN_AUTO_FIX: GovernedOperation = GovernedOperation {
+    id: "auto_drain.auto_fix",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "repair authority lets the window run agents to fix failed required checks and merge conflicts on its PRs; completion authority remains separate",
+};
+
 /// Choose a forecast policy for one dashboard-submitted local drain.
 pub const DASHBOARD_AUTO_DRAIN_MODE: GovernedOperation = GovernedOperation {
     id: "auto_drain.auto_concurrency",
@@ -528,6 +536,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_DRAIN_COMPLETE,
     DASHBOARD_AUTO_DRAIN_MODE,
     DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+    DASHBOARD_AUTO_DRAIN_AUTO_FIX,
     DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,

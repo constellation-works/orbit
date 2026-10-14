@@ -246,6 +246,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                             json!({"for_duration":"1m","complete":false}),
                             json!({"for_duration":"1m","complete":true}),
                             json!({"for_duration":"1m","approve_proposed":true}),
+                            json!({"for_duration":"1m","auto_fix":true}),
                         ]
                     } else {
                         vec![body(path)]
@@ -260,7 +261,10 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                             path == "/workflows/auto" && probe_body["complete"] == true;
                         let approve_auto =
                             path == "/workflows/auto" && probe_body["approve_proposed"] == true;
-                        let operator_only = completion_resume || completion_auto || approve_auto;
+                        let repair_auto =
+                            path == "/workflows/auto" && probe_body["auto_fix"] == true;
+                        let operator_only =
+                            completion_resume || completion_auto || approve_auto || repair_auto;
                         if ORDINARY_WRITES.contains(&(method, path)) && !operator_only {
                             assert_ne!(
                                 payload["code"], "authorization_denied",
@@ -277,6 +281,9 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                             );
                             if completion_resume || completion_auto {
                                 assert_eq!(payload["operation"], "auto_drain.complete");
+                            }
+                            if repair_auto {
+                                assert_eq!(payload["operation"], "auto_drain.auto_fix");
                             }
                             if approve_auto {
                                 assert_eq!(payload["operation"], "auto_drain.approve_proposed");

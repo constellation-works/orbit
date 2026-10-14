@@ -265,13 +265,16 @@ The card shows:
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
 | **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. **Mark done** needs an operator session. |
 | **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
+| **Auto-fix PR blockers** | Off by default. Repairs failed required checks and merge conflicts on the window's own PRs through the existing watcher and repair ledger. Needs an operator session on the owner machine; disabled on pull replicas with a visible reason. It never grants merging or proposed-task approval; merging still requires **Mark done**. |
 | **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Send pending results** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 
 Without operator capability you can still start a window that stops at
-review; **Mark done** and **Approve qualifying** stay disabled and say why. Nothing is reserved or
-started until you click **Start**. Results appear in the card's status line.
+review; **Mark done**, **Approve qualifying**, and **Auto-fix PR blockers** stay disabled and say why. Nothing is reserved or
+started until you click **Start**. Results appear in the card's status line,
+including whether auto-fix was enabled. If the submission response is lost, check
+the window and run history before starting again; the browser does not retry it.
 
 On a replica, a live pull drain counts as a window. The header reads **Pull
 drain**, and the **Stop** confirmation says admitted leaves stay claimed by
@@ -616,6 +619,9 @@ tasks done, resuming requires operator capability and otherwise returns
 `403` with `code: authorization_denied` and `operation: auto_drain.complete`.
 Starting a window with `approve_proposed` set without operator capability
 returns the same `403` with `operation: auto_drain.approve_proposed`.
+Starting with `auto_fix: true` requires operator capability too and returns
+`operation: auto_drain.auto_fix` on refusal. Owner admission and workspace claims
+are checked by the shared drain submission path before a run is persisted.
 **Replay run** requires operator capability for any source run.
 
 ## Troubleshooting
