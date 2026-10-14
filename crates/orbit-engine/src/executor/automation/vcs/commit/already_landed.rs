@@ -54,9 +54,11 @@ pub(super) fn verify<H: RuntimeHost + ?Sized>(
             "worktree is no longer clean; deliver or reconcile the pending changes",
         ));
     }
-    let artifacts = host.get_task_artifacts(&task.id)?;
-    let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
-    if !has(ARTIFACT) && !has(no_diff::ARTIFACT) {
+    if host.get_task_artifact(&task.id, ARTIFACT)?.is_none()
+        && host
+            .get_task_artifact(&task.id, no_diff::ARTIFACT)?
+            .is_none()
+    {
         return Err(refused(format!(
             "missing task artifact {ARTIFACT} or {no_diff}; for a task that correctly changed nothing, attach {no_diff} naming this task, its run or retry lineage, the pinned HEAD as tested_head, a reason, and zero-exit validation logs carrying run_id, tested_head, command, exit_code and output; for work a covering commit delivered, attach {ARTIFACT} with structured landing proof and required validation logs",
             no_diff = no_diff::ARTIFACT,
@@ -74,8 +76,7 @@ fn verify_at_revision<H: RuntimeHost + ?Sized>(
     run_id: &str,
     tested_head: &str,
 ) -> Result<Value, OrbitError> {
-    let artifacts = host.get_task_artifacts(&task.id)?;
-    let report = artifact(&artifacts, ARTIFACT)?;
+    let report = artifact(host, &task.id, ARTIFACT)?;
     let evidence: Evidence = serde_json::from_slice(&report.content).map_err(|error| {
         let diagnostic = error.to_string();
         let hints = shape_hints(&diagnostic, &report.content);
@@ -121,7 +122,7 @@ fn verify_at_revision<H: RuntimeHost + ?Sized>(
         ));
     }
     verify_covering_scope(task, workspace, &covering, &head)?;
-    let validation_provenance = verify_checks(&evidence, task, &artifacts)?;
+    let validation_provenance = verify_checks(host, &evidence, task)?;
 
     Ok(json!({
         "phase": "commit",
@@ -298,10 +299,10 @@ pub(super) fn run_in_lineage<H: RuntimeHost + ?Sized>(
     Ok(false)
 }
 
-fn verify_checks(
+fn verify_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
     evidence: &Evidence,
     task: &Task,
-    artifacts: &[TaskArtifact],
 ) -> Result<Vec<Value>, OrbitError> {
     let commands: BTreeSet<_> = evidence.required_commands.iter().collect();
     if commands.is_empty()
@@ -340,7 +341,7 @@ fn verify_checks(
                 ));
             }
         }
-        let log = artifact(artifacts, &check.log_artifact)?;
+        let log = artifact(host, &task.id, &check.log_artifact)?;
         let provenance: Value = serde_json::from_slice(&log.content).map_err(|error| {
             refused(format!(
                 "invalid validation log {}: {error}",
@@ -393,8 +394,12 @@ fn log_has_provenance(provenance: &Value, run_id: &str, tested_head: &str, comma
         && provenance["output"].as_str().is_some()
 }
 
-fn artifact<'a>(artifacts: &'a [TaskArtifact], path: &str) -> Result<&'a TaskArtifact, OrbitError> {
-    artifacts.iter().find(|artifact| artifact.path == path)
+fn artifact<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    path: &str,
+) -> Result<TaskArtifact, OrbitError> {
+    host.get_task_artifact(task_id, path)?
         .ok_or_else(|| refused(format!("missing task artifact {path}; attach structured landing proof and required validation logs")))
 }
 

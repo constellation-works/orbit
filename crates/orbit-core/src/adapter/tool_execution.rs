@@ -52,10 +52,10 @@ impl OrbitRuntime {
         super::tool_host::worker_tools::execute(
             self,
             session,
-            orbit_tools::OrbitBuiltinAction::Task(if name == "orbit.task.update" {
-                orbit_common::governance::task::TaskVerb::Update
-            } else {
-                orbit_common::governance::task::TaskVerb::Show
+            orbit_tools::OrbitBuiltinAction::Task(match name {
+                "orbit.task.update" => orbit_common::governance::task::TaskVerb::Update,
+                "orbit.task.artifact.get" => orbit_common::governance::task::TaskVerb::ArtifactGet,
+                _ => orbit_common::governance::task::TaskVerb::Show,
             }),
             input,
             None,

@@ -4,8 +4,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskStatus,
-    artifact_presentation, is_valid_orb_task_id, task_base_json,
+    ArtifactPresentation, Task, TaskArtifact, TaskStatus, artifact_presentation,
+    is_valid_orb_task_id, task_base_json,
 };
 use serde_json::{Map, Value};
 
@@ -166,14 +166,7 @@ pub(super) fn serialize_task_artifact_read(
     artifact: &TaskArtifact,
 ) -> Result<Value, OrbitError> {
     let size = artifact.content.len();
-    if size as u64 > MAX_TASK_ARTIFACT_CONTENT_BYTES {
-        return Err(OrbitError::InvalidInput(format!(
-            "artifact '{}' on task '{task_id}' is {size} bytes, over the \
-             {MAX_TASK_ARTIFACT_CONTENT_BYTES} byte inline read limit; download it from \
-             /api/tasks/{task_id}/artifacts/{} instead",
-            artifact.path, artifact.path
-        )));
-    }
+    artifact.validate_inline_size(task_id)?;
 
     let presentation = artifact_presentation(&artifact.media_type, &artifact.content);
     let mut object = Map::new();

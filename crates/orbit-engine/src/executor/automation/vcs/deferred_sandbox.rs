@@ -206,11 +206,7 @@ fn kept<H: RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
 ) -> Result<Option<DeferredSandboxArtifact>, OrbitError> {
-    let Some(artifact) = host
-        .get_task_artifacts(task_id)?
-        .into_iter()
-        .find(|artifact| artifact.path == DEFERRED_SANDBOX_ARTIFACT)
-    else {
+    let Some(artifact) = host.get_task_artifact(task_id, DEFERRED_SANDBOX_ARTIFACT)? else {
         return Ok(None);
     };
     serde_json::from_slice::<DeferredSandboxArtifact>(&artifact.content)

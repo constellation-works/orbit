@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-11
+last_updated: 2026-10-14
 last_validated: 2026-10-13
 status: Draft
 feature: distributed-drain
@@ -1043,6 +1043,16 @@ binding apart from tool arguments, and bound sessions and their proxies lose ope
 - Only task activity/automation writes cross the owner seam (run identity checked first); Git and
   worktree checks stay local. Generic updates cannot promote or complete a task. Source-file
   artifacts are materialized on the executor and routed path-free.
+- Clean-tree verification reads only its named checkpoint, structured no-diff or
+  already-landed report, and declared validation logs through the existing artifact
+  read mechanism. Internal host reads use `orbit.task.artifact.get` under the active
+  claim and bound task, sharing path ownership and the 1 MiB inline limit with the
+  public tool. Missing or oversized required evidence is refused; bytes are never
+  truncated or replaced by manifest metadata. Checkpoint digests, task/run/base
+  identity, live tags and clean-tree checks still govern acceptance. Unrelated
+  reports and media remain stored without entering the verification response.
+  Named reads share lock-busy retries; an unknown transport outcome remains an
+  error and grants no permission to hand off.
 - Evidence, document and friction writes share one SQLite commit with the claim comparison and
   mutation receipt. Omitted `during_task` means the bound task; conflicting arguments refuse;
   canonical digests (excluding friction timestamps) deduplicate retries.

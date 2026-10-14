@@ -81,6 +81,24 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
             .unwrap_or_default())
     }
 
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        let artifact = self
+            .artifacts
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact.path == path))
+            .cloned();
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(task_id)?;
+        }
+        Ok(artifact)
+    }
+
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         Ok(self
             .artifacts

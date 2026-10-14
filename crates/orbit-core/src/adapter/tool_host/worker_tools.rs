@@ -174,6 +174,30 @@ pub(crate) fn execute(
     }
     if action == OrbitBuiltinAction::Task(TaskVerb::ArtifactGet) {
         require_active_claim(runtime, session)?;
+        if let Some(projection) = input.get("_worker_read").and_then(Value::as_str) {
+            if projection != "artifact" {
+                return Err(OrbitError::InvalidInput(
+                    "unknown worker artifact read projection".into(),
+                ));
+            }
+            if input.get("id").and_then(Value::as_str) != Some(binding.task_id.as_str()) {
+                return Err(OrbitError::PolicyDenied(
+                    "worker task binding mismatch".into(),
+                ));
+            }
+            let mut request = input.clone();
+            if let Some(object) = request.as_object_mut() {
+                object.remove("_worker_read");
+            }
+            let parsed = TaskVerb::ArtifactGet.spec().parse_input(request)?;
+            let artifact = runtime.get_task_artifact_inline(
+                &parsed.required_string("id")?,
+                &parsed.required_string("path")?,
+            )?;
+            return serde_json::to_value(artifact)
+                .map(Some)
+                .map_err(|error| OrbitError::Store(error.to_string()));
+        }
         return Ok(None);
     }
     let (mutation, friction_tag_substitutions) = match action {

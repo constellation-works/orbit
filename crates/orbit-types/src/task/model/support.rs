@@ -54,6 +54,20 @@ impl TaskArtifact {
         }
     }
 
+    /// Refuse oversized inline evidence rather than returning partial bytes.
+    pub fn validate_inline_size(&self, task_id: &str) -> Result<(), TaskError> {
+        let size = self.content.len();
+        if size as u64 > MAX_TASK_ARTIFACT_CONTENT_BYTES {
+            return Err(TaskError::Invalid(format!(
+                "artifact '{}' on task '{task_id}' is {size} bytes, over the \
+                 {MAX_TASK_ARTIFACT_CONTENT_BYTES} byte inline read limit; download it from \
+                 /api/tasks/{task_id}/artifacts/{} instead",
+                self.path, self.path
+            )));
+        }
+        Ok(())
+    }
+
     pub fn text_content(&self) -> Option<&str> {
         std::str::from_utf8(&self.content).ok()
     }

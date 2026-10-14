@@ -59,8 +59,7 @@ fn verify_at_revision<H: RuntimeHost + ?Sized>(
     run_id: &str,
     tested_head: &str,
 ) -> Result<Value, OrbitError> {
-    let artifacts = host.get_task_artifacts(&task.id)?;
-    let report = artifact(&artifacts, ARTIFACT)?;
+    let report = artifact(host, &task.id, ARTIFACT)?;
     let evidence: NoDiffEvidence = serde_json::from_slice(&report.content)
         .map_err(|error| refused(format!("invalid {ARTIFACT}: {error}")))?;
     if evidence.schema_version != 1 || evidence.task_id != task.id {
@@ -78,7 +77,7 @@ fn verify_at_revision<H: RuntimeHost + ?Sized>(
     if head != tested_head {
         return Err(refused("tested HEAD is not the owner-observed base"));
     }
-    let validation_provenance = verify_checks(&evidence, &artifacts)?;
+    let validation_provenance = verify_checks(host, &task.id, &evidence)?;
 
     Ok(json!({
         "phase": "commit",
@@ -135,9 +134,10 @@ fn compare_checkpoint(checkpoint: &Value, checked: &Value) -> Result<(), OrbitEr
     Ok(())
 }
 
-fn verify_checks(
+fn verify_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
     evidence: &NoDiffEvidence,
-    artifacts: &[TaskArtifact],
 ) -> Result<Vec<Value>, OrbitError> {
     if evidence.validation.is_empty() {
         return Err(refused("list the validation this run executed"));
@@ -154,7 +154,7 @@ fn verify_checks(
                 check.command, check.exit_code
             )));
         }
-        let log = artifact(artifacts, &check.log_artifact)?;
+        let log = artifact(host, task_id, &check.log_artifact)?;
         let provenance: Value = serde_json::from_slice(&log.content).map_err(|error| {
             refused(format!(
                 "invalid validation log {}: {error}",
@@ -176,10 +176,12 @@ fn verify_checks(
     Ok(logs)
 }
 
-fn artifact<'a>(artifacts: &'a [TaskArtifact], path: &str) -> Result<&'a TaskArtifact, OrbitError> {
-    artifacts
-        .iter()
-        .find(|artifact| artifact.path == path)
+fn artifact<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    path: &str,
+) -> Result<TaskArtifact, OrbitError> {
+    host.get_task_artifact(task_id, path)?
         .ok_or_else(|| refused(format!("missing task artifact {path}")))
 }
 

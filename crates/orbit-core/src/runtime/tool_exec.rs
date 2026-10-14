@@ -66,7 +66,8 @@ impl OrbitRuntime {
             return self.route_worker_tool(name, input, tool_context.session_context);
         }
 
-        if ((name == "orbit.task.show" && input.get("_worker_read").is_some())
+        if ((matches!(name, "orbit.task.show" | "orbit.task.artifact.get")
+            && input.get("_worker_read").is_some())
             || (name == "orbit.task.update" && input.get("_worker_update").is_some()))
             && let Some(output) =
                 self.execute_worker_projection(name, &input, &tool_context.session_context)?

@@ -44,12 +44,14 @@ pub(super) fn artifact_get(
     // Resolve the task first so an unknown or foreign id fails as not-found
     // before any artifact lookup reports on a task the caller cannot see.
     let task = runtime.get_task(&id)?;
-    let artifact = runtime.get_task_artifact(&task.id, &path)?.ok_or_else(|| {
-        OrbitError::not_found(
-            orbit_common::NotFoundKind::Artifact,
-            format!("{}/{path}", task.id),
-        )
-    })?;
+    let artifact = runtime
+        .get_task_artifact_inline(&task.id, &path)?
+        .ok_or_else(|| {
+            OrbitError::not_found(
+                orbit_common::NotFoundKind::Artifact,
+                format!("{}/{path}", task.id),
+            )
+        })?;
     serialize_task_artifact_read(&task.id, &artifact)
 }
 

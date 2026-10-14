@@ -163,6 +163,60 @@ impl RedCheck {
     }
 }
 
+/// Preserve the real owner/claim boundary while enforcing the production
+/// MCP line ceiling without allocating a giant serialized response.
+struct EvidenceOwner {
+    owner: ToOwner,
+    reads: Arc<Mutex<Vec<(String, Value)>>>,
+    lose_read: Arc<Mutex<bool>>,
+}
+
+impl OwnerCoordinator for EvidenceOwner {
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.reads
+            .lock()
+            .unwrap()
+            .push((name.into(), input.clone()));
+        let answer = self.owner.call(name, input, session)?;
+        if name == "orbit.task.artifact.get" && std::mem::take(&mut *self.lose_read.lock().unwrap())
+        {
+            return Err(OrbitError::OutcomeUnknown {
+                mcp_call_id: "lost-evidence-read".into(),
+                message: "reply lost after owner read the named artifact".into(),
+            });
+        }
+        struct Count(usize);
+        impl std::io::Write for Count {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut count = Count(0);
+        serde_json::to_writer(&mut count, &answer).unwrap();
+        // Ordinary output alone suffices to overflow; MCP also mirrors it
+        // into a text block. Never raise the production 64 MiB ceiling.
+        if count.0 > 67_108_864 {
+            return Err(OrbitError::OutcomeUnknown {
+                mcp_call_id: format!("oversize-{name}"),
+                message: format!(
+                    "owner reply exceeds MCP 67108864-byte line ceiling ({} bytes)",
+                    count.0
+                ),
+            });
+        }
+        Ok(answer)
+    }
+}
+
 struct CleanLeaf {
     pair: Pair,
     gate: Option<Gate>,
@@ -172,6 +226,8 @@ struct CleanLeaf {
     bound: OrbitRuntime,
     base: String,
     input: Value,
+    evidence_reads: Arc<Mutex<Vec<(String, Value)>>>,
+    lose_evidence_read: Arc<Mutex<bool>>,
 }
 
 impl CleanLeaf {
@@ -368,6 +424,8 @@ impl CleanLeaf {
         std::fs::write(follower.join(".orbit/config.toml"), &config).unwrap();
         let record = pair.admission(&leaf);
         let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+        let evidence_reads = Arc::new(Mutex::new(Vec::new()));
+        let lose_evidence_read = Arc::new(Mutex::new(false));
         let bound =
             OrbitRuntime::from_roots(&pair.follower.global_root(), &follower.join(".orbit"))
                 .unwrap()
@@ -384,7 +442,11 @@ impl CleanLeaf {
                         execution: claim.executed_on.clone(),
                         bound_run_id: leaf.clone(),
                     },
-                    Arc::new(ToOwner(pair.wire.owner.clone())),
+                    Arc::new(EvidenceOwner {
+                        owner: ToOwner(pair.wire.owner.clone()),
+                        reads: evidence_reads.clone(),
+                        lose_read: lose_evidence_read.clone(),
+                    }),
                 )
                 .unwrap();
         let bound = calm_host(bound);
@@ -404,6 +466,8 @@ impl CleanLeaf {
             bound,
             base,
             input,
+            evidence_reads,
+            lose_evidence_read,
         };
         if !report {
             return fixture;
@@ -455,6 +519,85 @@ impl CleanLeaf {
             .as_array_mut()
             .unwrap();
         artifacts.push(json!({"path": path, "source_path": format!(".orbit/tmp/{path}")}));
+    }
+
+    /// Real stored media sufficient to exceed the old numeric-byte response.
+    /// Attaching once avoids repeated manifest rewrites in the regression.
+    fn retain_large_unrelated_evidence(&self) -> Vec<TaskArtifact> {
+        let artifacts = (0..17)
+            .map(|index| TaskArtifact {
+                path: format!("qa/media-{index}.bin"),
+                media_type: "application/octet-stream".into(),
+                content: vec![255; 1_048_576],
+                created_by: None,
+            })
+            .collect::<Vec<_>>();
+        let binding = self.bound.worker_invocation().unwrap();
+        self.pair
+            .wire
+            .owner
+            .mutate_execution_claim(
+                Some(&ClaimInvocation::trusted_worker(
+                    self.task.clone(),
+                    binding.claim_id.clone(),
+                    FOLLOWER.into(),
+                    Some(ClaimRun {
+                        machine_id: FOLLOWER.into(),
+                        run_id: self.leaf.clone(),
+                    }),
+                )),
+                "qa-evidence",
+                &ClaimMutation::Evidence(ClaimEvidence {
+                    artifacts: artifacts.clone(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let error = RuntimeHost::get_task_artifacts(&self.bound, &self.task).expect_err(
+            "ORB-16120: former bulk evidence read must overflow the unchanged MCP ceiling",
+        );
+        assert!(error.to_string().contains("67108864"), "{error}");
+        self.evidence_reads.lock().unwrap().clear();
+        artifacts
+    }
+
+    fn assert_named_reads_and_retained_evidence(&self, artifacts: &[TaskArtifact]) {
+        let reads = self.evidence_reads.lock().unwrap();
+        assert!(
+            !reads
+                .iter()
+                .any(|(_, input)| input["_worker_read"] == "artifacts"),
+            "ORB-16120: verification must not request unrelated evidence: {reads:?}"
+        );
+        assert!(
+            reads
+                .iter()
+                .any(|(name, input)| name == "orbit.task.artifact.get"
+                    && input["path"]
+                        .as_str()
+                        .is_some_and(|path| path.starts_with("no-diff-handoff/"))),
+            "checkpoint bytes must cross the real authorized owner boundary: {reads:?}"
+        );
+        assert!(
+            !reads
+                .iter()
+                .any(|(name, input)| name == "orbit.task.artifact.get"
+                    && input["path"]
+                        .as_str()
+                        .is_some_and(|path| path.starts_with("qa/"))),
+            "verification must never request unrelated media payloads"
+        );
+        let retained = self.pair.wire.owner.get_task_artifacts(&self.task).unwrap();
+        for artifact in artifacts {
+            let kept = retained
+                .iter()
+                .find(|kept| kept.path == artifact.path)
+                .unwrap();
+            assert_eq!(
+                kept.content, artifact.content,
+                "unrelated evidence must remain intact"
+            );
+        }
     }
 
     fn attach(&self, path: &str, value: Value) {
@@ -637,7 +780,13 @@ fn verified_no_diff_and_already_satisfied_base_complete_without_a_pr() {
         (false, "task_claimed_local_pipeline"),
     ] {
         let fixture = CleanLeaf::new(already_landed, "done");
+        let unrelated = if job == "task_claimed_pr_pipeline" {
+            fixture.retain_large_unrelated_evidence()
+        } else {
+            Vec::new()
+        };
         let handoff = fixture.run_clean_pipeline(job);
+        fixture.assert_named_reads_and_retained_evidence(&unrelated);
         let settled = fixture
             .settle(&handoff)
             .expect("owner independently verifies the report");
@@ -1024,11 +1173,17 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
     ] {
         let check = RedCheck::new();
         let mut fixture = CleanLeaf::tagged_requiring(completion, &check);
+        let unrelated = if completion == "done" && job == "task_claimed_pr_pipeline" {
+            fixture.retain_large_unrelated_evidence()
+        } else {
+            Vec::new()
+        };
         fixture.hand_off_deferral();
         fixture.attach("automation-coverage.json", json!({"findings": []}));
         let outcome = fixture.execute_clean_pipeline(job).unwrap();
         assert!(outcome.success, "{job}: {outcome:#?}");
         // The same matrix also pins the original ORB-14791 clean-review route.
+        fixture.assert_named_reads_and_retained_evidence(&unrelated);
         let committed = &outcome.pipeline["commit"];
         assert_eq!(committed["decision"], "skipped_no_diff_expected", "{job}");
         assert_eq!(committed["base_sha"], fixture.base, "{job}");
@@ -1417,9 +1572,40 @@ fn no_diff_retains_owner_completion_authority() {
 }
 
 fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_without_blocking() {
-    for changed in ["report", "log", "rewritten_base", "required_check"] {
-        let fixture = CleanLeaf::new(false, "done");
+    for changed in [
+        "report",
+        "log",
+        "rewritten_base",
+        "required_check",
+        "missing_log",
+        "oversize_log",
+        "wrong_log_run",
+        "missing_checkpoint",
+        "wrong_task",
+        "wrong_run",
+        "checkpoint_base",
+        "removed_tag",
+        "oversize_checkpoint",
+        "truncated_checkpoint",
+        "foreign_path",
+    ] {
+        let tagged = !matches!(
+            changed,
+            "report"
+                | "log"
+                | "rewritten_base"
+                | "required_check"
+                | "missing_log"
+                | "oversize_log"
+                | "wrong_log_run"
+        );
+        let fixture = if tagged {
+            CleanLeaf::review_only("done")
+        } else {
+            CleanLeaf::new(false, "done")
+        };
         let mut handoff = fixture.prepare_handoff();
+        let mut restore_blob = None;
         match changed {
             "report" => {
                 let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery else {
@@ -1448,7 +1634,123 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
                     &["push", "-q", "-f", "origin", "HEAD:refs/heads/main"],
                 );
             }
+            "missing_log" => {
+                let artifact = fixture
+                    .pair
+                    .wire
+                    .owner
+                    .get_task_artifact(&fixture.task, "no-diff.json")
+                    .unwrap()
+                    .unwrap();
+                let mut report: Value = serde_json::from_slice(&artifact.content).unwrap();
+                report["validation"][0]["log_artifact"] = json!("missing-validation.json");
+                fixture.attach("no-diff.json", report);
+            }
+            "oversize_log" => {
+                fixture
+                    .bound
+                    .attach_claim_validation_log(
+                        "implementation-validation.json",
+                        vec![b' '; 1_048_577],
+                    )
+                    .unwrap();
+                let error = fixture
+                    .bound
+                    .get_task_artifact(&fixture.task, "implementation-validation.json")
+                    .unwrap_err();
+                assert!(error.to_string().contains("inline read limit"), "{error}");
+            }
+            "wrong_log_run" => fixture.attach(
+                "implementation-validation.json",
+                json!({
+                    "run_id": "another-run", "tested_head": fixture.base, "command": CHECK,
+                    "exit_code": 0, "output": "",
+                }),
+            ),
             "required_check" => handoff.validation.clear(),
+            "missing_checkpoint" | "foreign_path" => {
+                let HandoffDelivery::NoDiff { evidence } = &mut handoff.candidate.delivery else {
+                    panic!("NoDiff")
+                };
+                evidence.path = if changed == "foreign_path" {
+                    "../checkpoint.json"
+                } else {
+                    "no-diff-handoff/missing.json"
+                }
+                .into();
+            }
+            "wrong_task" | "wrong_run" | "checkpoint_base" => {
+                let HandoffDelivery::NoDiff { evidence } = &mut handoff.candidate.delivery else {
+                    panic!("NoDiff")
+                };
+                let artifact = fixture
+                    .pair
+                    .wire
+                    .owner
+                    .get_task_artifact(&fixture.task, &evidence.path)
+                    .unwrap()
+                    .unwrap();
+                let mut report: Value = serde_json::from_slice(&artifact.content).unwrap();
+                report[match changed {
+                    "wrong_task" => "task_id",
+                    "wrong_run" => "job_run_id",
+                    _ => "base_sha",
+                }] = json!("another-binding");
+                fixture.attach(&evidence.path, report.clone());
+                evidence.sha256 = sha256_hex(&serde_json::to_vec(&report).unwrap());
+            }
+            "removed_tag" => {
+                let owner = &fixture.pair.wire.owner;
+                let path = find_file(&owner.paths().global_dir, "task.yaml")
+                    .or_else(|| find_file(&owner.paths().orbit_dir, "task.yaml"))
+                    .unwrap();
+                let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+                    serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(envelope.id, fixture.task);
+                // Hostile persisted state: ordinary active-claim updates cannot
+                // remove tags, but the handoff must still recheck their live value.
+                envelope.tags.clear();
+                std::fs::write(path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+            }
+            "oversize_checkpoint" => {
+                let HandoffDelivery::NoDiff { evidence } = &mut handoff.candidate.delivery else {
+                    panic!("NoDiff")
+                };
+                let content = vec![b' '; 1_048_577];
+                fixture
+                    .bound
+                    .attach_claim_validation_log(&evidence.path, content.clone())
+                    .unwrap();
+                evidence.sha256 = sha256_hex(&content);
+                // Exercise the executor's named inline read too, before owner settlement.
+                let error = fixture
+                    .bound
+                    .get_task_artifact(&fixture.task, &evidence.path)
+                    .unwrap_err();
+                assert!(error.to_string().contains("inline read limit"), "{error}");
+            }
+            "truncated_checkpoint" => {
+                let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery else {
+                    panic!("NoDiff")
+                };
+                let manifest = fixture
+                    .pair
+                    .wire
+                    .owner
+                    .get_task_artifact_manifest(&fixture.task)
+                    .unwrap();
+                let file = manifest
+                    .iter()
+                    .find(|file| file.path == evidence.path)
+                    .unwrap();
+                // Resolve the selected manifest blob in the disposable owner store.
+                let name = Path::new(&file.blob).file_name().unwrap().to_str().unwrap();
+                let blob = find_file(&fixture.pair.wire.owner.paths().global_dir, name)
+                    .or_else(|| find_file(&fixture.pair.wire.owner.paths().orbit_dir, name))
+                    .unwrap();
+                restore_blob = Some((blob.clone(), std::fs::read(&blob).unwrap()));
+                std::fs::write(blob, b"{").unwrap();
+            }
             _ => unreachable!(),
         }
         let error = fixture.settle(&handoff).expect_err(changed);
@@ -1458,9 +1760,27 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
                 OrbitError::PolicyDenied(_)
                     | OrbitError::InvalidInput(_)
                     | OrbitError::Execution(_)
+                    | OrbitError::Store(_)
+                    | OrbitError::TaskBundleCorrupt { .. }
             ),
             "{changed}: {error}"
         );
+        let expected = match changed {
+            "report" => Some("NoDiff verifier report changed"),
+            "missing_checkpoint" => Some("NoDiff verifier report is missing"),
+            "wrong_task" | "wrong_run" => Some("this task/run"),
+            "checkpoint_base" => Some("checkpoint's base"),
+            "removed_tag" => Some("no-diff-expected"),
+            "oversize_checkpoint" | "oversize_log" => Some("inline read limit"),
+            "missing_log" => Some("missing task artifact missing-validation.json"),
+            "wrong_log_run" => Some("validation log must capture the exact run"),
+            "truncated_checkpoint" => Some("size mismatch"),
+            "foreign_path" => Some("artifact path"),
+            _ => None,
+        };
+        if let Some(expected) = expected {
+            assert!(error.to_string().contains(expected), "{changed}: {error}");
+        }
         if changed == "rewritten_base" {
             assert!(
                 error
@@ -1468,6 +1788,11 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
                     .contains("is not contained in the owner's base"),
                 "the refusal names the rewritten base: {error}"
             );
+        }
+        if let Some((path, content)) = restore_blob {
+            // Restore exactly the hostile fixture bytes to inspect unchanged
+            // lifecycle state; the corruption refusal itself was asserted above.
+            std::fs::write(path, content).unwrap();
         }
         assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
         assert!(
@@ -1513,6 +1838,63 @@ fn claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs() {
     let error = engine_action(&fixture.bound, "git_commit", &fixture.input).unwrap_err();
     assert!(error.to_string().contains("validation log"), "{error}");
     assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+    for path in ["../no-diff.json", "/no-diff.json"] {
+        let error = fixture
+            .bound
+            .get_task_artifact(&fixture.task, path)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("artifact path"),
+            "{path}: {error}"
+        );
+    }
+    let error = fixture
+        .bound
+        .get_task_artifact("ORB-99999", "no-diff.json")
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("worker task binding mismatch"),
+        "{error}"
+    );
+    fixture.evidence_reads.lock().unwrap().clear();
+    *fixture.lose_evidence_read.lock().unwrap() = true;
+    let error = fixture
+        .bound
+        .get_task_artifact(&fixture.task, "no-diff.json")
+        .unwrap_err();
+    assert!(
+        matches!(error, OrbitError::OutcomeUnknown { .. }),
+        "{error}"
+    );
+    assert_eq!(
+        fixture.evidence_reads.lock().unwrap().len(),
+        1,
+        "an unknown artifact read is neither retried nor replaced by bulk or missing evidence"
+    );
+    assert!(
+        fixture
+            .bound
+            .get_task_artifact(&fixture.task, "no-diff.json")
+            .unwrap()
+            .is_some()
+    );
+    let mut binding = fixture.bound.worker_invocation().unwrap().clone();
+    binding.claim_id = "another-claim".into();
+    let error = ToOwner(fixture.pair.wire.owner.clone())
+        .call(
+            "orbit.task.artifact.get",
+            json!({"id": fixture.task, "path": "no-diff.json", "_worker_read": "artifact"}),
+            ToolSessionContext {
+                worker_invocation: Some(binding),
+                worker_host_call: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("stale_claim"),
+        "foreign claim: {error}"
+    );
     fixture.assert_no_blocked();
 }
 
@@ -1575,28 +1957,49 @@ fn a_claimed_no_diff_chore_completes_after_its_base_advances() {
 /// commit verifier ran is refused at `claim_validate`, naming the change, and
 /// the task is not blocked [ORB-15074].
 fn a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name() {
-    for (tagged, committed) in [(false, false), (false, true), (true, false), (true, true)] {
+    for (tagged, committed, action) in [false, true].into_iter().flat_map(|tagged| {
+        [false, true].into_iter().flat_map(move |committed| {
+            ["claim_validate", "claim_handoff"]
+                .into_iter()
+                .map(move |action| (tagged, committed, action))
+        })
+    }) {
         let fixture = if tagged {
             CleanLeaf::review_only("done")
         } else {
             CleanLeaf::new(false, "done")
         };
-        let input = fixture.validate_input();
+        let mut input = fixture.validate_input();
+        if action == "claim_handoff" {
+            let validated = fixture.action("claim_validate", &input);
+            for field in ["candidate", "validation", "no_diff_evidence"] {
+                input[field] = validated[field].clone();
+            }
+        }
         fixture.advance_base(1);
         let follower = &fixture.pair.follower_repo;
         std::fs::write(follower.join("src/f0.rs"), "fn reviewed() {}\n").unwrap();
         if committed {
             git(follower, &["commit", "-q", "-am", "Chore edits code"]);
         }
-        let error = engine_action(&fixture.bound, "claim_validate", &input).unwrap_err();
-        let named = if committed {
+        let error = engine_action(&fixture.bound, action, &input).unwrap_err();
+        let named = if action == "claim_handoff" {
+            if committed {
+                "carries commits beyond base"
+            } else {
+                "worktree is not clean"
+            }
+        } else if committed {
             "Chore edits code"
         } else {
             "src/f0.rs"
         };
         assert!(
-            matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains(named),
-            "tagged={tagged} committed={committed}: {error}"
+            matches!(
+                error,
+                OrbitError::PolicyDenied(_) | OrbitError::Execution(_)
+            ) && error.to_string().contains(named),
+            "{action}: tagged={tagged} committed={committed}: {error}"
         );
         assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
         assert!(
