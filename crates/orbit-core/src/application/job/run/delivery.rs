@@ -16,15 +16,15 @@
 //! owner's store instead, so its executor answers for the leaf on the durable
 //! admission binding the leaf to that task's claim.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::{
     ActivityV2Spec, CommitObservation, CommitObservationStatus, DeliveryEvidenceGap,
-    DeliveryEvidenceProvenance, JobRun, JobRunState, JobV2, JobV2Step, JobV2StepBody,
-    LandingMethod, LandingObservation, LandingObservationStatus, PipelineState,
+    DeliveryEvidenceProvenance, JobRun, JobRunState, JobTargetType, JobV2, JobV2Step,
+    JobV2StepBody, LandingMethod, LandingObservation, LandingObservationStatus, PipelineState,
     RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, RunDeliveryObservation,
     RunDeliveryStatus, TargetStep,
 };
@@ -40,20 +40,23 @@ const LOCAL_LANDING_ACTIVITY: &str = "git_merge";
 
 /// Longest run or task id this read accepts.
 const MAX_ID_LEN: usize = 128;
+/// Only parent links are read; no sibling or broad-history search.
+const MAX_ANCESTOR_HOPS: usize = 64;
 /// Longest PR number accepted from a checkpoint.
 const MAX_PR_NUMBER_DIGITS: usize = 12;
 
 /// One top-level host step the observation reads, located in the job
 /// definition rather than guessed from a step index.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DeliveryStep {
     pub(crate) id: String,
     pub(crate) index: u32,
     pub(crate) activity: &'static str,
+    definition: JobV2Step,
 }
 
 /// The delivery-relevant steps of one job definition.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct DeliveryJobShape {
     pub(crate) commit: Option<DeliveryStep>,
     pub(crate) landings: Vec<DeliveryStep>,
@@ -76,6 +79,7 @@ impl DeliveryJobShape {
                 id: step.id.clone(),
                 index,
                 activity,
+                definition: step.clone(),
             };
             if activity == COMMIT_ACTIVITY {
                 if shape.commit.is_none() {
@@ -154,40 +158,172 @@ impl OrbitRuntime {
         task_id: &str,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         let run_id = run.run_id.as_str();
-        // The definition the run executed: its pinned direct-path snapshot
-        // when it has one, otherwise the catalog asset.
-        let shape = match self.resolve_run_definition(run) {
-            Ok((_, mut job)) => {
-                if !job.holds_task_delivery() {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "run '{run_id}' is not a task delivery run"
-                    )));
-                }
-                // Resolve `activity:` refs exactly as execution does, so the
-                // spec judged below is the one the run's steps ran.
-                self.v2_activity_catalog()
-                    .ok()
-                    .and_then(|catalog| {
-                        orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog)
-                            .ok()
-                    })
-                    .map(|()| DeliveryJobShape::from_job(&job))
-            }
-            Err(_) => None,
-        };
+        let shape = self.delivery_shape(run)?;
         let state = self.read_run_state(run_id)?;
         let repository =
             crate::application::automation::source::Source::new(&self.paths().repo_root)
                 .repository()
                 .ok();
-        Ok(project_run_delivery(
-            self.workspace_id()?,
-            repository,
-            run,
+        let executed = shape
+            .as_ref()
+            .map(|shape| self.delivery_execution_records(run, shape));
+        let commit = match &executed {
+            Some(Err(gap)) => {
+                commit_gap(*gap, shape.as_ref().and_then(|shape| shape.commit.as_ref()))
+            }
+            _ => self.observe_stored_commit(
+                executed
+                    .as_ref()
+                    .and_then(|run| run.as_ref().ok())
+                    .unwrap_or(run),
+                state.as_ref(),
+                shape.as_ref(),
+                task_id,
+            ),
+        };
+        let landing = observe_landing(
+            executed
+                .as_ref()
+                .and_then(|run| run.as_ref().ok())
+                .unwrap_or(run),
             state.as_ref(),
             shape.as_ref(),
-            task_id,
-        ))
+            &commit,
+        );
+        let delivery_status = summarize(run.state, &commit, &landing);
+        Ok(RunDeliveryObservation {
+            schema_version: RUN_DELIVERY_SCHEMA_VERSION,
+            workspace_id: self.workspace_id()?,
+            repository,
+            task_id: task_id.to_string(),
+            run_id: run.run_id.clone(),
+            job_id: run.job_id.clone(),
+            run_state: run.state,
+            run_finished_at: run.finished_at,
+            delivery_status,
+            commit,
+            landing,
+        })
+    }
+
+    /// Resolve catalog refs exactly as execution does, using the pinned
+    /// definition where one exists. An unresolved or non-host action never
+    /// authenticates a checkpoint.
+    fn delivery_shape(&self, run: &JobRun) -> Result<Option<DeliveryJobShape>, OrbitError> {
+        let Ok((_, mut job)) = self.resolve_run_definition(run) else {
+            return Ok(None);
+        };
+        if !job.holds_task_delivery() {
+            return Err(OrbitError::InvalidInput(format!(
+                "run '{}' is not a task delivery run",
+                run.run_id
+            )));
+        }
+        Ok(self.v2_activity_catalog().ok().and_then(|catalog| {
+            orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog).ok()?;
+            Some(DeliveryJobShape::from_job(&job))
+        }))
+    }
+
+    fn observe_stored_commit(
+        &self,
+        run: &JobRun,
+        state: Option<&PipelineState>,
+        shape: Option<&DeliveryJobShape>,
+        task_id: &str,
+    ) -> CommitObservation {
+        let ordinary = observe_commit(run, state, shape, task_id);
+        let (Some(state), Some(step)) = (state, shape.and_then(|shape| shape.commit.as_ref()))
+        else {
+            return ordinary;
+        };
+        if !state_belongs_to(state, run) {
+            return commit_gap(DeliveryEvidenceGap::OwnershipMismatch, Some(step));
+        }
+        let Checkpoint::Recorded(output) = checkpoint(state, step) else {
+            return ordinary;
+        };
+        let owner = output.get("job_run_id").and_then(Value::as_str);
+        // Older checkpoints omit the owner. When a retry has no executed
+        // commit record, authenticate its producer rather than attributing the
+        // copied bytes (and a tail-local record's timestamp) to the retry.
+        let inherited = owner.is_some_and(|id| id != run.run_id.as_str())
+            || (run.retry_source_run_id.is_some() && !executed_step(run, step));
+        if !inherited {
+            return ordinary;
+        }
+        match self.inherited_commit(run, state, step, output, task_id) {
+            Ok(commit) => commit,
+            Err(gap) => commit_gap(gap, Some(step)),
+        }
+    }
+
+    /// Authenticate every parent link all the way to the root, even after
+    /// finding the producer, so a cycle or truncated lineage cannot hide
+    /// behind a matching checkpoint. Only the copied prefix through the
+    /// producer must contain identical checkpoint bytes.
+    fn inherited_commit(
+        &self,
+        run: &JobRun,
+        current_state: &PipelineState,
+        step: &DeliveryStep,
+        output: &Value,
+        task_id: &str,
+    ) -> Result<CommitObservation, DeliveryEvidenceGap> {
+        if !inherited_checkpoint_matches(current_state, step, output) {
+            return Err(DeliveryEvidenceGap::CheckpointInconsistent);
+        }
+        let mut seen = HashSet::from([run.run_id.clone()]);
+        let mut cursor = run.retry_source_run_id.clone();
+        let mut producer = None;
+        let mut hops = 0;
+        while let Some(parent_id) = cursor {
+            if hops >= MAX_ANCESTOR_HOPS
+                || bounded_id(&parent_id, "run_id").is_err()
+                || !seen.insert(parent_id.clone())
+            {
+                return Err(DeliveryEvidenceGap::OwnershipMismatch);
+            }
+            hops += 1;
+            // This query is scoped by the answering runtime's workspace.
+            let parent = self
+                .show_job_run_observed(&parent_id)
+                .map_err(|_| DeliveryEvidenceGap::OwnershipMismatch)?;
+            if parent.job_id != run.job_id || !run_task_ids(&parent).contains(&task_id) {
+                return Err(DeliveryEvidenceGap::OwnershipMismatch);
+            }
+            let shape = self
+                .delivery_shape(&parent)
+                .ok()
+                .flatten()
+                .ok_or(DeliveryEvidenceGap::JobDefinitionUnavailable)?;
+            if shape.commit.as_ref() != Some(step) {
+                return Err(DeliveryEvidenceGap::CheckpointInconsistent);
+            }
+            let parent = self.delivery_execution_records(&parent, &shape)?;
+            let state = self
+                .read_run_state(&parent_id)
+                .ok()
+                .flatten()
+                .ok_or(DeliveryEvidenceGap::StateMissing)?;
+            if !state_belongs_to(&state, &parent) {
+                return Err(DeliveryEvidenceGap::OwnershipMismatch);
+            }
+            if producer.is_none() {
+                if !inherited_checkpoint_matches(&state, step, output) {
+                    return Err(DeliveryEvidenceGap::CheckpointInconsistent);
+                }
+                if executed_step(&parent, step) {
+                    // The producer's recognized host contract checks both task
+                    // and run ownership. An ancestor merely named in input is
+                    // insufficient, even if the retry claims success.
+                    parse_commit_output(output, &parent.run_id, task_id)?;
+                    producer = Some(observe_commit(&parent, Some(&state), Some(&shape), task_id));
+                }
+            }
+            cursor = parent.retry_source_run_id;
+        }
+        producer.ok_or(DeliveryEvidenceGap::OwnershipMismatch)
     }
 }
 
@@ -266,34 +402,6 @@ fn run_task_ids(run: &JobRun) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-/// Project durable records into the public observation. Pure, so every
-/// partial and corrupt shape can be exercised without running a pipeline.
-pub(crate) fn project_run_delivery(
-    workspace_id: String,
-    repository: Option<String>,
-    run: &JobRun,
-    state: Option<&PipelineState>,
-    shape: Option<&DeliveryJobShape>,
-    task_id: &str,
-) -> RunDeliveryObservation {
-    let commit = observe_commit(run, state, shape, task_id);
-    let landing = observe_landing(run, state, shape, &commit);
-    let delivery_status = summarize(run.state, &commit, &landing);
-    RunDeliveryObservation {
-        schema_version: RUN_DELIVERY_SCHEMA_VERSION,
-        workspace_id,
-        repository,
-        task_id: task_id.to_string(),
-        run_id: run.run_id.clone(),
-        job_id: run.job_id.clone(),
-        run_state: run.state,
-        run_finished_at: run.finished_at,
-        delivery_status,
-        commit,
-        landing,
-    }
-}
-
 /// A step's checkpoint after the consistency check.
 enum Checkpoint<'a> {
     Recorded(&'a Value),
@@ -320,10 +428,51 @@ fn checkpoint<'a>(state: &'a PipelineState, step: &DeliveryStep) -> Checkpoint<'
 fn provenance(step: &DeliveryStep) -> DeliveryEvidenceProvenance {
     DeliveryEvidenceProvenance {
         source: RUN_DELIVERY_EVIDENCE_SOURCE.to_string(),
+        source_run_id: None,
         step_id: step.id.clone(),
         step_index: step.index,
         activity: step.activity.to_string(),
     }
+}
+
+/// The inherited checkpoint must retain both its logical index and its
+/// named pipeline entry, including the exact pointer when terminal compaction
+/// moved the indexed bytes into the pipeline.
+fn inherited_checkpoint_matches(
+    state: &PipelineState,
+    step: &DeliveryStep,
+    output: &Value,
+) -> bool {
+    let pointer = format!("/{}", step.id.replace('~', "~0").replace('/', "~1"));
+    matches!(checkpoint(state, step), Checkpoint::Recorded(value) if value == output)
+        && state.pipeline.get(&step.id) == Some(output)
+        && state
+            .step_output_pointers
+            .get(&step.index)
+            .is_none_or(|value| value == &pointer)
+}
+
+fn recorded_provenance(run: &JobRun, step: &DeliveryStep) -> DeliveryEvidenceProvenance {
+    DeliveryEvidenceProvenance {
+        source_run_id: Some(run.run_id.clone()),
+        ..provenance(step)
+    }
+}
+
+fn state_belongs_to(state: &PipelineState, run: &JobRun) -> bool {
+    state.run_id == run.run_id.as_str() && state.job_id == run.job_id.as_str()
+}
+
+/// Execution indices are tail-local after resume; identity and success are
+/// what bind the producing record to the logical definition/checkpoint.
+fn executed_step(run: &JobRun, step: &DeliveryStep) -> bool {
+    run.steps
+        .iter()
+        .rev()
+        .find(|record| record.target_id == step.id.as_str())
+        .is_some_and(|record| {
+            record.target_type == JobTargetType::Activity && record.state == JobRunState::Success
+        })
 }
 
 /// When the run's own step record says this step finished.
@@ -380,6 +529,9 @@ fn observe_commit(
             commit_without_checkpoint(run, step)
         };
     };
+    if !state_belongs_to(state, run) {
+        return commit_gap(DeliveryEvidenceGap::OwnershipMismatch, Some(step));
+    }
     let output = match checkpoint(state, step) {
         Checkpoint::Recorded(output) => output,
         Checkpoint::Absent => return commit_without_checkpoint(run, step),
@@ -393,7 +545,7 @@ fn observe_commit(
             base_sha,
             head_sha,
             observed_at: step_finished_at(run, step),
-            provenance: Some(provenance(step)),
+            provenance: Some(recorded_provenance(run, step)),
             reason: None,
         },
         Err(gap) => commit_gap(gap, Some(step)),
@@ -519,11 +671,24 @@ fn observe_landing(
             skipped += 1;
             continue;
         }
+        if !state_belongs_to(state, run) {
+            return landing_gap(DeliveryEvidenceGap::OwnershipMismatch, Some(step));
+        }
+        // A retry's current landing needs its own successful host step record.
+        // Copied landing bytes cannot establish a new merge on this run.
+        if run.retry_source_run_id.is_some() {
+            if !executed_step(run, step) {
+                return landing_gap(DeliveryEvidenceGap::OwnershipMismatch, Some(step));
+            }
+            if !inherited_checkpoint_matches(state, step, output) {
+                return landing_gap(DeliveryEvidenceGap::CheckpointInconsistent, Some(step));
+            }
+        }
         match parse_landing_output(step, output) {
             Ok(Some(merged)) => {
                 return LandingObservation {
                     observed_at: step_finished_at(run, step),
-                    provenance: Some(provenance(step)),
+                    provenance: Some(recorded_provenance(run, step)),
                     ..merged
                 };
             }
