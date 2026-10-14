@@ -1,6 +1,7 @@
 use super::super::super::git::git_success;
 use super::super::{path_is_registered, registered_worktree_paths, rescue};
 use super::classify::{SweepTaskLookups, classify_known};
+use super::host_targets::collect_host_targets;
 use super::leftovers::{parse_trash_directory, reclaim_trash_directory, worker_may_be_alive};
 use super::paths::{
     on_disk_worktrees, retained_bytes, run_worktree_paths, unresolvable_run_report,
@@ -262,6 +263,20 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         }
         reports.push(report);
     }
+
+    // A checkout this sweep removes (or would) no longer needs its host
+    // validation output; one already gone leaves that output orphaned.
+    let removed_worktrees = reports
+        .iter()
+        .filter(|report| report.action.starts_with("removed") || report.action == "would_remove")
+        .map(|report| report.path.clone())
+        .collect::<BTreeSet<_>>();
+    reports.extend(collect_host_targets(
+        repo_root,
+        runs,
+        options,
+        &removed_worktrees,
+    ));
 
     if options.run_id.is_none() {
         let known: BTreeSet<_> = known_paths.keys().cloned().collect();

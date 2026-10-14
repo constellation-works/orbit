@@ -46,8 +46,9 @@ pub(super) fn reclaim_patterns(options: &WorktreeGcOptions) -> &[String] {
     options.reclaim_patterns.as_deref().unwrap_or(&DEFAULT)
 }
 
-/// Whether any of this run's checkouts contains a declared output match.
-/// A prefilter only: collection still enforces registration, worker and Git gates.
+/// Whether any of this run's checkouts contains a declared output match, or
+/// has host validation output. A prefilter only: collection still enforces
+/// registration, worker, containment and Git gates.
 pub fn run_worktree_has_reclaim_output(
     repo_root: &Path,
     run: &JobRun,
@@ -57,5 +58,5 @@ pub fn run_worktree_has_reclaim_output(
         paths
             .iter()
             .any(|path| super::super::reclaim::has_matches(path, patterns))
-    })
+    }) || super::host_targets::run_has_host_target(repo_root, run)
 }

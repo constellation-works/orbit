@@ -115,6 +115,13 @@ tracks is kept (`skipped:tracked_content`). The scheduled pipeline does the
 same for every kept terminal worktree. `bytes_reclaimed` reports the size of
 the removed paths.
 
+On Linux, required validation builds into a host-owned target under
+`.orbit/state/host-validation-targets/`, outside the checkout. GC attributes
+each target to the runs whose recorded worktree path it was built for, and
+reclaims it once they are terminal with no live worker and the checkout is gone
+(or its kept output is being reclaimed). Targets of scratch checkouts no run
+names stay as `skipped:unattributed_host_target`.
+
 ## Diagnose and repair
 
 ```bash
