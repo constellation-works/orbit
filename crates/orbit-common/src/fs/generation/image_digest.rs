@@ -13,6 +13,12 @@
 //! timestamp tick could otherwise leave an identical key over different bytes.
 //! The cache is best-effort; any read, parse or write failure hashes as
 //! before.
+//!
+//! A writer hashes before its join, and the join is what creates a missing
+//! generation root. Such a digest is handed back as [`Unremembered`] so the
+//! writer can record it once admission has created the root; otherwise every
+//! later command against a freshly created root would hash again until some
+//! other writer happened to record it.
 
 use std::fs::File;
 use std::io::Read;
@@ -49,6 +55,22 @@ struct Entry {
     #[serde(flatten)]
     key: ImageKey,
     sha256: String,
+}
+
+/// A digest a writer hashed while the cache's directory did not exist yet.
+pub(super) struct Unremembered {
+    key: ImageKey,
+    digest: String,
+    hashed_at: SystemTime,
+}
+
+impl Unremembered {
+    /// Record the digest at `cache_path`. The settle rule is judged as of when
+    /// the image was hashed, not now: a later clock cannot vouch for bytes
+    /// that were read earlier.
+    pub(super) fn remember(self, cache_path: &Path) {
+        store(cache_path, self.key, &self.digest, self.hashed_at);
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,16 +155,18 @@ fn store(path: &Path, key: ImageKey, digest: &str, now: SystemTime) {
 /// A freshly hashed digest is remembered, as of `now`, only when `record` is
 /// set. A
 /// read-only participant passes `false`: it may use an entry a writer left,
-/// but it must not create or change any file under the generation root.
+/// but it must not create or change any file under the generation root. When
+/// `record` is set but the cache's directory does not exist yet, the digest
+/// comes back with an [`Unremembered`] for the caller to record later.
 pub(super) fn digest_with_cache(
     cache_path: Option<&Path>,
     record: bool,
     now: SystemTime,
     file: File,
     hash: impl FnOnce(File) -> Result<String, OrbitError>,
-) -> Result<String, OrbitError> {
+) -> Result<(String, Option<Unremembered>), OrbitError> {
     let (Some(path), Some(key)) = (cache_path, key_of(&file)) else {
-        return hash(file);
+        return Ok((hash(file)?, None));
     };
     if let Some(entry) = load(path).and_then(|cache| {
         cache
@@ -150,11 +174,20 @@ pub(super) fn digest_with_cache(
             .into_iter()
             .find(|entry| entry.key == key && is_sha256_hex(&entry.sha256))
     }) {
-        return Ok(entry.sha256);
+        return Ok((entry.sha256, None));
     }
     let digest = hash(file)?;
-    if record {
-        store(path, key, &digest, now);
+    if !record {
+        return Ok((digest, None));
     }
-    Ok(digest)
+    if path.parent().is_some_and(Path::is_dir) {
+        store(path, key, &digest, now);
+        return Ok((digest, None));
+    }
+    let unremembered = Unremembered {
+        key,
+        digest: digest.clone(),
+        hashed_at: now,
+    };
+    Ok((digest, Some(unremembered)))
 }

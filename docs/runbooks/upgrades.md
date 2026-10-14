@@ -446,7 +446,8 @@ image's device, inode, size, mtime and ctime. Any rewrite or replacement changes
 key and is re-hashed; an image modified within the last two seconds is never
 recorded, so a same-tick rewrite cannot alias an earlier entry. A read-only
 participant reads the cache but never writes it, so a read-only join leaves the
-root byte-identical.
+root byte-identical. A writer whose join creates the root records its digest once
+that join is admitted, so commands after the first `workspace init` reuse it.
 OS locks release on exit or crash (and on exec, which is how a handover leaves);
 never unlink `.generation.lock`, `.generation-admission.lock`,
 `.generation-compat.json`, `.generation-pending.json`, `.generation-participants/`
