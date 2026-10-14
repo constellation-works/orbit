@@ -117,8 +117,14 @@ pub(in super::super) fn compare_candidate_with_base<H: RuntimeHost + ?Sized>(
     base_sha: &str,
     run: &RequiredCommandRun,
 ) -> BaselineCheck {
-    if let Some(check) = cached_base_check(workspace_path, base_sha, &run.command, run.selection())
-        .filter(BaselineCheck::conclusive)
+    if let Some(check) = cached_base_check(
+        host,
+        workspace_path,
+        base_sha,
+        &run.command,
+        run.selection(),
+    )
+    .filter(BaselineCheck::conclusive)
     {
         return check;
     }
@@ -434,7 +440,13 @@ fn compare_base<H: RuntimeHost + ?Sized>(
         cached,
         exact_replay: selection.is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some()),
     };
-    let cache = match cache_paths(workspace_path, base_sha, command, selection) {
+    let cache = match cache_paths(
+        workspace_path,
+        base_sha,
+        command,
+        selection,
+        &host.validation_build_output_env(),
+    ) {
         Ok(cache) => cache,
         Err(error) => return inconclusive(format!("locate the base result cache: {error}")),
     };

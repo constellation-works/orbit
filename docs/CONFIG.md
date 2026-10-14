@@ -321,6 +321,7 @@ path_mode = "prepend"
 | `workflow.validation_env.login_shell` | `true` | Resolve PATH and toolchain locators from the owner's shell (below). `false` never starts the shell. |
 | `workflow.validation_env.interactive` | `true` | Try `-i -l -c` first, so toolchains exported in rc files are found. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
 | `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. Agent sessions get them too ([below](#agent-sessions-share-the-configured-path)). |
+| `workflow.validation_env.build_output_env` | `[]` | Output environment variable names to bind to managed host output for required validation and host evidence; see [build output](#workspace-build-output). |
 | `workflow.validation_env.path_mode` | `prepend` | `prepend` puts `path` first; `replace` makes it the whole PATH. |
 
 Required validation commands and `local_shell` steps run in this environment over the [allowlisted agent environment](#executionenv--the-agent-subprocess-environment), so a drain started from a minimal PATH (a service manager, `env -i`, SSH) still finds the toolchain.
@@ -330,6 +331,73 @@ Required validation commands and `local_shell` steps run in this environment ove
 **Recorded.** Each validation log and step output records `validation_env`: the PATH; its `source` (`config` when `path` has entries, else `login_shell` when the probe returned a PATH, else `launcher_fallback`); the shell and any probe error; `probe_mode` (`interactive_login` or `login`, else null); and `fallback_reason` (why interactive startup failed when login-only succeeded, else null). When both probes fail, `login_shell_error` holds both.
 
 **Diagnostics.** `orbit doctor`'s `validation-env` row shows the probe mode, fallback, PATH and the `python3`, `git` and `make` it finds, and warns (advisory) on a fallback or an earlier PATH entry shadowing a different executable (`/usr/bin/python3` before `/opt/homebrew/bin/python3`); duplicates and symlink aliases count once ([health checks](runbooks/health-checks.md#run-orbit-doctor)). While required commands are configured, `orbit run auto`, `orbit run ship`, and MCP `orbit.workflow.auto` (`status`, `start`) and `orbit.workflow.ship` warn when the shell cannot be probed, when resolution is off and `path` is empty, or when the resolved PATH drops login-shell entries (possible under `replace`).
+
+#### Workspace build output
+
+`workflow.validation_env.build_output_env` maps each listed variable to one managed,
+absolute host output directory. Commands must honor it, directly or through their
+build-tool configuration. There is no toolchain-specific default. An empty list
+allocates nothing and leaves inherited variables unchanged; command output is then
+owned and cleaned according to the command's own configuration, not this contract.
+
+For this Rust repository, merge [the repository configuration example](../config/orbit-workspace.toml)
+into the owner's ignored `.orbit/config.toml` during the separate operator rollout:
+
+```toml
+[workflow.validation_env]
+build_output_env = ["CARGO_TARGET_DIR"]
+```
+
+A non-Rust workspace can select its own locator and consume it in a required command:
+
+```toml
+[workflow]
+required_validation_commands = ['sh scripts/validate.sh']
+[workflow.validation_env]
+build_output_env = ["DIST_DIR"]
+```
+
+Create the example validation script in that workspace to invoke `cmake -S . -B "$DIST_DIR"` and
+`cmake --build "$DIST_DIR"`. Orbit supplies no Cargo variable to that workspace.
+Multiple listed variables refer to the same directory; commands can use subdirectories
+below it to separate outputs. Arbitrary placement outside managed host state is not
+supported by this contract.
+
+**Precedence.** Settings resolve built-in `[]`, then global, then workspace. An explicit
+workspace list replaces the global list, including `[]`. Names are trimmed,
+deduplicated and sorted, and must be shell environment identifiers. Execution identity
+variables (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TMP`, `TEMP`, `PWD`,
+`OLDPWD`) and `ORBIT_` variables are reserved, case-insensitively for portability. After allowlist and login/PATH resolution,
+configured bindings replace inherited values, even non-empty ones. They are applied
+only to host required-validation/replay/evidence commands, including baseline and
+recovery/reconciliation, never to agents or ordinary `local_shell` steps. A command
+that overrides the binding or ignores it gives up output isolation; configure such a
+command to consume the locator before admitting it as required validation.
+
+**Placement and provenance.** On every platform, configured output is
+`<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`.
+The primary repository is derived from the Git common directory; redirects in managed
+output path components are refused. This host execution context stays outside the
+worker's writable build areas. Different canonical source checkouts cannot share
+compiled paths; repeated host checks for the same source may reuse output. Records
+carry `build_output.env`, `directory`, `source` and `context: "host"`; an unconfigured
+run has empty `env` and null directory/source. Baseline cache schema 9 includes the
+bindings in its key, retaining prior records rather than certifying this contract with
+old results. Recovery fingerprints also include the bindings.
+
+**Cleanup and transition.** The existing host-validation-targets layout, source keys,
+run attribution, base-cache locks and scratch lease lineage stay unchanged. Linux's
+[descriptor-bound collector](runbooks/worktree-reclaim.md#host-validation-output)
+continues to reclaim eligible historical and new output after its checkout disappears;
+active, leased and ambiguous output stays. Non-Linux host output remains isolated but
+this Linux collector is not available there. Retain it for operator maintenance; do not
+infer deletion authority from its hash. No old output, failed-run logs or audit evidence
+is migrated or deleted by config resolution. Before deploying this runtime to a Rust
+workspace, install the explicit binding in its owner configuration, preserving existing
+settings; restart/upgrade active clients only through the supported operator procedure.
+Existing clients keep the same valid source-keyed output namespace. An unconfigured
+new client no longer receives the old implicit Cargo policy. Live rollout and storage
+verification are separate operator work.
 
 #### Agent sessions share the configured PATH
 
@@ -362,7 +430,7 @@ Codex runs each tool command through the user's shell as a login shell (`zsh -lc
 - A `no-diff-expected` task with a clean tree runs none of these commands, as the owner's pipelines skip `validate` for the tag. A claimed one hands off a `NoDiff` skip with no validation logs; the owner accepts it only while its own copy of the task keeps the tag. A clean tree that proves itself with `no-diff.json` or `already-landed.json`, and a tagged task that produces a diff, still validate.
 - Re-running a task whose failed run preserved a candidate from `commit` or later runs the commands on that candidate over the new base, to decide whether implementation runs at all. A candidate preserved from implementation or earlier always returns to the implementer ([re-running a task](../crates/orbit-core/assets/skills/orbit-orchestrate/references/workflows.md#re-running-a-task-with-a-preserved-candidate)).
 - An empty list runs nothing, including on claimed handoffs; the other handoff guards still apply.
-- On Linux required validation and host-evidence commands replace inherited `CARGO_TARGET_DIR` with `<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`. This host-owned state stays outside recovery’s writable worktree and stable mounts; even custom targets inside the worktree can contain sandbox-only compiled source paths. Different source checkouts have different targets, while retries in the same checkout reuse host builds. Logs record the effective target in `validation_env.cargo_target_dir`. Worktree GC reclaims a terminal run's target, and a scratch checkout's target only while holding its base-cache lock or lease ([host validation output](runbooks/worktree-reclaim.md#host-validation-output)). The first host run compiles the selection, with dependencies from the compiler cache. See [host build isolation](runbooks/compiler-cache.md#host-validation-builds-apart).
+- Required validation, host replay, detached evidence, baseline reruns and recovery use the workspace's [build output bindings](#workspace-build-output). The runtime allocates no build output by default. Configured bindings isolate host output from worker builds, and logs record `validation_env.build_output`.
 - An implementer whose affected-test gate passed with only deferral notices of sandboxes its lane refuses hands that gate off instead of failing, by naming the validation summary the gate wrote; Orbit derives the `deferred_sandbox_validation` record from it and runs each notice kind's probe in the implementer's lane itself [ORB-15516]: `DEFERRED: bubblewrap unavailable:` notices on Linux [ORB-15287], `SKIP: sandbox-exec cannot apply a profile:` notices on macOS, as a Mac claimed implementer's nested Seatbelt prints [ORB-15409], and `DEFERRED: ps denied:` notices from a claimed implementer on macOS, whose sandbox refuses to exec `ps` [ORB-15587]. One record may defer several kinds, such as a Mac claimed leaf's Seatbelt and ps-denied notices together, when every kind's probe refuses [ORB-15692]. The gate must be a required command or a `review.baseline_commands` entry. Validation runs it after the required commands, outside the agent sandbox (a claim's `claim_validate` on its claim host, before publication), on this run and on a resumed candidate: a pass that still prints any of these notices holds the candidate as a `validation_environment` failure, and a run that reports no executed tests is refused ([development guide](DEVELOPMENT.md#test-process-environment)).
 
 #### Missing tools block the task

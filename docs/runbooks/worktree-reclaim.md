@@ -70,9 +70,15 @@ declare caches and build output: evidence matching a declaration is reclaimable.
 
 ## Host validation output
 
-On Linux, required validation and host evidence build into
+Workspaces opt into managed host output through
+`workflow.validation_env.build_output_env` ([contract](../CONFIG.md#workspace-build-output)).
+Required validation and host evidence then build into
 `<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-checkout)>`,
 outside the checkout ([host build isolation](compiler-cache.md#host-validation-builds-apart)).
+The descriptor-bound collector below runs on Linux. The layout and canonical source
+keys remain compatible with historical implicit Cargo output; disabling bindings
+does not orphan or erase old output, leases or cache locks. Non-Linux configured
+output uses the same isolation layout but remains for operator maintenance.
 Removing a run's worktree does not remove that directory. Each sweep
 re-derives every recorded run's worktree path with the runner's own rule
 (the managed worktree root resolved, the worktree name appended) and hashes

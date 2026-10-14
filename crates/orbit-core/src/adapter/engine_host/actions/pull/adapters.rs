@@ -274,7 +274,7 @@ impl LeafPullLauncher<'_> {
 
 impl PullLauncher for LeafPullLauncher<'_> {
     fn base_no_longer_red(&self, hold: &orbit_types::workflow::BaselineRedHold) -> Option<String> {
-        recorded_base_no_longer_red(&self.runtime.paths().repo_root, hold)
+        recorded_base_no_longer_red(self.runtime, &self.runtime.paths().repo_root, hold)
     }
 
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {

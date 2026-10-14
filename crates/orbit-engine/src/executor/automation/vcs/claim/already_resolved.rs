@@ -53,14 +53,8 @@ pub(super) fn replay<H: RuntimeHost + ?Sized>(
 ) -> Result<Vec<ClaimedResult>, OrbitError> {
     let mut results = Vec::new();
     for (index, selector) in selectors.iter().enumerate() {
-        let run = run_host_sandbox_test(
-            host,
-            workspace,
-            &candidate.base,
-            selector,
-            &context.run_id,
-            &workspace.join("target"),
-        )?;
+        let run =
+            run_host_sandbox_test(host, workspace, &candidate.base, selector, &context.run_id)?;
         let host_command = selector.host_command();
         let refusal = match run.judgement {
             Ok(_) => {

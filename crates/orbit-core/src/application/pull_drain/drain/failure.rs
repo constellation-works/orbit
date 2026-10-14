@@ -1,5 +1,6 @@
 //! The settlement a terminal leaf implies, and the release evidence the owner
 //! carries back to its task.
+use crate::OrbitRuntime;
 use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
@@ -438,8 +439,12 @@ fn baseline_red_release(
 /// already recorded for its base ref's current tip. Never runs the command:
 /// a settlement must not wait on a build, and a moved tip nobody checked
 /// keeps the hold, which the owner's hold refresh checks without a leaf.
-pub(crate) fn recorded_base_no_longer_red(repo: &Path, hold: &BaselineRedHold) -> Option<String> {
-    match orbit_engine::recorded_baseline_hold_status(repo, hold)? {
+pub(crate) fn recorded_base_no_longer_red(
+    runtime: &OrbitRuntime,
+    repo: &Path,
+    hold: &BaselineRedHold,
+) -> Option<String> {
+    match orbit_engine::recorded_baseline_hold_status(runtime, repo, hold)? {
         orbit_engine::BaselineHoldStatus::Lifted(why) => Some(why),
         orbit_engine::BaselineHoldStatus::Holding(_) => None,
     }

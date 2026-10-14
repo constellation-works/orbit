@@ -285,6 +285,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.validation_env.interactive` | bool · **Default:** `true`<br>Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found; on startup failure, nonzero exit, timeout, or a missing marker it falls back to `-l -c`. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
 | `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
 | `workflow.validation_env.path_mode` | string · **Default:** `prepend`<br>How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
+| `workflow.validation_env.build_output_env` | array&lt;string&gt; · **Default:** `[]`<br>Environment variable names bound to managed host output for required validation and host evidence. Configured bindings replace inherited values; commands must honor them. Empty allocates nothing. See [Workspace build output](#workspace-build-output). |
 | `machine.name` | string · **Default:** Set by `orbit init`<br>Global only. This machine's display name, and the one `[machine]` value you can change. |
 | `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
 | `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
@@ -369,6 +370,44 @@ evidence remain; resumed runs rebuild reclaimed output. Collection never runs a
 cleanup command: checkout-authored Cargo configuration can redirect `cargo clean`
 outside the worktree, and Make or npm scripts can execute code with host authority.
 Declare only rebuildable paths; evidence matching a declared pattern is reclaimable.
+
+## Workspace build output
+
+Configure the output locator your workspace's build commands consume:
+
+```toml
+[workflow.validation_env]
+build_output_env = ["CARGO_TARGET_DIR"] # Rust workspace
+```
+
+A non-Rust workspace can use `build_output_env = ["DIST_DIR"]` and have its
+validation command invoke `cmake -S . -B "$DIST_DIR"` followed by
+`cmake --build "$DIST_DIR"`. Orbit has no toolchain-specific output default.
+
+The built-in list is empty. A workspace list replaces the global list, including
+an explicit `[]`. Empty configuration allocates no managed output and leaves
+inherited variables unchanged. Names are trimmed, deduplicated and sorted;
+they must be shell environment identifiers. Execution identity variables
+(`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TMP`, `TEMP`, `PWD`,
+`OLDPWD`) and `ORBIT_` names are reserved, ignoring case.
+
+After environment resolution, every configured variable points to the same
+absolute host-owned directory, outside worker-writable build areas:
+`<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`.
+Different source checkouts have separate output; repeated host checks for one
+source can reuse it. Commands must honor the locator to preserve that isolation.
+Bindings apply to required validation, host replay and detached evidence,
+including baseline and recovery checks, on every platform. They do not apply
+to agent sessions or ordinary `local_shell` steps. Logs record the resolved
+`build_output` environment, directory, source and host context.
+
+Managed cleanup retains active, leased or ambiguous output and can reclaim
+eligible inactive output even after its checkout is gone. Existing
+`host-validation-targets` remain attributable and reclaimable when bindings
+are disabled. Enable the workspace's output locator before rolling out a
+runtime that removes implicit Cargo routing; keep active clients' output
+contexts intact. Configuration examples describe an operator rollout,
+not an automatic change to the owning workspace's file.
 
 ## Root override
 

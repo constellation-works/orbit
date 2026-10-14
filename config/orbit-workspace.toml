@@ -1,0 +1,7 @@
+# Merge into the owning Orbit workspace's .orbit/config.toml during rollout.
+# This is repository policy, not a generic runtime/toolchain default.
+[workflow]
+required_validation_commands = ["make ci-fast", "make ci-lint", "make goldens", "make ci-test-affected"]
+
+[workflow.validation_env]
+build_output_env = ["CARGO_TARGET_DIR"]

@@ -26,7 +26,8 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// Version 7 retains complete-output host coverage refusals for flaky admission.
 /// Version 8 runs in host-owned source-path target namespaces: earlier results
 /// could have executed sandbox-built binaries [F2026-10-342].
-pub(super) const CACHE_SCHEMA_VERSION: u32 = 8;
+/// Version 9 keys workspace output bindings as part of the execution contract.
+pub(super) const CACHE_SCHEMA_VERSION: u32 = 9;
 
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
@@ -46,6 +47,7 @@ pub(in super::super) fn cache_paths(
     base_sha: &str,
     command: &str,
     selection: Option<&Value>,
+    build_output_env: &[String],
 ) -> Result<CachePaths, OrbitError> {
     // Preserve earlier evidence at its old key rather than overwriting it
     // when the execution contract changes.
@@ -60,6 +62,8 @@ pub(in super::super) fn cache_paths(
         identity.push('\0');
         identity.push_str(&selection.to_string());
     }
+    identity.push('\0');
+    identity.push_str(&serde_json::json!(build_output_env).to_string());
     let key = sha256_hex(identity.as_bytes());
     let dir = git_common_dir(repo)?.join(CACHE_DIR);
     Ok(CachePaths {
@@ -114,13 +118,21 @@ pub(in super::super) fn recorded_base_runs(repo: &Path) -> Vec<RecordedBaseRun> 
 
 /// The result another run already recorded for `command` on `base_sha` with
 /// `selection`, judged against it, without waiting for or starting a run.
-pub(in super::super) fn cached_base_check(
+pub(in super::super) fn cached_base_check<H: RuntimeHost + ?Sized>(
+    host: &H,
     workspace_path: &Path,
     base_sha: &str,
     command: &str,
     selection: Option<&Value>,
 ) -> Option<BaselineCheck> {
-    let cache = cache_paths(workspace_path, base_sha, command, selection).ok()?;
+    let cache = cache_paths(
+        workspace_path,
+        base_sha,
+        command,
+        selection,
+        &host.validation_build_output_env(),
+    )
+    .ok()?;
     let result = read_cached(&cache.result, selection)?;
     Some(BaselineCheck {
         base_sha: base_sha.to_string(),

@@ -25,17 +25,10 @@
 //! refusal still names the first failure the captured output shows, so a stop
 //! caused by a flood of identical failures says what they were [ORB-15870].
 //!
-//! On Linux a command builds in its own Cargo target directory,
-//! [`host_validation_target`] outside its writable checkout. A managed
-//! Linux sandbox binds the checkout's `target/` at the stable build mount, and
-//! the compiler-cache wrapper rewrites paths such as `CARGO_BIN_EXE_*` onto
-//! that mount for what it compiles there. Cargo's freshness check never sees
-//! the rewrite, so a host run in the shared `target/` reused test binaries
-//! that spawn paths existing only inside the sandbox. No sandboxed step builds
-//! into this directory: even custom targets under the checkout can contain
-//! rewritten source paths after recovery [F2026-10-342]. Host-owned state and
-//! a canonical source-path key isolate those artifacts without deleting them;
-//! dependencies still come back through the compiler cache.
+//! Workspace-configured build output variables bind to host-owned output
+//! outside the worker checkout, keyed by canonical source namespace. Commands
+//! must honor these bindings; a workspace with no bindings allocates nothing.
+//! This prevents reuse of binaries containing sandbox-only source paths.
 //!
 //! Captured output keeps a head, a tail and bounded nextest failure blocks
 //! from each stream. A long stdout cannot drop short stderr; middle failure
@@ -65,11 +58,10 @@
 //! candidate run tested rather than the base's own, empty, diff.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 use orbit_common::OrbitError;
-use orbit_common::security::release::sha256_hex;
 use orbit_common::text::floor_char_boundary;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, ValidationEnvironment, program_on_path,
@@ -86,6 +78,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::base_claim::{failure_identities, normalize_output};
+use super::build_output::bind_host_output;
 pub(super) use super::required_capture::capture;
 
 /// The file a required command may write its [`ValidationSummary`] to.
@@ -93,77 +86,6 @@ pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
 /// A selection, as a candidate run's summary reported it, that the command
 /// must test instead of choosing its own.
 pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";
-/// Where host validation targets live, relative to the primary checkout.
-pub(super) const HOST_VALIDATION_TARGETS_DIR: [&str; 3] =
-    [".orbit", "state", "host-validation-targets"];
-
-/// The directory name of the host validation target for a canonical source
-/// checkout. Worktree GC re-derives it from run records with this same rule.
-pub(super) fn host_validation_target_key(source: &Path) -> String {
-    sha256_hex(source.as_os_str().as_encoded_bytes())
-}
-
-/// The primary checkout holding `checkout`'s host validation target, and the
-/// canonical source path that keys it.
-pub(super) fn host_validation_source(checkout: &Path) -> Result<(PathBuf, PathBuf), OrbitError> {
-    let source = checkout.canonicalize()?;
-    let common = orbit_common::fs::git::git_common_dir(&source)?;
-    let primary = common
-        .parent()
-        .filter(|_| common.file_name().is_some_and(|name| name == ".git"))
-        .ok_or_else(|| {
-            OrbitError::Execution("host validation needs a primary Git checkout".into())
-        })?
-        .to_path_buf();
-    Ok((primary, source))
-}
-
-/// Host-owned Cargo output, separate from every sandbox-writable target.
-/// Key by the canonical *source* path: Cargo freshness alone cannot detect
-/// compiler-wrapper rewrites of embedded paths, or a different source checkout.
-/// The same checkout's repair/retry/resume can safely reuse its host output.
-pub(super) fn host_validation_target(checkout: &Path) -> Result<PathBuf, OrbitError> {
-    let (primary, source) = host_validation_source(checkout)?;
-    let key = host_validation_target_key(&source);
-    let mut target = primary;
-    // These are host state, never global compiler/download caches. Refuse
-    // redirects rather than creating output through a sandbox-writable symlink.
-    for component in HOST_VALIDATION_TARGETS_DIR
-        .iter()
-        .copied()
-        .chain([key.as_str()])
-    {
-        target.push(component);
-        match std::fs::symlink_metadata(&target) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "host validation target component '{}' must be a directory, not a redirect",
-                    target.display()
-                )));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match orbit_common::fs::io::create_private_dir(&target) {
-                    Ok(()) => {}
-                    // Another host command may have created the shared parent.
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        let metadata = std::fs::symlink_metadata(&target)?;
-                        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                            return Err(OrbitError::PolicyDenied(format!(
-                                "host validation target '{}' became a redirect",
-                                target.display()
-                            )));
-                        }
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(target)
-}
-
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
 /// step instead of holding it open indefinitely.
@@ -463,17 +385,20 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
         "fallback_reason": environment.fallback_reason,
         "config_path": environment.config_path,
         "path_mode": environment.path_mode.as_str(),
-        "cargo_target_dir": environment.env.iter()
-            .find(|(name, _)| name == "CARGO_TARGET_DIR")
-            .map(|(_, value)| value),
+        "build_output": {
+            "env": environment.build_output_env,
+            "directory": environment.build_output_dir,
+            "source": environment.build_output_source,
+            "context": "host",
+        },
     })
 }
 
 /// Run one required command in `workspace_path`, handing it `selection`
 /// to test when one is given, for at most `timeout_ms` (normally
 /// [`VALIDATION_TIMEOUT_MS`]).
-/// On Linux, `workspace_path` must be a Git checkout whose common directory
-/// belongs to a primary checkout, for host-owned Cargo target isolation.
+/// With configured output bindings, `workspace_path` must belong to a primary
+/// Git checkout for managed host output isolation.
 pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
@@ -488,15 +413,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         ));
     }
     let mut environment = host.validation_subprocess_environment();
-    if cfg!(target_os = "linux") {
-        environment.env.retain(|(key, _)| key != "CARGO_TARGET_DIR");
-        environment.env.push((
-            "CARGO_TARGET_DIR".to_string(),
-            host_validation_target(workspace_path)?
-                .to_string_lossy()
-                .into_owned(),
-        ));
-    }
+    bind_host_output(&mut environment, workspace_path)?;
     let validation_path = environment
         .path()
         .unwrap_or("<unset; /bin/sh uses its default search path>")

@@ -98,7 +98,7 @@ fn validation_environment_fingerprint(
     for (name, value) in &environment.env {
         variables.insert(name.as_str(), value.as_str());
     }
-    serde_json::to_vec(&variables)
+    serde_json::to_vec(&(variables, &environment.build_output_env))
         .ok()
         .map(|bytes| hex_sha256(&bytes))
 }

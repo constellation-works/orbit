@@ -71,7 +71,7 @@ fn refresh(fixture: &Fixture, hold: &BaselineRedHold, lifted: bool) {
         "{status:?}"
     );
     assert_eq!(
-        recorded_baseline_hold_status(&fixture.repo, hold),
+        recorded_baseline_hold_status(&fixture.runtime, &fixture.repo, hold),
         Some(status)
     );
 }
@@ -80,7 +80,10 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
     let fixture = fixture(GATE, "after\n");
     let hold = hold(&fixture);
     move_base(&fixture, "red");
-    assert_eq!(recorded_baseline_hold_status(&fixture.repo, &hold), None);
+    assert_eq!(
+        recorded_baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+        None
+    );
     refresh(&fixture, &hold, false);
     refresh(&fixture, &hold, false);
     assert_eq!(
@@ -102,6 +105,37 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
     assert_eq!(ran[1], ran[0]);
     assert_eq!(ran[2], hold.selection.clone().unwrap());
     assert_eq!(&ran[3..], &ran[1..3]);
+
+    // Changing workspace output bindings requires new evidence even on the
+    // same tip and selection; the old cache and scratch lineage stay intact.
+    let path = fixture.repo.join(".orbit/config.toml");
+    let mut config = std::fs::read_to_string(&path).unwrap();
+    config.push_str("\n[workflow.validation_env]\nbuild_output_env = ['DIST_DIR']\n");
+    std::fs::write(path, config).unwrap();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture._root.path().join("global"),
+        &fixture.repo.join(".orbit"),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded_baseline_hold_status(&runtime, &fixture.repo, &hold),
+        None
+    );
+    assert!(matches!(
+        baseline_hold_status(&runtime, &fixture.repo, &hold),
+        BaselineHoldStatus::Lifted(_)
+    ));
+    assert_eq!(
+        runs(&fixture).len(),
+        ran.len() + 2,
+        "new bindings replay failing tests and the full selection"
+    );
+    assert!(recorded_baseline_hold_status(&runtime, &fixture.repo, &hold).is_some());
+    assert_eq!(
+        runs(&fixture).len(),
+        ran.len() + 2,
+        "recorded queries stay observational"
+    );
 }
 
 fn unusable_replays_fall_back_to_the_full_selection_before_lifting() {

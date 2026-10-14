@@ -635,7 +635,9 @@ fn run_remediation_command(
     );
     let checkout = runtime.create_recovery_checkout(&checkout_id, remediation_commit)?;
     // Leased like every recovery checkout's host validation target.
-    let run = review_gate::lease_scratch_host_target(&checkout, ScratchHostTarget::Recovery)
+    let run = (!runtime.validation_env_policy().build_output_env.is_empty())
+        .then(|| review_gate::lease_scratch_host_target(&checkout, ScratchHostTarget::Recovery))
+        .transpose()
         .and_then(|_lease| review_gate::run_required_validation(runtime, &checkout, command));
     let cleanup = runtime.remove_recovery_checkout(&checkout_id);
     let run: RequiredValidationRun = run?;

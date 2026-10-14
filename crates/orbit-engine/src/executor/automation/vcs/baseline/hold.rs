@@ -59,7 +59,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
 ) -> BaselineHoldStatus {
     match moved_base_tip(repo, hold) {
         Ok(tip) => {
-            if let Some(status) = recorded_moved_base_status(repo, hold, &tip) {
+            if let Some(status) = recorded_moved_base_status(host, repo, hold, &tip) {
                 return status;
             }
             if let Some(selection) = hold_failing_tests_selection(hold) {
@@ -73,7 +73,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
             }
             let check = compare_with_base(host, repo, &tip, &hold.command, hold.selection.as_ref());
             if let Err(reason) = &check.result {
-                record_inconclusive_hold(repo, &tip, hold, reason);
+                record_inconclusive_hold(host, repo, &tip, hold, reason);
             }
             judge_moved_base(hold, &tip, hold.selection.as_ref(), check.result)
         }
@@ -89,7 +89,8 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
 /// It still reads the base ref, refreshing it from `origin` as
 /// [`baseline_hold_status`] does, so it fits a short caller such as the clock
 /// tick, which holds the host's sweep lock.
-pub fn recorded_baseline_hold_status(
+pub fn recorded_baseline_hold_status<H: RuntimeHost + ?Sized>(
+    host: &H,
     repo: &Path,
     hold: &BaselineRedHold,
 ) -> Option<BaselineHoldStatus> {
@@ -97,7 +98,7 @@ pub fn recorded_baseline_hold_status(
         Ok(tip) => tip,
         Err(status) => return Some(status),
     };
-    recorded_moved_base_status(repo, hold, &tip)
+    recorded_moved_base_status(host, repo, hold, &tip)
 }
 
 /// A recent failed attempt to judge a hold, keyed by tip and command using
@@ -108,10 +109,22 @@ struct InconclusiveHoldAttempt {
     reason: String,
 }
 
-fn record_inconclusive_hold(repo: &Path, tip: &str, hold: &BaselineRedHold, reason: &str) {
+fn record_inconclusive_hold<H: RuntimeHost + ?Sized>(
+    host: &H,
+    repo: &Path,
+    tip: &str,
+    hold: &BaselineRedHold,
+    reason: &str,
+) {
     let command = hold.command.as_str();
     let record = || -> Result<(), OrbitError> {
-        let cache = cache_paths(repo, tip, command, hold.selection.as_ref())?;
+        let cache = cache_paths(
+            repo,
+            tip,
+            command,
+            hold.selection.as_ref(),
+            &host.validation_build_output_env(),
+        )?;
         let bytes = serde_json::to_vec(&InconclusiveHoldAttempt {
             recorded_at: Utc::now(),
             reason: reason.to_string(),
@@ -129,18 +142,25 @@ fn record_inconclusive_hold(repo: &Path, tip: &str, hold: &BaselineRedHold, reas
     }
 }
 
-fn recorded_moved_base_status(
+fn recorded_moved_base_status<H: RuntimeHost + ?Sized>(
+    host: &H,
     repo: &Path,
     hold: &BaselineRedHold,
     tip: &str,
 ) -> Option<BaselineHoldStatus> {
-    let result = match cache_paths(repo, tip, &hold.command, hold.selection.as_ref()) {
+    let result = match cache_paths(
+        repo,
+        tip,
+        &hold.command,
+        hold.selection.as_ref(),
+        &host.validation_build_output_env(),
+    ) {
         Ok(cache) => match read_cached(&cache.result, hold.selection.as_ref()) {
             Some(result) => Ok(result),
             None => {
                 if let Some(selection) = hold_failing_tests_selection(hold)
                     && let Some(check) =
-                        cached_base_check(repo, tip, &hold.command, Some(&selection))
+                        cached_base_check(host, repo, tip, &hold.command, Some(&selection))
                     && let Some(status) = failed_replay_status(hold, tip, &selection, check)
                 {
                     return Some(status);

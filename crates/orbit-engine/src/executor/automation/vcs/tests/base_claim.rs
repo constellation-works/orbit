@@ -169,6 +169,7 @@ fn supervisor_stops_never_classify_partial_failures_as_known_red() {
                 );
                 assert_eq!(check.base_replay, Some(BaseReplay::FailingTests));
                 let mut baseline = cached_base_check(
+                    &Host,
                     &repo,
                     base.trim(),
                     command,
@@ -408,7 +409,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         check.base_log
     );
     assert!(
-        cached_base_check(&repo, base.trim(), "./check.sh", None).is_none(),
+        cached_base_check(&Host, &repo, base.trim(), "./check.sh", None).is_none(),
         "no conclusive base result was cached"
     );
 
