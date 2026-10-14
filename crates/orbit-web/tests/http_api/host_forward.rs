@@ -697,11 +697,12 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                 ],
             );
             let behind = old_dashboard();
-            // `dead-ssh` never binds. `taken-ssh` authenticates for
-            // `bind_delay`, then finds the port taken and exits at once.
+            // The same controlled interleaving covers an unrelated exit while
+            // its port is occupied, and collision exhaustion. Neither may
+            // trust a foreign dashboard or start a remote command.
             let stub = StubSsh::new(json!({
-                "dead-ssh": {"exit": 255, "delay": 1.5},
-                "taken-ssh": {"attach": behind, "spawn": behind, "bind_delay": 1.5},
+                "dead-ssh": {"exit": 255, "hold": true},
+                "taken-ssh": {"attach": behind, "spawn": behind, "bind_gate": "every"},
             }));
             let a_server = a.server_with_path(false, stub.bin());
             let foreign_identity = json!({"hosts": [{"local": true, "machine_id": "hm_foreign"}]});
@@ -719,13 +720,30 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                         .send()
                         .unwrap()
                 });
-                wait_until(&format!("{host}'s ssh to start"), SLOW_REQUEST, || {
-                    stub.calls().len() > before
-                });
-                let reserved = forwarded_port(&stub.calls()[before]);
-                let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
-                    .expect("the reserved port is free until ssh binds it");
-                let probes = serve_dashboard(foreign, Some(foreign_identity.clone()));
+                let allocations = if host == "takenhost" { 3 } else { 1 };
+                let mut foreign_probes = Vec::new();
+                for allocation in 0..allocations {
+                    wait_until(
+                        &format!("{host}'s allocation {allocation}"),
+                        SLOW_REQUEST,
+                        || stub.calls().len() > before + allocation,
+                    );
+                    let call = stub.calls()[before + allocation].clone();
+                    let reserved = forwarded_port(&call);
+                    let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
+                        .expect("the selected port is free until ssh binds it");
+                    foreign_probes.push(serve_dashboard(foreign, Some(foreign_identity.clone())));
+                    if host == "deadhost" {
+                        stub.release();
+                    } else {
+                        fs::write(
+                            stub.bin()
+                                .join(format!("release-{}", call["pid"].as_i64().unwrap())),
+                            "",
+                        )
+                        .unwrap();
+                    }
+                }
 
                 let failed = error_code(request.join().unwrap(), 502, "unreachable_destination");
                 assert_eq!(failed["host"], host, "{failed}");
@@ -733,15 +751,24 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                     failed["error"].as_str().unwrap().contains("exit 255"),
                     "{host}: ssh's own failure is reported: {failed}"
                 );
-                assert_eq!(
-                    probes.load(Ordering::SeqCst),
-                    0,
-                    "{host}: nothing is probed through a port its ssh never bound"
-                );
+                for probes in foreign_probes {
+                    assert_eq!(
+                        probes.load(Ordering::SeqCst),
+                        0,
+                        "{host}: nothing is probed through a port its ssh never bound"
+                    );
+                }
+                for call in &stub.calls()[before..] {
+                    assert!(
+                        !alive(call["pid"].as_i64().unwrap()),
+                        "{host}: every refused child is reaped"
+                    );
+                    assert_eq!(call["mode"], "attach", "{host}: no remote command starts");
+                }
                 assert_eq!(
                     stub.calls().len(),
-                    before + 1,
-                    "{host}: a failed probe spawns no remote dashboard"
+                    before + allocations,
+                    "{host}: only proven local collisions reallocate, within a fixed bound"
                 );
             }
         },
@@ -757,35 +784,98 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
             let b_server = b.server(true);
             let a = Fixture::new();
             write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
-            // Nothing answers the attach forward, so A spawns B's dashboard.
-            let stub =
-                StubSsh::new(json!({"hostb-ssh": {"attach": null, "spawn": port(&b_server)}}));
-            let mut a_server = a.server_with_path(true, stub.bin());
-
-            let state = json_ok(
-                a_server
-                    .request("GET", "/api/hosts/hostb/connection")
-                    .timeout(SLOW_REQUEST)
-                    .send()
-                    .unwrap(),
-            );
-            assert_eq!(state["origin"], "spawned", "{state}");
-            json_ok(a_server.get("/api/on/hostb/workspaces"));
-            let calls = stub.calls();
-            assert_eq!(calls.len(), 2, "attach probe, then spawn: {calls:?}");
-            assert_eq!(
-                calls[1]["command"],
-                "orbit web serve --no-open --operator --port 7878"
-            );
-            let pids = stub.pids();
-            assert!(pids.iter().any(|pid| alive(*pid)));
-
-            assert!(a_server.terminate().success());
-            for pid in pids {
-                assert!(
-                    !alive(pid),
-                    "graceful shutdown stops the ssh child it started"
+            for operator in [false, true] {
+                // F363: hold the initial child after allocation, take its port,
+                // then let its real bind fail. A fresh allocation must still
+                // spawn with exactly this session's authority.
+                let stub = StubSsh::new(json!({"hostb-ssh": {
+                    "attach": null, "spawn": port(&b_server), "bind_gate": "first",
+                }}));
+                let mut a_server = a.server_with_path(operator, stub.bin());
+                let origin = a_server.origin.clone();
+                let request = thread::spawn(move || {
+                    reqwest::blocking::Client::builder()
+                        .no_proxy()
+                        .timeout(SLOW_REQUEST)
+                        .build()
+                        .unwrap()
+                        .get(format!("{origin}/api/hosts/hostb/connection"))
+                        .send()
+                        .unwrap()
+                });
+                wait_until("the held initial ssh", SLOW_REQUEST, || {
+                    !stub.calls().is_empty()
+                });
+                let first = stub.calls()[0].clone();
+                let reserved = forwarded_port(&first);
+                let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved)).unwrap();
+                let probes = serve_dashboard(
+                    foreign,
+                    Some(json!({"hosts": [{
+                        "local": true, "machine_id": b.machine_id(),
+                    }]})),
                 );
+                fs::write(
+                    stub.bin()
+                        .join(format!("release-{}", first["pid"].as_i64().unwrap())),
+                    "",
+                )
+                .unwrap();
+                let state = json_ok(request.join().unwrap());
+                let calls = stub.calls();
+                let bind_events = fs::read_to_string(stub.bin().join("bind-events.jsonl")).unwrap();
+                let events: Vec<Value> = bind_events
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                assert_eq!(events[0]["pid"], first["pid"]);
+                assert_eq!(events[0]["port"], reserved);
+                assert_eq!(events[0]["errno"], libc::EADDRINUSE);
+                assert_eq!(
+                    state["reachable"], true,
+                    "a proven local collision must reallocate: {state}"
+                );
+                assert_eq!(state["origin"], "spawned", "{state}");
+                assert_eq!(state["machine_id"], b.machine_id());
+                json_ok(a_server.get("/api/on/hostb/workspaces"));
+                assert_eq!(
+                    calls.len(),
+                    3,
+                    "failed allocation, attach probe, then spawn: {calls:?}"
+                );
+                assert_eq!(calls[0]["mode"], "attach");
+                assert_eq!(calls[1]["mode"], "attach");
+                assert_eq!(calls[2]["mode"], "spawn");
+                assert_ne!(forwarded_port(&calls[1]), reserved);
+                assert_eq!(forwarded_port(&calls[1]), forwarded_port(&calls[2]));
+                let expected = if operator {
+                    "orbit web serve --no-open --operator --port 7878"
+                } else {
+                    "orbit web serve --no-open --port 7878"
+                };
+                assert_eq!(calls[2]["command"], expected);
+                assert_eq!(
+                    probes.load(Ordering::SeqCst),
+                    0,
+                    "even a matching identity on the foreign listener is never read"
+                );
+                assert!(
+                    !alive(first["pid"].as_i64().unwrap()),
+                    "the failed allocation's child is reaped before handoff"
+                );
+                let pids = stub.pids();
+                assert!(
+                    !alive(pids[1]),
+                    "the successful attach probe is reaped before spawn handoff"
+                );
+                assert!(
+                    alive(pids[2]),
+                    "only the owned spawn child serves the verified tunnel"
+                );
+                assert!(a_server.terminate().success());
+                for pid in pids {
+                    assert!(!alive(pid), "graceful shutdown stops every owned ssh child");
+                }
             }
         },
     );
