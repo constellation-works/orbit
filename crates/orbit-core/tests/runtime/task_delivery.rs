@@ -11,6 +11,14 @@ use orbit_types::workflow::{CommitObservationStatus, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod resume;
+use resume::{
+    inherited_commit_refuses_invalid_parent_evidence,
+    legacy_checkpoint_and_wire_shape_remain_readable_after_resume,
+    public_resume_retains_commit_producer_and_reads_current_landing,
+    repeated_resume_authenticates_each_parent_and_requires_current_landing,
+};
+
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
@@ -387,5 +395,9 @@ fn measure_delivery_lookup() {
 crate::scenario_table!(
     newest_delivery_uses_submitted_task_bindings_scenarios,
     newest_delivery_uses_submitted_task_bindings,
-    direct_path_run_is_observed_through_its_pinned_definition
+    direct_path_run_is_observed_through_its_pinned_definition,
+    public_resume_retains_commit_producer_and_reads_current_landing,
+    inherited_commit_refuses_invalid_parent_evidence,
+    repeated_resume_authenticates_each_parent_and_requires_current_landing,
+    legacy_checkpoint_and_wire_shape_remain_readable_after_resume
 );

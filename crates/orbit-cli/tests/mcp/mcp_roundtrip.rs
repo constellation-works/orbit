@@ -979,6 +979,153 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
     );
     assert_eq!(statuses.len(), 3, "the refused read is audited too: {rows}");
     assert!(!rows.to_string().contains(SECRET), "audit leaked run input");
+
+    // Reproduce the public-resume reporting gap on the same public MCP/CLI
+    // boundary. The host fixture's failed source retains its actual commit;
+    // public resume admission copies that checkpoint without rewriting it.
+    use orbit_types::workflow::{JobRunState, JobRunStep, JobTargetType};
+    let mut client = workspace.serve();
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id":task_id, "plan":"Read deterministic delivery checkpoints.", "model":"codex"}),
+    );
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id":task_id, "status":"backlog", "model":"codex"}),
+    );
+    drop(client);
+    let mut source = runtime.show_job_run_observed(RUN_ID).unwrap();
+    source.state = JobRunState::Failed;
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&workspace_id, &source, None)
+        .unwrap();
+    let landing_index = shipped_step_index("task_pr_pipeline", "complete_pr");
+    state.step_states.remove(&landing_index);
+    state.step_outputs.remove(&landing_index);
+    state
+        .pipeline
+        .as_object_mut()
+        .unwrap()
+        .remove("complete_pr");
+    runtime.write_run_state(RUN_ID, &state).unwrap();
+    let record = |run_id: &str, index: u32, id: &str, at| {
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_step_for_workspace(
+                &workspace_id,
+                run_id,
+                &JobRunStep {
+                    lock_wait_ms: None,
+                    step_index: index,
+                    target_type: JobTargetType::Activity,
+                    target_id: id.into(),
+                    started_at: Some(at),
+                    finished_at: Some(at),
+                    duration_ms: Some(0),
+                    exit_code: Some(0),
+                    agent_response_json: None,
+                    state: JobRunState::Success,
+                    error_code: None,
+                    error_message: None,
+                },
+            )
+            .unwrap();
+    };
+    record(
+        RUN_ID,
+        shipped_step_index("task_pr_pipeline", "commit"),
+        "commit",
+        source.created_at,
+    );
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let submitted = runtime
+        .submit_resume_run(RUN_ID, Some("fixture"), None)
+        .unwrap();
+    runtime
+        .wait_pipeline_runs(
+            std::slice::from_ref(&submitted.run_id),
+            10,
+            1,
+            Some("fixture"),
+        )
+        .unwrap();
+    let mut resumed = runtime.show_job_run_observed(&submitted.run_id).unwrap();
+    let mut inherited = runtime.read_run_state(&resumed.run_id).unwrap().unwrap();
+    let completed = json!({"phase":"complete", "merge":{"merged":true,
+        "pr_number":"4242", "landed_commit":LANDED}});
+    inherited.record_step(
+        landing_index,
+        JobRunState::Success,
+        Some(completed.clone()),
+        None,
+    );
+    inherited.record_pipeline_output("complete_pr", completed);
+    inherited.record_pipeline_output(
+        "sync_base",
+        json!({"head_before":HEAD, "head_after":"4".repeat(40)}),
+    );
+    inherited.compact_for_terminal(JobRunState::Success);
+    runtime
+        .write_run_state(&resumed.run_id, &inherited)
+        .unwrap();
+    // This is the first executed step of the resumed tail, not logical step 0.
+    record(&resumed.run_id, 0, "complete_pr", resumed.created_at);
+    resumed.state = JobRunState::Success;
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&workspace_id, &resumed, None)
+        .unwrap();
+
+    let mut client = workspace.serve();
+    let original = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"id":task_id, "field":"delivery", "run_id":RUN_ID}),
+    );
+    assert_eq!(original["delivery_status"], "committed");
+    assert_eq!(original["landing"]["status"], "not_reached");
+    let observed = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"id":task_id, "field":"delivery", "run_id":resumed.run_id}),
+    );
+    let default = client.call_tool_ok("orbit_task_show", json!({"id":task_id, "field":"delivery"}));
+    assert_eq!(default, observed);
+    assert_eq!(observed["delivery_status"], "landed", "{observed}");
+    assert_eq!(observed["commit"]["head_sha"], HEAD);
+    assert_eq!(observed["commit"]["observed_at"], json!(source.created_at));
+    assert_eq!(observed["commit"]["provenance"]["source_run_id"], RUN_ID);
+    assert_eq!(
+        observed["landing"]["provenance"]["source_run_id"],
+        resumed.run_id
+    );
+    assert_eq!(
+        observed["landing"]["provenance"]["step_index"],
+        landing_index
+    );
+    assert_eq!(observed["landing"]["landed_commit"], LANDED);
+    assert_eq!(runtime.read_run_state(RUN_ID).unwrap().unwrap(), state);
+    assert!(
+        !observed.to_string().contains(SECRET),
+        "inherited observation leaked run input"
+    );
+    drop(client);
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &json!({"id":task_id,"field":"delivery","run_id":resumed.run_id}).to_string(),
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        cli, observed,
+        "CLI and MCP report the same authenticated resume"
+    );
 }
 
 fn a_replica_mcp_session_enforces_checkout_capability_classes() {
