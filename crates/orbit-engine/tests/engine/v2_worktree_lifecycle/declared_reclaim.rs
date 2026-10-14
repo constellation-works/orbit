@@ -310,6 +310,146 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                 &fixture.repo,
                 &["worktree", "remove", "--force", path_str(&scratch)],
             );
+            // Scratch checkouts whose builder left a durable record: a base
+            // run's cache lock, or a lease. Each is reclaimed only while GC
+            // holds that lock; a held one is in use.
+            // (case, kind, report action of a dry run, of the scheduled sweep)
+            let scratch_cases = [
+                ("base-idle", "base-rerun", "would_reclaim", "reclaimed"),
+                (
+                    "base-held",
+                    "base-rerun",
+                    "skipped:host_target_in_use",
+                    "skipped:host_target_in_use",
+                ),
+                (
+                    "base-symlink",
+                    "base-rerun",
+                    "skipped:not_a_real_directory",
+                    "skipped:not_a_real_directory",
+                ),
+                (
+                    "host-evidence",
+                    "host-evidence",
+                    "would_reclaim",
+                    "reclaimed",
+                ),
+                ("recovery-idle", "recovery", "would_reclaim", "reclaimed"),
+                (
+                    "recovery-held",
+                    "recovery",
+                    "skipped:host_target_in_use",
+                    "skipped:host_target_in_use",
+                ),
+            ];
+            let mut held_locks = Vec::new();
+            let mut held_leases = Vec::new();
+            let mut base_locks = BTreeMap::new();
+            let mut scratch_sources = BTreeMap::new();
+            let attach = |checkout: &Path, commit: &str| {
+                fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+                git(
+                    &fixture.repo,
+                    &["worktree", "add", "--detach", path_str(checkout), commit],
+                );
+            };
+            let detach = |checkout: &Path| {
+                git(
+                    &fixture.repo,
+                    &["worktree", "remove", "--force", path_str(checkout)],
+                );
+            };
+            for (index, (case, kind, _, _)) in scratch_cases.into_iter().enumerate() {
+                let (target, source) = match kind {
+                    "base-rerun" => {
+                        let key = format!("{:064x}", index + 1);
+                        let lock = fixture.repo.join(format!(".git/orbit-baseline/{key}.lock"));
+                        let guard = orbit_common::fs::file_lock::acquire_exclusive_file_lock(
+                            &lock,
+                            "base run",
+                            Default::default(),
+                        )
+                        .unwrap();
+                        let checkout = fixture
+                            .repo
+                            .join(format!(".orbit/state/worktrees/orbit-baseline-{key}"));
+                        attach(&checkout, BASE);
+                        let source = checkout.canonicalize().unwrap();
+                        let target = build(&checkout);
+                        detach(&checkout);
+                        if case == "base-held" {
+                            held_locks.push(guard);
+                        }
+                        if case == "base-symlink" {
+                            fs::remove_dir_all(&target).unwrap();
+                            symlink(&outside, &target).unwrap();
+                        }
+                        base_locks.insert(case, lock);
+                        (target, source)
+                    }
+                    "host-evidence" => {
+                        let author = fixture.root.path().join("host-evidence-author");
+                        attach(&author, BASE);
+                        let script = "mkdir -p \"$CARGO_TARGET_DIR/debug\" && printf 'host build' > \"$CARGO_TARGET_DIR/debug/output\"\n";
+                        let commit = commit_file(&author, "host-build.sh", script);
+                        detach(&author);
+                        let candidate =
+                            orbit_engine::review_gate::revision(&fixture.repo, &commit).unwrap();
+                        let command = orbit_types::workflow::HostSandboxCommand::admit(
+                            "sh host-build.sh",
+                            &["sh host-build.sh".to_string()],
+                        )
+                        .unwrap();
+                        let run = orbit_engine::review_gate::run_host_sandbox_test(
+                            &host,
+                            &fixture.repo,
+                            &candidate,
+                            &command,
+                            "jrun-host-evidence",
+                            &fixture.root.path().join("unused-target"),
+                        )
+                        .unwrap();
+                        assert_eq!(run.exit_code, Some(0), "{}", run.output);
+                        let target =
+                            PathBuf::from(run.environment["cargo_target_dir"].as_str().unwrap());
+                        let leases = target
+                            .parent()
+                            .unwrap()
+                            .with_file_name("host-validation-leases");
+                        let record: Value = serde_json::from_slice(
+                            &fs::read(leases.join(format!(
+                                "{}.json",
+                                target.file_name().unwrap().to_str().unwrap()
+                            )))
+                            .unwrap(),
+                        )
+                        .unwrap();
+                        let source = PathBuf::from(record["source"].as_str().unwrap());
+                        assert!(!source.exists(), "the evidence checkout was removed");
+                        (target, source)
+                    }
+                    _ => {
+                        let checkout = fixture
+                            .repo
+                            .join(format!(".orbit/state/recovery-checkouts/jrun-{case}"));
+                        attach(&checkout, BASE);
+                        let source = checkout.canonicalize().unwrap();
+                        let lease = orbit_engine::review_gate::lease_scratch_host_target(
+                            &checkout,
+                            orbit_engine::review_gate::ScratchHostTarget::Recovery,
+                        )
+                        .unwrap();
+                        let target = build(&checkout);
+                        detach(&checkout);
+                        if case == "recovery-held" {
+                            held_leases.push(lease);
+                        }
+                        (target, source)
+                    }
+                };
+                targets.insert(case, target);
+                scratch_sources.insert(case, source);
+            }
             let host_reports = |result: &Value| -> BTreeMap<PathBuf, Value> {
                 result["reports"]
                     .as_array()
@@ -340,7 +480,11 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
             )
             .unwrap();
             let dry_run = host_reports(&serde_json::to_value(&dry_run).unwrap());
-            assert_eq!(dry_run.len(), cases.len() + 1, "{dry_run:#?}");
+            assert_eq!(
+                dry_run.len(),
+                cases.len() + scratch_cases.len() + 1,
+                "{dry_run:#?}"
+            );
             let estimated = dry_run[&targets["orphan"]]["bytes_reclaimed"]
                 .as_u64()
                 .unwrap();
@@ -354,6 +498,22 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                 dry_run[&unattributed]["action"], "skipped:unattributed_host_target",
                 "{dry_run:#?}"
             );
+            for (case, kind, expected, _) in scratch_cases {
+                let report = &dry_run[&targets[case]];
+                assert_eq!(report["action"], expected, "{case}: {report:#}");
+                assert!(targets[case].exists(), "{case}: a dry run deletes nothing");
+                let detail = report["detail"].as_str().unwrap();
+                assert!(
+                    detail.contains(kind) && detail.contains(path_str(&scratch_sources[case])),
+                    "{case}: the report names the scratch checkout type and source: {report:#}"
+                );
+                if expected == "would_reclaim" {
+                    assert!(
+                        report["bytes_reclaimed"].as_u64().unwrap() >= 10,
+                        "{case}: {report:#}"
+                    );
+                }
+            }
 
             let swept = action(&host, "worktree_gc", &json!({})).unwrap();
             let reports = host_reports(&swept);
@@ -368,6 +528,25 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
             }
             assert_eq!(reports[&targets["orphan"]]["bytes_reclaimed"], estimated);
             assert!(unattributed.join("debug/output").is_file());
+            for (case, _, _, expected) in scratch_cases {
+                let report = &reports[&targets[case]];
+                assert_eq!(report["action"], expected, "{case}: {report:#}");
+                assert_eq!(
+                    fs::symlink_metadata(&targets[case]).is_ok(),
+                    expected != "reclaimed",
+                    "{case}: {report:#}"
+                );
+                if expected == "reclaimed" {
+                    assert_eq!(
+                        report["bytes_reclaimed"], dry_run[&targets[case]]["bytes_reclaimed"],
+                        "{case}: {report:#}"
+                    );
+                }
+            }
+            // A held lock keeps its target, and its record outlives the sweep.
+            assert!(targets["base-held"].join("debug/output").is_file());
+            assert!(targets["recovery-held"].join("debug/output").is_file());
+            assert!(base_locks.values().all(|lock| lock.is_file()));
             assert!(
                 fs::symlink_metadata(&targets["symlink"])
                     .unwrap()
@@ -396,6 +575,14 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                     .all(|report| report["bytes_reclaimed"] == 0),
                 "{again:#}"
             );
+            // Released, the held scratch targets are reclaimed.
+            drop((held_locks, held_leases));
+            let released = host_reports(&action(&host, "worktree_gc", &json!({})).unwrap());
+            for case in ["base-held", "recovery-held"] {
+                let report = &released[&targets[case]];
+                assert_eq!(report["action"], "reclaimed", "{case}: {report:#}");
+                assert!(!targets[case].exists(), "{case}: {report:#}");
+            }
             // Replacing a component after GC's last check redirects nothing:
             // the targets directory swapped for a redirect to outside data
             // under the target's own key, or the target swapped for an outside

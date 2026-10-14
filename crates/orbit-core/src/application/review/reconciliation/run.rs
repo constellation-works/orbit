@@ -11,7 +11,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
-use orbit_engine::review_gate::{self, RequiredValidationRun};
+use orbit_engine::review_gate::{self, RequiredValidationRun, ScratchHostTarget};
 use orbit_types::task::{TaskArtifact, TaskComplexity, TaskRelation, TaskRelationType, TaskType};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -236,10 +236,15 @@ fn run_commands(
 ) -> Result<Vec<RequiredValidationRun>, OrbitError> {
     let checkout_id = format!("{run_id}-{side}");
     let checkout = runtime.create_recovery_checkout(&checkout_id, commit)?;
-    let runs = commands
-        .iter()
-        .map(|command| review_gate::run_required_validation(runtime, &checkout, command))
-        .collect::<Result<Vec<_>, _>>();
+    // The lease records what built the checkout's host validation target, so
+    // worktree GC can reclaim it once the checkout is gone, never while held.
+    let runs = review_gate::lease_scratch_host_target(&checkout, ScratchHostTarget::Recovery)
+        .and_then(|_lease| {
+            commands
+                .iter()
+                .map(|command| review_gate::run_required_validation(runtime, &checkout, command))
+                .collect::<Result<Vec<_>, _>>()
+        });
     // The checkout is this run's own scratch; remove it whatever happened.
     let cleanup = runtime.remove_recovery_checkout(&checkout_id);
     let runs = runs?;

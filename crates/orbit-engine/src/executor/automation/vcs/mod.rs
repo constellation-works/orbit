@@ -28,6 +28,7 @@ mod required_capture;
 mod required_command;
 mod resume;
 pub mod review_gate;
+mod scratch_target;
 mod worktree;
 
 #[cfg(test)]

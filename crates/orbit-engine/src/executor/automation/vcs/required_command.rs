@@ -103,11 +103,9 @@ pub(super) fn host_validation_target_key(source: &Path) -> String {
     sha256_hex(source.as_os_str().as_encoded_bytes())
 }
 
-/// Host-owned Cargo output, separate from every sandbox-writable target.
-/// Key by the canonical *source* path: Cargo freshness alone cannot detect
-/// compiler-wrapper rewrites of embedded paths, or a different source checkout.
-/// The same checkout's repair/retry/resume can safely reuse its host output.
-pub(super) fn host_validation_target(checkout: &Path) -> Result<PathBuf, OrbitError> {
+/// The primary checkout holding `checkout`'s host validation target, and the
+/// canonical source path that keys it.
+pub(super) fn host_validation_source(checkout: &Path) -> Result<(PathBuf, PathBuf), OrbitError> {
     let source = checkout.canonicalize()?;
     let common = orbit_common::fs::git::git_common_dir(&source)?;
     let primary = common
@@ -115,9 +113,19 @@ pub(super) fn host_validation_target(checkout: &Path) -> Result<PathBuf, OrbitEr
         .filter(|_| common.file_name().is_some_and(|name| name == ".git"))
         .ok_or_else(|| {
             OrbitError::Execution("host validation needs a primary Git checkout".into())
-        })?;
+        })?
+        .to_path_buf();
+    Ok((primary, source))
+}
+
+/// Host-owned Cargo output, separate from every sandbox-writable target.
+/// Key by the canonical *source* path: Cargo freshness alone cannot detect
+/// compiler-wrapper rewrites of embedded paths, or a different source checkout.
+/// The same checkout's repair/retry/resume can safely reuse its host output.
+pub(super) fn host_validation_target(checkout: &Path) -> Result<PathBuf, OrbitError> {
+    let (primary, source) = host_validation_source(checkout)?;
     let key = host_validation_target_key(&source);
-    let mut target = primary.to_path_buf();
+    let mut target = primary;
     // These are host state, never global compiler/download caches. Refuse
     // redirects rather than creating output through a sandbox-writable symlink.
     for component in HOST_VALIDATION_TARGETS_DIR

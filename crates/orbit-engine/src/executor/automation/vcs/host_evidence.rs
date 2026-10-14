@@ -5,7 +5,8 @@
 //! nothing the checkout holds beyond that commit can reach it and nothing the
 //! run writes reaches the checkout. On Linux its Cargo target follows the
 //! required-validation rule: host-owned output keyed by the detached source
-//! checkout, never the caller's potentially sandbox-built target. Elsewhere
+//! checkout, never the caller's potentially sandbox-built target, under a
+//! lease that lets worktree GC reclaim it once unused. Elsewhere
 //! it uses the caller's target unless the validation environment names one.
 //! On macOS
 //! `ORBIT_REQUIRE_SANDBOX_EXEC=1` turns a Seatbelt test's visible skip into a
@@ -32,6 +33,7 @@ use super::baseline::in_detached_worktree;
 use super::required_command::{
     VALIDATION_TIMEOUT_MS, capture, environment_record, host_validation_target, missing_tool,
 };
+use super::scratch_target::{ScratchHostTarget, lease_scratch_host_target};
 use super::worktree::scratch_checkout_path;
 
 /// Name prefix of a host-evidence checkout under the managed worktree root.
@@ -123,6 +125,15 @@ fn execute<H: RuntimeHost + ?Sized>(
     host_command: &str,
 ) -> HostEvidenceRun {
     let mut environment = host.validation_subprocess_environment();
+    // Held until the run ends, so worktree GC cannot reclaim the target
+    // underneath it; once the checkout is gone the lease's record is what
+    // lets GC reclaim the target at all.
+    let _lease = match lease_scratch_host_target(checkout, ScratchHostTarget::HostEvidence) {
+        Ok(lease) => lease,
+        Err(error) => {
+            return HostEvidenceRun::refused(HostEvidenceReason::RunFailed, error.to_string());
+        }
+    };
     if cfg!(target_os = "linux") {
         let target = match host_validation_target(checkout) {
             Ok(target) => target,

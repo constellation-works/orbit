@@ -300,7 +300,8 @@ host-owned state, outside the managed worktree and the sandbox's writable
 compiler/download cache grants. The runner refuses symlink components rather
 than following a redirect into recovery's writable paths. It leaves all old
 targets and logs intact; worktree GC reclaims a terminal run's target once its
-checkout is gone ([host validation output](worktree-reclaim.md#host-validation-output)). The hash binds build reuse to the exact canonical
+checkout is gone, and a scratch checkout's target under its base-cache lock or
+lease ([host validation output](worktree-reclaim.md#host-validation-output)). The hash binds build reuse to the exact canonical
 source path: a host-evidence detached checkout and a candidate checkout cannot
 reuse each other's embedded fixture paths. Repeated required validation in the
 same checkout reuses its host target. A detached evidence checkout is recreated

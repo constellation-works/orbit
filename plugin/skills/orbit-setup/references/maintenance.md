@@ -119,8 +119,11 @@ On Linux, required validation builds into a host-owned target under
 `.orbit/state/host-validation-targets/`, outside the checkout. GC attributes
 each target to the runs whose recorded worktree path it was built for, and
 reclaims it once they are terminal with no live worker and the checkout is gone
-(or its kept output is being reclaimed). Targets of scratch checkouts no run
-names stay as `skipped:unattributed_host_target`.
+(or its kept output is being reclaimed). A scratch checkout's target (base
+rerun, host evidence, recovery) is reclaimed only through its base-cache lock
+or lease record, while GC holds that lock; a held lock reports
+`skipped:host_target_in_use`. Targets with no such record stay
+`skipped:unattributed_host_target`.
 
 ## Diagnose and repair
 

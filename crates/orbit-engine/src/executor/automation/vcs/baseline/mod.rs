@@ -18,7 +18,9 @@
 //!   refuses the symlinks a checkout can hold;
 //! - the base result is cached in the repository's Git common directory per
 //!   `(base, command)` behind an exclusive file lock, so concurrent
-//!   candidates on one host share a single base run;
+//!   candidates on one host share a single base run. That lock's file also
+//!   records the run's scratch checkout, so worktree GC can reclaim the
+//!   checkout's host validation target while holding it;
 //! - a comparable completed base failure with the same exit status and
 //!   every candidate failure identity makes the
 //!   failure typed `[baseline_red]`: no recovery repairs it, and the
@@ -64,6 +66,8 @@ mod compare;
 mod hold;
 
 // Preserve the existing module surface even for helpers used only by this split.
+#[cfg(target_os = "linux")]
+pub(super) use cache::recorded_base_runs;
 #[allow(unused_imports)]
 pub(super) use cache::{CachePaths, cache_paths};
 pub(super) use cache::{cached_base_check, in_detached_worktree};
