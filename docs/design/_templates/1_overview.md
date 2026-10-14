@@ -2,7 +2,7 @@
 title: <Feature> — Overview
 owner: <agent family: codex | claude | grok | gemini>
 last_updated: YYYY-MM-DD
-last_validated: 2026-10-10
+last_validated: 2026-10-14
 status: Draft
 feature: <feature-slug>
 doc_role: overview
