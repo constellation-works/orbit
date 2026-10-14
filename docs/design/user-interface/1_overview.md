@@ -3,7 +3,7 @@ summary: "User Interface — Overview"
 type: design
 title: "User Interface — Overview"
 owner: gemini
-last_updated: 2026-09-24
+last_updated: 2026-10-13
 last_validated: 2026-10-10
 status: Draft
 feature: user-interface
@@ -31,6 +31,14 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 - **Surfaces:** The dashboard assets and `/api/*` handlers live in `crates/orbit-web/`.
   Static docs and project pages should reuse the same visual grammar without importing
   runtime-only dashboard assumptions.
+- **Context contention:** Task-detail selectors are amber for backlog tasks and red
+  for in-progress tasks when they overlap another in-progress task in the selected
+  owning workspace. Each highlighted entry names linked competing tasks and their
+  matching selectors. Review tasks do not cause highlights. The locks API computes
+  these matches using the shared declaration expansion and selector overlap index;
+  this display does not change admission or locking. Unavailable data (including
+  aggregate views without a selected workspace) is shown as unknown. Lock refreshes
+  update open details without discarding unsaved editors.
 
 ## 3. At a Glance
 

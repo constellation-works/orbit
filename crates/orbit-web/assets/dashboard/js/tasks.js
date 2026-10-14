@@ -5,7 +5,7 @@ import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts,
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
-import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
+import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1510,7 +1510,7 @@ const TASK_FIELD_EDITORS = {
     toText: (task) => linesToText(task.context_files),
     renderView: (task) =>
       Array.isArray(task.context_files) && task.context_files.length > 0
-        ? buildFileList(task.context_files)
+        ? buildFileList(task)
         : emptyFieldView("no context files"),
     // The server refuses a selector that names nothing unless the caller says
     // the task is about to create it, so that escape is the editor's own
@@ -1559,13 +1559,46 @@ function buildCriteriaList(criteria) {
   return ul;
 }
 
-function buildFileList(paths) {
+function buildFileList(task) {
   const ul = el("ul", { class: "file-list mono" });
-  for (const path of paths) {
-    ul.appendChild(el("li", {}, selectorParts(path)));
-  }
+  ul.contentionTask = task;
+  refreshFileList(ul);
   return ul;
 }
+
+function refreshFileList(ul) {
+  const task = ul.contentionTask;
+  const applicable = task.status === "backlog" || task.status === "in-progress";
+  const nodes = [];
+  let unknown = false;
+  for (const path of task.context_files) {
+    const matches = applicable ? taskContextContenders(task, path) : [];
+    if (matches === null) unknown = true;
+    const li = el("li", {}, [el("span", { class: "context-selector" }, selectorParts(path))]);
+    if (matches?.length) {
+      li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
+      const note = el("span", { class: "context-contention" }, [" overlaps "]);
+      matches.forEach((match, index) => {
+        if (index) note.appendChild(document.createTextNode("; "));
+        note.appendChild(readinessTaskLink(match.id, task.workspace_id));
+        note.appendChild(document.createTextNode(` · ${match.selector}`));
+      });
+      li.appendChild(note);
+    }
+    nodes.push(li);
+  }
+  if (unknown) nodes.push(el("li", { class: "context-contention-unknown", text: "Contention unknown — current workspace data unavailable." }));
+  if (nodes.length === 0) nodes.push(el("li", { class: "field-empty", text: "no context files" }));
+  ul.replaceChildren(...nodes);
+}
+
+// Update only the displayed selectors, including details preserved for an
+// unsaved editor/comment. Never replace an editor or discard its draft.
+onTaskRuntimeChange(() => {
+  for (const ul of document.querySelectorAll(".file-list")) {
+    if (ul.contentionTask) refreshFileList(ul);
+  }
+});
 
 // A context selector is `kind:target`. The kind and, for path selectors, the
 // directory are dimmed so the basename — what an operator scans for — reads
@@ -3276,9 +3309,16 @@ function takeTaskActionNotice() {
   return notice;
 }
 
-// A detail kept as an open draft is reused as-is, so only its readiness list
-// is replaced when the drain state behind it changes.
-function refreshDraftReadiness(wrap, task, context, readinessTask = task) {
+// A detail kept for an open draft can refresh its read-only readiness and
+// selector displays without touching the editor holding that draft.
+function refreshDraftDetails(wrap, task, context, readinessTask = task) {
+  if (Array.isArray(readinessTask.context_files)) {
+    for (const ul of wrap.querySelectorAll(".file-list")) {
+      if (!ul.contentionTask) continue;
+      ul.contentionTask = readinessTask;
+      refreshFileList(ul);
+    }
+  }
   const current = wrap.querySelector(".readiness-list");
   if (!current) return;
   const drain = taskDrainState(task, context);
@@ -3743,7 +3783,7 @@ export function renderTasks(tasks, context) {
     const pinnedKey = `pinned-${ptask.id}`;
     const draft = drafts.get(pinnedKey);
     if (draft) {
-      refreshDraftReadiness(draft, ptask, context);
+      refreshDraftDetails(draft, ptask, context);
       nodes.push(draft);
     } else {
       nodes.push(buildPinnedTask(ptask, context));
@@ -3885,7 +3925,7 @@ export function renderTasks(tasks, context) {
         const draft = drafts.get(key);
         if (draft) {
           const state = taskDetailState(t, context);
-          refreshDraftReadiness(draft, t, context, state.task || t);
+          refreshDraftDetails(draft, t, context, state.task || t);
           groupNodes.push(draft);
         } else {
           const state = taskDetailState(t, context);

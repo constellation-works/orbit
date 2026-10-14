@@ -536,6 +536,22 @@ input.field-editor-input {
 .row-detail .file-list .selector-dim {
   color: var(--fg-mute);
 }
+.row-detail .file-list .context-contended-backlog .context-selector,
+.row-detail .file-list .context-contended-backlog .selector-dim {
+  color: #fbbf24;
+}
+.row-detail .file-list .context-contended-active .context-selector,
+.row-detail .file-list .context-contended-active .selector-dim {
+  color: #fca5a5;
+}
+.context-contention {
+  display: block;
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+.context-contention-unknown {
+  color: var(--fg-dim);
+}
 
 .row-detail .history-line {
   font-family: var(--font-mono);

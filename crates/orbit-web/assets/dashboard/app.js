@@ -1554,7 +1554,11 @@ function fetchRunningRuns() {
 }
 
 function fetchAndRenderTaskLocks() {
-  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count");
+  const visit = captureWorkspaceVisit();
+  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count").catch(error => {
+    if (visit.isCurrent()) setTaskLocks(null);
+    throw error;
+  });
 }
 
 function fetchAndRenderRunDetail() {
