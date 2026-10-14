@@ -102,6 +102,7 @@ pub(in crate::adapter::tool_host) fn control(
                 trigger,
                 false,
                 approve_proposed,
+                false,
             )?;
             let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
                 "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});

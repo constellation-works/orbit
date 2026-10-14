@@ -502,6 +502,7 @@ Orbit's own work has no crew lane of its own; it draws from the [complexity pool
 | Shipped auto-task templates (code review, QA sweeps, doc duties, …) | the template's `complexity` | The minted task carries no crew, so it draws like any crew-less task. A `template.crew` setting, an explicit template `crew`, and `operation.review_crew` for `delivery-code-review` still win. |
 | Task pilot (`task_pilot_pipeline`) | `low` | Piloting reads tasks and writes a bounded proposal. |
 | Step-failure recovery, PR conflict recovery | `medium` | Recovery diagnoses failures in work of any tier, so it is not low work; medium is also the tier an unassessed task is verified on. |
+| [`orbit run auto --auto-fix`](#pr-auto-fix-repairs) repairs (failed required checks and merge conflicts on the drain's PRs) | `low` | The repair is bounded to one named blocker on a candidate that already passed its gates. |
 
 A pilot or recovery activity names its pool as `crew_config_key: workflow.<tier>_complexity_crews`. The run draws once per pool on its first such dispatch: the pool's weights apply, disabled crews and those outside the run's `allowed_crews` are skipped, and crews at a [provider usage limit](#provider-usage-limits) are skipped while another member is left. Every later dispatch of that pool in the run, and a resume, reuses the draw, which the run's state records with the eligible members. An empty or wholly disabled pool falls back to `workflow.default_crew`, as an unassigned task does, and the recorded draw says so. The task pilot and finding verification inspect pinned source with the provider's native file-read and command tools, which only Codex and Claude have, so their draws skip crews of any other provider (Gemini, Grok, Antigravity, ...). A pool with no such member passes to the next tier up, then to `workflow.default_crew`; when that cannot inspect either, the activity fails with `inspection_crew_unavailable` before a provider launches. The pilot's recorded draw names the filter and the crews it skipped.
 
@@ -808,6 +809,50 @@ input, including in claimed pipelines and after a process restart.
 passed unchanged, including any literal template tokens in its text. Later
 phases do not inherit it. Run-show recovery attempts include the resume
 rationale in their detail.
+
+### PR auto-fix repairs
+
+`orbit run auto --auto-fix` lets the drain repair the pull requests its own runs
+opened when a required check fails or the branch conflicts with its base. It is a
+per-invocation flag with no configuration key, and it authorizes repair only:
+merging still needs `--complete`. Without the flag nothing changes.
+
+The crew comes from the existing pool resolution, in this order:
+
+1. `--allow-crew` restricts which crews the draw may pick, as for every
+   activity in the run.
+2. `workflow.low_complexity_crews` is the pool, drawn once per run with its
+   weights, disabled crews skipped and provider usage limits honoured, as
+   [above](#system-work-draws-from-the-complexity-pools). Conflict repairs under
+   `--auto-fix` use this pool too, rather than the medium pool.
+3. An empty or wholly disabled pool falls back to `workflow.default_crew`.
+
+A pool none of whose crews the run may use stops auto-fix with a diagnostic
+rather than escalating to another pool. Auto-fix never changes a task's
+complexity or crew.
+
+The PR watcher already used by `--complete` does the detecting, and the
+existing recovery activities, final validation and push do the repair:
+
+- Pending checks wait. A failed required check whose job log shows a code
+  failure is repaired, with that head's failed step, error signature and log
+  excerpt as evidence. A conflict is rebased onto the current base by PR
+  conflict recovery.
+- Approvals, permissions, admin rules, unknown status, failures with no
+  readable job log, transient infrastructure failures and optional checks
+  failing alone launch no agent; the watcher stops with the reason.
+- The repaired candidate passes required validation, is pushed only when the
+  remote branch is still at the head the repair was admitted for, and the
+  watcher then checks the new head. A head that the review gate already
+  approved goes back through the pipeline's re-review round before it can merge.
+- Each admitted attempt is written to the primary task's history, with the
+  PR, head, blocker, attempt number, crew and the draw's source, before any
+  agent starts. That record removes duplicates across polls, restarts and
+  owner/follower overlap: a PR head gets at most one repair per blocker. It
+  also caps each PR at three repairs across all heads and runs. When the budget
+  runs out, the watcher stops with `auto_fix_budget_exhausted` and lists the
+  attempts.
+- Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
 ### Setting `task.crew`
 

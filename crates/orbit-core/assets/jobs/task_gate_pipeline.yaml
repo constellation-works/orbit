@@ -99,6 +99,8 @@ spec:
     landing_branch: ""
     # ORB-11187: forwarded to the leaf pipeline unchanged.
     completion: review
+    # `--auto-fix` repair authority, forwarded to the leaf pipeline unchanged.
+    auto_fix: false
     # ORB-12102: forwarded to the child pipeline, never pinned here. A gated
     # local run publishes nothing by default — `task_local_pipeline` gates its
     # `push` step on this value and defaults it to false — so a checkout with
@@ -156,6 +158,7 @@ spec:
           base_sync: "{{ input.base_sync }}"
           landing_branch: "{{ input.landing_branch }}"
           completion: "{{ input.completion }}"
+          auto_fix: "{{ input.auto_fix }}"
           allowed_crews: "{{ input.allowed_crews }}"
           auto_push: "{{ input.auto_push }}"
         admission_task_ids: "{{ input.task_ids }}"

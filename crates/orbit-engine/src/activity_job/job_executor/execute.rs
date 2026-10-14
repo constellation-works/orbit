@@ -103,6 +103,7 @@ pub fn execute_job_with_resume(
         recovery_activity,
         failure_activity,
         final_recovery_activity,
+        check_repair_activity: super::recovery::check_repair_activity(job),
         recovery_validation_continuations,
         item: None,
         iteration: None,

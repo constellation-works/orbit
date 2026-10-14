@@ -97,46 +97,72 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     attempt: u32,
     max_attempts: u32,
 ) -> Result<StepOutcome, DispatchError> {
+    // An admitted `--auto-fix` check repair carries hosted job logs as its
+    // evidence, which may quote any marker below; only its own marker
+    // decides it.
+    let check_repair = orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic());
+    let stops = |marked: bool| marked && !check_repair;
     // Signing in requires the operator; a repair agent cannot make this
     // provider usable, nor give its selected model capacity [ORB-14149] or
     // its account usage [ORB-14695], and the post-recovery attempt would
     // rerun the same model. Preserve the marker for claimed-leaf settlement.
-    if orbit_types::workflow::is_provider_unavailable(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_provider_unavailable(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
     // [ORB-14266] Nor can it get past the provider's content policy: the
     // repair agent and the rerun would send the same task to the same filter.
-    if orbit_types::workflow::is_provider_refusal(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_provider_refusal(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
     // [ORB-13987] Nor can it install a tool required validation could not
     // find; repairing the candidate would only spend the recovery budget.
-    if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_validation_environment_failure(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
     // [ORB-14260] Nor can it reach a claimed task's owner when the step's
     // own coordinator could not: its sandbox masks the same credentials.
     // Preserve the marker for claimed-leaf settlement.
-    if orbit_types::workflow::is_owner_route_unavailable(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_owner_route_unavailable(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
     // [ORB-14258] Nor can it fix a required command the base itself fails;
     // the task is held until the command passes on a new base instead.
-    if orbit_types::workflow::is_baseline_red_failure(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_baseline_red_failure(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
     // [ORB-14269] Nor can it clear a blocker the implementer already declared.
     // Another agent would only spend the recovery budget the stop was meant
     // to avoid.
-    if orbit_types::workflow::is_task_blocked_by_agent(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_task_blocked_by_agent(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
     // Nor can it run `orbit` while an upgrade refuses the step's agents; the
     // step runs again once the upgrade settles.
-    if orbit_types::workflow::is_upgrade_pending(None, Some(&failure.diagnostic())) {
+    if stops(orbit_types::workflow::is_upgrade_pending(
+        None,
+        Some(&failure.diagnostic()),
+    )) {
         return failure.into_result();
     }
-    let Some(recovery) = recovery_activity_for_step(step, ctx) else {
+    let Some(declared) = recovery_activity_for_step(step, ctx) else {
         return failure.into_result();
     };
 
@@ -144,11 +170,19 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     // that stops on a later commit of that rebase, or on a base that moved
     // again, is a new typed conflict for the next round, up to the bound. A
     // retry reporting the very conflict just recovered made no progress, so
-    // another round would only repeat it.
+    // another round would only repeat it. An `--auto-fix` check repair the
+    // completion watcher admitted for a new head is a further round under
+    // the same bound; the watcher's durable ledger admits each one.
     let original = failure.diagnostic();
     let mut failure = failure;
     let mut round = 1;
     loop {
+        let check_repair =
+            orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic());
+        let recovery = match check_repair_route(&declared, ctx, check_repair) {
+            Some(recovery) => recovery,
+            None => return failure.into_result(),
+        };
         match attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
             RecoveryAdmission::Retry => {}
             RecoveryAdmission::Original => return failure.into_result(),
@@ -160,17 +194,33 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             let mut bound = Value::Object(serde_json::Map::new());
             let committed = bind_recovery_context(step, ctx, &mut bound)
                 .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
-                .and_then(|()| commit_recovery_repair_for_retry(step, ctx, &recovery, &bound));
+                .and_then(|()| {
+                    // A reviewed head's check repair is re-reviewed before
+                    // the completion step publishes it.
+                    let review_follows = check_repair
+                        && bound
+                            .pointer("/failed_step_input/re_review_on_conflict")
+                            .and_then(Value::as_bool)
+                            == Some(true);
+                    commit_recovery_repair_for_retry(step, ctx, &recovery, &bound, review_follows)
+                });
             if let Err(refusal) = committed {
                 return failure.into_refused_repair(&refusal);
             }
         }
-        let recovered_conflict = (recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
-            && round < MAX_CONFLICT_RECOVERY_ROUNDS)
+        let rounds_left = round < MAX_CONFLICT_RECOVERY_ROUNDS;
+        let recovered_conflict = (declared.name == PR_CONFLICT_RECOVERY_ACTIVITY && rounds_left)
             .then(|| failure.diagnostic());
-        match post_recovery_attempt(step, ctx, &recovery, &original, recovered_conflict) {
-            PostRecovery::ConflictAgain(conflict) => {
-                failure = StepFailure::Error(conflict);
+        match post_recovery_attempt(
+            step,
+            ctx,
+            &recovery,
+            &original,
+            recovered_conflict,
+            rounds_left,
+        ) {
+            PostRecovery::RecoverAgain(next) => {
+                failure = StepFailure::Error(next);
                 round += 1;
             }
             PostRecovery::Settled(result) => return result,
@@ -178,13 +228,28 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     }
 }
 
+/// The recovery a failure goes to. An `--auto-fix` check repair, which the
+/// conflict leaf cannot address, goes to the job's `step_failure_recovery`;
+/// a job without one routes it nowhere.
+fn check_repair_route(
+    declared: &ResolvedRecoveryActivity,
+    ctx: &ExecCtx<'_>,
+    check_repair: bool,
+) -> Option<ResolvedRecoveryActivity> {
+    if check_repair && declared.name == PR_CONFLICT_RECOVERY_ACTIVITY {
+        return ctx.check_repair_activity.clone();
+    }
+    Some(declared.clone())
+}
+
 /// How the post-recovery attempt of a failed step ended.
 enum PostRecovery {
     /// Recovered, or failed for good with the original diagnostic attached.
     Settled(Result<StepOutcome, DispatchError>),
-    /// The retry stopped on a different typed rebase conflict and a further
-    /// conflict recovery round is admitted.
-    ConflictAgain(DispatchError),
+    /// The retry stopped on a different typed rebase conflict, or handed
+    /// over a newly admitted `--auto-fix` check repair, and a further
+    /// recovery round is admitted.
+    RecoverAgain(DispatchError),
 }
 
 fn post_recovery_attempt(
@@ -193,6 +258,7 @@ fn post_recovery_attempt(
     recovery: &ResolvedRecoveryActivity,
     original: &str,
     recovered_conflict: Option<String>,
+    rounds_left: bool,
 ) -> PostRecovery {
     let reattempt = run_step_body(step, ctx);
     let (outcome, error_message) = match &reattempt {
@@ -238,7 +304,13 @@ fn post_recovery_attempt(
                 .as_deref()
                 .is_some_and(|recovered| recovered != conflict.to_string()) =>
         {
-            PostRecovery::ConflictAgain(conflict)
+            PostRecovery::RecoverAgain(conflict)
+        }
+        Err(handoff)
+            if rounds_left
+                && orbit_types::workflow::is_pr_auto_fix_check_repair(&handoff.to_string()) =>
+        {
+            PostRecovery::RecoverAgain(handoff)
         }
         Err(DispatchError::CandidateAbsorbed { candidate, .. }) => {
             PostRecovery::Settled(Err(DispatchError::CandidateAbsorbed {

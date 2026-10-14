@@ -394,6 +394,20 @@ without the flag carries no `completion` key at all, so its persisted input is
 identical to a pre-`--complete` submission. See
 [orchestration.md](orchestration.md) for the authorization semantics.
 
+### The `auto_fix` input
+
+`orbit run auto --auto-fix` sets `auto_fix: true` on the drain, which forwards it
+to every leaf the same way it forwards `completion`; without the flag the key is
+absent. In `task_pr_pipeline` it runs `pr_complete` even under
+`completion: review`, as a watcher that never merges and never completes the
+task: it returns once the PR is mergeable or merged elsewhere. A failed required
+check fails the step with a marked hand-off that the executor routes to the
+job's `step_failure_recovery`. A conflict goes to the step's existing
+`pr_conflict_recovery`. Both draw their crew from `workflow.low_complexity_crews`.
+The retried `pr_complete` validates and publishes the repair and then watches the
+new head. A reviewed head is sent through the `re_review_*` round instead. See
+[orchestration.md](orchestration.md#auto-fix-authorization).
+
 ## Cancelling
 
 ```bash

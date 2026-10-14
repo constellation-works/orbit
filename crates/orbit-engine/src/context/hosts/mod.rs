@@ -22,9 +22,9 @@ pub use null_host::NullRuntimeHost;
 pub use plugin_broker::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun};
 pub use recovery::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, RebaseRecoveryAttemptScope, STEP_RECOVERY_DECISION_SCHEMA_VERSION,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, StepRecoveryVerdict,
+    FinalRecoveryApplied, PrAutoFixAdmission, PrAutoFixRequest, RebaseRecoveryAttemptScope,
+    STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
 pub use review::{
     ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,

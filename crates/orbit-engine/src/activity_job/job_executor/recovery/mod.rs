@@ -27,3 +27,23 @@ const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
 /// it is not low work, and the medium pool is the one an unassessed task is
 /// verified on.
 const RECOVERY_CREWS_KEY: &str = "workflow.medium_complexity_crews";
+
+/// The job's `step_failure_recovery`, resolved from the first top-level step
+/// that declares it: the repair an `--auto-fix` check failure is routed to.
+/// A job none of whose steps declares it routes no check repair.
+pub(super) fn check_repair_activity(job: &JobV2) -> Option<ResolvedRecoveryActivity> {
+    job.steps.iter().find_map(|step| {
+        match (
+            step.recovery_activity.as_deref(),
+            step.resolved_recovery_activity.as_ref(),
+        ) {
+            (Some(STEP_FAILURE_RECOVERY_ACTIVITY), Some(activity)) => {
+                Some(ResolvedRecoveryActivity {
+                    name: STEP_FAILURE_RECOVERY_ACTIVITY.to_string(),
+                    spec: activity.spec.clone(),
+                })
+            }
+            _ => None,
+        }
+    })
+}

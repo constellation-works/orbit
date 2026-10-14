@@ -219,6 +219,27 @@ never approves `proposed` tasks. In the dashboard it needs an operator
 session. See [Completing work with
 `--complete`](../../getting-started/workflows/#completing-work-with---complete).
 
+### Repair blocked pull requests
+
+`--auto-fix` lets the window repair the pull requests it opened when a required
+check fails or the branch conflicts with its base. It is CLI-only and off by
+default:
+
+```bash
+orbit run auto --for 4h --auto-fix
+orbit run auto --for 4h --auto-fix --complete
+```
+
+The drain keeps watching each PR. Pending checks wait. A failed required check
+or a conflict goes to the existing repair step, which runs as a crew from
+`workflow.low_complexity_crews` (narrowed by `--allow-crew`). The repair then
+passes your required validation and is pushed, and the drain checks the new
+head. Approvals, permissions, admin rules, unknown status and optional-check
+failures launch no agent. Each PR gets at most one repair per head and blocker,
+and three in total; the attempts are recorded in the task's history.
+`--auto-fix` never merges. Add `--complete` to also merge and finish tasks.
+See [System work](../../reference/config/#system-work).
+
 To follow the window, open its run from the **Drain** card header; the run
 detail lists the child runs it started. A task in progress has **View run** on
 its row. From the CLI, record the returned ID as `$AUTO_RUN_ID`:

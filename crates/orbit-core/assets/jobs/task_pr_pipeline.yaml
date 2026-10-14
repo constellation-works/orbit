@@ -45,6 +45,17 @@
 #   a conflict after the second keeps the PR and the task in review. A base
 #   that advances again after a completion step's recovery is followed a
 #   bounded number of times before failing as base_chase_exhausted.
+# - `auto_fix: true` (`orbit run auto --auto-fix`) runs `complete_pr` even
+#   without `completion: done`, as a watcher that never merges and ends once
+#   the PR is mergeable. With it, a required check that fails on the PR's
+#   head is handed to `step_failure_recovery` (the completion step's conflict
+#   leaf cannot repair it) and a conflicting head takes the conflict path
+#   above. Both draw their crew from `workflow.low_complexity_crews`, are
+#   admitted against the PR's durable repair ledger (one repair per head and
+#   blocker, a bounded budget per PR), and publish the repaired head only
+#   after required validation passes on it; a reviewed head is re-reviewed
+#   through the rounds below first. Review gates, unreadable checks and other
+#   administrative blockers stop without an agent.
 #
 schemaVersion: 2
 kind: Job
@@ -86,6 +97,9 @@ spec:
     # explicit per-invocation operator authorization to also merge the PR and
     # complete the tasks, which only happens after the merge is verified.
     completion: review
+    # `--auto-fix`: repair authority, never merge authority, over this run's
+    # PR (see the header and `pr_complete`). Requires the PR route below.
+    auto_fix: false
     # ORB-11242: the run-scoped crew restriction the auto-drain admitting this
     # run applied. Empty means unrestricted. This is the innermost carrier: the
     # agent activities below resolve their crew against this run input, so the
@@ -494,7 +508,7 @@ spec:
         pr_number: "{{ steps.pr_open.output.pr_number }}"
 
     - id: complete_pr
-      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
+      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true || {{ input.auto_fix }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"
       # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
       # prove real unmerged entries. Protection, review, check, auth, stale
       # ownership, and lease failures remain ineligible for agent recovery.
@@ -514,6 +528,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
+        allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.sync_base.output.head }}"
         published_head_sha: "{{ steps.push.output.local_sha }}"
         previous_published_head_sha: "{{ steps.push.output.remote_sha_before }}"
@@ -547,6 +563,7 @@ spec:
         base_sync: "{{ input.base_sync }}"
         mode: pr
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         re_review_after: complete_pr
 
@@ -629,6 +646,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
+        allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.complete_pr.output.rebased.head }}"
         published_head_sha: "{{ steps.re_push.output.local_sha }}"
         previous_published_head_sha: "{{ steps.re_push.output.remote_sha_before }}"
@@ -658,6 +677,7 @@ spec:
         base_sync: "{{ input.base_sync }}"
         mode: pr
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         re_review_after: complete_reviewed_pr
 
@@ -731,6 +751,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
+        allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.complete_reviewed_pr.output.rebased.head }}"
         published_head_sha: "{{ steps.re_push_2.output.local_sha }}"
         previous_published_head_sha: "{{ steps.re_push_2.output.remote_sha_before }}"

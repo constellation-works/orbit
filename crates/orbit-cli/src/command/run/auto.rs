@@ -17,7 +17,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --auto-fix\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
                   waiting for the batch.\n\n\
@@ -25,6 +25,19 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
+                  `--auto-fix` lets the drain repair the pull requests it opens. Each one is\n\
+                  watched for merge blockers: a required check that fails on its head, or a\n\
+                  conflict with its base, goes to the run's own repair pipeline, which commits\n\
+                  the repair, reruns required validation and pushes it to the same pull\n\
+                  request, then watches the new head. Pending checks are waited on. Review\n\
+                  requirements, unreadable or non-workflow checks, runner and network failures,\n\
+                  and other administrative blockers stop without an agent. Repair crews come\n\
+                  from `workflow.low_complexity_crews`, under `--allow-crew` and the host's\n\
+                  provider limits. Each pull request gets at most 3 repairs in total, and one\n\
+                  per head and blocker, across retries and restarts. `--auto-fix` never merges:\n\
+                  without `--complete` the tasks stay in `review` once the pull request is\n\
+                  mergeable; with it, completion merges as usual. Pull requests only; local\n\
+                  delivery is unaffected.\n\n\
                   `--complete` never approves `proposed` work; `--approve-proposed` does.\n\
                   With it, the drain pilots the qualifying proposed tasks (tagged\n\
                   `no-diff-expected`, or with context files and an assessed complexity) in\n\
@@ -104,6 +117,13 @@ pub struct AutoCommand {
     /// reports why. Off by default.
     #[arg(long)]
     pub approve_proposed: bool,
+    /// Repair the pull requests this drain opens when a required check fails
+    /// on their head or their branch conflicts with its base: the run's
+    /// repair pipeline fixes, validates and pushes the repair, then watches
+    /// the new head. Repair crews come from `workflow.low_complexity_crews`.
+    /// This never merges; `--complete` still decides that. Off by default.
+    #[arg(long)]
+    pub auto_fix: bool,
     /// Restrict this run to these configured crews, e.g. when a provider is
     /// unavailable or its budget is spent. Repeatable and comma-separated.
     /// Every name must be configured here; an unknown or empty one fails
@@ -145,13 +165,13 @@ pub struct AutoCommand {
     /// Pull from this owner instead of draining a local backlog. Takes the
     /// owner's host-qualified selector from federated discovery and runs only
     /// on that owner's replica checkout. Pulled work always stops at a handoff
-    /// the owner lands; `--complete` and the complexity pools do not apply,
-    /// and `--approve-proposed` is refused because only the owner approves
-    /// work. `--allow-crew` limits which tasks are claimed.
+    /// the owner lands; `--complete`, `--auto-fix` and the complexity pools do
+    /// not apply, and `--approve-proposed` is refused because only the owner
+    /// approves work. `--allow-crew` limits which tasks are claimed.
     #[arg(
         long,
         value_name = "SELECTOR",
-        conflicts_with_all = ["complete", "approve_proposed", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
+        conflicts_with_all = ["complete", "approve_proposed", "auto_fix", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
     )]
     pub pull: Option<String>,
     /// Owner host for `--pull <workspace>`, by registered host name or
@@ -169,7 +189,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "approve_proposed", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "approve_proposed", "auto_fix", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
     )]
     pub stop: bool,
 }
@@ -246,6 +266,7 @@ impl Execute for AutoCommand {
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
             self.approve_proposed,
+            self.auto_fix,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,

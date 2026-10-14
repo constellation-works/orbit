@@ -907,6 +907,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::runtime::recovery_decision::read(slot)
     }
 
+    fn admit_pr_auto_fix(
+        &self,
+        request: &orbit_engine::PrAutoFixRequest,
+    ) -> Result<orbit_engine::PrAutoFixAdmission, OrbitError> {
+        OrbitRuntime::admit_pr_auto_fix(self, request)
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,

@@ -134,6 +134,7 @@ pub(crate) fn workspace_auto_run_input(
     completion: crate::application::workflow::CompletionPolicy,
     allowed_crews: &[String],
     approve_proposed: bool,
+    auto_fix: bool,
 ) -> Result<Value, OrbitError> {
     if max_active_leaf_runs == Some(0) {
         return Err(OrbitError::InvalidInput(
@@ -170,6 +171,11 @@ pub(crate) fn workspace_auto_run_input(
     // work; the task-pilot apply step verifies it before approving anything.
     if approve_proposed {
         input.insert("approve_proposed".to_string(), json!(true));
+    }
+    // Repair authority over the PRs the drain opens, forwarded to every leaf
+    // like completion; it never authorizes a merge.
+    if auto_fix {
+        input.insert("auto_fix".to_string(), json!(true));
     }
     Ok(Value::Object(input))
 }

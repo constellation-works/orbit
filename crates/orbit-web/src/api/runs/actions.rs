@@ -231,6 +231,8 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             // Strict worker containment is a CLI-only flag.
             false,
             approve_proposed,
+            // `--auto-fix` is a CLI-only flag.
+            false,
         )?;
         let mut started = json!({
             "workflow": "auto",

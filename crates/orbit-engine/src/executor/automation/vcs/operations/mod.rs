@@ -24,6 +24,8 @@ pub(crate) const PR_MERGE_CAPABILITIES: &str = "pr.merge_capabilities";
 pub(crate) const PR_STATUS: &str = "pr.status";
 /// [ORB-15308] Close a pull request a superseding run replaced.
 pub(crate) const PR_CLOSE: &str = "pr.close";
+/// Which of a pull request's head checks branch protection requires.
+pub(crate) const PR_REQUIRED_CHECKS: &str = "pr.required_checks";
 /// [ORB-15956] Merge the base's current tip into a pull request's branch.
 pub(crate) const PR_UPDATE_BRANCH: &str = "pr.update_branch";
 /// [ORB-15956] The hosted CI jobs that ran on one commit.

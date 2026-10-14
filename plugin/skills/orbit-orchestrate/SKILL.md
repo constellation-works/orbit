@@ -22,7 +22,9 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
 - Creation, promotion and completion are distinct. `--complete` authorizes
   delivery for work admitted in that invocation's window; it does not itself
   authorize promotion, future windows or releases; `run auto --approve-proposed`
-  is the separate opt-in for a drain to approve qualifying proposed tasks.
+  is the separate opt-in for a drain to approve qualifying proposed tasks, and
+  `run auto --auto-fix` the separate opt-in to repair its own PRs' failed
+  required checks and conflicts, which never merges.
   Existing continuous-delivery authorization may cover them; apply the user's
   actual instructions.
 - Verify persisted preparation, actual diffs, required checks and merge state.

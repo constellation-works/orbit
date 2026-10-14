@@ -322,6 +322,7 @@ impl OrbitRuntime {
             trigger,
             false,
             false,
+            false,
         )
     }
 
@@ -331,6 +332,10 @@ impl OrbitRuntime {
     /// qualifying `proposed` tasks into the backlog through the task-pilot
     /// promotion boundary. Like `completion`, it is only ever raised by a
     /// per-invocation operator flag.
+    ///
+    /// `auto_fix` (`--auto-fix`) authorizes the drain's PR leaves to repair
+    /// failed required checks and merge conflicts on their pull requests. It
+    /// is repair authority only; `completion` alone authorizes merging.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_containment(
         &self,
@@ -344,6 +349,7 @@ impl OrbitRuntime {
         trigger: JobRunTrigger,
         strict_containment: bool,
         approve_proposed: bool,
+        auto_fix: bool,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
@@ -366,6 +372,7 @@ impl OrbitRuntime {
             completion,
             &self.canonical_allowed_crews(allowed_crews)?,
             approve_proposed,
+            auto_fix,
         )?;
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
         if strict_containment {

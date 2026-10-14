@@ -124,7 +124,19 @@ pub(super) fn dispatch_recovery(
                 .map_err(|error| ("input", error.to_string()))?;
         }
         inject_recovery_evidence(ctx, &mut input).map_err(|error| ("input", error))?;
-        input["crew_config_key"] = Value::String(RECOVERY_CREWS_KEY.to_string());
+        // An `--auto-fix` run repairs its pull request, check or conflict,
+        // with the crew drawn from the low pool, the draw its admission
+        // recorded.
+        let auto_fix = input
+            .pointer("/failed_step_input/auto_fix")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let crews_key = if auto_fix {
+            orbit_types::workflow::PR_AUTO_FIX_CREWS_KEY
+        } else {
+            RECOVERY_CREWS_KEY
+        };
+        input["crew_config_key"] = Value::String(crews_key.to_string());
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
         .map_err(|error| ("decision", error.to_string()))?;

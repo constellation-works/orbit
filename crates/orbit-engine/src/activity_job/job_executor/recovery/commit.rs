@@ -19,16 +19,21 @@ use crate::executor::automation::vcs::git::{git_command_success, git_output};
 /// a committed candidate. Nothing happens before the candidate's commit or
 /// for the `commit` step itself, which commit the repair themselves, nor for
 /// agent steps, whose changes the commit step or review settlement own.
+///
+/// `review_follows` admits a repair of a reviewed head: an `--auto-fix` check
+/// repair on a completion step whose repaired head goes to a re-review round
+/// before anything publishes or merges it.
 pub(super) fn commit_recovery_repair_for_retry(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
     bound: &Value,
+    review_follows: bool,
 ) -> Result<(), RecoveryCommitRefusal> {
     if !matches!(deterministic_action(step), Some(action) if action != "git_commit") {
         return Ok(());
     }
-    commit_recovery_repair_after_commit(step, ctx, recovery, bound)
+    commit_recovery_repair_after_commit(step, ctx, recovery, bound, review_follows)
 }
 
 /// Shared adoption boundary for step retry and final-recovery resume. The
@@ -39,6 +44,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
     bound: &Value,
+    review_follows: bool,
 ) -> Result<(), RecoveryCommitRefusal> {
     let pipeline = ctx.pipeline_snapshot();
     let outputs = pipeline
@@ -73,7 +79,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
         })
         .flatten()
         .filter_map(Value::as_str)
-        .filter(|head| !head.is_empty())
+        .filter(|head| !head.is_empty() && !review_follows)
         .map(str::to_string)
         .collect::<Vec<_>>();
     let task_ids = match (bound.get("task_id"), bound.get("task_ids")) {
@@ -199,5 +205,6 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
         &serde_json::json!({
             "task_id": task_id, "workspace_path": worktree.workspace_path,
         }),
+        false,
     )
 }

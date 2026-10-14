@@ -27,8 +27,8 @@ use crate::activity_job::{
 use super::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
-    PluginBrokerHandle, PluginBrokerRun, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport,
     StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
@@ -195,6 +195,16 @@ pub trait RuntimeHost: Send + Sync {
         task_ids: &[String],
         workspace_path: &Path,
     ) -> Result<(), OrbitError>;
+    /// Admit one `--auto-fix` repair of a pull request's failed required
+    /// checks or merge conflict before any agent runs. The host draws the
+    /// run's repair crew from `workflow.low_complexity_crews` and decides the
+    /// request against the pull request's durable ledger under the primary
+    /// task's lock, recording an admitted attempt in the same critical
+    /// section.
+    fn admit_pr_auto_fix(
+        &self,
+        request: &PrAutoFixRequest,
+    ) -> Result<PrAutoFixAdmission, OrbitError>;
 
     // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 

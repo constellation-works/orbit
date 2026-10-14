@@ -245,7 +245,10 @@ fn completion_rebase(
     step_id: &str,
     input: &Value,
 ) -> Result<Option<CompletionRebase>, OrbitError> {
-    let completes = input.get("completion").and_then(Value::as_str) == Some("done");
+    // `--auto-fix` hands a repaired reviewed head to re-review too, without
+    // completion authority.
+    let completes = input.get("completion").and_then(Value::as_str) == Some("done")
+        || input.get("auto_fix").and_then(Value::as_bool) == Some(true);
     let no_diff = input
         .get("skipped_no_diff_expected")
         .and_then(Value::as_bool)

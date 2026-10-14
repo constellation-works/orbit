@@ -111,6 +111,11 @@ spec:
     allowed_crews: []
     # ORB-14117: opt-in approval of qualifying proposed tasks each pass.
     approve_proposed: false
+    # Opt-in `--auto-fix`: completion watches each PR this run opens and
+    # repairs failed required checks and merge conflicts on it. Repair
+    # authority only; merging still needs `completion: done`. Forwarded to
+    # every leaf like `completion`.
+    auto_fix: false
     # Complexity pools are captured by Core at coordinator admission from
     # workflow configuration and low/medium/hard/xhard_complexity_crews run
     # overrides.
@@ -189,6 +194,7 @@ spec:
                     base_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
                     base_sync: "{{ steps.resolve_ship_input.output.base_sync }}"
                     completion: "{{ input.completion }}"
+                    auto_fix: "{{ input.auto_fix }}"
                     allowed_crews: "{{ input.allowed_crews }}"
             fan_in:
               join:
