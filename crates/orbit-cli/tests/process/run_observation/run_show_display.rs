@@ -69,14 +69,8 @@ fn shown(fixture: &Fixture, extra: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-#[test]
 fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
-    ) {
-        return;
-    }
-    let fixture = Fixture::init();
+    let fixture = Fixture::terminal();
     seed_interrupted_run(&fixture);
     // Piped output (`auto`) renders the plain form of the table.
     for format in ["table", "auto"] {
@@ -105,45 +99,23 @@ fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
     assert!(detail.contains("Lock wait: 42ms"), "{detail}");
     let quiet = shown(&fixture, &["--step", "prepare"]);
     assert!(!quiet.contains("Lock wait:"), "{quiet}");
-}
 
-#[test]
-fn run_show_hides_shipped_catalog_layers_unless_verbose() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::run_show_hides_shipped_catalog_layers_unless_verbose",
-    ) {
-        return;
-    }
-    let fixture = Fixture::init();
-    seed_interrupted_run(&fixture);
-    let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
+    // These views read the same immutable interrupted run and audit trail.
     let layers = json["catalog_layers"].as_array().unwrap();
     assert!(
         !layers.is_empty() && layers.iter().all(|layer| layer["layer"] == "shipped"),
         "the fixture must resolve only shipped references: {layers:?}"
     );
 
-    let quiet = shown(&fixture, &[]);
-    assert!(!quiet.contains("Catalog:"), "{quiet}");
+    let default_human = shown(&fixture, &[]);
+    assert!(!default_human.contains("Catalog:"), "{default_human}");
     let verbose = shown(&fixture, &["--verbose"]);
     assert_eq!(
         verbose.matches("Catalog:").count(),
         layers.len(),
         "{verbose}"
     );
-}
 
-#[test]
-fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record",
-    ) {
-        return;
-    }
-    let fixture = Fixture::init();
-    seed_interrupted_run(&fixture);
-
-    let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
     assert_eq!(json["steps_source"], "audit");
     let ids = json["steps"]
         .as_array()
@@ -155,7 +127,7 @@ fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_recor
     // The record keeps the reconciler's step untouched.
     assert_eq!(json["run"]["steps"][0]["error_code"], "worker_terminated");
 
-    let text = shown(&fixture, &[]);
+    let text = default_human;
     let rows = STEP_IDS
         .iter()
         .map(|id| {
@@ -174,14 +146,8 @@ fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_recor
 /// reconcile an ended run's steps by one rule: the audit trail answers for a
 /// run-level-only record, and the step the run died in reads as the run's
 /// terminal state with an `interrupted` outcome rather than `running`.
-#[test]
 fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
-    if !isolated_run_observation(
-        "run_observation::run_show_display::every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted",
-    ) {
-        return;
-    }
-    let fixture = Fixture::init();
+    let fixture = Fixture::terminal();
     seed_interrupted_run(&fixture);
     // The MCP run tools are an operator surface.
     let tool = |name: &str, input: serde_json::Value| {
@@ -256,9 +222,8 @@ fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
     assert_eq!(step["step"]["outcome"], "interrupted", "{step}");
 }
 
-#[test]
 fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
-    let fixture = Fixture::init();
+    let fixture = Fixture::terminal();
     seed_interrupted_run(&fixture);
     let rationale = "Set probe.command before returning the deferral record";
     let payload = serde_json::json!({
@@ -285,4 +250,28 @@ fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     assert_eq!(attempts[0]["decision"]["verdict"], "resume");
     assert_eq!(attempts[0]["diagnostic"], rationale);
     assert!(shown(&fixture, &[]).contains(rationale));
+}
+
+#[test]
+fn run_show_contracts() {
+    if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
+            run_show_prints_human_durations_and_one_based_steps_in_every_human_mode as fn(),
+        ),
+        (
+            "every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted",
+            every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted as fn(),
+        ),
+        (
+            "run_show_lists_a_final_recovery_resume_with_its_rationale",
+            run_show_lists_a_final_recovery_resume_with_its_rationale as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

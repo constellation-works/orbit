@@ -26,7 +26,6 @@ fn stage(fixture: &Fixture) -> Result<StagedBwrap, String> {
     .map_err(|error| error.to_string())
 }
 
-#[test]
 fn a_signed_listed_binary_is_staged_executable_with_its_digest() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -51,7 +50,6 @@ fn a_signed_listed_binary_is_staged_executable_with_its_digest() {
     assert!(!directory.exists(), "staging is removed with the handle");
 }
 
-#[test]
 fn unsigned_tampered_or_unlisted_binaries_are_refused() {
     let unsigned = Fixture::new(VERSION);
     unsigned.publish_assets(VERSION, &[(asset().as_str(), BINARY)], false);
@@ -81,4 +79,24 @@ fn unsigned_tampered_or_unlisted_binaries_are_refused() {
         error.contains("publishes no signed bundled Bubblewrap"),
         "{error}"
     );
+}
+
+#[test]
+fn bundled_bwrap_contracts() {
+    if crate::isolated_test::run_in_child("update::bundled_bwrap::bundled_bwrap_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "a_signed_listed_binary_is_staged_executable_with_its_digest",
+            a_signed_listed_binary_is_staged_executable_with_its_digest as fn(),
+        ),
+        (
+            "unsigned_tampered_or_unlisted_binaries_are_refused",
+            unsigned_tampered_or_unlisted_binaries_are_refused as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

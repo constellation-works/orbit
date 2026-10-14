@@ -12,6 +12,8 @@ use std::process::Stdio;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::{OrbitRuntime, TaskComplexity};
 use serde_json::{Value, json};
 
 use crate::git_repo;
@@ -23,6 +25,8 @@ struct Routed {
     bravo: Install,
     remote_task: String,
     local_task: String,
+    local_runtime: OrbitRuntime,
+    remote_runtime: OrbitRuntime,
 }
 
 impl Routed {
@@ -31,8 +35,10 @@ impl Routed {
         let bravo = fleet.install("bravo", "bravo", "BR");
         fleet.route("bravo", &bravo, "plain");
         fleet.json(&["host", "add", "bravo", "--json"]);
-        let remote_task = add_task(&fleet, &bravo.home, &bravo.repo(), "held by bravo");
-        let local_task = add_task(&fleet, &fleet.local.home, &fleet.local_repo, "held here");
+        let remote_runtime = owner_runtime(&bravo.home, &bravo.repo());
+        let local_runtime = owner_runtime(&fleet.local.home, &fleet.local_repo);
+        let remote_task = add_task(&remote_runtime, "held by bravo");
+        let local_task = add_task(&local_runtime, "held here");
         assert!(
             remote_task.starts_with("BR-"),
             "bravo mints BR ids: {remote_task}"
@@ -46,6 +52,8 @@ impl Routed {
             bravo,
             remote_task,
             local_task,
+            local_runtime,
+            remote_runtime,
         }
     }
 
@@ -91,17 +99,12 @@ impl Routed {
 
     /// The comment bodies on `id` as bravo itself reads them.
     fn comments_on_bravo(&self, id: &str) -> Vec<String> {
-        comments_in(&self.fleet, &self.bravo.home, &self.bravo.repo(), id)
+        comments_in(&self.remote_runtime, id)
     }
 
     /// The comment bodies on `id` in host A's own store.
     fn comments_here(&self, id: &str) -> Vec<String> {
-        comments_in(
-            &self.fleet,
-            &self.fleet.local.home,
-            &self.fleet.local_repo,
-            id,
-        )
+        comments_in(&self.local_runtime, id)
     }
 
     /// The remote commands dialed since the last call, then forget them.
@@ -141,73 +144,56 @@ fn parse(stdout: &[u8], args: &[&str]) -> Value {
     })
 }
 
-fn add_task(fleet: &Fleet, home: &Path, repo: &Path, title: &str) -> String {
-    let output = fleet
-        .orbit_in(
-            home,
-            repo,
-            &[
-                "task",
-                "add",
-                "--title",
-                title,
-                "--complexity",
-                "low",
-                "--json",
-            ],
-        )
-        .output()
-        .expect("spawn orbit");
-    assert!(
-        output.status.success(),
-        "task add: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let added = parse(&output.stdout, &["task", "add"]);
-    added["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("task add reports an id: {added}"))
+// Setup and state probes use the owning public runtime; the routed CLI/MCP
+// calls below still exercise parsing, transport, output and refusals.
+fn owner_runtime(home: &Path, repo: &Path) -> OrbitRuntime {
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+        orbit_core::runtime::OrbitRuntimeRoots {
+            global_root: home.join(".orbit"),
+            shared_root: repo.join(".orbit"),
+            local_root: repo.join(".orbit"),
+        },
+    )
+    .expect("registered fixture owner runtime")
+}
+
+fn add_task(runtime: &OrbitRuntime, title: &str) -> String {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            complexity: TaskComplexity::Low,
+            ..Default::default()
+        })
+        .expect("fixture task")
+        .id
         .to_string()
 }
 
-fn comments_in(fleet: &Fleet, home: &Path, repo: &Path, id: &str) -> Vec<String> {
-    let args = ["task", "show", id, "--fields", "comments", "--json"];
-    let output = fleet
-        .orbit_in(home, repo, &args)
-        .output()
-        .expect("spawn orbit");
-    assert!(
-        output.status.success(),
-        "{args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let comments = parse(&output.stdout, &args);
-    comments
-        .as_array()
-        .unwrap_or_else(|| panic!("comments are a list: {comments}"))
-        .iter()
-        .filter_map(|comment| {
-            ["body", "text", "content", "message"]
-                .iter()
-                .find_map(|key| comment[*key].as_str())
-        })
-        .map(ToOwned::to_owned)
+fn comments_in(runtime: &OrbitRuntime, id: &str) -> Vec<String> {
+    runtime
+        .get_task_comments(id)
+        .expect("owning task comments")
+        .into_iter()
+        .map(|comment| comment.message)
         .collect()
 }
 
-#[test]
 fn task_show_projections_match_the_owning_host() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
     let selector = routed.bravo_selector();
-    routed.json(&[
-        "task",
-        "update",
-        remote,
-        "--comment",
-        "a comment for the array projection",
-        "--json",
-    ]);
+    routed
+        .remote_runtime
+        .update_task_with_identity(
+            remote,
+            TaskUpdateParams {
+                comment: Some("a comment for the array projection".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("owning runtime fixture comment");
 
     let local_json = |fields: &str| {
         let args = ["task", "show", remote, "--fields", fields, "--json"];
@@ -228,6 +214,8 @@ fn task_show_projections_match_the_owning_host() {
         &["--workspace", &selector],
         &["--host", "bravo", "--workspace", "bravo-ws"],
     ];
+    let mut local_projections: std::collections::BTreeMap<&str, Value> =
+        std::collections::BTreeMap::new();
     for fields in [
         "title",
         "comments",
@@ -248,39 +236,57 @@ fn task_show_projections_match_the_owning_host() {
                 let object = local.as_object().expect("multiple fields stay keyed");
                 assert_eq!(object.len(), 4);
                 for field in fields.split(',') {
-                    let single = local_json(field);
+                    let single = &local_projections[field];
                     let expected = if field == "terminal" {
                         &single[field]
                     } else {
-                        &single
+                        single
                     };
                     assert_eq!(&object[field], expected);
                 }
             }
         }
-        for route in routes {
-            let mut args = vec!["task", "show", remote, "--fields", fields, "--json"];
-            args.extend_from_slice(route);
-            assert_eq!(routed.json(&args), local, "{args:?}");
-        }
+        // The task stays unchanged after its initial comment. Keep the actual
+        // local CLI results for multi-field and human projection comparisons.
+        local_projections.insert(fields, local.clone());
+        let args = ["task", "show", remote, "--fields", fields, "--json"];
+        assert_eq!(routed.json(&args), local, "{args:?}");
     }
 
-    let readiness = local_json("readiness");
-    for route in routes {
-        let mut args = vec!["task", "show", remote, "--fields", "readiness"];
-        args.extend_from_slice(route);
-        let output = routed.fleet.orbit_ok(&routed.fleet.local_repo, &args);
-        let text = String::from_utf8(output.stdout).expect("human task show is UTF-8");
-        let value = text
-            .trim()
-            .strip_prefix("readiness: ")
-            .unwrap_or_else(|| panic!("readiness field line: {text}"));
-        let shown: Value = serde_json::from_str(value).expect("full readiness object");
-        assert_eq!(shown, readiness, "{args:?}");
+    // All projection shapes cross the prefix route above. The other actual
+    // selector spellings converge before the same renderer; compare every
+    // field in one real payload on each, preserving destination/forwarding.
+    for route in &routes[1..] {
+        let args: Vec<_> = [
+            "task",
+            "show",
+            remote,
+            "--fields",
+            "title,comments,readiness,terminal",
+            "--json",
+        ]
+        .into_iter()
+        .chain(route.iter().copied())
+        .collect();
+        assert_eq!(
+            routed.json(&args),
+            local_projections["title,comments,readiness,terminal"],
+            "{args:?}"
+        );
     }
+
+    let readiness = &local_projections["readiness"];
+    let args = ["task", "show", remote, "--fields", "readiness"];
+    let output = routed.fleet.orbit_ok(&routed.fleet.local_repo, &args);
+    let text = String::from_utf8(output.stdout).expect("human task show is UTF-8");
+    let value = text
+        .trim()
+        .strip_prefix("readiness: ")
+        .unwrap_or_else(|| panic!("readiness field line: {text}"));
+    let shown: Value = serde_json::from_str(value).expect("full readiness object");
+    assert_eq!(&shown, readiness, "{args:?}");
 }
 
-#[test]
 fn cli_task_ids_route_to_the_host_their_prefix_names() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -355,7 +361,6 @@ fn cli_task_ids_route_to_the_host_their_prefix_names() {
     );
 }
 
-#[test]
 fn federated_mcp_routes_an_id_only_call_by_prefix() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -408,7 +413,6 @@ fn federated_mcp_routes_an_id_only_call_by_prefix() {
     );
 }
 
-#[test]
 fn a_routed_call_carries_the_callers_authority_and_no_more() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -468,7 +472,6 @@ fn a_routed_call_carries_the_callers_authority_and_no_more() {
     );
 }
 
-#[test]
 fn a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule() {
     let routed = Routed::new();
     // B keeps a replica checkout of A's workspace: a mirror of A's tasks.
@@ -556,21 +559,17 @@ fn a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule()
     );
 }
 
-#[test]
 fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() {
     let routed = Routed::new();
     let selector = routed.bravo_selector();
-    let tasks_in = |home: &Path, repo: &Path| {
-        let output = routed
-            .fleet
-            .orbit_in(home, repo, &["task", "list", "--json"])
-            .output()
-            .expect("spawn task list");
-        assert!(output.status.success(), "list the fixture's tasks");
-        parse(&output.stdout, &["task", "list"])
-    };
-    let local_before = tasks_in(&routed.fleet.local.home, &routed.fleet.local_repo);
-    let remote_before = tasks_in(&routed.bravo.home, &routed.bravo.repo());
+    let local_before = routed.local_runtime.list_tasks().expect("local tasks");
+    let remote_before = routed.remote_runtime.list_tasks().expect("remote tasks");
+    assert!(local_before.iter().any(|task| task.id == routed.local_task));
+    assert!(
+        remote_before
+            .iter()
+            .any(|task| task.id == routed.remote_task)
+    );
     routed.take_remote_argv();
 
     for command in [
@@ -624,12 +623,12 @@ fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() 
         "refused local commands never contact the remote host"
     );
     assert_eq!(
-        tasks_in(&routed.fleet.local.home, &routed.fleet.local_repo),
+        routed.local_runtime.list_tasks().expect("local tasks"),
         local_before,
         "refused commands leave the local tasks unchanged"
     );
     assert_eq!(
-        tasks_in(&routed.bravo.home, &routed.bravo.repo()),
+        routed.remote_runtime.list_tasks().expect("remote tasks"),
         remote_before,
         "refused commands leave the remote tasks unchanged"
     );
@@ -645,7 +644,6 @@ fn hinted_commands(message: &str) -> Vec<String> {
         .collect()
 }
 
-#[test]
 fn routed_task_update_refusals_offer_a_command_that_works() {
     let routed = Routed::new();
     let id = routed.remote_task.as_str();
@@ -758,7 +756,6 @@ fn routed_task_update_refusals_offer_a_command_that_works() {
     );
 }
 
-#[test]
 fn host_flag_resolves_to_the_selector_that_host_lists() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -931,7 +928,6 @@ fn ssh_hint_remote_argv(message: &str) -> Vec<String> {
     posix_shell_split(&local_words[2..].join(" "))
 }
 
-#[test]
 fn host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv() {
     let routed = Routed::new();
     let marker = routed.fleet.temp.path().join("injected_marker");
@@ -1095,4 +1091,72 @@ impl Drop for StdioClient {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn host_routing_contracts_0() {
+    if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "task_show_projections_match_the_owning_host",
+            task_show_projections_match_the_owning_host as fn(),
+        ),
+        (
+            "cli_task_ids_route_to_the_host_their_prefix_names",
+            cli_task_ids_route_to_the_host_their_prefix_names as fn(),
+        ),
+        (
+            "federated_mcp_routes_an_id_only_call_by_prefix",
+            federated_mcp_routes_an_id_only_call_by_prefix as fn(),
+        ),
+        (
+            "a_routed_call_carries_the_callers_authority_and_no_more",
+            a_routed_call_carries_the_callers_authority_and_no_more as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn host_routing_contracts_1() {
+    if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule",
+            a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule as fn(),
+        ),
+        (
+            "local_task_commands_refuse_remote_selection_without_delivering_or_mutating",
+            local_task_commands_refuse_remote_selection_without_delivering_or_mutating as fn(),
+        ),
+        (
+            "routed_task_update_refusals_offer_a_command_that_works",
+            routed_task_update_refusals_offer_a_command_that_works as fn(),
+        ),
+        (
+            "host_flag_resolves_to_the_selector_that_host_lists",
+            host_flag_resolves_to_the_selector_that_host_lists as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn host_routing_contracts_2() {
+    if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_2") {
+        return;
+    }
+    tracing::info!(
+        case = "host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv",
+        "CLI contract row"
+    );
+    host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv();
 }

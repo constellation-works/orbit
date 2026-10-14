@@ -28,7 +28,7 @@ use tempfile::tempdir;
 
 #[test]
 fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
-    exercise_handover(|mut server, pid, _| {
+    exercise_handover(|mut server, pid, port| {
         // Safety: SIGTERM to this test's own child, as a service manager would.
         assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -39,33 +39,12 @@ fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        drop(server);
+        assert!(
+            DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
+            "the handed-over dashboard must release its listening port"
+        );
     });
-}
-
-#[test]
-fn a_handed_over_dashboard_is_reaped_when_an_assertion_panics() {
-    let mut spawned = None;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        exercise_handover(|server, pid, port| {
-            spawned = Some((pid, port));
-            assert_eq!(server.id(), 0, "forced assertion failure after handover");
-        });
-    }));
-    let (pid, port) = spawned.expect("dashboard completed its handover before the forced panic");
-    assert!(
-        result.is_err(),
-        "the assertion must unwind through the guard"
-    );
-    // SAFETY: probe the PID retained before unwinding; do not send a signal.
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
-    );
-    assert!(
-        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
-        "the handed-over dashboard must release its listening port"
-    );
 }
 
 fn exercise_handover(after_handover: impl FnOnce(BoundServer, u32, u16)) {

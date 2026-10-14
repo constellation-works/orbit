@@ -194,6 +194,7 @@ mod inherited_pipes {
     }
 
     fn assert_cleanup(server: BoundServer, mut holder: UnixStream, unwind: bool) {
+        let pid = server.id();
         let started = Instant::now();
         let watchdog = Watchdog::new(&holder);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -207,6 +208,14 @@ mod inherited_pipes {
             "teardown needed a cooperative pipe release"
         );
         assert_eq!(result.is_err(), unwind);
+        // The guard must reap the original parent on assertion unwind as well
+        // as clean teardown; EOF alone could leave an unreaped zombie.
+        // SAFETY: probe our just-owned PID without sending a signal.
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
         assert!(
             started.elapsed() < Duration::from_secs(3),
             "teardown exceeded its two-second budget plus scheduling allowance"

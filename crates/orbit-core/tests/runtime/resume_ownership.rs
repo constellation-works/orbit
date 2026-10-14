@@ -610,6 +610,180 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
         Some(ancestor.as_str()),
         "lineage reconcile restamps onto the checkpoint batch"
     );
+    // Handoff provenance is decided during public resume admission, before
+    // the worker executes. Real terminal cleanup and promotion/completion
+    // remain covered by the CLI lifecycle carriers.
+    resume_handoff_admission_cases();
+}
+
+fn resume_handoff_admission_cases() {
+    for (event, note_kind, promoted) in [
+        ("validation_environment_blocked", "owned", false),
+        ("pr_failure_handoff", "owned", false),
+        ("pr_conflict_blocked", "owned", false),
+        ("review_gate_escalation", "owned", false),
+        ("pr_failure_handoff", "outside", false),
+        ("validation_environment_blocked", "missing", false),
+        ("pr_failure_handoff", "owned", true),
+    ] {
+        let fx = Fixture::new();
+        let task = fx.task();
+        let source = fx.failed_run(&*fx.located(fx.local.clone()), &task, "placeholder", None);
+        let input = json!({"task_ids": [task], "job_run_id": source, "completion": "done"});
+        fx.stamp_input(&source, &input);
+        // Resolve the same host actions used by the CLI completion fixture:
+        // restoration requires a successful reused pr_promote checkpoint,
+        // never a step name or agent-provided claim.
+        let job = json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": JOB},
+        "spec": {"state": "enabled", "kind": "workflow", "steps": [
+            {"id": "worktree", "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}},
+            {"id": "promote_tasks", "when": promoted.to_string(),
+             "spec": {"type": "deterministic", "action": "pr_promote", "config": {}}},
+            {"id": "complete_pr", "spec": {"type": "deterministic", "action": "pr_complete", "config": {}}}
+        ]}});
+        std::fs::write(
+            fx._root
+                .path()
+                .join("home/.orbit/resources/jobs")
+                .join(format!("{JOB}.yaml")),
+            job.to_string(),
+        )
+        .unwrap();
+        let mut state = PipelineState::new(source.clone(), JOB.into(), input);
+        let worktree = json!({"job_run_id": source, "batch_id": source, "task_ids": [task]});
+        state.record_step(0, JobRunState::Success, Some(worktree.clone()), None);
+        state.record_pipeline_output("worktree", worktree);
+        fx.bind(&task, &source);
+        if promoted {
+            fx.runtime
+                .apply_task_automation_update(
+                    &task,
+                    orbit_engine::TaskAutomationUpdate {
+                        status: Some(TaskStatus::Review),
+                        external_refs: vec![orbit_types::task::ExternalRef {
+                            system: "github-pr".into(),
+                            id: "42".into(),
+                            url: None,
+                        }],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let output =
+                json!({"phase": "promote", "performed_task_ids": [task], "pr_number": "42"});
+            state.record_step(1, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output("promote_tasks", output);
+        } else {
+            state.record_step(1, JobRunState::Skipped, None, None);
+        }
+        fx.jobs.write_run_state(&source, &state).unwrap();
+        let note_run = if note_kind == "outside" {
+            "jrun-outside-lineage"
+        } else {
+            &source
+        };
+        let note = if note_kind == "missing" {
+            "required validation lacked a tool in its environment: failed_step=validate".into()
+        } else {
+            resume_handoff_note(event, note_run)
+        };
+        fx.runtime
+            .apply_task_automation_update(
+                &task,
+                orbit_engine::TaskAutomationUpdate {
+                    status: Some(TaskStatus::Blocked),
+                    status_event: Some(event.into()),
+                    status_note: Some(note),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let before = fx.runtime.get_task(&task).unwrap();
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        let resumed = fx
+            .runtime
+            .submit_resume_run(&source, Some("operator"), None)
+            .unwrap();
+        let after = fx.runtime.get_task(&task).unwrap();
+        let after_history = fx.runtime.get_task_history(&task).unwrap();
+        assert_eq!(
+            &after_history[..history.len()],
+            history.as_slice(),
+            "{event}/{note_kind}"
+        );
+        assert_eq!(fx.jobs.read_run_state(&source).unwrap().unwrap(), state);
+        let seeded = fx.jobs.read_run_state(&resumed.run_id).unwrap().unwrap();
+        assert_eq!(seeded.run_id, resumed.run_id);
+        assert_eq!(seeded.step_output(0), state.step_output(0));
+        assert_eq!(seeded.step_output(1), state.step_output(1));
+        assert_eq!(seeded.initial_input["job_run_id"], source);
+        assert_eq!(
+            fx.jobs
+                .get_job_run(&resumed.run_id)
+                .unwrap()
+                .unwrap()
+                .retry_source_run_id,
+            Some(source.clone()),
+        );
+        if note_kind != "owned" {
+            assert_eq!(
+                after, before,
+                "{event}/{note_kind}: unauthorized block stays untouched"
+            );
+            assert_eq!(
+                after_history, history,
+                "{event}/{note_kind}: no restoration event"
+            );
+        } else {
+            let expected = if promoted {
+                TaskStatus::Review
+            } else {
+                TaskStatus::InProgress
+            };
+            assert_eq!(after.status, expected, "{event}/{promoted}");
+            assert_eq!(after.job_run_id.as_deref(), Some(source.as_str()));
+            let restored = after_history.last().unwrap();
+            assert_eq!(
+                restored.event,
+                if promoted {
+                    "resume_review_restored"
+                } else {
+                    "resume_readmitted"
+                },
+            );
+            assert_eq!(restored.from_status, Some(TaskStatus::Blocked));
+            assert_eq!(restored.to_status, Some(expected));
+            assert!(restored.note.as_ref().unwrap().contains(&resumed.run_id));
+            assert_eq!(
+                after_history.len(),
+                history.len() + 1,
+                "one admission transition"
+            );
+        }
+    }
+}
+
+fn resume_handoff_note(event: &str, run: &str) -> String {
+    match event {
+        "validation_environment_blocked" => format!(
+            "required validation lacked a tool in its environment: run={run}, \
+             failed_step=validate, candidate=abc, branch=orbit/candidate; the candidate was \
+             not judged and no PR was opened"
+        ),
+        "pr_failure_handoff" => format!(
+            "failure handoff published PR #7: run={run}, failed_step=validate, \
+             original_base=base, target_base=agent-main, conflicts=none reported"
+        ),
+        "pr_conflict_blocked" => format!(
+            "failure handoff published PR #7: run={run}, failed_step=sync_base, \
+             original_base=base, target_base=agent-main, conflicts=src/lib.rs"
+        ),
+        "review_gate_escalation" => format!(
+            "before-PR review gate stopped delivery: run={run}, failed_step=review_gate, \
+             candidate=abc, branch=orbit/candidate; no PR was opened"
+        ),
+        _ => unreachable!("the four production failure-handoff events"),
+    }
 }
 
 #[test]
