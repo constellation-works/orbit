@@ -25,6 +25,8 @@ struct VerifierHost {
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
     worker: Option<orbit_types::tool::WorkerInvocation>,
+    unknown_artifact_read: Mutex<Option<(String, usize)>>,
+    bulk_reads: Mutex<usize>,
 }
 
 impl VerifierHost {
@@ -35,6 +37,8 @@ impl VerifierHost {
             comments: Mutex::default(),
             artifacts: Mutex::default(),
             worker: None,
+            unknown_artifact_read: Mutex::default(),
+            bulk_reads: Mutex::default(),
         }
     }
 
@@ -86,6 +90,17 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
         task_id: &str,
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
+        if let Some((fault_path, remaining)) = &mut *self.unknown_artifact_read.lock().unwrap()
+            && fault_path == path
+        {
+            *remaining -= 1;
+            if *remaining == 0 {
+                return Err(OrbitError::OutcomeUnknown {
+                    mcp_call_id: "lost-artifact-read".into(),
+                    message: "named artifact reply lost".into(),
+                });
+            }
+        }
         let artifact = self
             .artifacts
             .lock()
@@ -100,6 +115,7 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
     }
 
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+        *self.bulk_reads.lock().unwrap() += 1;
         Ok(self
             .artifacts
             .lock()
@@ -458,27 +474,27 @@ fn commit_verifier_accepts_valid_no_diff_evidence() {
         "output": "ok"
     });
 
-    host.set_artifacts(
-        TASK_ID,
-        vec![
-            artifact("no-diff.json", valid_no_diff),
-            artifact("validation.json", log),
-        ],
-    );
-
-    let result = action(&host, &commit_input(temp.path(), &head))
-        .expect("valid no-diff evidence must be accepted by the verifier");
-    assert_eq!(result["decision"], "verified_no_diff");
-    assert_eq!(result["skipped_no_diff_expected"], true);
-    assert_eq!(result["committed"], false);
+    for stale in [None, Some(oversized_artifact("already-landed.json"))] {
+        let mut artifacts = vec![
+            artifact("no-diff.json", valid_no_diff.clone()),
+            artifact("validation.json", log.clone()),
+        ];
+        artifacts.extend(stale);
+        host.set_artifacts(TASK_ID, artifacts);
+        let result = action(&host, &commit_input(temp.path(), &head))
+            .expect("valid no-diff evidence must be accepted by the verifier");
+        assert_eq!(result["decision"], "verified_no_diff");
+        assert_eq!(result["skipped_no_diff_expected"], true);
+        assert_eq!(result["committed"], false);
+        assert_eq!(
+            *host.bulk_reads.lock().unwrap(),
+            0,
+            "no-diff evidence must use named-only reads"
+        );
+    }
 }
 
-fn commit_verifier_accepts_valid_already_landed_evidence() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
-
+fn valid_already_landed_artifacts(head: &str) -> Vec<TaskArtifact> {
     let valid_already_landed = json!({
         "schema_version": 1,
         "task_id": TASK_ID,
@@ -515,19 +531,182 @@ fn commit_verifier_accepts_valid_already_landed_evidence() {
         "output": "ok"
     });
 
-    host.set_artifacts(
-        TASK_ID,
-        vec![
-            artifact("already-landed.json", valid_already_landed),
-            artifact("validation.json", log),
-        ],
-    );
+    vec![
+        artifact("already-landed.json", valid_already_landed),
+        artifact("validation.json", log),
+    ]
+}
 
-    let result = action(&host, &commit_input(temp.path(), &head))
-        .expect("valid already-landed evidence must be accepted by the verifier");
-    assert_eq!(result["decision"], "verified_already_landed");
-    assert_eq!(result["skipped_no_diff_expected"], true);
-    assert_eq!(result["committed"], false);
+fn oversized_artifact(path: &str) -> TaskArtifact {
+    TaskArtifact::from_text(path, "x".repeat(1_048_577))
+}
+
+fn commit_verifier_accepts_valid_already_landed_evidence() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+
+    // An unused invalid route must never shadow fully bound landing proof.
+    for stale in [
+        None,
+        Some(oversized_artifact("no-diff.json")),
+        Some(TaskArtifact::from_text("no-diff.json", "invalid JSON")),
+    ] {
+        let mut artifacts = valid_already_landed_artifacts(&head);
+        artifacts.extend(stale);
+        host.set_artifacts(TASK_ID, artifacts);
+        let result = action(&host, &commit_input(temp.path(), &head))
+            .expect("stale no-diff evidence must not shadow valid landing proof [ORB-16131]");
+        assert_eq!(result["decision"], "verified_already_landed");
+        assert_eq!(result["skipped_no_diff_expected"], true);
+        assert_eq!(result["committed"], false);
+        assert_eq!(result["validation_provenance"][0]["tested_head"], head);
+        assert_eq!(git_head(temp.path()), head);
+        assert!(git_output(temp.path(), &["status", "--porcelain"]).is_empty());
+        assert_eq!(
+            *host.bulk_reads.lock().unwrap(),
+            0,
+            "clean-tree evidence must use named-only reads"
+        );
+    }
+}
+
+fn commit_verifier_refuses_required_evidence_and_unknown_reads() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let input = commit_input(temp.path(), &head);
+    let valid = valid_already_landed_artifacts(&head);
+
+    for (case, artifacts) in [
+        (
+            "oversized no-diff without alternate",
+            vec![oversized_artifact("no-diff.json")],
+        ),
+        (
+            "invalid no-diff without alternate",
+            vec![TaskArtifact::from_text("no-diff.json", "invalid JSON")],
+        ),
+        (
+            "oversized landing report",
+            vec![
+                oversized_artifact("no-diff.json"),
+                oversized_artifact("already-landed.json"),
+                valid[1].clone(),
+            ],
+        ),
+        (
+            "invalid landing report",
+            vec![
+                oversized_artifact("no-diff.json"),
+                TaskArtifact::from_text("already-landed.json", "invalid JSON"),
+                valid[1].clone(),
+            ],
+        ),
+        (
+            "oversized required log",
+            vec![
+                oversized_artifact("no-diff.json"),
+                valid[0].clone(),
+                oversized_artifact("validation.json"),
+            ],
+        ),
+        (
+            "invalid required log",
+            vec![
+                oversized_artifact("no-diff.json"),
+                valid[0].clone(),
+                TaskArtifact::from_text("validation.json", "invalid JSON"),
+            ],
+        ),
+        (
+            "missing required log",
+            vec![oversized_artifact("no-diff.json"), valid[0].clone()],
+        ),
+        (
+            "wrong-run required log",
+            vec![
+                oversized_artifact("no-diff.json"),
+                valid[0].clone(),
+                artifact(
+                    "validation.json",
+                    json!({"run_id": "another-run", "tested_head": head, "command": "make test", "exit_code": 0, "output": "ok"}),
+                ),
+            ],
+        ),
+    ] {
+        let host = VerifierHost::new(temp.path(), fixture_task());
+        host.set_artifacts(TASK_ID, artifacts);
+        let error = action(&host, &input).expect_err(case).to_string();
+        let required_refusal = match case {
+            "oversized no-diff without alternate" => "inline read limit",
+            "invalid no-diff without alternate" => "invalid no-diff.json",
+            "oversized landing report" | "invalid landing report" => "already-landed.json",
+            "oversized required log" | "missing required log" => "validation.json",
+            "invalid required log" | "wrong-run required log" => "validation log",
+            _ => unreachable!("every refusal case identifies its required evidence"),
+        };
+        assert!(
+            error.contains(required_refusal),
+            "{case} must refuse its required evidence: {error}"
+        );
+        assert_eq!(
+            git_head(temp.path()),
+            head,
+            "{case} must not create a commit"
+        );
+        assert_eq!(
+            *host.bulk_reads.lock().unwrap(),
+            0,
+            "{case} must use named-only reads"
+        );
+    }
+
+    // Read uncertainty is not evidence invalidity, even with a valid alternate.
+    for (path, nth) in [
+        ("no-diff.json", 1),
+        ("no-diff.json", 2),
+        ("validation.json", 1),
+    ] {
+        let host = VerifierHost::new(temp.path(), fixture_task());
+        let mut artifacts = valid.clone();
+        artifacts.push(artifact("no-diff.json", json!({
+            "schema_version": 1, "task_id": TASK_ID, "run_id": RUN_ID,
+            "tested_head": head, "reason": "No change required.",
+            "validation": [{"command": "make test", "exit_code": 0, "log_artifact": "validation.json"}],
+        })));
+        host.set_artifacts(TASK_ID, artifacts);
+        *host.unknown_artifact_read.lock().unwrap() = Some((path.into(), nth));
+        let error = action(&host, &input).expect_err("unknown no-diff read must refuse fallback");
+        assert!(
+            error
+                .to_string()
+                .contains("owner call outcome unknown for lost-artifact-read"),
+            "{path} read {nth} must refuse an unknown transport outcome: {error}"
+        );
+        assert_eq!(git_head(temp.path()), head);
+    }
+    for (path, nth) in [
+        ("already-landed.json", 1),
+        ("already-landed.json", 2),
+        ("already-landed.json", 3),
+        ("validation.json", 1),
+    ] {
+        let host = VerifierHost::new(temp.path(), fixture_task());
+        let mut artifacts = valid.clone();
+        artifacts.push(oversized_artifact("no-diff.json"));
+        host.set_artifacts(TASK_ID, artifacts);
+        *host.unknown_artifact_read.lock().unwrap() = Some((path.into(), nth));
+        let error = action(&host, &input).expect_err("unknown alternate read must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("owner call outcome unknown for lost-artifact-read"),
+            "{path} read {nth} must refuse an unknown transport outcome: {error}"
+        );
+        assert_eq!(git_head(temp.path()), head);
+    }
 }
 
 #[cfg(unix)]
@@ -1125,6 +1304,10 @@ fn commit_evidence_contracts_2() {
             (
                 "commit_verifier_accepts_valid_already_landed_evidence",
                 commit_verifier_accepts_valid_already_landed_evidence,
+            ),
+            (
+                "commit_verifier_refuses_required_evidence_and_unknown_reads",
+                commit_verifier_refuses_required_evidence_and_unknown_reads,
             ),
             #[cfg(unix)]
             (

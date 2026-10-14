@@ -15,7 +15,9 @@ use super::{already_landed, no_diff, tagged_no_diff};
 /// Accept a clean tree at the pinned HEAD only with structured evidence: a
 /// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
 /// covering delivery. A stale artifact of one kind never shadows valid
-/// evidence of the other; when both fail, both refusals are reported.
+/// evidence of the other, including a definite inline-size refusal. Unknown
+/// artifact-read outcomes still refuse; when both routes fail, both refusals
+/// are reported.
 pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
@@ -23,24 +25,29 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     run_id: &str,
     base_sha: &str,
 ) -> Result<Value, OrbitError> {
-    if host
-        .get_task_artifact(&task.id, no_diff::ARTIFACT)?
-        .is_none()
-    {
-        return already_landed::verify(host, task, workspace_path, run_id, base_sha);
-    }
-    let no_diff_error = match no_diff::verify(host, task, workspace_path, run_id, base_sha) {
-        Ok(checkpoint) => return Ok(checkpoint),
-        Err(error) => error,
+    let no_diff_error = match host.get_task_artifact(&task.id, no_diff::ARTIFACT) {
+        Ok(None) => {
+            return already_landed::verify(host, task, workspace_path, run_id, base_sha);
+        }
+        Ok(Some(_)) => match no_diff::verify(host, task, workspace_path, run_id, base_sha) {
+            Ok(checkpoint) => return Ok(checkpoint),
+            Err(error @ (OrbitError::Execution(_) | OrbitError::InvalidInput(_))) => error,
+            Err(error) => return Err(error),
+        },
+        // Named reads reject oversized persisted reports as invalid input.
+        // That is a definite refusal of this route, not a failed transport.
+        Err(error @ OrbitError::InvalidInput(_)) => error,
+        Err(error) => return Err(error),
     };
-    if host
-        .get_task_artifact(&task.id, already_landed::ARTIFACT)?
-        .is_none()
-    {
-        return Err(no_diff_error);
+    match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
+        Ok(None) => Err(no_diff_error),
+        Ok(Some(_)) => already_landed::verify(host, task, workspace_path, run_id, base_sha)
+            .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}"))),
+        Err(error @ OrbitError::InvalidInput(_)) => {
+            Err(OrbitError::Execution(format!("{no_diff_error}; {error}")))
+        }
+        Err(error) => Err(error),
     }
-    already_landed::verify(host, task, workspace_path, run_id, base_sha)
-        .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}")))
 }
 
 /// The commit checkpoint a no-diff promotion or completion must recheck, when
