@@ -33,6 +33,17 @@ pub(crate) fn running_digest(root: &Path, pid: u32) -> Option<String> {
 
 /// Copy `source` to `destination` as a distinct, [`assess`]ed candidate.
 pub(crate) fn distinct_copy(source: &Path, destination: &Path) {
+    distinct_copy_with_probe(source, destination, assess);
+}
+
+/// Create the same distinct native image, then warm it through the caller's
+/// required public command instead of an additional handover-contract launch.
+/// The probe must finish before any timed handover can use the image.
+pub(crate) fn distinct_copy_with_probe<T>(
+    source: &Path,
+    destination: &Path,
+    probe: impl FnOnce(&Path) -> T,
+) -> T {
     std::fs::copy(source, destination).expect("candidate copy");
     // Darwin names an image by its Mach-O UUID and rejects bytes appended after
     // the signed image, so the candidate gets a new UUID and is re-signed.
@@ -53,7 +64,7 @@ pub(crate) fn distinct_copy(source: &Path, destination: &Path) {
         .expect("open candidate")
         .write_all(b"\nupgrade-regression-candidate\n")
         .expect("distinct executable");
-    assess(destination);
+    probe(destination)
 }
 
 /// Install `source`'s bytes at `installed` the way an installer does: write

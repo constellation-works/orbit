@@ -502,3 +502,105 @@ experiment or manual QA. Focused warnings-denied Clippy and the existing
 real-CLI carrier check provide local evidence. The pipeline must rerun all four
 final commands, then the coordinator must verify Linux CI, Windows compilation
 and native macOS checks on the newly published head before landing PR #4749.
+
+## Local-candidate setup follow-up, 2026-10-14
+
+The two local-candidate tables retain all six row names, platform guards,
+independent installations/HOMEs/workspaces, native candidate bytes and assertions.
+Each candidate's required public manifest producer now performs its initial
+launch instead of a separate setup-only `update --contract --json` launch.
+The existing generation fixture accepts that probe; all other consumers still
+use its original contract assessment. Mach-O UUID renewal and ad-hoc signing
+remain unchanged. Git roots remain real repositories, but no longer seed an
+unrelated README commit: these rows attest provenance explicitly with the
+operator's commit, rather than deriving it from Git HEAD.
+
+The matched owner-host pair used base `2296455fcd01c3143311438ef710337ba472965a`
+on dk-server-2, native x86_64 Linux, 32 CPUs, Rust 1.98.1 and nextest 0.9.136.
+The normal host budget was eight build slots, four Cargo jobs and four test
+threads, with default lower CPU/IO priority. No setting or profile changed;
+the current default profile has a five-minute slow period, so the requested
+15-second limit is evaluated from actual durations, not inferred from PASS.
+The actual CLI SHA-256 was identical in both arms:
+`e93943ec003bc3b4986de9ecc32eb9ea0df301012be79f752f44429b731280e7`
+(376,136,432 bytes). No stripping or production change was made.
+
+Both focused commands selected/executed exactly two tests; the other 78
+identities were filtered or already ignored. They ran under
+`./scripts/build-budget.py -- cargo nextest run -p orbit-cli --test process
+--no-fail-fast --retries 0 --success-output immediate -E
+'test(=update::local_candidate::local_candidate_contracts_0) |
+test(=update::local_candidate::local_candidate_contracts_1)'`.
+
+| Measurement | Table 0 | Table 1 | Summed test time | Command wall |
+| --- | --- | --- | --- | --- |
+| Unchanged baseline | 12.329 s | 8.442 s | 20.771 s | 116.539 s, including 103 s initial compilation |
+| Candidate | 11.856 s | 8.082 s | 19.938 s | 15.310 s, including test-target recompilation |
+| Baseline with process tracing | 14.410 s | 10.104 s | 24.514 s | 14.996 s |
+| Candidate with identical process tracing | 14.602 s | 10.114 s | 24.716 s | 15.162 s |
+
+Tracing confirms contract launches across the cohort fell from 14 to eight,
+while Git seed commits fell from six to zero. The uninstrumented pair is a
+modest observed reduction; the instrumented pair is slightly slower. These
+are single samples on a shared host, not a causal speedup estimate or a
+best-of selection. Load averages were 11.72/8.95/11.60 to 11.19/9.89/11.65 for
+the baseline and 10.37/10.42/11.48 to 9.69/10.26/11.41 for the candidate.
+No load was synthesized or cache conditions artificially controlled.
+
+| Surviving row | Observable guarantee |
+| --- | --- |
+| Table 0 / older-installation bootstrap and idempotent replay | Equal-version native replacement, attested commit and digests, unsigned-local provenance, both admitted roots, completed convergence and preserved older backup on replay |
+| Table 0 / wrong provenance, digest, target or ownership | Full-commit validation; mismatched, missing and malformed manifests; changed bytes and foreign architecture; unmanaged/symlink targets; required/conflicting flags; producer preservation; host-global live-client refusal even with a workspace root override; unchanged bytes, generation, backup and staging |
+| Table 0 / discovered-workspace live client | A live workspace pin blocks replacement without changing installed bytes, backup or the workspace generation record |
+| Table 1 / unsupported admission contract, Linux | A genuine native executable lacking the contract is refused before replacement, with installation/generation/backup/staging preservation |
+| Table 1 / validation FIFO and accepted inode | Real client access during validation, exclusion of a concurrent update, unchanged installation before acceptance, accepted bytes installed despite pathname replacement, successful convergence and client access afterward |
+| Table 1 / quoted post-swap recovery | Actual failed migration reports `needs_recovery`; the reported quoted shell retry converges without another swap or changing accepted bytes |
+
+The retired setup-only contract assertion survives at the real native staged
+candidate admission boundary in the successful bootstrap/FIFO rows, with its
+negative control in the unsupported-contract row. No behavioral row or test
+identity was retired. Real staged/installed probes, FIFO synchronization,
+deadlines, existing executable-busy handling, cleanup and rollback coverage
+remain. No retry, sleep, visibility change to production code, mock or
+speculative test was added.
+
+The full process target then selected/executed 74 tests, all passed, with only
+the six existing ignored child helpers. Its local tables took 11.991/8.283 s;
+total summed time was 126.286 s, nextest wall 32.922 s and command wall
+33.283 s. Load moved 12.07/10.68/11.49 to 12.35/10.92/11.54. The independently
+landed flow callback repair is present in the base and its two unchanged
+tables passed in 0.226/0.146 s. This full target is not the full affected-test
+gate and establishes no full-CI 15-minute claim. The pipeline owns final
+`make ci-fast`, `make ci-lint`, `make goldens` and `make ci-test-affected`.
+
+Task artifacts under `performance/local-candidate/` retain every timed attempt,
+raw logs, process traces, exact baseline/candidate test sources and patch,
+host/settings/configuration hashes and the surviving guarantee map. Parent
+ORB-15949's original macOS failure remains 60.017 s timeout for table 0 and
+49.836 s for table 1; its failure-only baseline replay ran 20 tests and table 0
+took 20.812 s. Those are not matched full-suite or cross-host speedup evidence.
+The parent baseline local-candidate source and settings match this checkout,
+but its failed candidate Git object and host budget/load details are unavailable
+locally. Native macOS candidate timing is not measured in this Linux session;
+no macOS runtime result is claimed, and the earlier rejected stripping
+experiment remains rejected.
+
+The shared helper's other integration target, MCP, also returned exit zero:
+61 selected/executed runner entries, 73.293 s summed, 22.850 s nextest wall and
+26.440 s command wall. All five upgrade/handover entries completed, including
+the actual replaced-server and drain handovers. Two unrelated readonly
+Bubblewrap scenarios printed `DEFERRED: bubblewrap unavailable` because this
+lane cannot create a namespace; their sandbox coverage is **not run**, despite
+the runner's PASS results. Their exact notices remain in the raw log, and the
+pipeline's final affected-test gate owns its coverage enforcement.
+
+Focused process-target Clippy passed in 39.126 s with the repository's
+test-target flags, `-D warnings -A clippy::disallowed_methods`. An initial
+diagnostic omitted the test-fixture exception and failed with 231 disallowed
+filesystem/process calls; the identical command on unmodified baseline source
+failed with the same 231 errors. Both logs are retained rather than reported
+as passing checks. Focused rustfmt and the documentation-index check passed;
+the generated index row is unchanged because the first heading and summary
+were not edited. Final repository gates remain pipeline-owned and not run in
+this session. The real native CLI scenarios supply the meaningful positive,
+refusal, accepted-inode and recovery QA; no additional manual QA is claimed.
