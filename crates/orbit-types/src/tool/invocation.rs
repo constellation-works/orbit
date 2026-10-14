@@ -98,6 +98,17 @@ impl WorkerInvocation {
     }
 }
 
+/// Owner task tools an agent in a claimed leaf is never granted
+/// (distributed-drain design §3, "Claimed-mode implementation").
+///
+/// A claimed leaf's task belongs to another machine. Its injected envelope is
+/// the task and the claim is the authority; `orbit.task.show` may re-read that
+/// task through the claim-scoped owner broker. The agent returns its execution
+/// summary in its output for `claim_handoff` to carry instead of writing owner
+/// task state. Denying task updates makes that the only write path, rather
+/// than relying on the prompt alone.
+pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
+
 /// The coordination tools a claimed worker on another machine than its owner
 /// reaches that owner with through its run's coordinator, the step runner's
 /// broker [ORB-14260]. The agent sandbox masks the SSH credentials the owner

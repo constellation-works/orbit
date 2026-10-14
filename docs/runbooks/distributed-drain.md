@@ -645,6 +645,16 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   passing log beside theirs. A failing replay fails the claim with its output
   (the owner blocks the task); an empty list, a selector outside that
   grammar, or a run that executes no test or prints a skip is refused.
+- Before a follower receives a claim, the owner excludes tasks whose immutable
+  `required_tools` cannot be satisfied in a remote claimed implementer. The
+  pull receipt names the required tool and restriction in `deferred_conflicts`:
+  `orbit.task.update` is denied in claimed mode; owner coordination outside
+  the closed bridge, including `orbit.task.list` and `orbit.search`, is
+  unavailable. Search on a replica cannot establish the authoritative owner
+  window. These tasks stay in backlog without a claim, worktree or failed leaf,
+  and the follower may select another eligible task. Plain and auto-task
+  records follow the same rule. The owner's ordinary local activity admission
+  still decides its own requirements; no tool grant or requirement is changed.
 - The implement step runs in **claimed mode**. The agent sandbox denies
   `~/.ssh`, so a sandboxed agent on a follower has no route to the owner; it
   does not need one. It works from the injected task envelope, is not granted
@@ -674,7 +684,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   (`stale_claim`). Inside the sandbox, any other owner call is refused
   (`claimed_owner_bridge_refused`) and none is tried over SSH. The claimed
   implement step is still not granted `orbit.task.update` (above).
-  `orbit.search` is among the refused calls, so a claimed review files its
+  The broker does not carry `orbit.search`, so a claimed review files its
   findings without a duplicate search, and the owner's triage dedupes them.
   A finding the owner still refuses arrives as the claimed task's
   `unfiled-findings.json` artifact: file each entry on the owner, keeping its

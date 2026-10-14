@@ -507,6 +507,18 @@ fn calm_host(runtime: OrbitRuntime) -> OrbitRuntime {
 /// An approved owner task scoped to `file`, ready for admission, on `crew`
 /// when one is named.
 fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str>) -> String {
+    backlog_task_with_input(owner, repo, file, crew, json!({}))
+}
+
+/// Create requirements and provenance atomically with the task; requirements
+/// cannot be revised later through task updates.
+fn backlog_task_with_input(
+    owner: &OrbitRuntime,
+    repo: &Path,
+    file: &str,
+    crew: Option<&str>,
+    extra: Value,
+) -> String {
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join(file), "fn work() {}\n").unwrap();
     let mut input = json!({
@@ -521,6 +533,9 @@ fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str
     });
     if let Some(crew) = crew {
         input["crew"] = json!(crew);
+    }
+    for (key, value) in extra.as_object().expect("extra task fields") {
+        input[key] = value.clone();
     }
     let task = owner.run_tool("orbit.task.add", input).expect("add task");
     let id = task["id"].as_str().unwrap().to_string();

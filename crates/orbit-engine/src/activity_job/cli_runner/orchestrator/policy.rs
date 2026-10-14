@@ -5,6 +5,7 @@ use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
+use orbit_types::tool::CLAIMED_MODE_DENIED_TOOLS;
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
 use serde_json::Value;
 
@@ -109,17 +110,6 @@ pub fn activity_tool_policy_env(
         (ACTIVITY_NAME_ENV.to_string(), activity_name.to_string()),
     ]
 }
-
-/// Owner task tools an agent in a claimed leaf is never granted
-/// (distributed-drain design §3, "Claimed-mode implementation").
-///
-/// A claimed leaf's task belongs to another machine. Its injected envelope is
-/// the task and the claim is the authority; `orbit.task.show` may re-read that
-/// task through the claim-scoped owner broker. The agent returns its execution
-/// summary in its output for `claim_handoff` to carry instead of writing owner
-/// task state. Denying task updates makes that the only write path, rather
-/// than relying on the prompt alone.
-pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 
 /// Whether this invocation runs inside a claimed leaf.
 ///

@@ -42,7 +42,7 @@ use orbit_store::contracts::{
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{CLAIMED_MODE_DENIED_TOOLS, ToolSessionContext, is_claimed_owner_tool};
 use orbit_types::workflow::{
     ClaimFailureClass, JobRunState, ProviderFailureClass, ProviderFailureHold,
     handoff::{HandoffCandidate, HandoffDelivery, HandoffValidationLog, TaskHandoff},
@@ -55,6 +55,25 @@ use crate::runtime::run_input::recorded_task_ids;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
+
+/// A remote claimed implementer's restrictions, using the same deny set as
+/// the engine and the same coordination classification and closed bridge as
+/// dispatch. Search is local to the replica, so it cannot satisfy a declared
+/// requirement to read the authoritative owner's records either.
+fn claimed_required_tool_hold(task: &Task) -> Option<String> {
+    task.required_tools.iter().find_map(|tool| {
+        let restriction = if CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()) {
+            "denied in claimed mode; the implementer returns task state through its output"
+        } else if (crate::runtime::is_coordination_tool(tool) || tool == "orbit.search")
+            && !is_claimed_owner_tool(tool)
+        {
+            "owner coordination outside the closed claimed-owner bridge"
+        } else {
+            return None;
+        };
+        Some(format!("required tool `{tool}` is {restriction}"))
+    })
+}
 
 /// What `orbit.task.pull` answers: the immutable receipt and, separately, the
 /// claim's phase right now. A replayed receipt is historical evidence; the
@@ -652,6 +671,14 @@ impl crate::OrbitRuntime {
                 }
                 _ => {}
             }
+            // Exclude unsatisfiable requirements before candidate bundle reads;
+            // the transaction checks newly added tasks again below.
+            // Owner-local activity admission keeps its existing authority.
+            if identity.is_remote()
+                && let Some(why) = claimed_required_tool_hold(task)
+            {
+                admission_holds.entry(task.id.clone()).or_insert(why);
+            }
             // [ORB-15573] A standing provider hold keeps the task from an
             // executor that would run it as an excluded crew: its own, or the
             // executor's default for a task naming none. Another executor, or
@@ -687,18 +714,21 @@ impl crate::OrbitRuntime {
             &self.data_root(),
             &admission_holds,
             &self.baseline_held_tasks(&backlog),
-            &|task, comments, history| match self.pilot_admission_hold_in(
-                task,
-                comments,
-                &|| Ok(history.to_vec()),
-            )? {
-                Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::UnverifiedFinding(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::NativeOs(hold)) => {
-                    Ok(hold.wait_on(task, request.os, machine_id))
+            &|task, comments, history| {
+                if identity.is_remote()
+                    && let Some(why) = claimed_required_tool_hold(task)
+                {
+                    return Ok(Some(why));
                 }
-                _ => Ok(None),
+                match self.pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))? {
+                    Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::UnverifiedFinding(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::NativeOs(hold)) => {
+                        Ok(hold.wait_on(task, request.os, machine_id))
+                    }
+                    _ => Ok(None),
+                }
             },
         )
     }
