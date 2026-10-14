@@ -34,6 +34,7 @@
 //!
 //! [`head_check_evidence`]: super::super::landing_checks::head_check_evidence
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -64,6 +65,8 @@ pub(super) const UNSETTLED_BLOCKED_POLLS: u32 = 4;
 /// What an auto-fix run may do, read once per completion step.
 pub(super) struct AutoFix {
     run_id: String,
+    /// Current execution and authenticated retry ancestors, never siblings.
+    ledger_runs: BTreeSet<String>,
     task_ids: Vec<String>,
     allowed_crews: Value,
     /// `--complete` was granted too: completion may merge once mergeable.
@@ -72,16 +75,24 @@ pub(super) struct AutoFix {
 
 impl AutoFix {
     /// `Some` when the step's input carries `auto_fix: true`.
-    pub(super) fn from_input(input: &Value, task_ids: &[String], batch_id: &str) -> Option<Self> {
+    pub(super) fn from_input<H: RuntimeHost + ?Sized>(
+        host: &H,
+        input: &Value,
+        task_ids: &[String],
+        batch_id: &str,
+    ) -> Result<Option<Self>, OrbitError> {
         if input.get("auto_fix").and_then(Value::as_bool) != Some(true) {
-            return None;
+            return Ok(None);
         }
-        Some(Self {
-            run_id: input_string_field(input, "run_id").unwrap_or_else(|| batch_id.to_string()),
+        let run_id = input_string_field(input, "run_id").unwrap_or_else(|| batch_id.to_string());
+        let ledger_runs = repair_ledger_runs(host, &run_id)?;
+        Ok(Some(Self {
+            run_id,
+            ledger_runs,
             task_ids: task_ids.to_vec(),
             allowed_crews: input.get("allowed_crews").cloned().unwrap_or(Value::Null),
             merge_authorized: input.get("completion").and_then(Value::as_str) == Some("done"),
-        })
+        }))
     }
 
     /// Repair only: never request a merge or complete a task.
@@ -101,6 +112,50 @@ impl AutoFix {
                 )
             })
     }
+}
+
+/// A resume has a new execution identity while successful push checkpoints
+/// retain the source head. Only the host's durable, same-job retry ancestry
+/// transfers repair authority; input/checkpoint claims do not supply it.
+/// Direct activity calls without a stored run retain current-run authority.
+fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+) -> Result<BTreeSet<String>, OrbitError> {
+    let mut runs = BTreeSet::from([run_id.to_string()]);
+    let Some(mut current) = host.get_job_run(run_id)? else {
+        return Ok(runs);
+    };
+    if current.run_id != run_id {
+        return Err(OrbitError::Execution(
+            "auto_fix: execution identity differs; refusing inherited repair authority".into(),
+        ));
+    }
+    let job_id = current.job_id.clone();
+    for _ in 0..64 {
+        let Some(parent_id) = current.retry_source_run_id.take() else {
+            return Ok(runs);
+        };
+        if !runs.insert(parent_id.clone()) {
+            return Err(OrbitError::Execution(
+                "auto_fix: cyclic retry lineage; refusing inherited repair authority".into(),
+            ));
+        }
+        current = host.get_job_run(&parent_id)?.ok_or_else(|| {
+            OrbitError::Execution(
+                "auto_fix: retry ancestor is missing; refusing inherited repair authority".into(),
+            )
+        })?;
+        if current.run_id != parent_id || current.job_id != job_id {
+            return Err(OrbitError::Execution(
+                "auto_fix: retry ancestor identity differs; refusing inherited repair authority"
+                    .into(),
+            ));
+        }
+    }
+    Err(OrbitError::Execution(
+        "auto_fix: retry lineage exceeds its bound; refusing inherited repair authority".into(),
+    ))
 }
 
 /// What a `BLOCKED` pull request means to an auto-fix watcher.
@@ -325,9 +380,9 @@ fn required_failures<H: RuntimeHost + ?Sized>(
     Ok(failed)
 }
 
-/// Pin the heads this run already published for the pull request: a later
-/// completion round, or a resume of the run, starts from the head the
-/// previous round left on the branch.
+/// Pin the contiguous heads this execution or its authenticated retry
+/// ancestors published for the same pull request. Branch and review pins
+/// remain enforced by completion on every provider read.
 pub(super) fn adopt_published_repairs<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
@@ -336,7 +391,9 @@ pub(super) fn adopt_published_repairs<H: RuntimeHost + ?Sized>(
 ) -> Result<(), OrbitError> {
     let history = host.get_task_history(auto_fix.primary_task()?)?;
     for push in pr_auto_fix_pushes(&history, pr_number) {
-        if push.run_id == auto_fix.run_id && pin.candidate_sha() == Some(&push.from_head_sha) {
+        if auto_fix.ledger_runs.contains(&push.run_id)
+            && pin.candidate_sha() == Some(&push.from_head_sha)
+        {
             pin.adopt_refreshed_candidate(Some(&push.to_head_sha));
         }
     }
@@ -393,8 +450,9 @@ pub(super) enum LocalRepair {
 
 /// Publish a check repair the executor committed on top of the pinned head.
 ///
-/// Acts only when this run holds an admitted check repair of exactly the
-/// pinned head and the checkout is that branch, strictly ahead of it.
+/// Acts only when this execution or a retry ancestor holds an admitted
+/// check repair of exactly the pinned head and the checkout is that branch,
+/// strictly ahead of it.
 /// Anything else (an interrupted rebase, a detached checkout, another
 /// writer's commit) is left to the ordinary completion path, which refuses
 /// what it does not pin. The repair passes the workspace's required
@@ -418,7 +476,7 @@ pub(super) fn publish_local_repair<H: RuntimeHost + ?Sized>(
     let holds_repair = pr_auto_fix_attempts(&history, pr_number)
         .iter()
         .any(|attempt| {
-            attempt.run_id == auto_fix.run_id
+            auto_fix.ledger_runs.contains(&attempt.run_id)
                 && attempt.head_sha == authorized
                 && attempt.blocker == PrAutoFixBlocker::FailedChecks
         });

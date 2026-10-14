@@ -58,13 +58,16 @@ use orbit_types::workflow::handoff::{
 };
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
-    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobV2StepBody,
-    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PS_EXEC_PROBE, PipelineState,
-    ReviewGateRefusal, ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
+    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobRun, JobV2StepBody,
+    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PR_AUTO_FIX_ADMITTED_EVENT,
+    PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_PUSHED_EVENT, PS_EXEC_PROBE, PipelineState, PrAutoFixAttempt,
+    PrAutoFixBlocker, PrAutoFixPush, ReviewGateRefusal, ReviewTiming, ReviewVerdict,
+    SEATBELT_APPLY_PROBE, is_baseline_red_failure, pr_auto_fix_attempts,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod auto_fix;
 mod flaky;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
@@ -6629,6 +6632,7 @@ fn task(status: TaskStatus) -> Task {
 /// through, kept in memory. The provider boundary is left to the engine.
 struct DeliveryHost {
     repo: PathBuf,
+    runs: Mutex<BTreeMap<String, JobRun>>,
     tasks: Mutex<BTreeMap<String, Task>>,
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     completion_notes: Mutex<Vec<String>>,
@@ -6687,6 +6691,7 @@ impl DeliveryHost {
     fn new(repo: &Path, status: TaskStatus) -> Self {
         Self {
             repo: repo.to_path_buf(),
+            runs: Mutex::default(),
             tasks: Mutex::new(BTreeMap::from([(TASK_ID.to_string(), task(status))])),
             comments: Mutex::default(),
             completion_notes: Mutex::default(),
@@ -6836,6 +6841,33 @@ impl DeliveryHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self.runs.lock().unwrap().get(run_id).cloned())
+    }
+
+    fn admit_pr_auto_fix(
+        &self,
+        request: &orbit_engine::PrAutoFixRequest,
+    ) -> Result<orbit_engine::PrAutoFixAdmission, OrbitError> {
+        let attempts = pr_auto_fix_attempts(&self.history(TASK_ID), &request.pr_number);
+        let decision = orbit_types::workflow::decide_pr_auto_fix(
+            &attempts,
+            &orbit_types::workflow::PrAutoFixClaim {
+                pr_number: &request.pr_number,
+                head_sha: &request.head_sha,
+                blocker: request.blocker,
+                run_id: &request.run_id,
+            },
+            PR_AUTO_FIX_BUDGET,
+            "fixture",
+            "fixture",
+        );
+        if let orbit_types::workflow::PrAutoFixDecision::Admit(attempt) = &decision {
+            auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
+        }
+        Ok(orbit_engine::PrAutoFixAdmission::Decided(decision))
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,

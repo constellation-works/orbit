@@ -42,7 +42,9 @@ spec:
         description: >
           `orbit run auto --auto-fix`: repair failed required checks and merge
           conflicts on this PR through the run's repair pipeline. Never
-          authorizes a merge.
+          authorizes a merge. Resumes inherit repair admissions and contiguous
+          published-head changes only through the host's durable same-job retry
+          lineage; PR, branch, exact-head and review pins remain enforced.
       allowed_crews:
         type: [array, string, "null"]
         description: >
