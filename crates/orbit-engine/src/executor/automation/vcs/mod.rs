@@ -57,6 +57,8 @@ pub(super) use push::push_batch_changes;
 pub use remote_probe::{with_remote_probe_backoff, with_vcs_retry_wait};
 pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
+#[cfg(all(target_os = "linux", feature = "test-support"))]
+pub use worktree::with_host_target_removal_hook;
 pub use worktree::{
     WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport,
     collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,

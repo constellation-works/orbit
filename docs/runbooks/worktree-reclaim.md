@@ -92,10 +92,16 @@ Any mapped active run reports `skipped:run_not_terminal` and a live worker
 reports `skipped:worker_alive`; neither is measured. `--older-than-hours`
 applies as for worktrees, except when the sweep reclaims kept output. A
 target that is not a real directory (a symlink, a file) is
-`skipped:not_a_real_directory` and is never followed. Before deletion, GC
-checks again that each component of the targets directory is a real directory
-and that the target is the same directory it measured. Recursive removal
-unlinks symlinks inside it rather than following them.
+`skipped:not_a_real_directory` and is never followed. GC opens the targets
+directory from `/` one component at a time without following symlinks, and
+classifies, measures and removes each target through that open handle, never
+by path again. Before deletion it checks that the targets directory is still
+the one at its path and that the target is the same directory (device and
+inode) it measured. Owner access is restored and entries are unlinked through
+each directory's own handle, so a component replaced after the check cannot
+redirect a permission change or a delete outside the target: a substituted
+target fails as `failed:` and is left untouched. Symlinks inside are unlinked,
+not followed.
 
 Base reruns, host-evidence and recovery checkouts are detached scratch
 checkouts that no run record names. Their targets, and any other entry, are

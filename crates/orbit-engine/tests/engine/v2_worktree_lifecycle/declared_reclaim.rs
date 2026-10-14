@@ -396,6 +396,109 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                     .all(|report| report["bytes_reclaimed"] == 0),
                 "{again:#}"
             );
+            // Replacing a component after GC's last check redirects nothing:
+            // the targets directory swapped for a redirect to outside data
+            // under the target's own key, or the target swapped for an outside
+            // directory. That data and its read-only permissions survive.
+            #[cfg(target_os = "linux")]
+            for case in ["ancestor-swap", "target-swap"] {
+                let task = format!("T-HOST-{case}");
+                let run_id = format!("jrun-host-{case}");
+                host.add_task(&task, TaskStatus::Backlog);
+                let input = setup_input(&[&task], &run_id);
+                let checkout =
+                    Checkout::from_setup(&action(&host, "worktree_setup", &input).unwrap());
+                host.set_status(&task, TaskStatus::Blocked);
+                let target = build(&checkout.path);
+                git(
+                    &fixture.repo,
+                    &["worktree", "remove", "--force", path_str(&checkout.path)],
+                );
+                host.add_run(job_run(&run_id, JobRunState::Failed, input));
+                // Read-only output owner access is restored through its handle.
+                fs::set_permissions(target.join("debug"), fs::Permissions::from_mode(0o500))
+                    .unwrap();
+                let decoy = fixture.root.path().join(format!("decoy-{case}"));
+                let planted = decoy.join(target.file_name().unwrap());
+                let locked = planted.join("locked");
+                fs::create_dir_all(&locked).unwrap();
+                fs::write(locked.join("output"), "outside").unwrap();
+                fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+                let root = target.parent().unwrap().to_path_buf();
+                let held_root = root.with_file_name("host-validation-targets.held");
+                let held_target = root.join(format!(
+                    "{}.held",
+                    target.file_name().unwrap().to_str().unwrap()
+                ));
+                let swapped = std::rc::Rc::new(std::cell::Cell::new(false));
+                let hook = {
+                    let (target, planted) = (target.clone(), planted.clone());
+                    let (root, held_root, held_target) =
+                        (root.clone(), held_root.clone(), held_target.clone());
+                    let swapped = swapped.clone();
+                    move |path: &Path| {
+                        if path != target || swapped.replace(true) {
+                            return;
+                        }
+                        if case == "ancestor-swap" {
+                            fs::rename(&root, &held_root).unwrap();
+                            symlink(planted.parent().unwrap(), &root).unwrap();
+                        } else {
+                            fs::rename(&target, &held_target).unwrap();
+                            fs::rename(&planted, &target).unwrap();
+                        }
+                    }
+                };
+                let result =
+                    orbit_engine::test_support::with_host_target_removal_hook(hook, || {
+                        orbit_engine::collect_worktrees(
+                            &fixture.repo,
+                            &host.list_job_runs_for_gc().unwrap(),
+                            &host,
+                            &orbit_engine::WorktreeGcOptions {
+                                delete: true,
+                                run_id: Some(run_id.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap()
+                    });
+                assert!(swapped.get(), "{case}: the removal reached the swap point");
+                let report = &host_reports(&serde_json::to_value(&result).unwrap())[&target];
+                let survivor = if case == "ancestor-swap" {
+                    fs::remove_file(&root).unwrap();
+                    fs::rename(&held_root, &root).unwrap();
+                    locked.clone()
+                } else {
+                    target.join("locked")
+                };
+                assert_eq!(
+                    fs::read_to_string(survivor.join("output")).ok().as_deref(),
+                    Some("outside"),
+                    "{case}: outside data survives: {report:#}"
+                );
+                assert_eq!(
+                    fs::metadata(&survivor).unwrap().permissions().mode() & 0o7777,
+                    0o500,
+                    "{case}: outside permissions are unchanged"
+                );
+                if case == "ancestor-swap" {
+                    // The classified directory went through the held root.
+                    assert_eq!(report["action"], "reclaimed", "{case}: {report:#}");
+                    assert!(!target.exists(), "{case}: {report:#}");
+                } else {
+                    let action = report["action"].as_str().unwrap();
+                    assert!(action.starts_with("failed:"), "{case}: {report:#}");
+                    assert_eq!(report["bytes_reclaimed"], 0, "{case}: {report:#}");
+                    assert!(held_target.join("debug/output").is_file(), "{case}");
+                    fs::set_permissions(
+                        held_target.join("debug"),
+                        fs::Permissions::from_mode(0o700),
+                    )
+                    .unwrap();
+                }
+                fs::set_permissions(&survivor, fs::Permissions::from_mode(0o700)).unwrap();
+            }
         },
     );
 }
