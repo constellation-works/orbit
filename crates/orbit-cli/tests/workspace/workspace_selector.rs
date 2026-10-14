@@ -178,7 +178,6 @@ fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
     );
 }
 
-#[test]
 fn workspace_remove_deregisters_deleted_checkout_by_name_id_and_path() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -265,7 +264,6 @@ fn workspace_remove_deregisters_deleted_checkout_by_name_id_and_path() {
     assert_eq!(workspace_names, vec!["survivor"]);
 }
 
-#[test]
 fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -441,7 +439,6 @@ fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
     );
 }
 
-#[test]
 fn global_workspace_flag_fails_closed_on_unknown_selector() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -483,7 +480,6 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
     );
 }
 
-#[test]
 fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorded_path() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -598,7 +594,6 @@ fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorde
     );
 }
 
-#[test]
 fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -751,7 +746,6 @@ fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
     fs::write(&config, original_config).expect("restore alpha workspace config after missing");
 }
 
-#[test]
 fn tool_run_workspace_selection_uses_global_flag_and_input_precedence() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -892,7 +886,6 @@ fn tool_run_workspace_selection_uses_global_flag_and_input_precedence() {
 /// A workspace whose ID equals another workspace's name must still be reachable
 /// from its checkout and by absolute path. The colliding token stays fail-closed
 /// only when the operator types it as an id-or-name selector [ORB-11805].
-#[test]
 fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1010,7 +1003,6 @@ fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name
 /// A workspace whose ID equals another workspace's name must still allow publication
 /// binding, rebinding, showing, and removing when selected from its own checkout or
 /// by its unambiguous name [ORB-11879].
-#[test]
 fn publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1178,7 +1170,6 @@ fn publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name
 
 /// `task show` is the one verb whose target is a machine-global primary key, so
 /// omitting `--workspace` follows the ID instead of the cwd [ORB-10797].
-#[test]
 fn task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1277,7 +1268,6 @@ fn task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter() 
 /// `orbit tool run orbit.task.show` is the agent-facing twin of `orbit task show`
 /// and must follow the ID from a foreign checkout and from no workspace at all
 /// [ORB-10961]. An explicit `workspace` in the tool input stays a filter.
-#[test]
 fn tool_run_task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1454,7 +1444,6 @@ fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
     serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
 }
 
-#[test]
 fn workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refusal() {
     let temp = tempdir().unwrap();
     let home = temp.path().join("home");
@@ -1591,4 +1580,78 @@ fn workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refu
         fs::read_to_string(replica_repo.join("README.md")).unwrap(),
         "# repo\n"
     );
+}
+
+#[test]
+fn workspace_selector_contracts_0() {
+    for (name, check) in [
+        (
+            "workspace_remove_deregisters_deleted_checkout_by_name_id_and_path",
+            workspace_remove_deregisters_deleted_checkout_by_name_id_and_path as fn(),
+        ),
+        (
+            "global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout",
+            global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout as fn(),
+        ),
+        (
+            "global_workspace_flag_fails_closed_on_unknown_selector",
+            global_workspace_flag_fails_closed_on_unknown_selector as fn(),
+        ),
+        (
+            "global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorded_path",
+            global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorded_path
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn workspace_selector_contracts_1() {
+    for (name, check) in [
+        (
+            "migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one",
+            migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one as fn(),
+        ),
+        (
+            "tool_run_workspace_selection_uses_global_flag_and_input_precedence",
+            tool_run_workspace_selection_uses_global_flag_and_input_precedence as fn(),
+        ),
+        (
+            "checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name",
+            checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name as fn(),
+        ),
+        (
+            "publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name",
+            publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn workspace_selector_contracts_2() {
+    for (name, check) in [
+        (
+            "task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter",
+            task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter as fn(),
+        ),
+        (
+            "tool_run_task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter",
+            tool_run_task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter
+                as fn(),
+        ),
+        (
+            "workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refusal",
+            workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refusal
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

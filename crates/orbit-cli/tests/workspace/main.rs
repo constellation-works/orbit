@@ -10,7 +10,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-#[cfg(unix)]
+// ChildGuard has a portable kill/wait fallback; its Unix signals and process
+// groups are guarded inside the shared module, as in the process binary.
 #[path = "../support/child_guard.rs"]
 mod child_guard;
 #[path = "../support/fixture_crew.rs"]

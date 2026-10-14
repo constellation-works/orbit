@@ -61,7 +61,6 @@ fn read_optional(path: impl Into<PathBuf>) -> Option<Vec<u8>> {
 
 /// Upgrade actual previous-release bytes, rather than deriving a legacy fixture
 /// from today's templates. Guards managed materialization provenance [DANI-10392].
-#[test]
 fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() {
     use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
     use orbit_common::security::release::sha256_hex;
@@ -274,7 +273,6 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
 /// `delivery-qa` is no longer a shipped default. Init leaves it absent, doctor
 /// warns while a locally modified seeded copy is still in the catalog, and
 /// refresh keeps those bytes outside the active catalog instead of deleting them.
-#[test]
 fn retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept() {
     use orbit_common::security::release::sha256_hex;
 
@@ -385,7 +383,6 @@ fn retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept() {
     );
 }
 
-#[test]
 fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent() {
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
@@ -517,7 +514,6 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
 /// record provenance that would let a later sync refresh it, never retire it,
 /// and it stays the definition the workspace loads.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn a_predating_workspace_definition_overrides_a_new_default_across_sync_and_update() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -711,7 +707,6 @@ updated_at: 2026-09-19T06:45:34.930746394+00:00
     assert_override_is_active("orbit update");
 }
 
-#[test]
 fn workspace_sync_outside_registered_workspace_fails_before_writing() {
     let parent = tempdir().expect("parent tempdir");
     let home = parent.path().join("home");
@@ -749,7 +744,6 @@ fn workspace_sync_outside_registered_workspace_fails_before_writing() {
 /// and the human summary name the skipped provenance write, and neither
 /// claims the catalog converged or its provenance was recorded.
 #[cfg(unix)]
-#[test]
 fn workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -822,7 +816,6 @@ fn workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence()
 /// ignore line, and lines retired from older managed blocks, with one ignore
 /// of the whole `.orbit/` directory while keeping the operator's own lines. A
 /// forced re-init then leaves every checkout file byte-identical.
-#[test]
 fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
@@ -901,7 +894,6 @@ fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
 /// nested checkout that the primary-checkout Git snapshot cannot hash, and the
 /// first local ship fails in its implement step. `workspace init` must ignore
 /// it, and `workspace sync` must restore the ignore for an existing checkout.
-#[test]
 fn relocated_root_checkout_ignores_its_delivery_worktrees() {
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
@@ -988,7 +980,6 @@ fn git(repo: &Path, args: &[&str]) {
 /// [ORB-12107] Without `--force`, `workspace init` refuses a second name for
 /// an initialized checkout and an existing name for a second checkout. Neither
 /// refusal writes the registry or a checkout identity.
-#[test]
 fn workspace_init_refuses_checkout_and_name_collisions_without_writing() {
     let home = tempdir().expect("home tempdir");
     let first = home.path().join("first");
@@ -1060,4 +1051,67 @@ fn checkout_files(repo: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
         }
     }
     files
+}
+
+#[test]
+fn workspace_sync_contracts_0() {
+    for (name, check) in [
+        (
+            "workspace_sync_upgrades_previous_release_automation_with_provenance_intact",
+            workspace_sync_upgrades_previous_release_automation_with_provenance_intact as fn(),
+        ),
+        (
+            "retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept",
+            retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept as fn(),
+        ),
+        (
+            "workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent",
+            workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent
+                as fn(),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "a_predating_workspace_definition_overrides_a_new_default_across_sync_and_update",
+            a_predating_workspace_definition_overrides_a_new_default_across_sync_and_update
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn workspace_sync_contracts_1() {
+    for (name, check) in [
+        (
+            "workspace_sync_outside_registered_workspace_fails_before_writing",
+            workspace_sync_outside_registered_workspace_fails_before_writing as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence",
+            workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence as fn(),
+        ),
+        (
+            "workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent",
+            workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent as fn(),
+        ),
+        (
+            "relocated_root_checkout_ignores_its_delivery_worktrees",
+            relocated_root_checkout_ignores_its_delivery_worktrees as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn workspace_sync_contracts_2() {
+    tracing::info!(
+        case = "workspace_init_refuses_checkout_and_name_collisions_without_writing",
+        "CLI contract row"
+    );
+    workspace_init_refuses_checkout_and_name_collisions_without_writing();
 }

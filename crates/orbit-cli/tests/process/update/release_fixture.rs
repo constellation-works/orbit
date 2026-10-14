@@ -136,7 +136,12 @@ impl Fixture {
 
     /// Publish `version` to the mirror, and make it the mirror's latest.
     pub(super) fn publish(&self, version: &str, behavior: FakeBinary) {
-        let archive = tar_gz(&script(version, &self.invocation_log, behavior));
+        self.publish_script(version, &script(version, &self.invocation_log, behavior));
+    }
+
+    /// Publish a candidate with a case-specific probe rendezvous.
+    pub(super) fn publish_script(&self, version: &str, body: &[u8]) {
+        let archive = tar_gz(body);
         let directory = self.mirror.join(format!("v{version}"));
         std::fs::create_dir_all(&directory).expect("release directory");
         let asset = release_archive_name(TEST_TARGET);

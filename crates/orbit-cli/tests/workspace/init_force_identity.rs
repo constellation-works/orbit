@@ -72,7 +72,6 @@ impl Fixture {
     }
 }
 
-#[test]
 fn force_refuses_missing_or_invalid_identity_flags_before_deleting_the_root() {
     let fixture = Fixture::initialized();
     let root = fixture.root();
@@ -125,7 +124,6 @@ fn force_refuses_missing_or_invalid_identity_flags_before_deleting_the_root() {
     }
 }
 
-#[test]
 fn force_with_valid_identity_flags_resets_the_root_and_creates_a_new_identity() {
     let fixture = Fixture::initialized();
     let root = fixture.root();
@@ -153,7 +151,6 @@ fn force_with_valid_identity_flags_resets_the_root_and_creates_a_new_identity() 
     assert!(root.join("resources/executors").is_dir());
 }
 
-#[test]
 fn ordinary_reinit_still_ignores_identity_flags_and_preserves_the_identity() {
     let fixture = Fixture::initialized();
     let root = fixture.root();
@@ -172,7 +169,6 @@ fn ordinary_reinit_still_ignores_identity_flags_and_preserves_the_identity() {
     );
 }
 
-#[test]
 fn force_reset_may_choose_a_new_prefix_even_after_the_old_one_minted_task_ids() {
     // The reset deletes the task registry, so ids minted under the old prefix
     // cannot contradict the new identity.
@@ -202,4 +198,29 @@ fn force_reset_may_choose_a_new_prefix_even_after_the_old_one_minted_task_ids() 
     );
     let after = load_machine_identity(&fixture.root()).expect("valid replacement identity");
     assert_eq!(after.task_prefix, "ZZ");
+}
+
+#[test]
+fn init_identity_contracts() {
+    for (name, check) in [
+        (
+            "force_refuses_missing_or_invalid_identity_flags_before_deleting_the_root",
+            force_refuses_missing_or_invalid_identity_flags_before_deleting_the_root as fn(),
+        ),
+        (
+            "force_with_valid_identity_flags_resets_the_root_and_creates_a_new_identity",
+            force_with_valid_identity_flags_resets_the_root_and_creates_a_new_identity as fn(),
+        ),
+        (
+            "ordinary_reinit_still_ignores_identity_flags_and_preserves_the_identity",
+            ordinary_reinit_still_ignores_identity_flags_and_preserves_the_identity as fn(),
+        ),
+        (
+            "force_reset_may_choose_a_new_prefix_even_after_the_old_one_minted_task_ids",
+            force_reset_may_choose_a_new_prefix_even_after_the_old_one_minted_task_ids as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

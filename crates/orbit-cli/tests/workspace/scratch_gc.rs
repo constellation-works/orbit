@@ -64,19 +64,49 @@ impl Fixture {
     /// Run the shipped worktree GC job and return the reap step's output.
     fn gc(&self, inputs: &[&str]) -> Value {
         let mut command = self.orbit();
-        command.env("ORBIT_OPERATOR", "1").args([
-            "run",
-            "job",
-            "worktree_gc_pipeline",
-            "--wait",
-            "--json",
-        ]);
+        command
+            .env("ORBIT_OPERATOR", "1")
+            .args(["run", "job", "worktree_gc_pipeline", "--json"]);
+        // Retain the shipped default's real CLI --wait/output contract. The
+        // override matrix needs the same actual detached jobs, but can observe
+        // them through the public wait API at its admitted one-second cadence.
+        if inputs.is_empty() {
+            command.arg("--wait");
+        }
         for input in inputs {
             command.args(["--input", input]);
         }
         let output = command.assert().success().get_output().stdout.clone();
         let run: Value = serde_json::from_slice(&output).unwrap();
-        run["pipeline"]["reap"].clone()
+        if inputs.is_empty() {
+            return run["pipeline"]["reap"].clone();
+        }
+        let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+            orbit_core::runtime::OrbitRuntimeRoots {
+                global_root: self.home.join(".orbit"),
+                shared_root: self.work.join(".orbit"),
+                local_root: self.work.join(".orbit"),
+            },
+        )
+        .expect("registered scratch GC runtime");
+        let waited = runtime
+            .wait_pipeline_runs(
+                &[run["run_id"]
+                    .as_str()
+                    .expect("submitted GC run")
+                    .to_string()],
+                30,
+                1,
+                None,
+            )
+            .expect("wait for the actual submitted scratch GC job");
+        let entry = waited
+            .results
+            .into_iter()
+            .next()
+            .expect("scratch GC wait entry");
+        assert_eq!(entry.status, "success", "scratch GC job failed: {entry:?}");
+        entry.pipeline.expect("scratch GC pipeline")["reap"].clone()
     }
 }
 
@@ -114,7 +144,6 @@ fn entry<'a>(scratch: &'a Value, tmp: &Path, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no report for {name}: {scratch}"))
 }
 
-#[test]
 fn prunes_entries_older_than_the_window_and_never_follows_symlinks() {
     let fixture = Fixture::new();
     let tmp = fixture.tmp();
@@ -202,7 +231,6 @@ fn prunes_entries_older_than_the_window_and_never_follows_symlinks() {
     assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
 }
 
-#[test]
 fn a_negative_window_is_refused_before_anything_is_removed() {
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.tmp()).unwrap();
@@ -305,5 +333,25 @@ mod held {
         let after = fixture.gc(&[]);
         assert_eq!(after["scratch"]["entries_removed"], 2, "{after}");
         assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn scratch_gc_contracts() {
+    if crate::isolated_test::run_in_child("scratch_gc::scratch_gc_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "prunes_entries_older_than_the_window_and_never_follows_symlinks",
+            prunes_entries_older_than_the_window_and_never_follows_symlinks as fn(),
+        ),
+        (
+            "a_negative_window_is_refused_before_anything_is_removed",
+            a_negative_window_is_refused_before_anything_is_removed as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

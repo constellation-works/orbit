@@ -83,7 +83,6 @@ impl Fixture {
     }
 }
 
-#[test]
 fn previews_and_confirmation_report_bytes_and_preserve_the_directory() {
     let fixture = Fixture::new();
     let empty = fixture.json(&["gc", "tmp", "--confirm", "--json"]);
@@ -303,12 +302,10 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
     );
 }
 
-#[test]
 fn symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses() {
     assert_symlink_gc_handles_non_utf8_name(|path| fs::write(path, b"bytes"));
 }
 
-#[test]
 fn symlink_gc_still_checks_symlinks_when_non_utf8_name_is_unsupported() {
     assert_symlink_gc_handles_non_utf8_name(|_| {
         Err(std::io::Error::from_raw_os_error(libc::EILSEQ))
@@ -395,7 +392,6 @@ fn assert_symlink_gc_handles_non_utf8_name(
     );
 }
 
-#[test]
 fn a_checkout_without_orbit_directory_has_nothing_to_reclaim() {
     // State lives in an explicit root, so the checkout never gets `.orbit/`.
     let temp = tempfile::tempdir().unwrap();
@@ -447,4 +443,29 @@ fn a_checkout_without_orbit_directory_has_nothing_to_reclaim() {
         !fixture.work.join(".orbit").exists(),
         "confirm must not create .orbit as a side effect of gc"
     );
+}
+
+#[test]
+fn tmp_gc_contracts() {
+    for (name, check) in [
+        (
+            "previews_and_confirmation_report_bytes_and_preserve_the_directory",
+            previews_and_confirmation_report_bytes_and_preserve_the_directory as fn(),
+        ),
+        (
+            "symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses",
+            symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses as fn(),
+        ),
+        (
+            "symlink_gc_still_checks_symlinks_when_non_utf8_name_is_unsupported",
+            symlink_gc_still_checks_symlinks_when_non_utf8_name_is_unsupported as fn(),
+        ),
+        (
+            "a_checkout_without_orbit_directory_has_nothing_to_reclaim",
+            a_checkout_without_orbit_directory_has_nothing_to_reclaim as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

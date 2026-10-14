@@ -213,7 +213,21 @@ impl Delivery {
         let submitted = self.cli.json(&["job", "resume", source, "--json"]);
         let run = submitted["run_id"].as_str().unwrap().to_string();
         let deadline = Instant::now() + Duration::from_secs(20);
-        self.cli.poll_run(&run, expected, Duration::from_secs(20));
+        // These workers write their own terminal state. Keep killed-worker
+        // reconciliation on the shared CLI poll path used by the other cases.
+        let expected_state: JobRunState = expected.parse().unwrap();
+        let poll_deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let shown = self.runtime.show_job_run_observed(&run).unwrap();
+            if shown.state == expected_state {
+                break;
+            }
+            assert!(
+                Instant::now() < poll_deadline,
+                "run did not reach {expected}: {shown:?}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
         let completed = self.runtime.show_job_run(&run).unwrap();
         assert_eq!(completed.retry_source_run_id.as_deref(), Some(source));
         // The terminal run write precedes task cleanup. Wait for the worker
@@ -301,11 +315,7 @@ fn forge(root: &std::path::Path, merged: bool) {
     }
 }
 
-#[test]
 fn completion_resume_restores_review_and_completes_merged_pr() {
-    if !isolated("completion_resume_restores_review_and_completes_merged_pr") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), false);
     let fx = Delivery::new();
@@ -369,11 +379,7 @@ fn completion_resume_restores_review_and_completes_merged_pr() {
 
 /// Resumed workers use the original checkpoint batch for delivery. Their
 /// failure or orphan reconciliation must still block every readmitted task.
-#[test]
 fn resumed_terminal_runs_block_readmitted_tasks() {
-    if !isolated("resumed_terminal_runs_block_readmitted_tasks") {
-        return;
-    }
     for case in ["failed", "interrupted", "superseded"] {
         let fx = Delivery::new();
         fx.skip_promotion();
@@ -544,11 +550,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
     }
 }
 
-#[test]
 fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
-    if !isolated("completion_resume_cannot_invent_review_or_reverse_withdrawal") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), true);
     for case in [
@@ -797,11 +799,7 @@ fn latest_resume_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
 /// Promotion remains reused when a later non-completion step fails or the
 /// scan exhausts the job. Neither skipped promotion nor an operator block
 /// grants restoration authority.
-#[test]
 fn resume_preserves_promotion_across_non_completion_tails() {
-    if !isolated("resume_preserves_promotion_across_non_completion_tails") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), false);
     for case in [
@@ -929,20 +927,15 @@ fn resume_preserves_promotion_across_non_completion_tails() {
 /// naming a run outside the lineage, or a note that does not name a run, stays
 /// blocked. After promotion, the handoff restores review instead of readmitting
 /// implementation.
-#[test]
 fn resume_readmits_lineage_failure_handoff_blocks() {
-    if !isolated("resume_readmits_lineage_failure_handoff_blocks") {
-        return;
-    }
     let forge_root = tempfile::tempdir().unwrap();
     forge(forge_root.path(), false);
 
-    for event in [
-        "validation_environment_blocked",
-        "pr_failure_handoff",
-        "pr_conflict_blocked",
-        "review_gate_escalation",
-    ] {
+    // The existing core resume ownership matrix covers all four handoff
+    // event forms and both malformed-note refusals at public admission.
+    // Keep real CLI workers for unpromoted and promoted terminal outcomes.
+    {
+        let event = "pr_failure_handoff";
         let fx = Delivery::new();
         fx.skip_promotion();
         fx.block_handoff(event, &failure_handoff_note(event, &fx.run));
@@ -954,36 +947,6 @@ fn resume_readmits_lineage_failure_handoff_blocks() {
         assert_eq!(restored.from_status, Some(TaskStatus::Blocked), "{event}");
         assert_eq!(restored.to_status, Some(TaskStatus::InProgress), "{event}");
     }
-
-    let fx = Delivery::new();
-    fx.skip_promotion();
-    fx.block_handoff(
-        "pr_failure_handoff",
-        &failure_handoff_note("pr_failure_handoff", "jrun-outside-lineage"),
-    );
-    fx.fail(&fx.run);
-    let before = fx.runtime.get_task(&fx.task).unwrap();
-    fx.resume(&fx.run, "failed");
-    assert_eq!(
-        fx.runtime.get_task(&fx.task).unwrap(),
-        before,
-        "a handoff that names a run outside the lineage stays blocked"
-    );
-
-    let fx = Delivery::new();
-    fx.skip_promotion();
-    fx.block_handoff(
-        "validation_environment_blocked",
-        "required validation lacked a tool in its environment: failed_step=validate",
-    );
-    fx.fail(&fx.run);
-    let before = fx.runtime.get_task(&fx.task).unwrap();
-    fx.resume(&fx.run, "failed");
-    assert_eq!(
-        fx.runtime.get_task(&fx.task).unwrap(),
-        before,
-        "a handoff note that does not name its run stays blocked"
-    );
 
     let fx = Delivery::new();
     fx.promote();
@@ -998,4 +961,48 @@ fn resume_readmits_lineage_failure_handoff_blocks() {
     assert_eq!(restored.event, "resume_review_restored");
     assert_eq!(restored.from_status, Some(TaskStatus::Blocked));
     assert_eq!(restored.to_status, Some(TaskStatus::Review));
+}
+
+#[test]
+fn resume_lifecycle_contracts_0() {
+    if !isolated("resume_lifecycle_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "completion_resume_restores_review_and_completes_merged_pr",
+            completion_resume_restores_review_and_completes_merged_pr as fn(),
+        ),
+        (
+            "resumed_terminal_runs_block_readmitted_tasks",
+            resumed_terminal_runs_block_readmitted_tasks as fn(),
+        ),
+        (
+            "completion_resume_cannot_invent_review_or_reverse_withdrawal",
+            completion_resume_cannot_invent_review_or_reverse_withdrawal as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn resume_lifecycle_contracts_1() {
+    if !isolated("resume_lifecycle_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "resume_preserves_promotion_across_non_completion_tails",
+            resume_preserves_promotion_across_non_completion_tails as fn(),
+        ),
+        (
+            "resume_readmits_lineage_failure_handoff_blocks",
+            resume_readmits_lineage_failure_handoff_blocks as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

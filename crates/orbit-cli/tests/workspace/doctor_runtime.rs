@@ -78,14 +78,7 @@ fn task_relations_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 /// ORB-14181: the live edge whose generated relation row was gone made the
 /// index-only audit report `task-relations` healthy while every rebuild
 /// failed on it. The canonical bundle is the authority.
-#[test]
 fn task_relations_reports_a_canonical_dangling_edge_the_index_lost() {
-    if crate::isolated_test::run_in_child(
-        "doctor_runtime::task_relations_reports_a_canonical_dangling_edge_the_index_lost",
-    ) {
-        return;
-    }
-
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = workspace_runtime(&temp);
     let target = add_task(&runtime, "Retired provenance", Vec::new());
@@ -141,14 +134,7 @@ fn task_relations_reports_a_canonical_dangling_edge_the_index_lost() {
 }
 
 #[cfg(unix)]
-#[test]
 fn retired_graph_cleanup_unlinks_boundaries_without_following_them() {
-    if crate::isolated_test::run_in_child(
-        "doctor_runtime::retired_graph_cleanup_unlinks_boundaries_without_following_them",
-    ) {
-        return;
-    }
-
     let temp = tempfile::tempdir().expect("tempdir");
     let global_root = temp.path().join("global");
     let shared_root = temp.path().join("main").join(".orbit");
@@ -184,15 +170,8 @@ fn retired_graph_cleanup_unlinks_boundaries_without_following_them() {
 }
 
 #[cfg(unix)]
-#[test]
 fn cleanup_preserves_a_lock_held_by_a_live_process() {
     use std::os::unix::io::AsRawFd;
-
-    if crate::isolated_test::run_in_child(
-        "doctor_runtime::cleanup_preserves_a_lock_held_by_a_live_process",
-    ) {
-        return;
-    }
 
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = workspace_runtime(&temp);
@@ -231,4 +210,30 @@ fn cleanup_preserves_a_lock_held_by_a_live_process() {
     );
     assert!(lock_path.exists(), "a held lock file must remain");
     drop(file);
+}
+
+#[test]
+fn doctor_runtime_contracts() {
+    if crate::isolated_test::run_in_child("doctor_runtime::doctor_runtime_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "task_relations_reports_a_canonical_dangling_edge_the_index_lost",
+            task_relations_reports_a_canonical_dangling_edge_the_index_lost as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "retired_graph_cleanup_unlinks_boundaries_without_following_them",
+            retired_graph_cleanup_unlinks_boundaries_without_following_them as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "cleanup_preserves_a_lock_held_by_a_live_process",
+            cleanup_preserves_a_lock_held_by_a_live_process as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

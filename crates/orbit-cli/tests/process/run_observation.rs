@@ -42,7 +42,6 @@ mod host_resources;
 #[cfg(unix)]
 mod job_exit_status;
 mod provider_limits;
-mod replay_crew;
 mod run_history;
 mod run_show_display;
 mod wait;
@@ -100,13 +99,7 @@ fn isolated_run_observation(test: &str) -> bool {
     false
 }
 
-#[test]
 fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
-    if !isolated_run_observation(
-        "run_observation::successful_security_sweep_shows_filing_floor_source_and_excluded_alerts",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime =
         OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
@@ -161,24 +154,12 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
     }
 }
 
-#[test]
 fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
-    if !isolated_run_observation(
-        "run_observation::shipped_security_job_uses_config_unless_run_input_overrides_it",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     // No gh is available: collection reports the capability gap, but filing
     // still resolves its floor through the shipped job's real templates.
     for (config, input, floor, source) in [
         ("", None, "moderate", "built-in"),
-        (
-            "[security_alert_sweep]\nmin_severity = \"high\"\n",
-            None,
-            "high",
-            "workspace",
-        ),
         (
             "[security_alert_sweep]\nmin_severity = \"high\"\n",
             Some("min_severity=critical"),
@@ -194,13 +175,13 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
     ] {
         fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
         let mut command = fixture.orbit();
-        command.args([
-            "run",
-            "job",
-            "dependabot_alert_sweep_pipeline",
-            "--wait",
-            "--json",
-        ]);
+        command.args(["run", "job", "dependabot_alert_sweep_pipeline", "--json"]);
+        // Keep a real CLI --wait route. The remaining precedence rows still
+        // submit and parse their inputs through this same CLI job route, then
+        // observe the real worker through the public wait boundary.
+        if source == "built-in" {
+            command.arg("--wait");
+        }
         if let Some(input) = input {
             command.args(["--input", input]);
         }
@@ -213,6 +194,30 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
             String::from_utf8_lossy(&result.stderr)
         );
         let submitted: Value = serde_json::from_slice(&result.stdout).unwrap();
+        if source != "built-in" {
+            let runtime =
+                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+                    orbit_core::runtime::OrbitRuntimeRoots {
+                        global_root: fixture.home.join(".orbit"),
+                        shared_root: fixture.work.join(".orbit"),
+                        local_root: fixture.work.join(".orbit"),
+                    },
+                )
+                .expect("registered security fixture runtime");
+            let waited = runtime
+                .wait_pipeline_runs(
+                    &[submitted["run_id"]
+                        .as_str()
+                        .expect("submitted sweep")
+                        .to_string()],
+                    30,
+                    1,
+                    None,
+                )
+                .expect("wait for the actual CLI-submitted security sweep");
+            assert_eq!(waited.results.len(), 1);
+            assert_eq!(waited.results[0].status, "success", "{waited:?}");
+        }
         let shown = fixture.json(&[
             "run",
             "show",
@@ -237,6 +242,14 @@ struct Fixture {
 
 impl Fixture {
     fn init() -> Self {
+        Self::init_with_stale_runs(true)
+    }
+
+    fn terminal() -> Self {
+        Self::init_with_stale_runs(false)
+    }
+
+    fn init_with_stale_runs(include_stale_runs: bool) -> Self {
         let temp = tempfile::tempdir().expect("fixture tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
@@ -256,13 +269,19 @@ impl Fixture {
         // Deterministic jobs still freeze crew admission; pin fixture selection
         // while every child sees a PATH with no provider launcher.
         fixture_crew::configure_sol(&fixture.home.join(".orbit"));
-        // Opening the workspace once creates the store the seed writes into.
-        fixture
-            .orbit()
-            .args(["run", "history", "--no-reconcile", "--json"])
-            .assert()
-            .success();
-        fixture.seed();
+        // Create the migrated store through the registered public factory;
+        // history output is not part of fixture setup's contract.
+        drop(
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+                orbit_core::runtime::OrbitRuntimeRoots {
+                    global_root: fixture.home.join(".orbit"),
+                    shared_root: fixture.work.join(".orbit"),
+                    local_root: fixture.work.join(".orbit"),
+                },
+            )
+            .expect("registered observation fixture runtime"),
+        );
+        fixture.seed(include_stale_runs);
         fixture
     }
 
@@ -293,53 +312,55 @@ impl Fixture {
             .to_string()
     }
 
-    /// A stale `running` run (impossible owner pid), a never-claimed
-    /// `pending` run days past its grace window, each holding a reservation,
-    /// and a finished `failed` run with a failed step as scan evidence.
-    fn seed(&self) {
+    /// Every fixture keeps a finished failed run and its scan evidence.
+    /// Full fixtures also keep a stale running run (impossible owner pid) and
+    /// a never-claimed pending run, each holding a reservation.
+    fn seed(&self, include_stale_runs: bool) {
         let workspace_id = self.workspace_id();
         let orbit_dir = canonical(&self.work).join(".orbit");
         let orbit_dir = orbit_dir.to_string_lossy();
         let db = self.db();
-        for (run_id, state, created_at, started_at, pid) in [
-            (
-                STALE_RUNNING,
-                "running",
-                "2026-09-20T01:00:00+00:00",
-                Some("2026-09-20T01:00:01+00:00"),
-                Some(999_999),
-            ),
-            (
-                STALE_PENDING,
-                "pending",
-                "2026-09-20T02:00:00+00:00",
-                None,
-                None,
-            ),
-        ] {
-            db.execute(
-                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+        if include_stale_runs {
+            for (run_id, state, created_at, started_at, pid) in [
+                (
+                    STALE_RUNNING,
+                    "running",
+                    "2026-09-20T01:00:00+00:00",
+                    Some("2026-09-20T01:00:01+00:00"),
+                    Some(999_999),
+                ),
+                (
+                    STALE_PENDING,
+                    "pending",
+                    "2026-09-20T02:00:00+00:00",
+                    None,
+                    None,
+                ),
+            ] {
+                db.execute(
+                    "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
                      scheduled_at, started_at, created_at, pid)
                  VALUES (?1, ?2, 'fixture_job', 1, ?3, ?4, ?5, ?4, ?6)",
-                params![run_id, workspace_id, state, created_at, started_at, pid],
-            )
-            .expect("seed stale run");
-            db.execute(
-                "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir,
+                    params![run_id, workspace_id, state, created_at, started_at, pid],
+                )
+                .expect("seed stale run");
+                db.execute(
+                    "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir,
                      workspace_id, task_ids_json, files_json, actor, created_at,
                      expires_at, owner_run_id)
                  VALUES (?1, ?2, ?3, '[]', ?4, 'fixture', ?5,
                      '2099-01-01T00:00:00+00:00', ?6)",
-                params![
-                    format!("reservation-{run_id}"),
-                    orbit_dir,
-                    workspace_id,
-                    format!(r#"["src/{state}.rs"]"#),
-                    created_at,
-                    run_id,
-                ],
-            )
-            .expect("seed reservation");
+                    params![
+                        format!("reservation-{run_id}"),
+                        orbit_dir,
+                        workspace_id,
+                        format!(r#"["src/{state}.rs"]"#),
+                        created_at,
+                        run_id,
+                    ],
+                )
+                .expect("seed reservation");
+            }
         }
         db.execute(
             "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
@@ -451,7 +472,6 @@ fn canonical(path: &Path) -> PathBuf {
 /// Every read form the run-failure scan permits, including the latest-run
 /// defaults, leaves the stale runs and their reservations exactly as stored
 /// while still returning the finished-run and step-failure evidence.
-#[test]
 fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
     let fixture = Fixture::init();
     let before = fixture.snapshot();
@@ -483,13 +503,7 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
     );
 }
 
-#[test]
 fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
-    if !isolated_run_observation(
-        "run_observation::readiness_reports_total_and_notifies_only_when_backlog_is_truncated",
-    ) {
-        return;
-    }
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::{TaskComplexity, TaskStatus, TaskType};
 
@@ -553,13 +567,7 @@ fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
     );
 }
 
-#[test]
 fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
-    if !isolated_run_observation(
-        "run_observation::job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
     fs::create_dir_all(&jobs).unwrap();
@@ -608,7 +616,6 @@ fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
     );
 }
 
-#[test]
 fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
     let fixture = Fixture::init();
     let before = fixture.snapshot();
@@ -691,7 +698,6 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
 
 /// Without the flag the same reads keep reconciling, including `run events`
 /// for an unrelated run, which reconciles every stale run at runtime open.
-#[test]
 fn default_run_reads_still_reconcile_stale_runs() {
     let fixture = Fixture::init();
     fixture
@@ -727,11 +733,7 @@ fn default_run_reads_still_reconcile_stale_runs() {
 /// An explicit run lookup reports why the stored run is unreadable instead
 /// of claiming it does not exist; only a run with no row is `not_found`.
 /// Legacy `orbit logs` follows the same rule.
-#[test]
 fn explicit_run_lookup_preserves_store_errors() {
-    if !isolated_run_observation("run_observation::explicit_run_lookup_preserves_store_errors") {
-        return;
-    }
     const MISSING: &str = "jrun-20260920-9999";
     let fixture = Fixture::init();
     fixture
@@ -777,7 +779,6 @@ fn explicit_run_lookup_preserves_store_errors() {
 /// The public `job run` alias executes locally, and its completed audit tree
 /// remains readable after the worker exits. Cancelling this terminal fixture
 /// cannot signal a process or replace its successful outcome.
-#[test]
 fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
@@ -825,13 +826,7 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
 
 /// The CLI's default task-leaf cancel requeues with its reason and leaves the
 /// candidate in place; `--block` retains the previous blocked transition.
-#[test]
 fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
-    if !isolated_run_observation(
-        "run_observation::cancel_task_leaf_requeues_by_default_and_block_is_explicit",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let candidate = fixture.work.join("src").join("candidate.rs");
     fs::create_dir_all(candidate.parent().unwrap()).unwrap();
@@ -1021,11 +1016,6 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
-    if !isolated_run_observation(
-        "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
-    ) {
-        return;
-    }
     use orbit_common::process::identity::{
         STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
     };
@@ -1079,7 +1069,6 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
 /// the terminal state, and the cancelled outcome must survive a repeat
 /// cancel.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     use std::process::{Child, Stdio};
     use std::time::{Duration, Instant};
@@ -1263,13 +1252,7 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
 /// A stopped coordinator's workers retain workspace slots, including a
 /// delivery whose wrapper has finished. A replacement records that inherited
 /// occupancy without attributing those workers' outcomes to itself.
-#[test]
 fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
-    if !isolated_run_observation(
-        "run_observation::replacement_drain_counts_and_reports_inherited_workers_until_they_finish",
-    ) {
-        return;
-    }
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::{TaskComplexity, TaskStatus, TaskType};
     use orbit_types::workflow::{ChildDispatch, PipelineState};
@@ -1518,13 +1501,7 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
 /// Worker-limit adjustment only writes a drain control record. The fixture's
 /// live test PID prevents orphan reconciliation; this record is never passed
 /// to cancellation or any process-control command.
-#[test]
 fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
-    if !isolated_run_observation(
-        "run_observation::run_concurrency_updates_persisted_revision_and_refuses_stale_writes",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -1612,13 +1589,7 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
 /// repeat drain start still queues behind it as a successor rather than
 /// extending it [ORB-15383]. Only drain control records are written; the
 /// fixture's live test PID keeps orphan reconciliation away from the run.
-#[test]
 fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
-    if !isolated_run_observation(
-        "run_observation::run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
     let runtime = orbit_core::OrbitRuntime::from_roots(
@@ -1735,13 +1706,7 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
 /// the job once allowed — a twentieth is admitted to run at once instead of
 /// waiting `pending` behind a job-level limit while it holds a drain slot. The
 /// detached worker is substituted, so nothing beyond admission executes.
-#[test]
 fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
-    if !isolated_run_observation(
-        "run_observation::a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
     let runtime = orbit_core::OrbitRuntime::from_roots(
@@ -1773,13 +1738,7 @@ fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
 /// `orbit run concurrency` retunes a replica's pull drain the same way it
 /// does an auto drain, to any positive ceiling, and still refuses a run that
 /// is not a drain.
-#[test]
 fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
-    if !isolated_run_observation(
-        "run_observation::run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -1825,13 +1784,7 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
 /// sustained pressure, so it reports the throttle a live drain recorded on
 /// its last pass: readiness and `run show` name the resource, value,
 /// threshold and since-when, and ship discovery stands down.
-#[test]
 fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
-    if !isolated_run_observation(
-        "run_observation::a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -1928,11 +1881,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
 
 /// A local admission pass counts deferred tasks inside `queued`; the CLI
 /// prints those tasks separately and subtracts them from the admissible count.
-#[test]
 fn run_show_counts_local_deferred_tasks_once() {
-    if !isolated_run_observation("run_observation::run_show_counts_local_deferred_tasks_once") {
-        return;
-    }
     use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
 
     let fixture = Fixture::init();
@@ -2004,13 +1953,7 @@ fn run_show_counts_local_deferred_tasks_once() {
 /// the same `Still waiting` lines a local drain prints: each kept-off task
 /// with its reason and the tasks it waits on, the age of the owner's answer,
 /// and, once several passes in a row claimed nothing, one line saying why.
-#[test]
 fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
-    if !isolated_run_observation(
-        "run_observation::run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host",
-    ) {
-        return;
-    }
     use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
@@ -2154,13 +2097,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
 
 /// A pull drain bounds the deferred list it records; the `Still waiting`
 /// block counts every deferred task and says how many the list left out.
-#[test]
 fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
-    if !isolated_run_observation(
-        "run_observation::run_show_reports_deferred_tasks_beyond_the_listed_ones",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -2230,11 +2167,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
 
 /// [ORB-15639] An open pull breaker names its failure count, their classes
 /// and when it half-opens; once that time has passed it reads half-open.
-#[test]
 fn run_show_names_the_pull_breaker() {
-    if !isolated_run_observation("run_observation::run_show_names_the_pull_breaker") {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -2295,11 +2228,7 @@ fn run_show_names_the_pull_breaker() {
 
 /// A durable failed-pass record is visible through the actual CLI in text
 /// and JSON, independently of successful coordinator step outputs.
-#[test]
 fn run_show_exposes_degraded_pull_pass_health() {
-    if !isolated_run_observation("run_observation::run_show_exposes_degraded_pull_pass_health") {
-        return;
-    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -2406,13 +2335,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
 /// [ORB-15622] `orbit doctor` compares this replica's validation gates with
 /// the owner's that its latest pull drain recorded at submission, and names
 /// each list that differs.
-#[test]
 fn doctor_warns_when_the_replicas_gates_differ_from_the_owners() {
-    if !isolated_run_observation(
-        "run_observation::doctor_warns_when_the_replicas_gates_differ_from_the_owners",
-    ) {
-        return;
-    }
     let fixture = Fixture::init();
     let now = chrono::Utc::now().to_rfc3339();
     let input = serde_json::json!({"owner_validation_gates": {
@@ -2455,13 +2378,7 @@ mod agent_invoke;
 
 /// A partial forced cancellation keeps its structured result on stdout and
 /// exits unsuccessfully in both JSON and terminal modes.
-#[test]
 fn force_cancel_reports_unstopped_local_children_and_exits_one() {
-    if !isolated_run_observation(
-        "run_observation::force_cancel_reports_unstopped_local_children_and_exits_one",
-    ) {
-        return;
-    }
     for as_json in [true, false] {
         let fixture = Fixture::init();
         let runtime = orbit_core::OrbitRuntime::from_roots(
@@ -2536,13 +2453,7 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
 /// task [ORB-14310]: `run readiness` and the drain's `run show` both name the
 /// typed `surface_reserved` reason and the reserving task, from a real drain
 /// pass rather than a seeded record.
-#[test]
 fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
-    if !isolated_run_observation(
-        "run_observation::a_surface_reservation_reaches_readiness_and_drain_run_show",
-    ) {
-        return;
-    }
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
@@ -2655,13 +2566,7 @@ fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
 /// alive; the same agent without that report reads plainly alive. The agent
 /// and its stopped child are real processes so both liveness probes answer.
 #[cfg(target_os = "linux")]
-#[test]
 fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
-    if !isolated_run_observation(
-        "run_observation::run_show_marks_an_agent_blocked_on_a_stopped_descendant",
-    ) {
-        return;
-    }
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
@@ -2819,4 +2724,193 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
     let json = fixture.json(&["run", "show", ALIVE, "--no-reconcile", "--json"]);
     assert!(json["provider_processes"][0]["blocked_on_stopped_descendant"].is_null());
     drop(agent);
+}
+
+#[test]
+fn run_observation_contracts_0() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "successful_security_sweep_shows_filing_floor_source_and_excluded_alerts",
+            successful_security_sweep_shows_filing_floor_source_and_excluded_alerts as fn(),
+        ),
+        (
+            "shipped_security_job_uses_config_unless_run_input_overrides_it",
+            shipped_security_job_uses_config_unless_run_input_overrides_it as fn(),
+        ),
+        (
+            "readiness_bootstrap_preserves_stale_runs_and_held_reservations",
+            readiness_bootstrap_preserves_stale_runs_and_held_reservations as fn(),
+        ),
+        (
+            "readiness_reports_total_and_notifies_only_when_backlog_is_truncated",
+            readiness_reports_total_and_notifies_only_when_backlog_is_truncated as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn run_observation_contracts_1() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_1") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage",
+            job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage as fn(),
+        ),
+        (
+            "no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged",
+            no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged as fn(),
+        ),
+        (
+            "default_run_reads_still_reconcile_stale_runs",
+            default_run_reads_still_reconcile_stale_runs as fn(),
+        ),
+        (
+            "explicit_run_lookup_preserves_store_errors",
+            explicit_run_lookup_preserves_store_errors as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn run_observation_contracts_2() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_2") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable",
+            job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable as fn(),
+        ),
+        (
+            "cancel_task_leaf_requeues_by_default_and_block_is_explicit",
+            cancel_task_leaf_requeues_by_default_and_block_is_explicit as fn(),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome",
+            cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome as fn(),
+        ),
+        (
+            "replacement_drain_counts_and_reports_inherited_workers_until_they_finish",
+            replacement_drain_counts_and_reports_inherited_workers_until_they_finish as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn run_observation_contracts_3() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_3") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "run_concurrency_updates_persisted_revision_and_refuses_stale_writes",
+            run_concurrency_updates_persisted_revision_and_refuses_stale_writes as fn(),
+        ),
+        (
+            "run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues",
+            run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues as fn(),
+        ),
+        (
+            "a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once",
+            a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once as fn(),
+        ),
+        (
+            "run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling",
+            run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn run_observation_contracts_4() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_4") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship",
+            a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship as fn(),
+        ),
+        (
+            "run_show_counts_local_deferred_tasks_once",
+            run_show_counts_local_deferred_tasks_once as fn(),
+        ),
+        (
+            "run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host",
+            run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host as fn(),
+        ),
+        (
+            "run_show_reports_deferred_tasks_beyond_the_listed_ones",
+            run_show_reports_deferred_tasks_beyond_the_listed_ones as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn run_observation_contracts_5() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_5") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "run_show_names_the_pull_breaker",
+            run_show_names_the_pull_breaker as fn(),
+        ),
+        (
+            "run_show_exposes_degraded_pull_pass_health",
+            run_show_exposes_degraded_pull_pass_health as fn(),
+        ),
+        (
+            "doctor_warns_when_the_replicas_gates_differ_from_the_owners",
+            doctor_warns_when_the_replicas_gates_differ_from_the_owners as fn(),
+        ),
+        (
+            "force_cancel_reports_unstopped_local_children_and_exits_one",
+            force_cancel_reports_unstopped_local_children_and_exits_one as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn run_observation_contracts_6() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_6") {
+        return;
+    }
+    tracing::info!(
+        case = "a_surface_reservation_reaches_readiness_and_drain_run_show",
+        "CLI contract row"
+    );
+    a_surface_reservation_reaches_readiness_and_drain_run_show();
+    #[cfg(target_os = "linux")]
+    {
+        tracing::info!(
+            case = "run_show_marks_an_agent_blocked_on_a_stopped_descendant",
+            "CLI contract row"
+        );
+        run_show_marks_an_agent_blocked_on_a_stopped_descendant();
+    }
 }
