@@ -5,6 +5,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
+use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
@@ -333,6 +334,9 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         },
         // Run selectors, crews and drain settings are structural; a resize
         // reason is an operator audit note kept verbatim.
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => ActionPolicy { declared: verb.spec().params, ..NO_REDACTION },
+        },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
@@ -351,7 +355,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::CommandExec
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
-        | OrbitBuiltinAction::Search
         // [ORB-11354] The invocation prompt is free text and *is* persisted on
         // the run record, but redacting it would change the instruction the
         // agent receives — an operator debugging an auth failure needs to name
@@ -387,6 +390,9 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

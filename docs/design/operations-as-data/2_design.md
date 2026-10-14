@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters, CLI action subcommands) as built on friction, auto-task, drain, workspace claim, every task tool and the workflow-run tools, plus the planned migration of the remaining nouns.
+summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters, CLI action subcommands) as built on friction, auto-task, drain, workspace claim, every task tool, the workflow-run tools and search; the migration is complete with explicit verdicts for the remaining single-surface or wider CLI contracts.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
 ---
 
 # Operations as Data — Design
@@ -616,8 +616,9 @@ other nouns.
 
 ## 9. Migration plan
 
-**Planned**, except phase 0a, phase 0b's warn mode and phases 1–4, which are
-implemented. This replaces the touch-it-move-it ratchet; see
+**Implemented:** phases 0a and 1–5 and phase 0b's warn mode are complete.
+The separately scheduled unknown-field refusal remains planned. This replaces
+the touch-it-move-it ratchet; see
 [Migrate the remaining nouns on a plan, not on contact](./4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
 
 Each phase is one Orbit task tagged `operations-as-data` (large nouns split per
@@ -631,14 +632,14 @@ slice); the task IDs follow the table. Each starts with cookbook Step 0 and puts
 | 2 (done) | drain (6 tools) and workspace claim (3 inactive tools) | Tool-only, mechanical; collapses nine `OrbitBuiltinAction` variants; drain verbs keep their agent-floor rows in `GOVERNED_OPERATIONS` |
 | 3 (done) | task, in slices: reads (`show`, `list`, `eligible`, `lint`); writes (`add`, `update`, with the guarded schema extension); `artifact get`/`put` (nested); `locks` (nested); review (`reconcile_review`, `review_reset`, `reject`); `delete` | Largest noun; slices keep each PR reviewable. `flow`, `export`, `import`, `publication`, `reindex`, `recheck-blocked` and `archive` have no tool and are judged per subcommand, not migrated by default |
 | 4 (done) | workflow run: `workflow.ship`, `workflow.run.show/list/resume`, `workflow.auto` | Operator-governed; the authorization matrix golden in `output_goldens.rs` must not move except as intended |
-| 5 | Single-verb tools with a second surface: `routine.control` with `orbit routine pause/resume`; `search` with `orbit search` | A one-verb noun with one surface gains nothing; `agent.invoke`, `command.exec` and `pipeline.invoke/wait` migrate only if they gain a surface |
+| 5 (done) | `search` with `orbit search`; the remaining builtin tools judged individually below | Routine pause/resume is host-local state, not a definition toggle. Wider agent/job CLIs and tool-only operations retain their contracts |
 
 Tasks: phase 0a is [ORB-15932] (kernel v2 structure, done); phase 0b is
 [ORB-15933] (input validation, warn mode, done) and [ORB-15934] (refuse unknown
 fields after the window); phase 1
 [ORB-15935] (done); phase 2 [ORB-15936] (done); phase 3 [ORB-15937] (reads, done), [ORB-15938]
 (add/update, done), [ORB-15939] (artifact and locks, done), [ORB-15940] (review and
-lifecycle, done); phase 4 [ORB-15941] (done); phase 5 [ORB-15942]. [ORB-15943] verifies the
+lifecycle, done); phase 4 [ORB-15941] (done); phase 5 [ORB-15942] (done). [ORB-15943] verifies the
 authorization golden that phases 1 and 4 rely on.
 
 Out of scope: the `Desktop*` host actions (a separate host protocol), GitHub and
@@ -663,10 +664,14 @@ they are 11 and 9: the five workflow tool impls are gone, and the four
 workflow action variants and `DesktopDrain`, which only `orbit.workflow.auto`
 dispatched, are replaced by `Workflow(WorkflowVerb)`. After phase 3d, they
 are 7 and 5: the review, reject and delete tool impls and their four action
-variants are gone, so `Task(TaskVerb)` covers every task tool. The six tool
-impls left are the two phase 5 tools and the four that migrate only if they
-gain a surface, plus the generic `OperationTool<V>`; the five variants are theirs
-except routine control's, which dispatches outside `OrbitBuiltinAction`. The weekly code-health sweep reports
+variants are gone, so `Task(TaskVerb)` covers every task tool. After phase 5,
+they are 6 and 4: search's tool impl is gone and its
+standalone action is `Search(SearchVerb)`. The five hand-wired tool impls
+are routine control, agent invocation, command execution and pipeline
+invoke/wait; the sixth is the generic `OperationTool<V>`. The four standalone
+variants belong to those tools except routine control, which uses the desktop
+host actions. Their explicit verdicts follow. The weekly code-health sweep
+reports
 both numbers. Neither is a merge gate.
 
 ### Phase 2: tool-only nouns (Implemented)
@@ -880,6 +885,42 @@ inventory and the Step 0 differences are in
 The MCP snapshot, the tool-list goldens and the authorization matrix golden are
 unchanged.
 
+### Phase 5: search and remaining-tool verdicts (Implemented)
+
+`orbit.search` is declared in
+[governance/search.rs](../../../crates/orbit-common/src/governance/search.rs)
+and served by `OperationTool<SearchVerb>`. `orbit search <query>` derives its
+arguments from that spec and executes through `run_tool`; the generic CLI
+adapter can bind an operation at a command root without inventing a `query`
+subcommand. The CLI surface retains its required query, rendering, inherited
+reindex flags and `query:<kind>` audit label. Query effect remains read-only.
+`search reindex` stays local maintenance: it has no tool counterpart, requires
+the full runtime and keeps `reindex:<kind>` audit metadata.
+
+Step 0 captured search and reindex help before editing, plus JSON/plain output,
+capability outcomes and CLI audit rows on isolated fixtures. The existing
+`search.txt` and the captured `search-reindex.txt` pass unchanged. MCP parameter
+order, descriptions and scope, and the authorization matrix remain unchanged.
+Accepted aliases and retired lexical-only fields live in the spec. Unknown
+fields start in warn-and-audit mode, as for other migrated reads. The behaviour
+comparison is recorded in [4_decisions.md](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
+
+Every remaining hand-wired builtin was inspected rather than inferred from its
+name. Similar CLI names do not establish equivalent operations:
+
+| Tool | Verdict |
+|---|---|
+| `orbit.routine.control` | Keep hand-wired. Its operator-only `list` is a bounded workspace projection; `toggle` compare-and-sets a definition's enabled state and observed target. `routine pause/resume` instead changes host-local pause state, and `list/show` report host-wide catalog/definition/fire details. None shares its contract. The phase 4 enum-selector and guarded-mode shape applies if an equivalent second surface is added. |
+| `orbit.agent.invoke` | Keep hand-wired. A second CLI exists (`run agent`), correcting the initial inventory, but it is a wider command: cwd defaults in the caller's process, timeout accepts durations, and `--wait` waits to terminal with failure exit behavior; the tool requires explicit cwd and bounds optional waiting to 600 seconds. Both already share core admission. As with phase 4's wider CLIs, retain this surface rather than change its contract in this migration. |
+| `orbit.command.exec` | Keep hand-wired. No equivalent CLI; `orbit tool run` is the generic tool transport, not an independent operation surface. The tool requires explicit argv, confined working directory, operator capability and a workspace claim. |
+| `orbit.pipeline.invoke` | Keep hand-wired. `run job` is a wider catalog-or-local-YAML command with key=value inputs, optional waiting and failure exit behavior. The tool takes a registered job name and JSON input, with a distinct default-input guarded mode and managed-child admission. There is no equivalent standalone CLI operation. |
+| `orbit.pipeline.wait` | Keep hand-wired. No independent wait CLI; the single-run `--wait` renderer in `run job` is not the multi-run tool's bounded polling operation. The tool remains off MCP. |
+
+All folder documents were already `Accepted`, reflecting the operator's accepted
+kernel and migration decisions; that status is preserved. The scoped migration
+is complete. The five exceptions retain their current contracts, not an open
+migration phase.
+
 ## 10. Concerns & Honest Limitations
 
 - **The registry is a wall of contract strings.** Centralizing tool names,
@@ -908,8 +949,9 @@ unchanged.
   captures its own before starting.
 - **Dashboard routes are not derived** (§8). Adding a verb that should be
   reachable over HTTP still needs a route, and nothing catches a forgotten one.
-- **Two idioms coexist until phase 5.** Readers of `orbit-tools` and `orbit-cli`
-  meet both shapes. The plan bounds the period; it does not remove the cost.
+- **The remaining hand-wired exceptions retain distinct contracts.** The scoped
+  migration is complete, but five tools remain outside the registry for the
+  reasons recorded in phase 5. Future equivalent surfaces should revisit them.
 - **There are no per-verb Rust request or response structs.** `serde_json::Value`
   stays on the wire, wrapped by `OperationInput` after validation. Declared
   aliases remove the main reason given for not deriving typed requests; whether

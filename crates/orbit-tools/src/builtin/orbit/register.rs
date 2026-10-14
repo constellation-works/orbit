@@ -6,8 +6,9 @@ use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
 
-use super::{agent, command, operation, pipeline, search};
+use super::{agent, command, operation, pipeline};
 use crate::ToolRegistry;
+use orbit_common::governance::search::SEARCH;
 
 pub fn register(registry: &mut ToolRegistry) {
     registry.register_mcp(
@@ -46,7 +47,7 @@ pub fn register(registry: &mut ToolRegistry) {
         McpToolScope::WorkspaceRequired,
     );
     registry.register(pipeline::wait::OrbitPipelineWaitTool);
-    registry.register_mcp(search::OrbitSearchTool, McpToolScope::WorkspaceRequired);
+    operation::register_noun(registry, &SEARCH);
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);

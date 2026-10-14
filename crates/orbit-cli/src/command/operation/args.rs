@@ -185,8 +185,18 @@ fn find_by_subcommand<V: OperationVerb>(path: &[&str]) -> Option<&'static Operat
 /// action instead of an argument for it, and its other arguments become
 /// global so every action inherits them.
 fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
-    let mut cmd =
-        Command::new(spec.cli_path.last().copied().unwrap_or_default()).about(spec.cli_about);
+    augment_operation_args(
+        Command::new(spec.cli_path.last().copied().unwrap_or_default()),
+        spec,
+    )
+}
+
+/// Bind a root command's arguments to a shared operation (such as `orbit search`).
+pub(crate) fn augment_operation_args<V: 'static>(
+    cmd: Command,
+    spec: &'static OperationSpec<V>,
+) -> Command {
+    let mut cmd = cmd.about(spec.cli_about);
     if let Some(long_about) = spec.cli_help.long_about {
         cmd = cmd.long_about(long_about);
     }
@@ -307,7 +317,7 @@ fn canonical_enum_value(values: &[EnumValue], raw: &str) -> String {
 /// Omitted arguments stay absent. Required parameters are passed through
 /// verbatim and left for the handler to validate, which keeps "you passed only
 /// whitespace" reporting where the domain rules live.
-fn input_from_matches<V: 'static>(
+pub(crate) fn input_from_matches<V: 'static>(
     spec: &'static OperationSpec<V>,
     matches: &ArgMatches,
 ) -> Map<String, Value> {
