@@ -480,10 +480,12 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
         // Preserve the previous canonical bytes before replacing them. A first
         // observation needs only its canonical record; recovery must not erase
         // an earlier attempt's cost or failure. Archives are diagnostic only.
-        let digest = sha256_hex(content);
+        let content =
+            super::required_evidence::retain(host, task_ids, run_id, path, content, claimed)?;
+        let digest = sha256_hex(&content);
         for task_id in task_ids {
             if let Some(previous) = host.get_task_artifact(task_id, path)?
-                && previous.content != *content
+                && previous.content != content
             {
                 let archive = format!(
                     "validation/{run_id}/attempts/{}.json",

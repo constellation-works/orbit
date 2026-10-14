@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise affected-crate test selection and execution at the script boundary."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -668,7 +669,7 @@ class NextestOutputTransportTests(unittest.TestCase):
 
     NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
 
-    def run_gate(self, test_body, returncode=0, selection=None):
+    def run_gate(self, test_body, returncode=0, selection=None, report_failure=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / "repo"
@@ -695,6 +696,14 @@ class NextestOutputTransportTests(unittest.TestCase):
         (root / "crates/suite/src/lib.rs").write_text("// changed\n")
         summary = Path(temporary.name) / "summary.json"
         environment["ORBIT_VALIDATION_SUMMARY"] = str(summary)
+        evidence = Path(temporary.name) / "evidence"
+        if report_failure:
+            evidence.write_text("not a directory")
+        else:
+            evidence.mkdir()
+        environment["ORBIT_COMMAND_EVIDENCE_DIR"] = str(evidence)
+        environment["ORBIT_COMMAND_EVIDENCE_INVOCATION"] = "fixture-invocation"
+        self.evidence = evidence
         if selection is not None:
             environment["ORBIT_VALIDATION_SELECTION"] = json.dumps(selection)
         result = subprocess.run(["python3", str(root / "scripts/ci-test-affected.py")], cwd=root,
@@ -739,11 +748,33 @@ class NextestOutputTransportTests(unittest.TestCase):
         self.assertEqual(self.summary["tests_run"], 1, output)
 
     def test_failure_output_is_relayed_and_archived(self):
-        output = self.run_gate('#[test]\nfn broken() { println!("failure-body"); panic!("failure-detail"); }',
+        output = self.run_gate('#[test]\nfn broken() { println!("{}", "head-noise\\n".repeat(20000)); println!("failure-body"); println!("{}", "tail-noise\\n".repeat(20000)); panic!("failure-detail"); }',
                                returncode=100)
         for diagnostic in ("failure-body", "failure-detail"):
             self.assertIn(diagnostic, output)
             self.assertIn(diagnostic, self.full_output)
+        report = json.loads((self.evidence / "manifest.json").read_text())
+        self.assertEqual(report["invocation"], "fixture-invocation")
+        [entry] = report["files"]
+        retained = (self.evidence / entry["name"]).read_bytes()
+        self.assertEqual(retained.decode(), self.full_output)
+        self.assertEqual(entry["bytes"], len(retained))
+        self.assertEqual(entry["sha256"], hashlib.sha256(retained).hexdigest())
+        self.assertTrue(entry["complete"])
+        self.assertTrue(entry["source"].startswith(".orbit/tmp/ci-test-affected-nextest-"))
+        denied = self.run_gate('#[test]\nfn broken() { panic!("failure-detail"); }',
+                               returncode=100, report_failure=True)
+        self.assertIn("command evidence report unavailable", denied)
+        self.assertIn("failure-detail", denied)
+        self.run_gate('#[test]\nfn broken() { println!("{}", "prefix-noise\\n".repeat(100000)); panic!("oversized-detail"); }',
+                      returncode=100)
+        [partial] = json.loads((self.evidence / "manifest.json").read_text())["files"]
+        prefix = (self.evidence / partial["name"]).read_bytes()
+        self.assertEqual(len(prefix), 1024 * 1024)
+        self.assertGreater(len(self.full_output.encode()), len(prefix))
+        self.assertEqual(prefix, self.full_output.encode()[:len(prefix)])
+        self.assertEqual(partial["sha256"], hashlib.sha256(prefix).hexdigest())
+        self.assertFalse(partial["complete"], "the reported prefix cannot claim complete raw failure evidence")
 
     def test_a_failing_tests_selection_runs_only_the_named_tests(self):
         # [ORB-15328] The identities a failed run printed select exactly those

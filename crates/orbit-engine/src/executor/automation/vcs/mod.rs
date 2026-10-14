@@ -27,6 +27,7 @@ mod push;
 mod remote_probe;
 mod required_capture;
 mod required_command;
+mod required_evidence;
 mod resume;
 pub mod review_gate;
 mod scratch_target;

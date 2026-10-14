@@ -171,6 +171,52 @@ durable activity start/finish events to separate provider recovery and each
 validation invocation from an end-to-end step span; subtracting reported test
 time alone cannot establish engine overhead.
 
+Required commands may report diagnostic files through the generic
+`ORBIT_COMMAND_EVIDENCE_DIR` and `ORBIT_COMMAND_EVIDENCE_INVOCATION` channel.
+The executor creates a fresh directory outside the checkout for each attempt,
+anchors its descriptor before execution, and reads only flat, no-follow regular
+files. A command writes `manifest.json` with `schema_version: 1`, its supplied
+`invocation`, and up to eight `files`, each containing `name`, a relative
+`source` label, `bytes`, `sha256`, and `complete`. The source label is
+command-reported provenance, never a path the executor opens. Unknown fields,
+foreign invocations, traversal, symlinks, nonregular files, mismatched sizes or
+digests, and invalid UTF-8 are refused. The manifest read is capped at 16 KiB;
+all source and retained bytes together are capped at the existing 1 MiB inline
+artifact ceiling **per attempt**. These limits do not extend command deadlines.
+
+The affected-test script reports its merged nextest log on a failed runner
+exit, copying at most 1 MiB and marking a larger source's prefix incomplete.
+Standalone execution still leaves the log under `.orbit/tmp/`.
+Managed validation captures reported bytes before the host temporary directory
+ends, applies secret redaction to the entire text before splitting it, and
+attaches UTF-8 chunks of at most 16 KiB under
+`validation/<run>/evidence/<digest>.json`. Each chunk has its byte offset,
+length and content digest; a task-bound `<digest>.manifest.json` records the
+source and retained digests/lengths, redaction, completeness, chunk artifact
+digests/paths, and exact task/run/command/log/role/head/attempt/invocation
+provenance and the source checkout path. The command text is redacted; its
+unredacted digest retains exact command identity. Candidate, cached base, network
+attempts and failing-test replay logs retain their own qualifications. Cached
+base bytes still describe the original invocation, even when attached to a later run's task. Chunk attachment
+precedes its manifest; failed or unknown attachment responses are never retried
+and are recorded as `attachment_unknown`, `complete: false`. Disposable scratch
+may then disappear without erasing conclusively attached evidence.
+
+`not_reported` and `refused` also mean incomplete evidence. Oversized command
+reports are refused rather than silently truncated or mislabeled complete; the workspace
+script reports its bounded prefix with `complete: false`. Bounded command output
+continues to retain failure diagnosis. `complete` describes all reported bytes
+with redaction applied; `raw_complete` is false if the producer reported a
+partial log or redaction changed it. Binary logs are unsupported. A command
+interrupted before reporting cannot establish complete raw evidence. Evidence
+is diagnostic only: no report, missing chunk or completeness claim can grant
+coverage, change exit status, or waive base/replay/host refusals. Claimed
+known-red failures attach diagnostics before their existing continuation.
+`evidence_capture_ms` and `evidence_retention_ms` report advisory capture and
+attachment overhead separately; fixture attachment timing does not establish
+owner-store/network cost. Existing trusted owner/run and claim routing govern
+all writes; command manifests cannot choose an owner or an artifact path.
+
 Required-command failure messages are limited to 16 KiB and name the command,
 exit code, failing tests, base verdict and candidate/base log artifact paths.
 Captured output stays in the task's `validation/<run>/<index>.json` and
