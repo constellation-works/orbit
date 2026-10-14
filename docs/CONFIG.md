@@ -920,6 +920,13 @@ existing recovery activities, final validation and push do the repair:
   also caps each PR at three repairs across all heads and runs. When the budget
   runs out, the watcher stops with `auto_fix_budget_exhausted` and lists the
   attempts.
+- A resumed job inherits repair admissions and contiguous publication edges
+  only from its durable, same-job retry ancestors. It can keep watching a
+  published repair or validate and lease-push an admitted local repair left
+  committed before interruption. Unrelated runs confer no authority; PR,
+  branch, exact-head and review guards still apply. Resume spends no new
+  repair attempt merely to finish an inherited repair and grants no merge
+  authority.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
 ### Setting `task.crew`

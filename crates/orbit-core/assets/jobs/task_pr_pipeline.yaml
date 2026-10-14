@@ -528,6 +528,9 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        # Completion receives the new execution run_id from the dispatcher.
+        # Its durable retry ancestors authorize prior auto-fix ledger entries;
+        # the successful push checkpoint below deliberately retains its SHA.
         auto_fix: "{{ input.auto_fix }}"
         allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.sync_base.output.head }}"

@@ -162,7 +162,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
-        let auto_fix = AutoFix::from_input(input, &task_ids, &context.batch_id);
+        let auto_fix = AutoFix::from_input(host, input, &task_ids, &context.batch_id)?;
         let delivered = match drive_pr_to_merged(
             host,
             input,
