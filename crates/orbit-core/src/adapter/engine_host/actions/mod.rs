@@ -1,11 +1,12 @@
 //! Deterministic actions and executor helpers behind `RuntimeHost`.
 //!
 //! `dispatch` maps each `CoreDeterministicAction` the engine runs onto Core:
-//! sweep filing, task-pilot, backlog admission and workspace auto-drain
-//! actions call `application::sweep_filing`, `application::task::pilot`,
-//! `application::admission` and `application::workspace_auto`; the pull,
-//! pipeline and recovery actions are still implemented in the sibling
-//! modules here. The executor helpers resolve what an agent step runs with:
+//! sweep filing, task-pilot, backlog admission, workspace auto-drain and pull
+//! drain actions call `application::sweep_filing`, `application::task::pilot`,
+//! `application::admission`, `application::workspace_auto` and
+//! `application::pull_drain`; the pipeline and recovery actions are still
+//! implemented in the sibling modules here, and `pull` keeps the pull drain's
+//! owner transport and leaf launcher adapters. The executor helpers resolve what an agent step runs with:
 //! the CLI command (`cli_executor`), the sandbox (`sandbox`) and the task
 //! context (`task_context`). HTTP agent-loop transport and CLI subprocess execution
 //! live in `orbit-engine`, so this module never names orbit-agent types.

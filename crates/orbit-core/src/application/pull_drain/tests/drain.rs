@@ -219,7 +219,7 @@ impl PullLauncher for Launcher {
 #[test]
 fn a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work() {
     if isolated_pull_test(
-        "adapter::engine_host::actions::pull::tests::drain::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
+        "application::pull_drain::tests::drain::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
     ) {
         return;
     }
@@ -263,7 +263,7 @@ fn a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work() {
 #[test]
 fn a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation() {
     if isolated_pull_test(
-        "adapter::engine_host::actions::pull::tests::drain::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
+        "application::pull_drain::tests::drain::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
     ) {
         return;
     }
@@ -390,7 +390,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
 #[test]
 fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
     if isolated_pull_test(
-        "adapter::engine_host::actions::pull::tests::drain::pull_lost_request_and_binding_responses_recover_the_same_leaf",
+        "application::pull_drain::tests::drain::pull_lost_request_and_binding_responses_recover_the_same_leaf",
     ) {
         return;
     }
@@ -429,7 +429,7 @@ fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
 #[test]
 fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
     if isolated_pull_test(
-        "adapter::engine_host::actions::pull::tests::drain::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
+        "application::pull_drain::tests::drain::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
     ) {
         return;
     }
@@ -475,7 +475,7 @@ fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
 #[test]
 fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
     if isolated_pull_test(
-        "adapter::engine_host::actions::pull::tests::drain::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
+        "application::pull_drain::tests::drain::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
     ) {
         return;
     }

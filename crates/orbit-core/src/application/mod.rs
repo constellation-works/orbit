@@ -28,6 +28,7 @@ pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
 pub mod plugin;
+pub(crate) mod pull_drain;
 pub mod review;
 pub mod routines;
 pub(crate) mod search;

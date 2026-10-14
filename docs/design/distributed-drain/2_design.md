@@ -374,7 +374,7 @@ still needs authority). Only `landing_branch` (owner-resolved ship configuration
 the submission. Acceptance and landing resolve revisions through one shared rule.
 
 **Follower execution** ([ORB-13625]). `RoutedPullPeer`
-(`adapter/engine_host/actions/pull/adapters.rs`) speaks the protocol to the owner's registered
+(`adapter/engine_host/actions/pull/adapters.rs`, under the drain in `application/pull_drain/`) speaks the protocol to the owner's registered
 tools over a composition-supplied `orbit_tools::DrainOwnerTransport` — in production the
 federated mux over the host's registered hosts (`~/.orbit/hosts.toml`), opened as `agent` (`orbit-cmd`
 `worker_coordination.rs`). The owner serves the same code the owner-local adapter calls:

@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Proposal for predictive admission — Orbit records each task's CPU and memory minute by minute, averages them into profiles per workspace, work class (code change, no-diff review, recurring auto-task) and complexity, forecasts host load from the running tasks, and admits a task when its profile fits under the forecast.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/adapter/engine_host/actions/pull/refill.rs", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/scope.rs"]
+paths: ["crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/scope.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
@@ -97,7 +97,7 @@ Implementation tasks are filed from this table once the design is accepted.
 | Profiles and `orbit run profiles` report | [host_resource/profile/](../../../crates/orbit-core/src/runtime/host_resource/profile/mod.rs) | to file |
 | Host load forecast and admission reservations | new, beside [host_resource/](../../../crates/orbit-core/src/runtime/host_resource/mod.rs) | to file |
 | Gap-fit admission (local drains) | [workspace_auto/classify.rs](../../../crates/orbit-core/src/application/workspace_auto/classify.rs) | to file |
-| Gap-fit admission (pull drains) | [pull/refill.rs](../../../crates/orbit-core/src/adapter/engine_host/actions/pull/refill.rs) | to file |
+| Gap-fit admission (pull drains) | [pull_drain/refill/mod.rs](../../../crates/orbit-core/src/application/pull_drain/refill/mod.rs) | to file |
 | `[workflow.auto_concurrency]` settings | [settings/machine.rs](../../../crates/orbit-config/src/registry/settings/machine.rs) | to file |
 | Admission reasons in `drain_last_pass` and `orbit run show` | [run/state/drain.rs](../../../crates/orbit-types/src/workflow/run/state/drain.rs) | to file |
 | macOS sampling from the worker's process tree | [process/ancestry.rs](../../../crates/orbit-common/src/process/ancestry.rs) | to file |
