@@ -71,9 +71,12 @@ spec:
       log_tail:
         type: string
       # Injected by the recovery dispatcher only: recovery draws its crew from
-      # the medium complexity pool, once per run.
+      # the medium complexity pool, once per run, or from the low pool for an
+      # `--auto-fix` run's completion step.
       crew_config_key:
-        const: workflow.medium_complexity_crews
+        enum:
+          - workflow.medium_complexity_crews
+          - workflow.low_complexity_crews
       # Host-allocated, run-local decision file for this one invocation.
       # Absent when the host has no decision slot; the executor then keeps
       # its legacy single post-recovery attempt whenever recovery completes.
@@ -293,7 +296,8 @@ spec:
          output, not the owner's task record); and
        - failed_step_id is a delivery-tail step: commit, prepare_branch,
          sync_base, validate, push, or pr_open (including their corresponding
-         activity names).
+         activity names), or a completion step (`pr_complete`) whose
+         `error_message` is an auto-fix check repair (see step 4).
 
        Each of those conditions is re-derived from durable state — the persisted
        task record and the run's own checkpoints — not from anything an earlier
@@ -360,6 +364,24 @@ spec:
        reaches you, so the error says whether the base passed. A failure
        outside the candidate's changes that still reaches you is a blocker to
        report with the `not_recovered` decision: re-running it cannot pass.
+
+       An auto-fix check repair is a completion step (`pr_complete`) failure
+       whose `error_message` starts with `pr_auto_fix_check_repair:`. The
+       operator ran `orbit run auto --auto-fix`; Orbit's watcher found
+       required hosted checks failing on the published PR head named there,
+       admitted this one repair against the PR's budget, and quotes each
+       failed job's step, error signature and log excerpt for exactly that
+       head. Reproduce the failure locally where you can (the workspace's own
+       AGENTS.md names its validation commands), fix the candidate so those
+       checks pass, and leave the repair uncommitted. Fix the code, not the
+       check: never edit, skip or weaken a CI workflow, a required command or
+       a test's assertion to make it pass. Do not push, open a PR, merge or
+       change lifecycle status. Write `retry` once the repair is in place.
+       Orbit then commits it, reruns the workspace's required validation on
+       it, publishes it to the same PR (a head bound to a review is
+       re-reviewed first) and watches the new head's checks. A failure the
+       candidate did not cause, such as one the base branch shares, is
+       `not_recovered`.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You

@@ -8,6 +8,7 @@
 
 mod answers;
 mod attribution;
+mod auto_fix;
 mod body;
 mod complete;
 mod delivery;

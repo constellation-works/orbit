@@ -63,6 +63,12 @@
 //! and gate above, re-resolves the merge policy, and asks again with the same
 //! SHA. At most [`BASE_MODIFIED_MERGE_ATTEMPTS`] requests are made, within the
 //! unchanged wait budget.
+//!
+//! `auto_fix: true` (`orbit run auto --auto-fix`) authorizes repair of failed
+//! required checks and merge conflicts on this pull request (see
+//! [`super::auto_fix`]). Without `completion: done` beside it the step only
+//! watches: it never requests a merge or completes a task, and ends once the
+//! pull request is mergeable, leaving the task in review.
 
 use super::super::remote_probe::fixed_wait as sleep;
 use std::path::Path;
@@ -70,6 +76,7 @@ use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
+use orbit_types::workflow::PrAutoFixBlocker;
 use serde_json::{Value, json};
 
 use crate::context::{ReviewLandingRequest, RuntimeHost};
@@ -85,6 +92,10 @@ use super::super::handoff::load_handoff_context;
 use super::super::operations;
 use super::super::push::push_batch_changes;
 use super::answers::{PullRequestStatus, ReviewedMergeOutcome, read_pr_status};
+use super::auto_fix::{
+    AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, blocked_verdict,
+    publish_local_repair, record_published_repair, repair_failed_checks, stopped,
+};
 use super::delivery::{DeliveryEvidence, DeliveryPin, PrMergeState, classify_pr_state};
 use super::head_lag::HeadLag;
 use super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge};
@@ -151,9 +162,16 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
-        let delivered = match drive_pr_to_merged(host, input, &workspace_path, &pr_number)? {
+        let auto_fix = AutoFix::from_input(input, &task_ids, &context.batch_id);
+        let delivered = match drive_pr_to_merged(
+            host,
+            input,
+            &workspace_path,
+            &pr_number,
+            auto_fix.as_ref(),
+        )? {
             Delivery::Merged(delivered) => delivered,
-            Delivery::RebasedForReview(rebased) => {
+            Delivery::RebasedForReview { rebased, reason } => {
                 return Ok(json!({
                     "phase": "complete",
                     "no_diff_expected": false,
@@ -161,10 +179,22 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
                     "rebased": rebased,
                     "merge": {
                         "merged": false,
-                        "reason": "reviewed_head_conflicted",
+                        "reason": reason,
                         "pr_number": pr_number,
                         "reviewed_head_sha": reviewed_head_sha(input),
                     },
+                    "completed_task_ids": [],
+                    "skipped_task_ids": [],
+                }));
+            }
+            // Repair authority alone: the watch ends here and the task
+            // stays in review.
+            Delivery::Watched(outcome) => {
+                return Ok(json!({
+                    "phase": "complete",
+                    "no_diff_expected": false,
+                    "re_review_required": false,
+                    "merge": outcome,
                     "completed_task_ids": [],
                     "skipped_task_ids": [],
                 }));
@@ -246,9 +276,16 @@ struct DeliveredMerge {
 /// How driving the PR ended without an error.
 enum Delivery {
     Merged(DeliveredMerge),
-    /// The reviewed head conflicted with its base and was rebased locally;
-    /// the rebase checkpoint must be reviewed before it is published.
-    RebasedForReview(Value),
+    /// The reviewed head conflicted with its base and was rebased locally,
+    /// or an auto-fix repaired it; the checkpoint must be reviewed before it
+    /// is published.
+    RebasedForReview {
+        rebased: Value,
+        reason: &'static str,
+    },
+    /// An auto-fix watch without merge authority ended: the pull request is
+    /// mergeable, or was merged by someone else.
+    Watched(Value),
 }
 
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
@@ -258,6 +295,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
+    auto_fix: Option<&AutoFix>,
 ) -> Result<Delivery, OrbitError> {
     let max_wait_seconds = bounded_u64(
         input,
@@ -289,6 +327,32 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     // lease-pushes the same branch.
     let mut pin = DeliveryPin::from_input(input);
     let mut head_lag = HeadLag::new(max_wait_seconds, poll_interval_seconds);
+    let watch_only = auto_fix.is_some_and(AutoFix::watch_only);
+    // Polls of a BLOCKED head that showed no failed and no running check.
+    let mut unsettled_polls = 0_u32;
+    if let Some(auto_fix) = auto_fix {
+        // An earlier round of this run may have published a repaired head,
+        // and the executor may have committed a check repair since.
+        adopt_published_repairs(host, auto_fix, pr_number, &mut pin)?;
+        match publish_local_repair(
+            host,
+            input,
+            auto_fix,
+            workspace_path,
+            pr_number,
+            &pin,
+            reviewed_head_sha.is_some(),
+        )? {
+            LocalRepair::None => {}
+            LocalRepair::Published(head) => pin.adopt_refreshed_candidate(Some(&head)),
+            LocalRepair::ForReview(rebased) => {
+                return Ok(Delivery::RebasedForReview {
+                    rebased,
+                    reason: "auto_fix_repaired_reviewed_head",
+                });
+            }
+        }
+    }
 
     loop {
         let status = read_pr_status(host, Path::new(workspace_path), pr_number)?;
@@ -317,6 +381,15 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
         }
         match state {
+            PrMergeState::Merged if watch_only => {
+                return Ok(Delivery::Watched(json!({
+                    "merged": true,
+                    "reason": "auto_fix_merged_elsewhere",
+                    "pr_number": pr_number,
+                    "head_sha": status.head_sha,
+                    "waited_seconds": waited_seconds,
+                })));
+            }
             PrMergeState::Merged => {
                 let evidence = pin.ensure_delivered(&status, pr_number)?;
                 let landed_commit = status.exact_merge_commit.as_deref();
@@ -356,14 +429,42 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 )));
             }
             PrMergeState::Blocked(reason) => {
-                let diagnosis = pin
-                    .base_advance_note(input, workspace_path)
-                    .unwrap_or_default();
-                return Err(OrbitError::Execution(format!(
-                    "pr_complete: pull request #{pr_number} cannot be merged ({reason}); \
-                     branch protection or required reviews are unsatisfied and this run does not \
-                     bypass them — the task stays in review.{diagnosis}"
-                )));
+                let Some(auto_fix) = auto_fix.filter(|_| is_blocked_merge_state(&status)) else {
+                    let diagnosis = pin
+                        .base_advance_note(input, workspace_path)
+                        .unwrap_or_default();
+                    return Err(OrbitError::Execution(format!(
+                        "pr_complete: pull request #{pr_number} cannot be merged ({reason}); \
+                         branch protection or required reviews are unsatisfied and this run does \
+                         not bypass them — the task stays in review.{diagnosis}"
+                    )));
+                };
+                match blocked_verdict(&status, unsettled_polls) {
+                    BlockedVerdict::Wait => unsettled_polls += 1,
+                    BlockedVerdict::Stop(reason) => return Err(stopped(pr_number, &reason)),
+                    // A repair commit on a reviewed head is reviewed again
+                    // before it is published; the last completion round has
+                    // no re-review left to give it.
+                    BlockedVerdict::RepairChecks(_)
+                        if reviewed_head_sha.is_some() && !re_review_on_conflict(input) =>
+                    {
+                        return Err(stopped(
+                            pr_number,
+                            "its head is bound to a review and this completion round has no \
+                             re-review left for a repair",
+                        ));
+                    }
+                    BlockedVerdict::RepairChecks(failed) => {
+                        return Err(repair_failed_checks(
+                            host,
+                            auto_fix,
+                            workspace_path,
+                            pr_number,
+                            &status,
+                            &failed,
+                        ));
+                    }
+                }
             }
             PrMergeState::Conflict => {
                 // [ORB-11333] Repairing a conflict rewrites the candidate; a
@@ -378,6 +479,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                              fresh review before managed completion, so the task stays in review"
                         )));
                     }
+                    if let Some(auto_fix) = auto_fix {
+                        admit_conflict_repair(host, auto_fix, pr_number, &status)?;
+                    }
                     let rebased = rebase_conflicting_pr_branch(
                         host,
                         input,
@@ -385,19 +489,47 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         pr_number,
                         &status,
                     )?;
-                    return Ok(Delivery::RebasedForReview(rebased));
+                    return Ok(Delivery::RebasedForReview {
+                        rebased,
+                        reason: "reviewed_head_conflicted",
+                    });
                 }
                 if conflict_refresh_attempted || !has_completion_recovery_checkpoint(input) {
                     return Err(completion_conflict_error(pr_number));
                 }
+                if let Some(auto_fix) = auto_fix {
+                    admit_conflict_repair(host, auto_fix, pr_number, &status)?;
+                }
                 let refreshed =
                     refresh_conflicting_pr_branch(host, input, workspace_path, pr_number, &status)?;
+                if let (Some(auto_fix), Some(from), Some(to)) =
+                    (auto_fix, pin.candidate_sha(), refreshed.as_deref())
+                {
+                    record_published_repair(
+                        host,
+                        auto_fix,
+                        pr_number,
+                        from,
+                        to,
+                        PrAutoFixBlocker::Conflict,
+                    )?;
+                }
                 pin.adopt_refreshed_candidate(refreshed.as_deref());
                 conflict_refresh_attempted = true;
                 // The existing PR remains authoritative. Re-read its state
                 // after the branch update rather than inferring mergeability
                 // from a successful push.
                 continue;
+            }
+            PrMergeState::Mergeable if watch_only => {
+                return Ok(Delivery::Watched(json!({
+                    "merged": false,
+                    "reason": "auto_fix_mergeable",
+                    "pr_number": pr_number,
+                    "head_sha": status.head_sha,
+                    "waited_seconds": waited_seconds,
+                    "stale_head_observations": head_lag.observations,
+                })));
             }
             PrMergeState::Mergeable => {
                 if !merge_requested {
@@ -464,7 +596,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 // once checks settle, including on queue-only branches where
                 // that mutation refuses the unsupported merge. Only an
                 // unpinned ungated run may hand the merge to GitHub.
-                if reviewed_head_sha.is_none()
+                if !watch_only
+                    && reviewed_head_sha.is_none()
                     && pin.candidate_sha().is_none()
                     && !auto_merge_requested
                 {
@@ -594,8 +727,42 @@ fn re_review_on_conflict(input: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the PR reports `BLOCKED` itself, rather than another state
+/// completion also refuses (`BEHIND`, `DRAFT`), which auto-fix never repairs.
+fn is_blocked_merge_state(status: &PullRequestStatus) -> bool {
+    status
+        .merge_state_status
+        .as_deref()
+        .is_some_and(|state| state.eq_ignore_ascii_case("BLOCKED"))
+}
+
+/// Admit an auto-fix repair of the conflict on the pull request's head
+/// before the pinned rebase can reach conflict recovery.
+fn admit_conflict_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    pr_number: &str,
+    status: &PullRequestStatus,
+) -> Result<(), OrbitError> {
+    let head_sha = status
+        .head_sha
+        .as_deref()
+        .ok_or_else(|| stopped(pr_number, "the pull request reported no head commit"))?;
+    admit(
+        host,
+        auto_fix,
+        pr_number,
+        head_sha,
+        PrAutoFixBlocker::Conflict,
+    )
+    .map(|_| ())
+}
+
+/// Completion, or auto-fix repair, authority over the retained delivery
+/// checkpoints a conflict repair needs.
 fn has_completion_recovery_checkpoint(input: &Value) -> bool {
-    input.get("completion").and_then(Value::as_str) == Some("done")
+    (input.get("completion").and_then(Value::as_str) == Some("done")
+        || input.get("auto_fix").and_then(Value::as_bool) == Some(true))
         && ["head", "published_head_sha", "base"]
             .into_iter()
             .all(|key| input_string_field(input, key).is_some())

@@ -521,6 +521,53 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "pull_request": pull_request }))
 }
 
+/// Which checks on a PR's head commit branch protection requires.
+///
+/// `gh pr view --json statusCheckRollup` does not say, so this asks the
+/// GraphQL API for each rollup context's `isRequired` against the PR. The
+/// answer carries the head commit it describes; the reader in `pr/answers.rs`
+/// refuses one that is truncated or names another head.
+pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
+    let selector = required_string(input, "pr")?;
+    let workspace_path = required_string(input, "workspace_path")?;
+    let Some(number) = pr_number_from_selector(selector) else {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid private automation VCS PR selector '{selector}'; expected a number or GitHub PR URL"
+        )));
+    };
+    let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
+        pullRequest(number:$pr){headRefOid commits(last:1){nodes{commit{oid \
+        statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename \
+        ... on CheckRun{name isRequired(pullRequestNumber:$pr) \
+        checkSuite{workflowRun{workflow{name}}}} \
+        ... on StatusContext{context isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
+    let args = vec![
+        "api".to_string(),
+        "graphql".to_string(),
+        "-F".to_string(),
+        "owner={owner}".to_string(),
+        "-F".to_string(),
+        "repo={repo}".to_string(),
+        "-F".to_string(),
+        format!("pr={number}"),
+        "-f".to_string(),
+        format!("query={query}"),
+    ];
+    let result = execute_with_transient_retry(
+        "gh",
+        &args,
+        Some(Path::new(workspace_path)),
+        DEFAULT_TIMEOUT_MS,
+        "PR required checks",
+    )?;
+    let answer: Value = serde_json::from_str(&result.stdout).map_err(|error| {
+        OrbitError::Execution(format!(
+            "private automation VCS PR required checks returned invalid JSON: {error}"
+        ))
+    })?;
+    Ok(json!({ "pull_request": answer.pointer("/data/repository/pullRequest").cloned() }))
+}
+
 fn valid_pr_selector(value: &str) -> bool {
     pr_number_from_selector(value).is_some()
 }

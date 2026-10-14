@@ -329,6 +329,89 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
     }
 }
 
+/// What the failed checks on a pull request's head show an `--auto-fix`
+/// watcher, read with the same job and log answers the landing uses.
+pub(super) enum HeadCheckEvidence {
+    /// Every failed check is a workflow job whose log was read and shows no
+    /// runner or network failure: hand it to a repair with this evidence.
+    Repair(String),
+    /// Not a failure a code repair can clear, or not one this read could
+    /// establish, for this reason.
+    Stop(String),
+}
+
+/// Read the failed jobs behind `failed` on `head`, the exact commit the
+/// rollup reported, so the evidence a repair receives is bound to it.
+///
+/// A check no workflow job answers is a status this run cannot attribute to
+/// code (an external app, a policy gate); an unreadable job or log proves
+/// nothing; a log that shows the runner or the network failing is not the
+/// candidate's. Each stops without a repair.
+pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    head: &str,
+    failed: &[(Option<String>, String)],
+) -> HeadCheckEvidence {
+    let jobs = match commit_jobs(host, workspace, head) {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            return HeadCheckEvidence::Stop(format!(
+                "the jobs on head {head} could not be read: {error}"
+            ));
+        }
+    };
+    let mut details = Vec::new();
+    for check in failed {
+        let label = match &check.0 {
+            Some(workflow) => format!("{workflow} / {}", check.1),
+            None => check.1.clone(),
+        };
+        let Some(job) = jobs
+            .iter()
+            .find(|job| unsuccessful(job) && answers(job, check))
+        else {
+            return HeadCheckEvidence::Stop(format!(
+                "no failed workflow job on head {head} answers check '{label}', so it is not a \
+                 failure a code repair is known to clear"
+            ));
+        };
+        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+            return HeadCheckEvidence::Stop(format!(
+                "the failed job behind check '{label}' reported no identity"
+            ));
+        };
+        let log = match job_log(host, workspace, run_id, job_id) {
+            Ok(log) => log,
+            Err(error) => {
+                return HeadCheckEvidence::Stop(format!(
+                    "the log of '{}' could not be read: {error}",
+                    job_label(job)
+                ));
+            }
+        };
+        if let Some(evidence) = transient_evidence(&log) {
+            return HeadCheckEvidence::Stop(format!(
+                "the log of '{}' shows `{evidence}`: the runner or the network failed, not \
+                 the candidate",
+                job_label(job)
+            ));
+        }
+        let signature = error_signature(&log, failed_step(job));
+        details.push(format!(
+            "'{}' failed in step `{}` on head {head} with signature `{}`; log excerpt:\n{}",
+            job_label(job),
+            failed_step(job),
+            signature.text,
+            excerpt(&log)
+        ));
+    }
+    if details.is_empty() {
+        return HeadCheckEvidence::Stop(format!("the rollup names no failed check on head {head}"));
+    }
+    HeadCheckEvidence::Repair(details.join("\n"))
+}
+
 /// The jobs on one commit, or why they could not be read; read once per
 /// landing attempt.
 type CommitJobs = Option<Result<Vec<Value>, String>>;

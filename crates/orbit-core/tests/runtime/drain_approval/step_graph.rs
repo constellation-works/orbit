@@ -177,6 +177,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
             JobRunTrigger::cli(),
             false,
             true,
+            false,
         )
         .unwrap()
         .run_id;

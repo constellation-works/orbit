@@ -6,8 +6,9 @@ spec:
   type: agent_loop
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
-    after PR publication during authorized completion. It uses a crew drawn
-    from the medium complexity pool to resolve the live conflict files, with any companion edit
+    after PR publication during authorized completion or an `--auto-fix`
+    watch. It uses a crew drawn from the medium complexity pool (the low pool
+    under `--auto-fix`) to resolve the live conflict files, with any companion edit
     the resolution needs. The host executor then validates, stages, continues
     the stopped rebase, and carries the candidate onto the current base tip
     before one retry.
@@ -51,8 +52,12 @@ spec:
           type: object
       log_tail:
         type: string
+      # Injected by the recovery dispatcher only: the medium pool, or the low
+      # pool for an `--auto-fix` run's completion step.
       crew_config_key:
-        const: workflow.medium_complexity_crews
+        enum:
+          - workflow.medium_complexity_crews
+          - workflow.low_complexity_crews
       failed_step_id:
         type: string
       activity_name:
@@ -126,7 +131,8 @@ spec:
     The executor has already proved that its existing `git_rebase` boundary
     stopped on actual unmerged index entries. The failed step is either
     `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
-    published PR only under retained `completion: done` authorization. It
+    published PR only under retained `completion: done` or `auto_fix: true`
+    authorization. It
     retries that same failed deterministic step after you return success. A
     candidate with several commits can stop again on a later commit of the
     same rebase; the retry then reports that stop and you are invoked again
@@ -167,8 +173,8 @@ spec:
        - the checked-out branch is not `failed_step_input.head`, or the
          stopped rebase's pre-rewrite HEAD (`git rev-parse ORIG_HEAD`) is not
          `failed_step_input.head_sha` / `published_head_sha`;
-       - for `pr_complete`, the retained `completion: done` authorization or
-         `pr_number` is missing.
+       - for `pr_complete`, both the retained `completion: done` and
+         `auto_fix: true` authorizations, or `pr_number`, are missing.
        `target_base_sha` no longer being the tip of `origin/<base>` is NOT a
        stop condition. The stopped rebase is pinned to `target_base_sha`; the
        host continues it there and then carries the candidate onto the current

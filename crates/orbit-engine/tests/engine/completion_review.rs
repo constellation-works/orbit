@@ -326,6 +326,8 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
     // task-store effects with deterministic stub activities.
     let prefix = stubs(&["worktree", "commit", "prepare_branch", "sync_base"]);
     let mut job = job_asset(json!(prefix));
+    // The shipped input defaults, which execution merges under every run's input.
+    job.default_input = shipped.default_input.clone();
     for id in [
         "review_gate_admit",
         "review",

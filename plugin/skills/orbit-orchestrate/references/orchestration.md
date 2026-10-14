@@ -480,6 +480,37 @@ configuration.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
 
+### Auto-fix authorization
+
+`orbit run auto --auto-fix` is the explicit authorization for one drain to
+repair the pull requests its own runs opened. It is default-off, never enabled
+by configuration, and independent of `--complete`. It authorizes repair only:
+`--auto-fix` alone never merges, and only `--complete` takes a task to `done`.
+It cannot be combined with `--pull` or `--stop`.
+
+- The completion watcher detects the blockers; no second watcher exists. Pending
+  checks wait. Failed required checks are repaired by the job's
+  `step_failure_recovery`, with the failed head's error signature and log
+  excerpt as evidence. Conflicts are repaired by `pr_conflict_recovery` against
+  the current base.
+- Approvals, permissions, admin rules, unknown or unreadable status, transient
+  runner or network failures, and optional-check failures alone launch no agent;
+  the leaf stops in `review` with the reason.
+- The repair goes through the ordinary commit, required final validation and
+  lease-checked push. The watcher then re-checks the new head, and a reviewed
+  head goes back through re-review before it can merge.
+- The crew comes from `workflow.low_complexity_crews` through the run's frozen
+  pool draw, restricted by `--allow-crew`. Conflict recovery uses this pool too
+  under `--auto-fix`. Task complexity and crew are never changed, and nothing
+  escalates.
+- Every attempt is written to the primary task's history with the PR, head,
+  blocker, attempt number, crew and draw source before any agent runs. A PR
+  head gets at most one repair per blocker across polls, restarts and
+  owner/follower overlap. Each PR has at most three repairs in total. When they
+  are spent, the leaf stops with `auto_fix_budget_exhausted` and lists the
+  attempts.
+- Closed or merged PRs and superseded heads get no repair.
+
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and
 `orbit.task.show` rather than assuming it completed.

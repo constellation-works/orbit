@@ -49,6 +49,13 @@ the window. Use it only when the user authorized promotion as well as delivery.
 It cannot be combined with `--pull`. Tag a task `no-auto-approve` to keep it out
 of every automatic approval, the CI sweep's included.
 
+`orbit run auto --auto-fix` is the separate, default-off authorization for that
+drain to repair failed required checks and merge conflicts on the PRs its runs
+opened, using the low-complexity crew pool and a budget of three repairs per PR.
+It never merges: pair it with `--complete` only when delivery through `done` is
+also authorized. It cannot be combined with `--pull`. See
+[orchestration.md](orchestration.md#auto-fix-authorization).
+
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
 overrides. Never replace a user's branch choice with a hardcoded convention.

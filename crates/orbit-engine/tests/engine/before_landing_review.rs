@@ -295,6 +295,8 @@ fn shipped_job() -> orbit_types::workflow::JobV2 {
         "prepare_branch",
         "sync_base"
     ])));
+    // The shipped input defaults, which execution merges under every run's input.
+    job.default_input = shipped.default_input.clone();
     for id in [
         "review_gate_admit",
         "review",

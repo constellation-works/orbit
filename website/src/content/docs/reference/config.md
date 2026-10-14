@@ -241,7 +241,10 @@ crew. Shipped auto-task templates name no crew, so each minted task draws from
 the pool for its complexity; a `template.crew` setting, an explicit template
 crew, and `operation.review_crew` for `delivery-code-review` still win. The
 task pilot draws from `low`, and step-failure and PR conflict recovery from
-`medium`. A run draws once per pool, keeping the pool's weights and skipping
+`medium`. Repairs authorized by `orbit run auto --auto-fix`, conflict repairs
+included, draw from `low`, narrowed only by `--allow-crew`; there is no
+separate auto-fix key, and a pool the run cannot use stops the repair rather
+than escalating. A run draws once per pool, keeping the pool's weights and skipping
 disabled and usage-limited crews, and records the draw in its state. An empty
 pool falls back to `default_crew`, and the recorded draw says so. Recovery
 never inherits a failed task's crew.

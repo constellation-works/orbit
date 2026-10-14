@@ -9,6 +9,7 @@ mod final_recovery;
 pub mod handoff;
 mod host_evidence;
 mod job;
+mod pr_auto_fix;
 mod reconciliation;
 mod review;
 mod review_evidence;
@@ -73,6 +74,12 @@ pub use job::{
     JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep, JobTargetType,
     KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs,
     default_max_iterations, default_retry_backoff_seconds,
+};
+pub use pr_auto_fix::{
+    PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CHECK_REPAIR_MARKER,
+    PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker,
+    PrAutoFixClaim, PrAutoFixDecision, PrAutoFixPush, decide_pr_auto_fix,
+    is_pr_auto_fix_check_repair, pr_auto_fix_attempts, pr_auto_fix_pushes,
 };
 pub use reconciliation::{
     BaselineDisposition, BaselineRemediationCheck, REVIEW_RECONCILIATION_ADMISSION_KEY,

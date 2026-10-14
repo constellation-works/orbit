@@ -354,6 +354,102 @@ pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Siz
     Ok(PullRequestStatus::from_status_response(&response))
 }
 
+/// The checks branch protection requires on one head commit, as
+/// `pr.required_checks` reports them: `(workflow, name)` pairs, matched the
+/// way [`StatusCheck`] names a rollup entry.
+#[derive(Clone, Debug)]
+pub(in crate::executor::automation::vcs) struct RequiredChecks {
+    pub(in crate::executor::automation::vcs) head_sha: String,
+    pub(in crate::executor::automation::vcs) required: Vec<(Option<String>, String)>,
+}
+
+impl RequiredChecks {
+    /// Parse a `pr.required_checks` response. A truncated listing, or an
+    /// entry without a name or a boolean `isRequired`, is a failed read: it
+    /// cannot prove a failed check optional.
+    fn from_response(response: &Value) -> Result<Self, OrbitError> {
+        let unreadable =
+            |what: &str| OrbitError::Execution(format!("the required-checks answer {what}"));
+        let pull_request = response
+            .get("pull_request")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| unreadable("carried no pull request"))?;
+        let commit = pull_request
+            .pointer("/commits/nodes/0/commit")
+            .ok_or_else(|| unreadable("carried no head commit"))?;
+        let head_sha =
+            reported(commit.get("oid")).ok_or_else(|| unreadable("carried no head commit id"))?;
+        let Some(contexts) = commit
+            .get("statusCheckRollup")
+            .filter(|rollup| !rollup.is_null())
+            .map(|rollup| &rollup["contexts"])
+        else {
+            return Ok(Self {
+                head_sha,
+                required: Vec::new(),
+            });
+        };
+        if contexts.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
+            return Err(unreadable("was truncated or carried no page information"));
+        }
+        let mut required = Vec::new();
+        for node in contexts["nodes"]
+            .as_array()
+            .ok_or_else(|| unreadable("carried no check list"))?
+        {
+            let name = reported(node.get("name").or_else(|| node.get("context")))
+                .ok_or_else(|| unreadable("named no check"))?;
+            match node.get("isRequired").and_then(Value::as_bool) {
+                Some(true) => required.push((
+                    node.pointer("/checkSuite/workflowRun/workflow/name")
+                        .and_then(Value::as_str)
+                        .map(|workflow| workflow.trim().to_string()),
+                    name,
+                )),
+                Some(false) => {}
+                None => {
+                    return Err(unreadable(&format!(
+                        "did not say whether '{name}' is required"
+                    )));
+                }
+            }
+        }
+        Ok(Self { head_sha, required })
+    }
+
+    /// Whether the rollup entry `(workflow, name)` is required. A rollup
+    /// entry without a workflow matches by name alone.
+    pub(in crate::executor::automation::vcs) fn requires(
+        &self,
+        workflow: Option<&str>,
+        name: &str,
+    ) -> bool {
+        self.required
+            .iter()
+            .any(|(required_workflow, required_name)| {
+                required_name == name
+                    && (workflow.is_none() || required_workflow.as_deref() == workflow)
+            })
+    }
+}
+
+/// Read which checks branch protection requires on pull request
+/// `pr_number`'s head.
+pub(in crate::executor::automation::vcs) fn read_required_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+) -> Result<RequiredChecks, OrbitError> {
+    let response = host.run_private_vcs_operation(
+        operations::PR_REQUIRED_CHECKS,
+        json!({
+            "pr": pr_number,
+            "workspace_path": workspace_path.to_string_lossy(),
+        }),
+    )?;
+    RequiredChecks::from_response(&response)
+}
+
 fn reported(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)

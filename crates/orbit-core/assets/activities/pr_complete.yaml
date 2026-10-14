@@ -12,7 +12,11 @@ spec:
     bundle completes without a PR. A reviewed head that conflicts with its
     base is never merged as rebased content: with re_review_on_conflict the
     branch is rebased locally, nothing is published, and the output asks for
-    a re-review; otherwise completion refuses as review_gate_stale.
+    a re-review; otherwise completion refuses as review_gate_stale. With
+    auto_fix, failed required checks and merge conflicts on the PR are
+    admitted against its repair ledger and handed to the run's repair
+    activities; without completion done it only watches, never merges, and
+    ends once the PR is mergeable.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids]
@@ -29,7 +33,21 @@ spec:
       pr_number:
         type: string
       completion:
-        const: done
+        enum: [review, done]
+        description: >
+          `done` authorizes merging and the review -> done transition. Any
+          other value needs auto_fix, which only watches and repairs.
+      auto_fix:
+        type: boolean
+        description: >
+          `orbit run auto --auto-fix`: repair failed required checks and merge
+          conflicts on this PR through the run's repair pipeline. Never
+          authorizes a merge.
+      allowed_crews:
+        type: [array, string, "null"]
+        description: >
+          The run's crew allowlist, which the auto-fix repair crew's draw
+          honours.
       head:
         type: string
       published_head_sha:

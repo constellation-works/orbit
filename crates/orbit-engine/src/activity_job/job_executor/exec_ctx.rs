@@ -28,6 +28,10 @@ pub(super) struct ExecCtx<'a> {
     /// carries it: the hook answers for a failed top-level step, so nested
     /// block contexts leave it `None`.
     pub(super) final_recovery_activity: Option<ResolvedRecoveryActivity>,
+    /// The job's own `step_failure_recovery`, as its steps declare it. An
+    /// `--auto-fix` check repair the completion watcher admitted is routed
+    /// to it from a step whose recovery is the conflict leaf.
+    pub(super) check_repair_activity: Option<ResolvedRecoveryActivity>,
     /// Top-level rebase step ids whose resolved continuation will execute host
     /// validation. Computed after job validation; nested contexts clear it.
     pub(super) recovery_validation_continuations: std::collections::HashSet<String>,

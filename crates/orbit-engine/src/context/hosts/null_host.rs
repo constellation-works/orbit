@@ -30,8 +30,8 @@ use super::RuntimeHost;
 use super::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
-    PluginBrokerHandle, PluginBrokerRun, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport,
     StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
@@ -236,6 +236,14 @@ pub trait NullRuntimeHost: Send + Sync {
     ) -> Result<StepRecoveryDecisionRead, OrbitError> {
         Err(unsupported_runtime_capability(
             "read_step_recovery_decision",
+        ))
+    }
+    fn admit_pr_auto_fix(
+        &self,
+        _request: &PrAutoFixRequest,
+    ) -> Result<PrAutoFixAdmission, OrbitError> {
+        Ok(PrAutoFixAdmission::Refused(
+            "this host keeps no auto-fix ledger".to_string(),
         ))
     }
     fn validate_step_recovery_mutation(
@@ -869,6 +877,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         slot: &StepRecoveryDecisionSlot,
     ) -> Result<StepRecoveryDecisionRead, OrbitError> {
         NullRuntimeHost::read_step_recovery_decision(self, slot)
+    }
+    fn admit_pr_auto_fix(
+        &self,
+        request: &PrAutoFixRequest,
+    ) -> Result<PrAutoFixAdmission, OrbitError> {
+        NullRuntimeHost::admit_pr_auto_fix(self, request)
     }
     fn validate_step_recovery_mutation(
         &self,

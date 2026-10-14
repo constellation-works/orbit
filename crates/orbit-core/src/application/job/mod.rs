@@ -10,6 +10,7 @@ mod final_recovery;
 mod forge_hold_resume;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
+mod pr_auto_fix;
 mod resume;
 mod run;
 mod upgrade_resume;

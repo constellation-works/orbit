@@ -156,3 +156,27 @@ pub enum FinalRecoveryApplied {
     /// `failure_activity` follows.
     Escalated { outcome: String },
 }
+
+/// A pull-request repair the completion watcher asks to dispatch under
+/// `--auto-fix`: the run, the bundle, and the exact head and blocker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrAutoFixRequest {
+    pub run_id: String,
+    pub task_ids: Vec<String>,
+    pub pr_number: String,
+    pub head_sha: String,
+    pub blocker: orbit_types::workflow::PrAutoFixBlocker,
+    /// The run's `allowed_crews`, which the repair crew's draw honours.
+    pub allowed_crews: serde_json::Value,
+}
+
+/// What the host decided for a [`PrAutoFixRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrAutoFixAdmission {
+    /// The ledger's decision, recorded under the primary task's lock when it
+    /// admits.
+    Decided(orbit_types::workflow::PrAutoFixDecision),
+    /// No repair may run here, for this reason: no usable crew, or a host
+    /// that does not own the task's record.
+    Refused(String),
+}
