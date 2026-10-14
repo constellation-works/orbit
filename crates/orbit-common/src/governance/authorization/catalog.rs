@@ -124,6 +124,14 @@ pub const DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED: GovernedOperation = GovernedOpe
     rationale: "opting in lets every pass of the window approve qualifying proposed tasks into the backlog, including ones filed after submission",
 };
 
+/// Choose a forecast policy for one dashboard-submitted local drain.
+pub const DASHBOARD_AUTO_DRAIN_MODE: GovernedOperation = GovernedOperation {
+    id: "auto_drain.auto_concurrency",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "choosing a per-drain forecast policy changes unattended admission decisions",
+};
+
 /// Stop new admissions for the workspace's live auto-drain window from the
 /// dashboard (the `--stop` equivalent of `orbit run auto`) [ORB-12728].
 pub const DASHBOARD_AUTO_DRAIN_STOP: GovernedOperation = GovernedOperation {
@@ -518,6 +526,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_MODE,
     DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
     DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_HANDOFF_APPROVE,

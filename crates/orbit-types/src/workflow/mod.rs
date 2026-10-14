@@ -1,7 +1,9 @@
 //! Domain contracts for this Orbit types module.
 
 pub mod activity_job;
+mod auto_concurrency;
 mod auto_task;
+pub use auto_concurrency::AutoConcurrencyMode;
 mod child_dispatch;
 mod error;
 mod executor_def;

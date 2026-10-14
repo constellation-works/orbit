@@ -1,4 +1,4 @@
-//! Gap-fit admission for a local drain pass (`machine.auto_concurrency`).
+//! Gap-fit admission for a local drain pass under its captured mode.
 //!
 //! `select_admissions` asks [`GapFit::admits`] about each candidate that
 //! passed every other check: the ceiling, the footprint guard and conflicts.
@@ -50,7 +50,7 @@ use crate::runtime::host_resource::profile::{ProfileLookup, ResourceProfile};
 /// baseline noise, which would otherwise restart the count on every pass.
 const IMPROVEMENT_POINTS: f64 = 1.0;
 
-/// `machine.auto_concurrency.mode` when it is not `off`.
+/// The effective per-drain auto-concurrency mode when it is not `off`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GapFitMode {
     /// Decide and record, but admit as `off`.

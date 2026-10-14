@@ -53,6 +53,12 @@ const AUTO_ACTIONS: &[EnumValue] = &[
     EnumValue::plain("resize"),
 ];
 
+const AUTO_CONCURRENCY_MODES: &[EnumValue] = &[
+    EnumValue::plain("off"),
+    EnumValue::plain("shadow"),
+    EnumValue::plain("enforce"),
+];
+
 const RUN_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "Job run ID."));
 
 const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
@@ -91,6 +97,11 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
             "for_seconds",
             ParamType::Integer,
             "Required for start: window length in seconds, 1 through 86400 (24 hours)",
+        ),
+        mcp_only(
+            "auto_concurrency",
+            ParamType::Enum(AUTO_CONCURRENCY_MODES),
+            "Start only: off, shadow or enforce for this local drain. Omitted captures machine.auto_concurrency.mode. Retained on resume/restart; changes no configuration. Unsupported for pull drains",
         ),
         mcp_only(
             "concurrency",
@@ -258,3 +269,23 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
+
+/// Refuse malformed or incompatible explicit modes before generic optional
+/// field normalization can turn a supplied null into an omitted setting.
+pub fn validate_auto_concurrency_input(input: &serde_json::Value) -> Result<(), crate::OrbitError> {
+    let Some(mode) = input.get("auto_concurrency") else {
+        return Ok(());
+    };
+    if input.get("action").and_then(serde_json::Value::as_str) != Some("start") {
+        return Err(crate::OrbitError::InvalidInput(
+            "auto_concurrency is a start setting".into(),
+        ));
+    }
+    serde_json::from_value::<orbit_types::workflow::AutoConcurrencyMode>(mode.clone())
+        .map(|_| ())
+        .map_err(|_| {
+            crate::OrbitError::InvalidInput(
+                "auto_concurrency must be off, shadow or enforce".into(),
+            )
+        })
+}

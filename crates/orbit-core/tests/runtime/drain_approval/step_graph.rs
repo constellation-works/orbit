@@ -166,7 +166,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
 
     let drain = workspace
         .runtime
-        .submit_workspace_auto_run_with_containment(
+        .submit_workspace_auto_run_with_mode(
             Some(3600),
             Some(1),
             CompletionPolicy::Review,
@@ -178,6 +178,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
             false,
             true,
             false,
+            Some(orbit_types::workflow::AutoConcurrencyMode::Enforce),
         )
         .unwrap()
         .run_id;
@@ -307,6 +308,25 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
         );
     }
     assert_eq!(workspace.run(&drain).state, JobRunState::Success);
+    assert_eq!(
+        workspace.run(&drain).input.as_ref().unwrap()["auto_concurrency"],
+        "enforce"
+    );
+    let state = workspace.runtime.read_run_state(&drain).unwrap().unwrap();
+    assert_eq!(
+        state
+            .pull_drain
+            .drain_last_pass
+            .as_ref()
+            .unwrap()
+            .admission_forecast
+            .as_ref()
+            .unwrap()
+            .mode,
+        "enforce",
+        "the shipped graph must forward its captured mode into real admission"
+    );
+
     assert_eq!(workspace.status(&late), TaskStatus::Backlog);
     let report = workspace
         .runtime

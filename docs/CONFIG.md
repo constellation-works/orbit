@@ -85,6 +85,40 @@ holds no running delivery or reservation, the first candidate is admitted
 even when it does not fit, so work larger than the thresholds still runs on
 an idle host; its admission records the miss as `idle_host`.
 
+For one local drain, `orbit run auto --auto-concurrency off|shadow|enforce`
+overrides only its forecast mode. Omission captures the configured host mode
+at submission. The persisted `input.auto_concurrency` and
+`input.auto_concurrency_source` (`explicit` or `configured`) survive restart
+and resume, so subsequent configuration changes affect new drains. No
+configuration is edited implicitly; concurrency ceilings, throttle, fit
+thresholds, profiles, accuracy recording, idle-host fallback and starvation
+protection keep their existing behavior.
+
+Long-lived dashboard and MCP sessions resolve the host mode from the current
+global configuration at each inherited submission and readiness read. A
+supported configuration change updates the next inherited choice without
+restarting the session; previously submitted drains retain their captured mode.
+
+The dashboard's **Auto-concurrency mode** control offers **Inherit host**,
+**Off**, **Shadow** and **Enforce** in an operator session. MCP
+`orbit.workflow.auto` accepts `auto_concurrency` on `action: start`; HTTP
+`POST /api/workflows/auto` accepts the same field. Start receipts carry an
+`auto_concurrency` object with `mode`, `source` and current `configured_mode`,
+read from the durable run input. CLI/MCP/HTTP run inspection also exposes
+`auto_concurrency.mode` and `source` from that snapshot (under `run` in CLI and HTTP detail
+JSON). Readiness reports the status drain's
+captured mode separately from the current configured mode used by the next
+inherited start. Unknown values, non-string modes and settings on stop or
+resize are refused before effects. CLI `--stop` and `--pull` conflict with
+`--auto-concurrency`: pull overrides are unsupported, and pull drains
+continue using their executor host configuration.
+
+CLI submissions report the captured mode in a separate text line and the
+`auto_concurrency` JSON field; submission warnings and notes keep their
+existing meanings. HTTP stop requests require operator authority even when
+their bodies are malformed; authorized incompatible requests are refused
+without stopping admissions.
+
 For a pull drain (`orbit run auto --pull`), under `enforce` each
 `orbit.task.pull` request names the work this host's load forecast has room
 for, the owner grants only a task inside it, and the drain requests nothing

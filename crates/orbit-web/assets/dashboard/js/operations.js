@@ -21,6 +21,7 @@ let lastAutoDrain = null;
 let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
+let autoDrainMode = "";
 let autoDrainComplete = false;
 let autoDrainApproveProposed = false;
 // Set while Start or Stop is refreshing the card after reporting its result, so
@@ -1728,6 +1729,10 @@ function autoDrainWindow(payload) {
   const approvals = autoDrainApprovals(payload.approvals);
   if (approvals) stat("approved", "Approved", approvals.approved, approvals.held, approvals.title);
   if (stats.children.length > 0) block.appendChild(stats);
+  if (payload.auto_concurrency?.mode) block.appendChild(el("p", {
+    class: "drain-field-hint",
+    text: `Auto-concurrency: ${payload.auto_concurrency.mode} (${payload.auto_concurrency.source}).`,
+  }));
   const runId = capacity.drain_status_run_id || live.runId;
   const when = phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "admissions stopped";
   if (runId || when) {
@@ -1780,6 +1785,33 @@ function autoDrainDurationControl(payload) {
     segment.appendChild(option);
   }
   return segment;
+}
+
+function autoDrainModeControl(payload) {
+  const configured = payload.auto_concurrency?.configured_mode;
+  const label = el("label", { class: "drain-field-label", text: "Auto-concurrency mode" });
+  label.htmlFor = "auto-drain-mode";
+  const select = el("select", { class: "drain-mode-select" });
+  select.id = "auto-drain-mode";
+  select.dataset.drainFocus = "mode";
+  for (const [value, text] of [["", `Inherit host (${configured || "unknown"})`], ["off", "Off"], ["shadow", "Shadow"], ["enforce", "Enforce"]]) {
+    const option = el("option", { text });
+    option.value = value;
+    select.appendChild(option);
+  }
+  // Older readiness responses cannot authorize an override.
+  const authorized = payload.controls_authorized === true && payload.replica !== true;
+  select.disabled = !authorized;
+  select.value = authorized ? autoDrainMode : "";
+  select.addEventListener("change", () => {
+    autoDrainMode = select.value;
+    renderAutoDrain(payload);
+  });
+  return el("div", { class: "drain-field" }, [label, select,
+    el("p", { class: "drain-field-hint", text: authorized
+      ? "Off admits without forecasting; shadow records decisions; enforce uses forecast fit. Host safety limits still apply. The mode is captured for this window; configuration is unchanged."
+      : "A per-window mode requires an operator session on an owner workspace." }),
+  ]);
 }
 
 // Concurrency is the same blank-means-runtime-default number input as before,
@@ -1956,9 +1988,11 @@ function autoDrainStartButton(payload, form) {
       ? `WARNING: ${AUTO_DRAIN_COMPLETE_WARNING}`
       : "Shipped tasks stay in review; a separate action completes them.";
     const approveProposed = autoDrainApproveProposed;
+    const mode = payload.controls_authorized === true && payload.replica !== true ? autoDrainMode : "";
     const confirmText = [
       `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
       `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
+      `Auto-concurrency: ${mode || "inherit host at submission"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
       completeLine,
@@ -1970,13 +2004,14 @@ function autoDrainStartButton(payload, form) {
     renderAutoDrain(payload);
     try {
       const body = { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed };
+      if (mode) body.auto_concurrency = mode;
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
       if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
-      feedback("auto-drain-operation-feedback", "success", [`Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...submissionNoticeLines(result)].join("\n"));
+      feedback("auto-drain-operation-feedback", "success", [`Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...(result?.auto_concurrency?.mode ? [`Auto-concurrency: ${result.auto_concurrency.mode} (${result.auto_concurrency.source}).`] : []), ...submissionNoticeLines(result)].join("\n"));
       await refreshDrainAfterAction();
     } catch (error) {
       if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
@@ -2322,6 +2357,7 @@ function renderAutoDrainStart(payload, reasons) {
       autoDrainDurationControl(payload),
     ]),
     autoDrainConcurrencyControl(payload, form),
+    autoDrainModeControl(payload),
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
     form.problem,

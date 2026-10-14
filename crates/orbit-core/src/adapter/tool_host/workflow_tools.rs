@@ -35,6 +35,9 @@ pub(super) fn dispatch(
     model: Option<String>,
     trigger: JobRunTrigger,
 ) -> Result<Value, OrbitError> {
+    if verb == WorkflowVerb::Auto {
+        orbit_common::governance::workflow::validate_auto_concurrency_input(&input)?;
+    }
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
     let input = verb.spec().parse_input(input)?.into_value();
     match verb {

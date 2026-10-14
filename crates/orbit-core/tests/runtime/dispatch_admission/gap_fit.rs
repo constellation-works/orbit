@@ -471,6 +471,53 @@ fn shadow_admits_as_off_and_records_what_enforce_would_do() {
     );
 }
 
+/// Explicit per-run modes override the host without changing another drain,
+/// and continue deciding identically after the host runtime is reopened.
+fn per_run_mode_overrides_the_host_and_survives_reopen() {
+    for mode in ["off", "shadow", "enforce"] {
+        let fixture = Fixture::new("shadow", "");
+        fixture.seed_profiles();
+        fixture.running_hard_delivery();
+        let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+        let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+        let drain = running_run(
+            &fixture.runtime,
+            "workspace_auto_pipeline",
+            json!({"auto_concurrency":mode,"auto_concurrency_source":"explicit"}),
+        );
+        let other = fixture.drain();
+        let config = std::fs::read(fixture.global.join("config.toml")).unwrap();
+        let reopened = fixture.with_mode("shadow", "");
+        let input = reopened.show_job_run(&drain).unwrap().input.unwrap();
+        let pass = crate::scenarios::with_immutable_host_load(|| {
+            reopened.run_deterministic(
+            "classify_workspace_auto_tasks", &json!({}),
+            &json!({"run_id":drain,"auto_concurrency":input["auto_concurrency"],"max_active_leaf_runs":4}),
+            ToolContext::default()).unwrap()
+        });
+        let expected = if mode == "enforce" {
+            vec![light.clone()]
+        } else {
+            vec![heavy.clone(), light.clone()]
+        };
+        assert_eq!(admitted(&pass), expected, "{mode}: {pass:#}");
+        if mode == "off" {
+            assert!(pass["admission_forecast"].is_null());
+        } else {
+            assert_eq!(recorded(&reopened, &drain, &pass).mode, mode);
+        }
+        assert_eq!(reopened.run_auto_concurrency(&drain).unwrap()["mode"], mode);
+        assert_eq!(
+            reopened.run_auto_concurrency(&other).unwrap()["mode"],
+            "shadow"
+        );
+        assert_eq!(
+            std::fs::read(fixture.global.join("config.toml")).unwrap(),
+            config
+        );
+    }
+}
+
 /// `max_active_leaf_runs` is enforced before gap fit: with one free slot,
 /// two candidates that both fit admit one, and the other is queued, not
 /// skipped.
@@ -1136,6 +1183,7 @@ crate::scenario_table!(
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it,
     candidates_admitted_in_one_pass_count_each_other,
     shadow_admits_as_off_and_records_what_enforce_would_do,
+    per_run_mode_overrides_the_host_and_survives_reopen,
     the_ceiling_holds_before_gap_fit,
     the_throttle_holds_enforce_whatever_the_forecast_says,
     a_host_without_profiles_admits_in_enforce_as_off_does

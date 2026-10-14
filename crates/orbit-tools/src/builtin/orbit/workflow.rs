@@ -17,9 +17,14 @@ use super::operation::{GuardedModes, operation_tool_schema};
 use crate::{OrbitBuiltinAction, ToolContext};
 
 impl GuardedModes for WorkflowVerb {
-    fn preempt(self, ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
+    fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            WorkflowVerb::Auto => ensure_operator_leaf(ctx).err().map(Err),
+            WorkflowVerb::Auto => ensure_operator_leaf(ctx)
+                .and_then(|()| {
+                    orbit_common::governance::workflow::validate_auto_concurrency_input(input)
+                })
+                .err()
+                .map(Err),
             WorkflowVerb::Ship | WorkflowVerb::RunResume => ensure_not_managed(ctx).err().map(Err),
             WorkflowVerb::RunList | WorkflowVerb::RunShow => None,
         }

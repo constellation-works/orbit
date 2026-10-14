@@ -6,6 +6,7 @@
 mod approvals;
 mod classify;
 mod drains;
+mod mode;
 mod readiness;
 mod window;
 
