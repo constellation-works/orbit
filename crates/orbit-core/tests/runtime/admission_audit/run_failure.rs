@@ -222,7 +222,7 @@ fn failure_cleanup_leaves_a_newer_human_withdrawal_alone() {
 }
 
 fn git(repo: &std::path::Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .arg("-C")
         .arg(repo)
         .args([

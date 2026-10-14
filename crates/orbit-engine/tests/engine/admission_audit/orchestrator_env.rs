@@ -8,7 +8,6 @@ use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, V2AuditEventKi
 use std::{
     fs,
     path::Path,
-    process::Command,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -478,7 +477,7 @@ pub(super) fn init_repo(path: &Path) -> String {
     git(path, &["rev-parse", "HEAD"])
 }
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args([
             "-c",
             "core.hooksPath=/dev/null",

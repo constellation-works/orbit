@@ -712,7 +712,7 @@ fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits(
             let admin_head = git_path(&checkout.path, "HEAD");
             fs::write(&admin_head, "not a ref\n").unwrap();
             assert!(
-                Command::new("git")
+                crate::git_test_support::command()
                     .args(["status", "--porcelain"])
                     .current_dir(&checkout.path)
                     .output()
@@ -1028,7 +1028,7 @@ fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
                     commit_file(&fixture.repo, "README.md", "other side\n");
                     git(&fixture.repo, &["checkout", BASE]);
                     commit_file(&fixture.repo, "README.md", "base side\n");
-                    let merge = Command::new("git")
+                    let merge = crate::git_test_support::command()
                         .args(["merge", "other"])
                         .current_dir(&fixture.repo)
                         .output()
@@ -2390,7 +2390,7 @@ fn git_rebase_decision_follows_the_checkout_state() {
                     ))
                 })
                 .collect::<String>();
-            let mut command = Command::new("git")
+            let mut command = crate::git_test_support::command()
                 .current_dir(&conflicted.checkout.path)
                 .args(["update-index", "--index-info"])
                 .stdin(Stdio::piped())
@@ -4947,7 +4947,7 @@ fn git_path(checkout: &Path, name: &str) -> PathBuf {
 }
 
 fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
-    Command::new("git")
+    crate::git_test_support::command()
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
         .current_dir(repo)
         .status()

@@ -178,10 +178,7 @@ fn fixture_task() -> Task {
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command
         .args(args)
         .current_dir(dir)
@@ -1065,7 +1062,7 @@ fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
     // Control: plain status without Orbit's host policy does run the filter,
     // so the assertions above observe a real execution path.
     make_nested_stat_stale(&sub);
-    let status = std::process::Command::new("git")
+    let status = crate::git_test_support::command()
         .args(["status", "--porcelain"])
         .current_dir(repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

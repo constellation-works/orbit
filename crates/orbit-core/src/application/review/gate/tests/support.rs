@@ -6,7 +6,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::Utc;
 use orbit_engine::RuntimeHost;
@@ -55,7 +54,7 @@ fn fixture(config_toml: &str) -> Fixture {
 }
 
 pub(super) fn git(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .env("GIT_AUTHOR_NAME", "orbit[impl-model]")

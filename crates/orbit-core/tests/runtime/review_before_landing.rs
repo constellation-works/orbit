@@ -3,7 +3,6 @@
 //! open and unmerged with the task in review [ORB-14849].
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::Utc;
 use orbit_core::TaskStatus;
@@ -383,10 +382,7 @@ fn an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts() {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(cwd).output().unwrap();
     assert!(
         output.status.success(),

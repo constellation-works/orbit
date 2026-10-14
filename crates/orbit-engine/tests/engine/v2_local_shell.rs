@@ -265,7 +265,7 @@ fn shell_activity_with_profile(config: Value, fs_profile: Option<&str>) -> Strin
 }
 
 fn init_repo(path: &Path) {
-    let status = std::process::Command::new("git")
+    let status = crate::git_test_support::command()
         .args(["init", "--quiet"])
         .current_dir(path)
         .status()

@@ -4,7 +4,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use orbit_engine::validate_claim_new_paths;
 use tempfile::tempdir;
@@ -181,10 +181,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 fn git_with_input(repo: &Path, args: &[&str], input: &[u8]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
+    let mut command = crate::git_test_support::command();
     let mut child = command
         .arg("-C")
         .arg(repo)

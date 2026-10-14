@@ -117,7 +117,7 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
         "[machine]\nhost_shutdown_hold_minutes = 30\n",
     )
     .unwrap();
-    let init = std::process::Command::new("git")
+    let init = crate::git_test_support::command()
         .args(["init", "--initial-branch=main", "-q"])
         .current_dir(&repo)
         .status()

@@ -9,6 +9,9 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/git.rs"]
+mod git_test_support;
+
 mod linux_landlock;
 mod linux_runtime_ipc;
 mod linux_sandbox;

@@ -19,7 +19,7 @@ fn git_commit(host: &impl RuntimeHost, input: &Value) -> Result<Value, OrbitErro
     )
 }
 fn git_output(repo: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(repo)
         .output()?;

@@ -1,7 +1,6 @@
 //! Plugin inspection uses the same workspace pins as sync and runtime loading.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use orbit_common::fs::io::create_dir_symlink;
 use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactKind};
@@ -14,10 +13,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::plugin::PluginStatus;
 
 fn git(repo: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.current_dir(repo).args(args).output().unwrap();
     assert!(
         output.status.success(),

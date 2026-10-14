@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use orbit_store::workflow::task::{
     PublicationInspectRequest, PublicationRestoreMode, PublicationRestoreRequest,
@@ -199,7 +198,7 @@ fn git_stdin(repo: &Path, args: &[&str], stdin: &[u8]) -> String {
 }
 
 fn git_output(repo: &Path, args: &[&str], stdin: Option<&[u8]>) -> std::process::Output {
-    let mut command = Command::new("git");
+    let mut command = crate::git_test_support::command();
     command
         .current_dir(repo)
         .args(args)

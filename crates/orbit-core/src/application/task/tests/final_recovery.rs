@@ -3,9 +3,9 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::git_test_support::run as run_git;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::friction_store::{FrictionAddParams, FrictionStore};
 use orbit_types::record::FrictionStatus;

@@ -58,7 +58,7 @@ impl DirtyCheckout {
 fn snapshot_commit(checkout: &Path) -> String {
     let index = checkout.parent().unwrap().join("snapshot.index");
     let scratch = |args: &[&str]| {
-        let output = Command::new("git")
+        let output = crate::git_test_support::command()
             .args(args)
             .current_dir(checkout)
             .env("GIT_INDEX_FILE", &index)
@@ -538,7 +538,7 @@ fn expire_unreachable_objects(repo: &Path) {
 }
 
 fn git_ok(current_dir: &Path, args: &[&str]) -> bool {
-    Command::new("git")
+    crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .status()
@@ -547,7 +547,7 @@ fn git_ok(current_dir: &Path, args: &[&str]) -> bool {
 }
 
 fn git_bytes(current_dir: &Path, args: &[&str]) -> Vec<u8> {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .output()

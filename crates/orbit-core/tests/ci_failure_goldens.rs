@@ -1,6 +1,9 @@
 //! Captured CI log shapes through the deterministic task-filing boundary.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 orbit_common::isolate_test_process!();
 
 use std::path::{Path, PathBuf};
@@ -2079,10 +2082,7 @@ backend = "cli"
 /// Commit `count` empty commits on `repo` and return their ids, oldest first.
 fn commit_chain(repo: &Path, count: usize) -> Vec<String> {
     let git = |args: &[&str]| {
-        let mut command = std::process::Command::new("git");
-        orbit_common::test_env::clear_inherited_authority(|key| {
-            command.env_remove(key);
-        });
+        let mut command = crate::git_test_support::command();
         let output = command
             .args([
                 "-c",

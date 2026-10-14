@@ -4,9 +4,9 @@
 
 use std::path::Path;
 
+use crate::git_test_support::run as run_git;
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
 use orbit_engine::{
     RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update,
     blocked_workflow_interruption_update,

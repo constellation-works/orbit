@@ -1,6 +1,9 @@
 //! HTTP contracts through the public server entry point, in disposable child processes.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 #[path = "http_api/aggregate_pages.rs"]
 mod aggregate_pages;
 #[path = "http_api/audit.rs"]

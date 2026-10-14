@@ -18,7 +18,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use orbit_common::OrbitError;
@@ -1293,7 +1292,7 @@ fn a_cached_branch_update_requires_a_fresh_landing_base() {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .arg("-C")
         .arg(dir)
         .args([

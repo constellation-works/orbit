@@ -26,6 +26,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -433,7 +436,7 @@ fn publication_restore_advances_allocator_only_for_local_task_numbers() {
     let bare = pub_dir.path().join("publication.git");
     let cache = pub_dir.path().join("cache");
     std::fs::create_dir_all(&cache).unwrap();
-    let mut git_init = std::process::Command::new("git");
+    let mut git_init = crate::git_test_support::command();
     git_init.args([
         "init",
         "--bare",
@@ -557,7 +560,7 @@ fn publication_restore_advances_allocator_only_for_local_task_numbers() {
     let foreign_only_bare = foreign_only_pub_dir.path().join("foreign_only.git");
     let foreign_only_cache = foreign_only_pub_dir.path().join("cache");
     std::fs::create_dir_all(&foreign_only_cache).unwrap();
-    let mut git_init_foreign = std::process::Command::new("git");
+    let mut git_init_foreign = crate::git_test_support::command();
     git_init_foreign.args([
         "init",
         "--bare",

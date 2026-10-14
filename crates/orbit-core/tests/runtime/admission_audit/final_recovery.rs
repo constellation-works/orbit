@@ -3,9 +3,8 @@
 //! bound, or a human.
 
 use std::path::Path;
-use std::process::Command;
 
-use orbit_common::fs::git::run_git;
+use crate::git_test_support::run as run_git;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
@@ -56,7 +55,7 @@ fn bare_remote_repository(path: &Path) -> (std::path::PathBuf, String, String) {
     std::fs::create_dir_all(path).expect("create fixture root");
     std::fs::create_dir_all(&repo).expect("create checkout");
     let git = |cwd: &Path, args: &[&str]| {
-        let output = Command::new("git")
+        let output = crate::git_test_support::command()
             .args(args)
             .current_dir(cwd)
             .output()
@@ -121,7 +120,7 @@ fn bare_remote_repository(path: &Path) -> (std::path::PathBuf, String, String) {
 }
 
 fn fixture_git(path: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(path)
         .output()

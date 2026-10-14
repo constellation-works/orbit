@@ -28,6 +28,10 @@
 //! orbit-common, orbit-agent, orbit-exec, orbit-store, orbit-tools
 //! → `orbit-engine` → orbit-core
 
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
 pub mod activity_job;
 /// Scoped hooks and the null host base for test fixtures, enabled only in tests.
 #[cfg(feature = "test-support")]

@@ -46,7 +46,7 @@ fn orchestrator_accounting_excludes_other_workspaces_and_keeps_local_missing_tas
         let workspace = root.path().join(name).join(".orbit");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(&workspace).unwrap();
-        let git = std::process::Command::new("git")
+        let git = crate::git_test_support::command()
             .args(["init", "--quiet"])
             .arg(workspace.parent().unwrap())
             .output()

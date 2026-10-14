@@ -1129,7 +1129,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             .unwrap()
             .with_actor(ActorIdentity::human("human:daniel"));
         let git = |args: &[&str]| {
-            let output = std::process::Command::new("git")
+            let output = crate::git_test_support::command()
                 .args(args)
                 .current_dir(&repo)
                 .output()

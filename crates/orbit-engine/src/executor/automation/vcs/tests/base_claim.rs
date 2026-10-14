@@ -98,7 +98,7 @@ fn supervisor_stops_never_classify_partial_failures_as_known_red() {
         git_ok(&repo, &["add", "check.sh"]);
         git_ok(&repo, &["commit", "-q", "-m", "base"]);
         let base = String::from_utf8(
-            Command::new("git")
+            crate::git_test_support::command()
                 .args(["rev-parse", "HEAD"])
                 .current_dir(&repo)
                 .output()
@@ -195,7 +195,7 @@ fn supervisor_stops_never_classify_partial_failures_as_known_red() {
 
 #[cfg(unix)]
 fn git_ok(repo: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
+    let mut command = crate::git_test_support::command();
     command
         .args([
             "-c",
@@ -295,7 +295,7 @@ fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the
     git_ok(&repo, &["add", "check.sh"]);
     git_ok(&repo, &["commit", "-q", "-m", "base"]);
     let base = String::from_utf8(
-        Command::new("git")
+        crate::git_test_support::command()
             .args(["rev-parse", "HEAD"])
             .current_dir(&repo)
             .output()
@@ -369,7 +369,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
     git_ok(&repo, &["add", "check.sh"]);
     git_ok(&repo, &["commit", "-q", "-m", "base"]);
     let base = String::from_utf8(
-        Command::new("git")
+        crate::git_test_support::command()
             .args(["rev-parse", "HEAD"])
             .current_dir(&repo)
             .output()
@@ -536,7 +536,7 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
         git_ok(&repo, &["add", "check.sh"]);
         git_ok(&repo, &["commit", "-q", "-m", "base"]);
         let base = String::from_utf8(
-            Command::new("git")
+            crate::git_test_support::command()
                 .args(["rev-parse", "HEAD"])
                 .current_dir(&repo)
                 .output()

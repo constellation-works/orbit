@@ -116,7 +116,7 @@ pub(super) fn run(repo: &Path, args: &[&str]) -> String {
     if args.first() == Some(&"push") {
         assert_local_push_remote(repo);
     }
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .env("GIT_ALLOW_PROTOCOL", "file")
         .current_dir(repo)

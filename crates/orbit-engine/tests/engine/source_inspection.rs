@@ -5,7 +5,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use orbit_engine::activity_job::load_activity_asset;
@@ -197,10 +196,7 @@ fn executable(path: &Path, body: &str) {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command
         .current_dir(root)
         .args([

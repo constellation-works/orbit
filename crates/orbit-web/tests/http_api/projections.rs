@@ -768,7 +768,7 @@ fn github_pr_refs_link_the_pull_request_from_the_origin_remote() {
             let fixture = Fixture::new();
             let repo = fixture.path("repo");
             let git = |args: &[&str]| {
-                let status = std::process::Command::new("git")
+                let status = crate::git_test_support::command()
                     .args(args)
                     .current_dir(&repo)
                     .status()

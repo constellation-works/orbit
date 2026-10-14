@@ -1,7 +1,6 @@
 //! Prepare/apply classification of status changes and material drift.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
@@ -44,7 +43,7 @@ pub(super) fn workspace(config_toml: Option<&str>) -> Workspace {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(repo)
         .env("GIT_AUTHOR_NAME", "Orbit Test")

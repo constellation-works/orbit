@@ -49,7 +49,7 @@ fn recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw() {
         ],
         vec!["branch", "fixture/candidate"],
     ] {
-        let output = orbit_common::fs::git::run_git(&owner_repo, &args).expect("seed owner Git");
+        let output = crate::git_test_support::run(&owner_repo, &args).expect("seed owner Git");
         assert!(output.success, "{args:?}: {}", output.stderr);
     }
     std::fs::write(
@@ -244,7 +244,7 @@ model = "fixture-b"
         "owner_unrelated_job"
     );
     let candidate =
-        orbit_common::fs::git::run_git(&owner_repo, &["rev-parse", "fixture/candidate"]).unwrap();
+        crate::git_test_support::run(&owner_repo, &["rev-parse", "fixture/candidate"]).unwrap();
     assert!(candidate.success, "candidate evidence is preserved");
     assert_eq!(
         candidate.stdout.trim(),

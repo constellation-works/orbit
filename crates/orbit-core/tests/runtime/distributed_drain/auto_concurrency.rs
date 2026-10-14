@@ -406,7 +406,7 @@ fn an_enforcing_follower_admits_work_too_big_to_fit_only_on_an_idle_host() {
 fn another_workspace(pair: &Pair, proc_root: &Path) -> Pair {
     let repo = pair._root.path().join(FOLLOWER).join("other-repo");
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .args(["init", "--bare", "--initial-branch=main", "-q"])
         .arg(repo.join(".git"))
         .output()

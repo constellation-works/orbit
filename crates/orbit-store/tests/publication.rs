@@ -3,6 +3,9 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]

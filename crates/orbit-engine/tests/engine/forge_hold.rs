@@ -165,7 +165,7 @@ exec '{real_git}' "$@"
 
     /// The commit the remote's branch holds, if any.
     fn remote_head(&self) -> Option<String> {
-        let output = Command::new("git")
+        let output = crate::git_test_support::command()
             .args([
                 "rev-parse",
                 "--verify",
@@ -385,7 +385,7 @@ fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
             listener.set_nonblocking(true).unwrap();
             let url = format!("https://{}/remote.git", listener.local_addr().unwrap());
             git(&fixture.workspace(), &["remote", "set-url", "origin", &url]);
-            let output = Command::new("git")
+            let output = crate::git_test_support::command()
                 .args(["-c", "core.hooksPath=/dev/null", "push", "origin", BRANCH])
                 .current_dir(fixture.workspace())
                 .output()

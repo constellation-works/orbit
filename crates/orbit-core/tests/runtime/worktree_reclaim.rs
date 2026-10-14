@@ -10,7 +10,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(repo)
         .args(args)
         .output()

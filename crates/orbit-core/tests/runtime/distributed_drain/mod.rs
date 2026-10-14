@@ -478,7 +478,7 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     let repo = root.join(machine).join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
-    let git_boundary = std::process::Command::new("git")
+    let git_boundary = crate::git_test_support::command()
         .args(["init", "--bare", "--initial-branch=main", "-q"])
         .arg(repo.join(".git"))
         .output()
@@ -1255,7 +1255,7 @@ fn publish_origin(repo: &Path) {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .arg("-C")
         .arg(dir)
         .args([
