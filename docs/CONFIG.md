@@ -972,7 +972,11 @@ existing recovery activities, final validation and push do the repair:
   only from its durable, same-job retry ancestors. It can keep watching a
   published repair or validate and lease-push an admitted local repair left
   committed before interruption. Unrelated runs confer no authority; PR,
-  branch, exact-head and review guards still apply. Resume spends no new
+  branch, exact-head and review guards still apply. A subsequent base conflict
+  leases against that authenticated current head while retaining the original
+  publication checkpoint as provenance. The refreshed candidate passes captured
+  validation before publication, or before returning for independent re-review;
+  concurrent remote movement is refused. Resume spends no new
   repair attempt merely to finish an inherited repair and grants no merge
   authority.
 - When a shared-base repair has already landed, Orbit can refresh the owned

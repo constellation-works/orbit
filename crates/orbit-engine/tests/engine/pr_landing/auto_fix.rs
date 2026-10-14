@@ -725,3 +725,246 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
         },
     );
 }
+
+// An admitted CI repair is published through the real PR executor first.
+// Completion then receives its original H0 checkpoint after the base advances.
+#[test]
+fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
+    isolated(
+        "auto_fix::published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards",
+        |sandbox| {
+            for case in [
+                "refresh",
+                "reviewed",
+                "review_required",
+                "real_conflict",
+                "ordinary_stale",
+                "budget",
+                "validation_failed",
+                "remote_moved",
+                "remote_deleted",
+                "wrong_base",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    tracing::info!(case, "published CI repair conflict");
+                    let fx = Fixture::new(row);
+                    let host = auto_fix_resume_fixture(&fx, RUN_ID);
+                    fs::write(fx.repo.join("repair.txt"), "CI repair\n").unwrap();
+                    git(&fx.repo, &["add", "repair.txt"]);
+                    git(&fx.repo, &["commit", "-m", "admitted CI repair"]);
+                    let repaired = fx.head();
+                    host.require_commands(&["test -f repair.txt"]);
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let published = action(&host, "pr_complete", &input).unwrap();
+                    assert_eq!(published["merge"]["head_sha"], repaired);
+                    assert_eq!(fx.remote_tip(BRANCH), repaired);
+                    let pushes = orbit_types::workflow::pr_auto_fix_pushes(
+                        &host.history(TASK_ID),
+                        PR_NUMBER,
+                    );
+                    assert_eq!(pushes.len(), 1);
+                    assert_eq!(pushes[0].from_head_sha, fx.candidate);
+                    assert_eq!(pushes[0].to_head_sha, repaired);
+                    let failed_history = host.history(TASK_ID);
+
+                    if case == "real_conflict" {
+                        fx.commit_on_base(FEATURE, "base conflicts with candidate\n");
+                    } else {
+                        fx.advance_base();
+                    }
+                    let base = fx.remote_tip(BASE);
+                    let mut checks = vec!["success"; fx.status_reads()];
+                    checks.extend(["dirty", "success"]);
+                    fx.script_checks(&checks);
+                    if matches!(case, "reviewed" | "review_required") {
+                        input["reviewed_head_sha"] = json!(repaired);
+                        input["re_review_on_conflict"] = json!(case == "reviewed");
+                    } else if case == "ordinary_stale" {
+                        input["auto_fix"] = json!(false);
+                    } else if case == "budget" {
+                        for attempt in 2..=PR_AUTO_FIX_BUDGET {
+                            seed_auto_fix_history(
+                                &host,
+                                PR_AUTO_FIX_ADMITTED_EVENT,
+                                &PrAutoFixAttempt {
+                                    pr_number: PR_NUMBER.into(),
+                                    head_sha: format!("spent-{attempt}"),
+                                    blocker: PrAutoFixBlocker::Conflict,
+                                    attempt,
+                                    budget: PR_AUTO_FIX_BUDGET,
+                                    run_id: "sibling-run".into(),
+                                    crew: "fixture".into(),
+                                    crew_source: "fixture".into(),
+                                },
+                            );
+                        }
+                    } else if case == "validation_failed" {
+                        host.require_commands(&["exit 23"]);
+                    } else if case == "remote_moved" {
+                        // Validation is the deterministic rendezvous: another
+                        // writer moves the remote after rebase's ownership read.
+                        host.require_commands(&[&format!("repair_race_sha=$(git -c user.name=Other -c user.email=other@example.invalid commit-tree HEAD^{{tree}} -p {repaired} -m foreign) && git push origin \"$repair_race_sha:refs/heads/{BRANCH}\"")]);
+                    } else if case == "remote_deleted" {
+                        host.require_commands(&[&format!("git push origin :refs/heads/{BRANCH}")]);
+                    } else if case == "wrong_base" {
+                        fs::write(fx.forge.join("pr-base"), "main\n").unwrap();
+                    }
+                    let result = action(&host, "pr_complete", &input);
+                    match case {
+                        "refresh" => {
+                            let output = result.expect("authenticated H1 must refresh automatically despite the original H0 checkpoint");
+                            let refreshed = fx.head();
+                            assert_ne!(refreshed, repaired);
+                            assert_eq!(fx.remote_tip(BRANCH), refreshed);
+                            assert_eq!(output["merge"]["head_sha"], refreshed);
+                            assert_eq!(git(&fx.repo, &["show", "HEAD:repair.txt"]), "CI repair");
+                            assert_eq!(
+                                host.validation_log(
+                                    TASK_ID,
+                                    &format!("validation/{RUN_ID}/0.json")
+                                )["tested_head"],
+                                refreshed
+                            );
+                            let pushes = orbit_types::workflow::pr_auto_fix_pushes(
+                                &host.history(TASK_ID),
+                                PR_NUMBER,
+                            );
+                            assert_eq!(pushes.len(), 2);
+                            assert_eq!(pushes[1].from_head_sha, repaired);
+                            assert_eq!(pushes[1].to_head_sha, refreshed);
+                            assert_eq!(pushes[1].blocker, PrAutoFixBlocker::Conflict);
+                        }
+                        "reviewed" => {
+                            let output = result.expect(
+                                "reviewed authenticated H1 must rebase for independent re-review",
+                            );
+                            assert_eq!(output["re_review_required"], true);
+                            assert_eq!(output["rebased"]["head_sha_before"], repaired);
+                            assert_eq!(output["rebased"]["remote_sha_before"], repaired);
+                            assert_eq!(output["rebased"]["head_sha"], fx.head());
+                            assert_ne!(fx.head(), repaired);
+                            assert_eq!(
+                                host.validation_log(
+                                    TASK_ID,
+                                    &format!("validation/{RUN_ID}/0.json")
+                                )["tested_head"],
+                                fx.head()
+                            );
+                            assert_eq!(
+                                fx.remote_tip(BRANCH),
+                                repaired,
+                                "re-review precedes publication"
+                            );
+                        }
+                        "real_conflict" => {
+                            let conflict = completion_conflict(result);
+                            assert_eq!(conflict.target_base_sha, base);
+                            assert_eq!(
+                                fx.remote_tip(BRANCH),
+                                repaired,
+                                "conflict recovery retains the owned H1 lease"
+                            );
+                            assert_eq!(conflict.conflicting_paths, vec![FEATURE.to_string()]);
+                            let recovered_fx = Fixture {
+                                candidate: repaired.clone(),
+                                ..fx
+                            };
+                            let recovered =
+                                recover_completion(&recovered_fx, &host, &conflict, "resolved\n");
+                            let mut checks = vec!["success"; recovered_fx.status_reads()];
+                            checks.extend(["dirty", "success"]);
+                            recovered_fx.script_checks(&checks);
+                            let output = action(&host, "pr_complete", &input).expect(
+                                "certified conflict recovery refreshes the same authenticated head",
+                            );
+                            assert_eq!(output["merge"]["head_sha"], recovered);
+                            assert_eq!(recovered_fx.remote_tip(BRANCH), recovered);
+                            assert_eq!(
+                                host.validation_log(
+                                    TASK_ID,
+                                    &format!("validation/{RUN_ID}/0.json")
+                                )["tested_head"],
+                                recovered
+                            );
+                            assert!(recovered_fx.merge_requests().is_empty());
+                            assert_eq!(recovered_fx.remote_tip(BASE), base);
+                            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                            assert_eq!(input["published_head_sha"], pushes[0].from_head_sha);
+                            assert_eq!(
+                                pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                                2
+                            );
+                            assert!(host.history(TASK_ID).starts_with(&failed_history));
+                            let pushes = orbit_types::workflow::pr_auto_fix_pushes(
+                                &host.history(TASK_ID),
+                                PR_NUMBER,
+                            );
+                            assert_eq!(pushes.last().unwrap().from_head_sha, repaired);
+                            assert_eq!(pushes.last().unwrap().to_head_sha, recovered);
+                            return;
+                        }
+                        _ => {
+                            let error = result.expect_err(case).to_string();
+                            let expected = match case {
+                                "budget" => "auto_fix_budget_exhausted",
+                                "review_required" => "review_gate_stale",
+                                "validation_failed" => "23",
+                                "remote_moved" | "remote_deleted" => "push_lease_lost",
+                                _ => "delivery_evidence_stale",
+                            };
+                            assert!(error.contains(expected), "{case}: {error}");
+                            if case == "remote_moved" {
+                                assert_ne!(
+                                    fx.remote_tip(BRANCH),
+                                    fx.head(),
+                                    "concurrent publication survives"
+                                );
+                                assert_ne!(fx.remote_tip(BRANCH), repaired);
+                            } else if case == "remote_deleted" {
+                                assert!(
+                                    git(
+                                        &fx.repo,
+                                        &["ls-remote", "origin", &format!("refs/heads/{BRANCH}")]
+                                    )
+                                    .is_empty(),
+                                    "deleted branch is never recreated"
+                                );
+                            } else {
+                                assert_eq!(
+                                    fx.remote_tip(BRANCH),
+                                    repaired,
+                                    "refusal leaves H1 intact"
+                                );
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        match case {
+                            "budget" => 3,
+                            "ordinary_stale" | "wrong_base" | "review_required" => 1,
+                            _ => 2,
+                        },
+                        "cumulative admission budget: {case}"
+                    );
+                    assert_eq!(
+                        input["published_head_sha"], fx.candidate,
+                        "original provenance remains immutable"
+                    );
+                    assert!(
+                        host.history(TASK_ID).starts_with(&failed_history),
+                        "failed/admitted history is retained"
+                    );
+                    assert!(
+                        fx.merge_requests().is_empty(),
+                        "repair-only authority never merges"
+                    );
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                    assert_eq!(fx.remote_tip(BASE), base, "repair does not modify the base");
+                });
+            }
+        },
+    );
+}
