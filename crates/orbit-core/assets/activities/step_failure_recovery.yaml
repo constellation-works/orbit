@@ -371,17 +371,33 @@ spec:
        required hosted checks failing on the published PR head named there,
        admitted this one repair against the PR's budget, and quotes each
        failed job's step, error signature and log excerpt for exactly that
-       head. Reproduce the failure locally where you can (the workspace's own
+       head. This admission authorizes you to diagnose and repair the source
+       cause of those evidenced required-check failures, including files
+       outside the original task description or context selectors and defects
+       already present on the base branch. This is an explicit exception to
+       the ordinary candidate-scope boundary above: original task scope alone
+       is never a reason to report `not_recovered`. Keep the repair limited to
+       files necessary to fix the exact evidenced failure; it grants no
+       authority for unrelated changes. If the same evidenced failure already
+       has a delivered repair on the current PR head, verify that repair and
+       its relevant check results, then reuse it rather than making duplicate
+       edits. Record the failing head and job, diagnostic evidence, cause,
+       changed paths (or the paths of a reused repair), and each validation
+       command and result in the required recovery friction and activity
+       summary.
+       Reproduce the failure locally where you can (the workspace's own
        AGENTS.md names its validation commands), fix the candidate so those
-       checks pass, and leave the repair uncommitted. Fix the code, not the
+       checks pass, and leave the repair uncommitted. Fix the source, not the
        check: never edit, skip or weaken a CI workflow, a required command or
-       a test's assertion to make it pass. Do not push, open a PR, merge or
-       change lifecycle status. Write `retry` once the repair is in place.
+       a test's assertion to make it pass. Do not change unrelated files,
+       Git or `.orbit` metadata, or secrets. Do not push, open a PR, merge,
+       release, or change lifecycle status. Write `retry` once the repair is in
+       place.
        Orbit then commits it, reruns the workspace's required validation on
        it, publishes it to the same PR (a head bound to a review is
-       re-reviewed first) and watches the new head's checks. A failure the
-       candidate did not cause, such as one the base branch shares, is
-       `not_recovered`.
+       re-reviewed first) and watches the new head's checks. If an existing
+       committer guard refuses a necessary path, report its exact refusal and
+       path as a runtime blocker; do not infer a task-selector restriction.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You
