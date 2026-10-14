@@ -23,7 +23,7 @@ const HARD_MAX_PARTITION_SIZE: usize = 5;
 const DEFAULT_MAX_TASKS: usize = 50;
 const HARD_MAX_TASKS: usize = 500;
 
-pub(in super::super) fn prepare(
+pub(crate) fn prepare(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

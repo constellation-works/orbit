@@ -18,7 +18,7 @@ use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
 
-pub(in super::super) fn pipeline_success_guard(
+pub(crate) fn pipeline_success_guard(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -252,7 +252,7 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
 /// same-id pipeline key, which is overwritten by the next iteration.
 /// Parent run state still owns child linkage; this audit row owns the batch's
 /// exact result list and aggregate counts for durable history readers.
-pub(in super::super) fn record_pipeline_results_audit(
+pub(crate) fn record_pipeline_results_audit(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

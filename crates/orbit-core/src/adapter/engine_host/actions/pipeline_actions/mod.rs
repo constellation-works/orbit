@@ -1,18 +1,10 @@
-//! Deterministic actions pipeline sequencers use to validate bundles, dispatch
-//! child Jobs, re-check admission at dispatch, and guard pipeline results.
+//! Deterministic actions that dispatch child Jobs for pipeline sequencers and
+//! wait on them. The decisions they consult between waits (gate admission)
+//! and the other pipeline actions live in `application::job::pipeline_actions`.
 
-mod bundles;
-mod delivery;
-mod gate_admission;
-mod gate_starvation;
 mod invoke;
-mod results;
 
 #[cfg(test)]
 mod tests;
 
-pub(super) use bundles::validate_bundles;
-pub(super) use delivery::resolve_delivery_job;
-pub(super) use gate_starvation::gate_starvation_defer;
 pub(super) use invoke::{invoke_and_wait, invoke_detached};
-pub(super) use results::{pipeline_success_guard, record_pipeline_results_audit};

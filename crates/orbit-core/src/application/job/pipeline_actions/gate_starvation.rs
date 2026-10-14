@@ -24,7 +24,7 @@ use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservatio
 /// its output: a reserved window is `{deferred: false}`; an expired one is
 /// audited as `gate.starvation` and returned as the deferral `invoke_and_wait`
 /// stops on.
-pub(in super::super) fn gate_starvation_defer(
+pub(crate) fn gate_starvation_defer(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

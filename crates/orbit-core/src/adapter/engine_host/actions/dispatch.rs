@@ -16,12 +16,14 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
+use crate::application::job::pipeline_actions;
 use crate::application::pull_drain;
 use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
 use crate::application::task::pilot as task_pilot;
+use crate::application::task::{blocked_recovery_steps, finding_verification_steps};
 use crate::application::workspace_auto;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
@@ -29,7 +31,7 @@ use crate::runtime::task::locks::{
     task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
 };
 
-use super::{blocked_recovery, finding_verification, pipeline_actions};
+use super::pipeline_actions::{invoke_and_wait, invoke_detached};
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
@@ -295,26 +297,26 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
         // Select and assign review findings to verifiers, then record each
         // validated verdict; both run at one pinned source revision.
-        CoreDeterministicAction::PrepareFindingVerification => finding_verification::prepare(
+        CoreDeterministicAction::PrepareFindingVerification => finding_verification_steps::prepare(
             runtime,
             action,
             input,
-            finding_verification::run_id(owner_run_id(&tool_context), input),
+            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
         ),
-        CoreDeterministicAction::ApplyFindingVerification => finding_verification::apply(
+        CoreDeterministicAction::ApplyFindingVerification => finding_verification_steps::apply(
             runtime,
             action,
             input,
-            finding_verification::run_id(owner_run_id(&tool_context), input),
+            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
         ),
         // Re-check one blocked task's episode and open a detached base
         // checkout for final recovery, then apply its decision through the
         // shared final-recovery applier and remove that checkout.
         CoreDeterministicAction::PrepareBlockedTaskRecovery => {
-            blocked_recovery::prepare(runtime, action, input, recovery_run_id(&tool_context))
+            blocked_recovery_steps::prepare(runtime, action, input, recovery_run_id(&tool_context))
         }
         CoreDeterministicAction::ApplyBlockedTaskRecovery => {
-            blocked_recovery::apply(runtime, action, input, recovery_run_id(&tool_context))
+            blocked_recovery_steps::apply(runtime, action, input, recovery_run_id(&tool_context))
         }
         // Run a held candidate's named Linux CodeQL check at the held commit
         // and attach its log, plus the result when it passed; receipt queues
@@ -480,13 +482,13 @@ pub(crate) fn run_deterministic(
         // workflows can model "dispatch and join" as a single step
         // with `{status, run_id, pipeline?, error?}` output.
         CoreDeterministicAction::InvokeAndWait => {
-            pipeline_actions::invoke_and_wait(runtime, action, input, tool_context)
+            invoke_and_wait(runtime, action, input, tool_context)
         }
         // Submit a child v2 Job and return as soon as its Run is durable, so
         // the parent keeps working while it executes [ORB-10819]. The caller
         // re-observes the child; this returns no status.
         CoreDeterministicAction::InvokeDetached => {
-            pipeline_actions::invoke_detached(runtime, action, input, tool_context)
+            invoke_detached(runtime, action, input, tool_context)
         }
         // Fail a workflow if child wait results did not reach `succeeded`
         // (cancel it when every such child was cancelled), or apply the

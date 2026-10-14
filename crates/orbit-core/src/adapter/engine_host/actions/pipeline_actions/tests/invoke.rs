@@ -20,10 +20,10 @@ use orbit_types::workflow::{ChildDispatchPhase, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::invoke::invoke_and_wait_with;
-use super::super::pipeline_success_guard;
 use crate::OrbitRuntime;
 use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::job::pipeline::PipelineWaitClock;
+use crate::application::job::pipeline_actions::pipeline_success_guard;
 use crate::application::task::TaskAddParams;
 use crate::application::test_support::runtime_with_workspace_config;
 

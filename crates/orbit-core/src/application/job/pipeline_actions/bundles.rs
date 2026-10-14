@@ -3,10 +3,7 @@
 use orbit_engine::DispatchError;
 use serde_json::Value;
 
-pub(in super::super) fn validate_bundles(
-    action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
+pub(crate) fn validate_bundles(action: &str, input: &Value) -> Result<Value, DispatchError> {
     let bundles_raw = input
         .get("bundles")
         .and_then(Value::as_array)

@@ -12,7 +12,7 @@ use crate::runtime::task::locks::parse_task_ids;
 /// ([`OrbitRuntime::resolve_admitted_delivery_route`]); a refusal — including
 /// a PR route with no forge remote — fails the step before the gate reserves
 /// anything or creates a worktree.
-pub(in super::super) fn resolve_delivery_job(
+pub(crate) fn resolve_delivery_job(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
