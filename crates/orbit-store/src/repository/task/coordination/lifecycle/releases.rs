@@ -9,11 +9,11 @@ use super::{decode, decode_state};
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
-    /// What a drain run on `machine_id` already gave back for failures that
-    /// blame its host [ORB-14257]. Admission keeps each such task from that
-    /// drain for the rest of its window — the follower excludes the leaf's
-    /// crew too, but a release its worker delivered after the follower built
-    /// its next request must not be pulled straight back — and keeps every
+    /// What a drain run on `machine_id` already gave back for a task-scoped
+    /// operator cancel or failures that blame its host. Admission keeps each
+    /// such task from that drain for the rest of its window, even when a
+    /// release arrives after the follower built its next request. A cancel
+    /// leaves unrelated work and reviewers eligible. Admission keeps every
     /// task from it once one release blames the host whatever crew runs
     /// there. A release for a forge outage blames neither [ORB-14634].
     pub(in super::super) fn drain_releases(
@@ -29,10 +29,9 @@ impl TaskCommitBoundary {
             {
                 continue;
             }
-            let Some(record) = state
-                .release
-                .filter(|record| record.class.excludes_crew() && !record.forge_unavailable)
-            else {
+            let Some(record) = state.release.filter(|record| {
+                record.class.suppresses_task_repull() && !record.forge_unavailable
+            }) else {
                 continue;
             };
             if record.class.suppresses_host() && released.host.is_none() {
@@ -301,10 +300,10 @@ impl TaskCommitBoundary {
     }
 }
 
-/// The releases one drain run made for failures that blame its host.
+/// The releases that suppress a task or the host for one drain run.
 #[derive(Debug, Default)]
 pub(in super::super) struct DrainReleases {
-    /// Each task released for a class that excludes the leaf's crew.
+    /// Each task whose release prevents immediate repull by this drain.
     pub(in super::super) tasks: BTreeMap<String, ClaimReleaseRecord>,
     /// The first release whose class suppresses the whole host.
     pub(in super::super) host: Option<ClaimReleaseRecord>,

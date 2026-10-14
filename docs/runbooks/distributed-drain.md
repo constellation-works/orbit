@@ -782,8 +782,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   follower. A forge release blames neither the crew nor the host: the drain
   keeps offering both, and the owner may hand the task straight back to the
   same drain, whose next claim continues the kept candidate. After
-  `operator_cancel` or any other `transient` release, the drain stops
-  offering that crew for the rest of its window. After
+  `operator_cancel`, the owner withholds only the cancelled task from that
+  drain for the rest of its window. The release still counts against the
+  task's release budget and keeps its candidate and settlement evidence;
+  unrelated work and required reviewers on the same crew remain eligible.
+  Any other `transient` release stops the drain offering that crew for the
+  rest of its window. After
   `provider`, an authentication failure stops every crew of that provider
   (an `anthropic` crew is the same provider as `claude`); a capacity failure
   stops only the crew the leaf ran, and only for a backoff of 10 minutes

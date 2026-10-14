@@ -236,20 +236,26 @@ impl ClaimFailureClass {
         !self.blocks()
     }
 
+    /// Whether the owner withholds the released task from the same drain for
+    /// the rest of its window. An operator cancel suppresses only that task;
+    /// failures that exclude its crew also prevent an immediate repull when
+    /// the release arrives after the drain built its next request. A release
+    /// carrying a forge hold is an exception the release itself records.
+    #[must_use]
+    pub const fn suppresses_task_repull(self) -> bool {
+        matches!(self, Self::OperatorCancel) || self.excludes_crew()
+    }
+
     /// Whether the executing drain stops running the leaf's crew for the
-    /// rest of its window. A cancel excludes that crew, but does not suppress
-    /// the whole host; a red base and a base conflict exclude neither, nor
-    /// does a `transient` release that carries a forge hold [ORB-14634] or a
+    /// rest of its window. An operator cancel, a red base and a base conflict
+    /// exclude neither the crew nor the host. Neither does a `transient`
+    /// release that carries a forge hold [ORB-14634] or a
     /// `provider` release for a content refusal [ORB-15573].
     #[must_use]
     pub const fn excludes_crew(self) -> bool {
         matches!(
             self,
-            Self::Environment
-                | Self::Transient
-                | Self::OperatorCancel
-                | Self::OwnerRoute
-                | Self::Provider
+            Self::Environment | Self::Transient | Self::OwnerRoute | Self::Provider
         )
     }
 

@@ -620,8 +620,11 @@ owns delivery:
   candidate that `sync_base` and its conflict recovery could not carry onto a base that moved).
   The class is read from the last failed step's typed marker, then any provider or red-base
   failure the run recorded, then the terminalizing diagnostic, then the leaf's progress.
-  `operator_cancel` and `transient` exclude the leaf's crew for the rest of
-  the drain's window (source `leaf_released`). `provider` uses source
+  `operator_cancel` withholds only the cancelled task from the same drain for
+  the rest of its window, preserving its release count, candidate and settlement
+  evidence without excluding the crew or host. Unrelated work and required
+  reviewers on that crew remain eligible. `transient` excludes the leaf's crew
+  for the rest of the drain's window (source `leaf_released`). `provider` uses source
   `provider_unavailable`: authentication excludes every configured crew of
   that provider for the window, and capacity excludes only the leaf's crew,
   until its backoff's `until`. A usage limit ([ORB-14695]) is a
